@@ -162,7 +162,9 @@ data:
   NETLEASH_ENABLED: "true"
   NETLEASH_SECRETS_ENABLED: "true"
   NETLEASH_INTERNAL_DNS_ZONES: cluster.local
-  NETLEASH_PIN_PATH: /sys/fs/bpf/netleash
+  # This is the container-visible bind path; runner.yaml supplies the node's
+  # persistent bpffs directory as its backing filesystem.
+  NETLEASH_PIN_PATH: /var/lib/netleash-bpf
   NETLEASH_SECRET_CA_DIR: /var/lib/daytona/netleash
   NETLEASH_SECRET_PROXY_PORT: "18080"
   SSH_GATEWAY_ENABLE: "true"

@@ -130,7 +130,10 @@ spec:
               mountPath: /etc/daytona/ssh
               readOnly: true
             - name: netleash-bpf
-              mountPath: /sys/fs/bpf/netleash
+              # Do not target /sys directly: OCI runtimes assemble sysfs while
+              # creating the container and cannot reliably create nested custom
+              # mountpoints there. The host source below remains on bpffs.
+              mountPath: /var/lib/netleash-bpf
               mountPropagation: HostToContainer
       volumes:
         - name: runner-host-key

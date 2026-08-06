@@ -238,9 +238,11 @@ uncertified runtime into a certified one:
   required post-bootstrap scale-up. Compute becomes highly available only
   after separately registered runners exist and snapshot/state behavior is
   exercised across them.
-- Netleash pins are node-local under `/sys/fs/bpf/daytona`. A reschedule to a
-  different node relies on source reconciliation, not transfer of pins. The
-  persistent CA/binding state is on the runner PVC.
+- Netleash pins are node-local under `/sys/fs/bpf/daytona`, bind-mounted in the
+  runner at `/var/lib/netleash-bpf` because OCI runtimes manage the container's
+  `/sys` hierarchy. A reschedule to a different node relies on source
+  reconciliation, not transfer of pins. The persistent CA/binding state is on
+  the runner PVC.
 - Public GKE Gateway/LoadBalancer, certificates, Cloud Armor/rate policy,
   managed dependency provisioning, Secret Manager synchronization, and
   observability exporters are intentionally outside this package. They vary by
