@@ -59,6 +59,17 @@ import { SecretModule } from './secret/secret.module'
           pinoHttp: {
             autoLogging: logConfig.requests.enabled,
             level: logConfig.level,
+            redact: {
+              paths: [
+                'req.headers.authorization',
+                'req.headers.cookie',
+                'req.headers["proxy-authorization"]',
+                'req.headers["x-api-key"]',
+                'req.headers["x-daytona-authorization"]',
+                'res.headers["set-cookie"]',
+              ],
+              censor: '[REDACTED]',
+            },
             hooks: {
               logMethod: swapMessageAndObject,
             },
