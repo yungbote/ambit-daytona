@@ -1586,15 +1586,26 @@ export class SnapshotManager implements TrackableJobExecutions, OnApplicationShu
       )
     }
 
-    try {
-      await runnerAdapter.removeSnapshot(initialImageRefOnRunner)
-    } catch (error) {
-      this.logger.error(`Failed to remove snapshot ${snapshot.imageName}: ${fromAxiosError(error)}`)
+    // Build snapshots use a temporary runner-local reference before their
+    // canonical registry reference is known. Pull snapshots do not: once the
+    // digest is resolved, initialImageRefOnRunner is snapshot.ref itself.
+    // Removing that canonical reference races the asynchronous v2 runner job
+    // against the READY snapshot_runner row below; when the remove completes,
+    // it deletes the row and leaves an ACTIVE snapshot with no schedulable
+    // runner. Only staging references may be cleaned during activation.
+    if (snapshot.buildInfo && initialImageRefOnRunner !== snapshot.ref) {
+      try {
+        await runnerAdapter.removeSnapshot(initialImageRefOnRunner)
+      } catch (error) {
+        this.logger.error(
+          `Failed to remove snapshot staging ref ${initialImageRefOnRunner}: ${fromAxiosError(error)}`,
+        )
+      }
     }
 
     // For pull snapshots, best effort cleanup the original image now that we've computed the ref from it
     // Only cleanup if there's no other snapshot in processing state using the same image
-    if (!snapshot.buildInfo) {
+    if (!snapshot.buildInfo && snapshot.imageName && snapshot.imageName !== snapshot.ref) {
       try {
         const anotherSnapshot = await this.snapshotRepository.findOne({
           where: {

@@ -47,6 +47,18 @@ spec:
                 sleep 5
               done
 
+              attempt=0
+              until curl -fsS \
+                -u "harbor_registry_user:${HARBOR_REGISTRY_PASSWORD}" \
+                http://daytona-harbor-registry:5000/v2/ >/dev/null; do
+                attempt=$((attempt + 1))
+                if [ "$attempt" -ge 60 ]; then
+                  echo "Harbor core-to-registry credentials did not authenticate before the bootstrap deadline" >&2
+                  exit 1
+                fi
+                sleep 2
+              done
+
               projects="$(curl -fsS -u "admin:${HARBOR_ADMIN_PASSWORD}" 'http://daytona-harbor/api/v2.0/projects?name=daytona')"
               if printf '%s' "$projects" | grep -Eq '"name"[[:space:]]*:[[:space:]]*"daytona"'; then
                 exit 0
@@ -67,6 +79,11 @@ spec:
                 secretKeyRef:
                   name: daytona-harbor-admin
                   key: HARBOR_ADMIN_PASSWORD
+            - name: HARBOR_REGISTRY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: daytona-harbor-registry-credentials
+                  key: REGISTRY_PASSWD
           resources:
             requests:
               cpu: 10m
@@ -79,4 +96,3 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
-

@@ -23,6 +23,10 @@ data:
   OIDC_ISSUER_BASE_URL: https://accounts.google.com
   PUBLIC_OIDC_DOMAIN: https://accounts.google.com
   OIDC_AUDIENCE: 411589140767-ct4tknprtvsg8v2ltkio27e3sf98mb1g.apps.googleusercontent.com
+  # The public TypeScript SDK waits on this Socket.IO endpoint for sandbox
+  # lifecycle events. Every API replica shares the Redis adapter, so the
+  # gateway remains horizontally safe behind the GKE Gateway.
+  NOTIFICATION_GATEWAY_DISABLED: "false"
   DEFAULT_SNAPSHOT: docker.io/daytonaio/sandbox:0.6.0-slim@sha256:825533a16c854304facdff594bc1a0ff3eb223a25c2ff9b1b70b5e05fb754492
   TRANSIENT_REGISTRY_URL: https://registry.daytona.ambit.sh
   TRANSIENT_REGISTRY_PROJECT_ID: daytona

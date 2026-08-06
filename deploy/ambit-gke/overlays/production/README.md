@@ -166,6 +166,12 @@ admin password and remains the credential Daytona stores. Create the separate
 database/user before Harbor starts; sharing Daytona's `daytona` schema would
 collapse unrelated ownership and is not supported.
 
+The Harbor bootstrap Job authenticates directly to the registry with the raw
+internal password before it creates or accepts the project. This proves the
+derived htpasswd line matches the password Secret; a syntactically valid but
+stale bcrypt line therefore fails deployment instead of surfacing later as an
+image-push error.
+
 `DB_USERNAME=daytona`, `REDIS_USERNAME=default`, and the probe-only health key
 are non-secret runtime configuration. The production Redis password and CA,
 database password, encryption material, API keys, SSH keys, registry
