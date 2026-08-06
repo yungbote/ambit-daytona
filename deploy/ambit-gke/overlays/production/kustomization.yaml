@@ -40,7 +40,7 @@ patches:
 images:
   - name: daytona-api
     newName: us-east4-docker.pkg.dev/mwcc-infrastructure/ambit/daytona-oss-api
-    digest: sha256:cf52a7d63374d302e568fefa3ebc9cb7dd3959e36fa865987f618c677ad17f29
+    digest: sha256:82ff866720392758b3e6a882411028963f79001591b3448c6e45f1b5032227b0
   - name: daytona-proxy
     newName: us-east4-docker.pkg.dev/mwcc-infrastructure/ambit/daytona-oss-proxy
     digest: sha256:e7de8d055aa75c87b8148e564734edd53b26e5fbbb2d9c5170d8fa24cc371ab8
