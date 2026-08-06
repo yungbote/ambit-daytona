@@ -13,8 +13,10 @@ export interface DockerImageInfo {
   project?: string
   /** The repository/image name (e.g. 'image' in 'registry:5000/test/image') */
   repository: string
-  /** The tag or digest (e.g. 'latest' or 'sha256:123...') */
+  /** The mutable tag (e.g. 'latest') */
   tag?: string
+  /** The immutable content digest (e.g. 'sha256:123...') */
+  digest?: string
   /** The full original image name */
   originalName: string
 }
@@ -24,6 +26,7 @@ export class DockerImage implements DockerImageInfo {
   project?: string
   repository: string
   tag?: string
+  digest?: string
   originalName: string
 
   constructor(info: DockerImageInfo) {
@@ -31,6 +34,7 @@ export class DockerImage implements DockerImageInfo {
     this.project = info.project
     this.repository = info.repository
     this.tag = info.tag
+    this.digest = info.digest
     this.originalName = info.originalName
   }
 
@@ -44,6 +48,9 @@ export class DockerImage implements DockerImageInfo {
     }
     if (this.tag) {
       name = `${name}:${this.tag}`
+    }
+    if (this.digest) {
+      name = `${name}@${this.digest}`
     }
     return name
   }
@@ -72,32 +79,36 @@ export function parseDockerImage(imageName: string): DockerImage {
     repository: '',
   }
 
-  // Check for digest format first
-  let parts: string[] = []
-  if (imageName.includes('@sha256:')) {
-    const [nameWithoutDigest, digest] = imageName.split('@sha256:')
-    if (!nameWithoutDigest || !digest || !/^[a-f0-9]{64}$/.test(digest)) {
+  const digestSeparatorIndex = imageName.indexOf('@')
+  if (digestSeparatorIndex !== imageName.lastIndexOf('@')) {
+    throw new Error('Invalid image name. At most one digest is allowed')
+  }
+
+  let nameWithOptionalTag = imageName
+  if (digestSeparatorIndex >= 0) {
+    nameWithOptionalTag = imageName.substring(0, digestSeparatorIndex)
+    const digest = imageName.substring(digestSeparatorIndex + 1)
+    if (!nameWithOptionalTag || !/^sha256:[a-f0-9]{64}$/.test(digest)) {
       throw new Error('Invalid digest format. Must be image@sha256:64_hex_characters')
     }
-    result.tag = `sha256:${digest}`
-    // Split remaining parts
-    parts = nameWithoutDigest.split('/')
+    result.digest = digest
+  }
 
-    // Throw if a part is empty
-    if (parts.some((part) => part === '')) {
-      throw new Error('Invalid image name. A part is empty')
+  const lastSlashIndex = nameWithOptionalTag.lastIndexOf('/')
+  const lastColonIndex = nameWithOptionalTag.lastIndexOf(':')
+  const hasTag = lastColonIndex > lastSlashIndex
+  const nameWithoutTag = hasTag ? nameWithOptionalTag.substring(0, lastColonIndex) : nameWithOptionalTag
+  if (hasTag) {
+    const tag = nameWithOptionalTag.substring(lastColonIndex + 1)
+    if (!tag) {
+      throw new Error('Invalid image name. Tag cannot be empty')
     }
-  } else {
-    const lastSlashIndex = imageName.lastIndexOf('/')
-    const lastColonIndex = imageName.lastIndexOf(':')
-    const hasTag = lastColonIndex > lastSlashIndex
+    result.tag = tag
+  }
 
-    const nameWithoutTag = hasTag ? imageName.substring(0, lastColonIndex) : imageName
-    if (hasTag) {
-      result.tag = imageName.substring(lastColonIndex + 1)
-    }
-    // Split remaining parts
-    parts = nameWithoutTag.split('/')
+  const parts = nameWithoutTag.split('/')
+  if (parts.some((part) => part === '')) {
+    throw new Error('Invalid image name. A part is empty')
   }
 
   // Check if first part looks like a registry hostname (contains '.' or ':' or is 'localhost')

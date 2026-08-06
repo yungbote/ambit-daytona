@@ -25,6 +25,6 @@ export interface IDockerRegistryProvider {
   deleteArtifact(
     baseUrl: string,
     auth: { username: string; password: string },
-    params: { project: string; repository: string; tag: string },
+    params: { project: string; repository: string; reference: string },
   ): Promise<void>
 }

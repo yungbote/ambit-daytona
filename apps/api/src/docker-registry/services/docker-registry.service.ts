@@ -570,8 +570,9 @@ export class DockerRegistryService {
     }
 
     const parsedImage = parseDockerImage(imageName)
-    if (!parsedImage.project) {
-      throw new Error('Invalid image name format. Expected: [registry]/project/repository[:tag]')
+    const artifactReference = parsedImage.digest ?? parsedImage.tag
+    if (!parsedImage.project || !artifactReference) {
+      throw new Error('Invalid image name format. Expected: [registry]/project/repository[:tag][@digest]')
     }
 
     try {
@@ -584,7 +585,7 @@ export class DockerRegistryService {
         {
           project: parsedImage.project,
           repository: parsedImage.repository,
-          tag: parsedImage.tag,
+          reference: artifactReference,
         },
       )
     } catch (error) {

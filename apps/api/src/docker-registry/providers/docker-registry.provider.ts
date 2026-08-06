@@ -37,9 +37,9 @@ export class DockerRegistryProvider implements IDockerRegistryProvider {
   async deleteArtifact(
     baseUrl: string,
     auth: { username: string; password: string },
-    params: { project: string; repository: string; tag: string },
+    params: { project: string; repository: string; reference: string },
   ): Promise<void> {
-    const url = `${baseUrl}/api/v2.0/projects/${params.project}/repositories/${params.repository}/artifacts/${params.tag}`
+    const url = `${baseUrl}/api/v2.0/projects/${params.project}/repositories/${params.repository}/artifacts/${params.reference}`
 
     try {
       await firstValueFrom(this.httpService.delete(url, { auth }))
