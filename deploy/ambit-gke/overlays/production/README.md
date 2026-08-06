@@ -185,9 +185,10 @@ Daytona's object-storage service calls MinIO's
 credentials to runners. GCS alone does not implement that contract. The
 overlay therefore runs four MinIO peers on separate retained
 `daytona-standard-rwo` volumes and creates the shared `ambit-daytona` bucket
-with a pinned `mc` job. The bootstrap Job uses the cluster-local MinIO Service,
-so it can establish owned state before public DNS, certificates, or the Gateway
-are ready.
+with a pinned `mc` job. The bootstrap Job, API, and runners use the
+cluster-local MinIO Service, so owned state and control-plane startup do not
+depend on public DNS, certificates, or the Gateway. The public MinIO route is
+an edge endpoint, not an internal service-discovery dependency.
 
 The official Harbor 2.15.2 deployment owns both Daytona registry roles at
 `https://registry.daytona.ambit.sh`. Its registry uses GCS through Workload
@@ -237,8 +238,8 @@ frontend on reserved address resource `ambit-daytona-ssh`; it cannot share this
 HTTP(S) Gateway. Verify `ssh.daytona.ambit.sh` resolves to that Service address
 before exercising port 2222.
 
-The MinIO peers currently use HTTP for their node-to-node erasure traffic
-inside the GKE VPC; client/API/runner traffic uses the public HTTPS endpoint.
+The MinIO peers and the namespace-identity-restricted API/runner clients use
+HTTP inside the GKE VPC; public edge traffic uses the HTTPS Gateway endpoint.
 If application-layer encryption between peers is required, add a private CA and
 pod-DNS certificates as a routing/storage concern and distribute that CA to
 every S3 client; do not disable certificate verification.

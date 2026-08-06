@@ -31,8 +31,8 @@ data:
   # The hostname intentionally contains "minio": this AGPL Daytona revision
   # selects its MinIO STS flow from that endpoint and requests prefix-scoped
   # temporary credentials for each organization.
-  S3_ENDPOINT: https://minio.daytona.ambit.sh
-  S3_STS_ENDPOINT: https://minio.daytona.ambit.sh/minio/v1/assume-role
+  S3_ENDPOINT: http://minio.daytona-state.svc.cluster.local:9000
+  S3_STS_ENDPOINT: http://minio.daytona-state.svc.cluster.local:9000/minio/v1/assume-role
   S3_REGION: us-east4
   S3_DEFAULT_BUCKET: ambit-daytona
 ---
@@ -56,6 +56,6 @@ metadata:
   name: daytona-runner-config
   namespace: daytona-runners
 data:
-  AWS_ENDPOINT_URL: https://minio.daytona.ambit.sh
+  AWS_ENDPOINT_URL: http://minio.daytona-state.svc.cluster.local:9000
   AWS_REGION: us-east4
   AWS_DEFAULT_BUCKET: ambit-daytona
