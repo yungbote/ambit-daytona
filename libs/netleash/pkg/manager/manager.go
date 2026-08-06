@@ -86,8 +86,12 @@ type entry struct {
 	// eBPF gate additionally requires the proxy to be running (EnableEgressProxy),
 	// and is re-applied when the proxy comes up.
 	enforceProxy bool
-	fw           *firewall.Firewall
-	cancel       context.CancelFunc
+	// unrestrictedEgress distinguishes an open network whose web ports are still
+	// forced through the proxy from a domain-restricted firewall. It cannot be
+	// inferred from domains after Adopt, where the in-memory domain set is unknown.
+	unrestrictedEgress bool
+	fw                 *firewall.Firewall
+	cancel             context.CancelFunc
 }
 
 // attachTarget describes where a workload's egress firewall attaches.
@@ -149,7 +153,9 @@ func (m *Manager) pinPathFor(id string) string {
 // attached to cgroupPath that allows exactly the given domains (entries
 // prefixed with "*." enable wildcard suffix matching). It is idempotent:
 //
-//   - empty domains  → any existing firewall is removed (unrestricted egress)
+//   - empty domains without proxy enforcement → any existing firewall is removed
+//   - empty domains with proxy enforcement → DNS/non-web egress stays open while
+//     standard web ports are forced through the proxy
 //   - same domains   → no-op (the working filter is left in place)
 //   - changed domains → the existing filter's allow list is updated IN PLACE
 //   - new workload    → a fresh firewall is attached and pinned
@@ -186,10 +192,11 @@ func (m *Manager) Configure(id, cgroupPath string, domains []string, enforceProx
 // workload's traffic (the host side of its veth pair); hostVeth must be true for
 // such an interface so the TC directions are swapped (workload egress arrives as
 // ingress on the host veth). Semantics otherwise match Configure exactly
-// (idempotent; empty domains remove the filter; changes update in place;
-// enforceProxy gates web ports through the shared egress proxy).
+// (idempotent; empty domains remove the filter only without proxy enforcement;
+// changes update in place; enforceProxy gates web ports through the shared
+// egress proxy).
 func (m *Manager) ConfigureInterface(id, iface string, hostVeth bool, domains []string, enforceProxy bool) error {
-	if iface == "" && len(normalizeDomains(domains)) > 0 {
+	if iface == "" && (len(normalizeDomains(domains)) > 0 || enforceProxy) {
 		return fmt.Errorf("netleash: ConfigureInterface for workload %s requires an interface name", id)
 	}
 	return m.configure(id, attachTarget{iface: iface, hostVeth: hostVeth}, domains, enforceProxy)
@@ -199,17 +206,19 @@ func (m *Manager) ConfigureInterface(id, iface string, hostVeth bool, domains []
 // ConfigureInterface (TC mode); see Configure's doc for the idempotency rules.
 func (m *Manager) configure(id string, target attachTarget, domains []string, enforceProxy bool) error {
 	norm := normalizeDomains(domains)
+	unrestrictedEgress := len(norm) == 0 && enforceProxy
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if len(norm) > 0 && enforceProxy && m.egressProxyAddr == "" {
+	if enforceProxy && m.egressProxyAddr == "" {
 		return fmt.Errorf("netleash: proxy enforcement requested for workload %s but the egress proxy is not running", id)
 	}
 
 	existing, ok := m.entries[id]
 
-	// No domains → remove any existing restriction.
-	if len(norm) == 0 {
+	// No domains and no mandatory proxy → remove the policy entirely. Empty
+	// domains with enforcement are a distinct open-network policy, not removal.
+	if len(norm) == 0 && !enforceProxy {
 		if ok {
 			m.removeLocked(id, existing)
 		}
@@ -223,25 +232,46 @@ func (m *Manager) configure(id string, target attachTarget, domains []string, en
 	// domain's already-resolved IPs stop being reachable. Pure additions keep the
 	// cache so in-flight connections to still-allowed domains aren't disrupted.
 	if ok {
-		if equalDomains(existing.domains, norm) && existing.enforceProxy == enforceProxy {
+		sameDomains := equalDomains(existing.domains, norm)
+		openingNetwork := !existing.unrestrictedEgress && unrestrictedEgress
+		if sameDomains && existing.enforceProxy == enforceProxy && existing.unrestrictedEgress == unrestrictedEgress {
 			// Reassert the gate even when desired state is unchanged. A previous
 			// map-write failure must remain retryable rather than being mistaken for
 			// successful convergence on the next idempotent admission.
-			return m.applyProxyEnforcementLocked(id, existing)
+			return m.applyProxyPolicyLocked(id, existing)
 		}
-		if !equalDomains(existing.domains, norm) {
-			clearLearned := len(existing.domains) == 0 || domainsRemoved(existing.domains, norm)
+
+		// Tightening an open policy must disable unrestricted egress before domain
+		// maps are touched. If the subsequent update fails, the workload remains
+		// blocked rather than retaining its former open-network policy.
+		if existing.unrestrictedEgress && !unrestrictedEgress {
+			if err := m.setProxyPolicyLocked(id, existing, enforceProxy, false); err != nil {
+				return err
+			}
+			existing.enforceProxy = enforceProxy
+			existing.unrestrictedEgress = false
+		}
+
+		if !sameDomains || openingNetwork {
+			// Always clear maps before opening. This also removes an adopted policy's
+			// unknown pinned domains, which are intentionally absent from entry.domains.
+			clearLearned := openingNetwork || len(existing.domains) == 0 || domainsRemoved(existing.domains, norm)
 			if err := existing.fw.UpdateDomains(norm, clearLearned); err != nil {
 				return fmt.Errorf("netleash: updating workload %s: %w", id, err)
 			}
 			existing.domains = norm
 			m.log.Info("domain allow list updated", "workload", id, "domains", norm, "cleared_learned_ips", clearLearned)
 		}
-		// Re-apply the web-port proxy gate idempotently and surface failures for
-		// the runner to quarantine. Hostname enforcement is part of the policy
-		// contract, not an optional layer over the IP allow list.
+
+		// Relaxing to unrestricted happens only after the restrictive domain maps
+		// were cleared. Re-apply every policy idempotently so transient map-write
+		// failures remain visible and retryable.
+		if err := m.setProxyPolicyLocked(id, existing, enforceProxy, unrestrictedEgress); err != nil {
+			return err
+		}
 		existing.enforceProxy = enforceProxy
-		return m.applyProxyEnforcementLocked(id, existing)
+		existing.unrestrictedEgress = unrestrictedEgress
+		return nil
 	}
 
 	// New workload → attach a fresh firewall and pin it.
@@ -261,9 +291,10 @@ func (m *Manager) configure(id string, target attachTarget, domains []string, en
 		// filter so a domain-restricted workload can still reach the proxy (the
 		// proxy then enforces the same allow list on the workload's behalf for the
 		// traffic it intercepts). Empty when the proxy is off.
-		ProxyAddr:    m.egressProxyAddr,
-		EnforceProxy: enforceProxy,
-		Logger:       m.log.With(slog.String("workload", id)),
+		ProxyAddr:          m.egressProxyAddr,
+		EnforceProxy:       enforceProxy,
+		UnrestrictedEgress: unrestrictedEgress,
+		Logger:             m.log.With(slog.String("workload", id)),
 	})
 	if err := fw.Setup(); err != nil {
 		fw.Cleanup()
@@ -286,30 +317,36 @@ func (m *Manager) configure(id string, target attachTarget, domains []string, en
 	}
 
 	m.entries[id] = &entry{
-		domains:      norm,
-		target:       target,
-		enforceProxy: enforceProxy,
-		fw:           fw,
-		cancel:       cancel,
+		domains:            norm,
+		target:             target,
+		enforceProxy:       enforceProxy,
+		unrestrictedEgress: unrestrictedEgress,
+		fw:                 fw,
+		cancel:             cancel,
 	}
-	m.log.Info("domain allow list applied", "workload", id, "domains", norm, "interface", target.iface, "enforce_proxy", enforceProxy)
+	m.log.Info("egress policy applied", "workload", id, "domains", norm, "interface", target.iface, "enforce_proxy", enforceProxy, "unrestricted", unrestrictedEgress)
 	return nil
 }
 
-// applyProxyEnforcementLocked writes the entry's desired web-port proxy gate to
-// its firewall: on when the entry requested enforcement AND the shared proxy is
-// running, off otherwise. Hostname enforcement is a required policy boundary,
-// so requested enforcement without a live proxy or writable gate is an error.
+// setProxyPolicyLocked writes an explicit desired proxy policy to an entry's
+// firewall. Hostname enforcement is a required policy boundary, so requested
+// enforcement without a live proxy or writable gate is an error.
 // Caller must hold m.mu.
-func (m *Manager) applyProxyEnforcementLocked(id string, e *entry) error {
-	effective := e.enforceProxy && m.egressProxyAddr != ""
-	if e.enforceProxy && !effective {
+func (m *Manager) setProxyPolicyLocked(id string, e *entry, enforceProxy, unrestrictedEgress bool) error {
+	effective := enforceProxy && m.egressProxyAddr != ""
+	if enforceProxy && !effective {
 		return fmt.Errorf("netleash: proxy enforcement requested for workload %s but the egress proxy is not running", id)
 	}
-	if err := e.fw.SetProxyEnforcement(m.egressProxyAddr, effective); err != nil {
-		return fmt.Errorf("netleash: applying proxy enforcement for workload %s: %w", id, err)
+	if err := e.fw.SetProxyPolicy(m.egressProxyAddr, effective, unrestrictedEgress && effective); err != nil {
+		return fmt.Errorf("netleash: applying proxy policy for workload %s: %w", id, err)
 	}
 	return nil
+}
+
+// applyProxyPolicyLocked reasserts the entry's requested durable state.
+// Caller must hold m.mu.
+func (m *Manager) applyProxyPolicyLocked(id string, e *entry) error {
+	return m.setProxyPolicyLocked(id, e, e.enforceProxy, e.unrestrictedEgress)
 }
 
 // Adopt re-attaches management to a workload whose pinned firewall survived a
@@ -347,19 +384,19 @@ func (m *Manager) Adopt(id string) error {
 	// proxy is already live (normal runner startup order), verify reachability and
 	// the gate before declaring the entry managed. Cleanup leaves pins attached
 	// on failure so the host can quarantine/stop the workload.
-	enforceProxy, err := fw.ProxyEnforcementEnabled()
+	proxyPolicy, err := fw.ReadProxyPolicy()
 	if err != nil {
 		fw.Cleanup()
 		cancel()
 		return fmt.Errorf("netleash: reading hostname policy for adopted workload %s: %w", id, err)
 	}
-	if enforceProxy && m.egressProxyAddr != "" {
+	if proxyPolicy.Enforced && m.egressProxyAddr != "" {
 		if err := fw.AllowIP(m.egressProxyAddr); err != nil {
 			fw.Cleanup()
 			cancel()
 			return fmt.Errorf("netleash: allowing egress proxy for adopted workload %s: %w", id, err)
 		}
-		if err := fw.SetProxyEnforcement(m.egressProxyAddr, true); err != nil {
+		if err := fw.SetProxyPolicy(m.egressProxyAddr, true, proxyPolicy.UnrestrictedEgress); err != nil {
 			fw.Cleanup()
 			cancel()
 			return fmt.Errorf("netleash: enabling hostname enforcement for adopted workload %s: %w", id, err)
@@ -370,11 +407,12 @@ func (m *Manager) Adopt(id string) error {
 	// domains/cgroupPath are intentionally left zero: the live allow list lives
 	// in the adopted pinned maps, not in this record.
 	m.entries[id] = &entry{
-		enforceProxy: enforceProxy,
-		fw:           fw,
-		cancel:       cancel,
+		enforceProxy:       proxyPolicy.Enforced,
+		unrestrictedEgress: proxyPolicy.UnrestrictedEgress,
+		fw:                 fw,
+		cancel:             cancel,
 	}
-	m.log.Info("domain allow list adopted after restart", "workload", id)
+	m.log.Info("egress policy adopted after restart", "workload", id, "enforce_proxy", proxyPolicy.Enforced, "unrestricted", proxyPolicy.UnrestrictedEgress)
 	return nil
 }
 
@@ -754,7 +792,7 @@ func (m *Manager) EnableEgressProxy(cfg EgressProxyConfig) (*EgressProxyHandle, 
 			continue
 		}
 		if e.enforceProxy {
-			if err := m.applyProxyEnforcementLocked(id, e); err != nil {
+			if err := m.applyProxyPolicyLocked(id, e); err != nil {
 				m.log.Error("netleash: failed to enable proxy enforcement on existing firewall", "workload", id, "error", err)
 				failedFirewalls = append(failedFirewalls, id)
 			}

@@ -77,27 +77,25 @@ func (d *DockerClient) UpdateNetworkSettings(ctx context.Context, containerId st
 		}
 	}
 
-	// Apply (or clear) the eBPF domain allow list via netleash. Keyed by the
-	// full container ID so it stays consistent across the sandbox lifecycle.
-	// An empty list clears any existing restriction.
+	// Reconcile the source-bound proxy policy and eBPF as one ordered boundary.
+	// Empty domains remain proxy-gated when the sandbox uses secrets; otherwise
+	// they remove the policy and restore an ordinary open network.
 	if updateNetworkSettingsDto.DomainAllowList != nil {
 		domainAllowList := *updateNetworkSettingsDto.DomainAllowList
 		env := envSliceToMap(info.Config.Env)
-		if len(splitDomainAllowList(domainAllowList)) > 0 {
-			// Tighten the hostname policy before enabling/updating the eBPF gate.
-			// If either half fails, rejectSandboxAdmission revokes the binding and
-			// stops the workload rather than retaining an IP-only compatibility mode.
+		needsProxyGate := len(splitDomainAllowList(domainAllowList)) > 0 || sandboxUsesSecrets(env)
+		if needsProxyGate {
+			// Install the destination policy before redirecting traffic to the proxy.
+			// Manager handles open↔restricted kernel transitions fail-closed.
 			if err := d.updateSandboxPolicyDomains(ctx, info.ID, containerId, ipAddress, domainAllowList, env); err != nil {
 				return d.rejectSandboxAdmission(ctx, info, err)
 			}
-			if err := d.applyDomainAllowList(ctx, info.ID, domainAllowList); err != nil {
+			if err := d.applyEgressPolicy(ctx, info, domainAllowList); err != nil {
 				return d.rejectSandboxAdmission(ctx, info, err)
 			}
 		} else {
-			// Clearing a domain policy is intentionally relaxing. Remove the eBPF
-			// gate first, then preserve an allow-all proxy binding only for containers
-			// that still carry proxy wiring (for example secret-using sandboxes).
-			if err := d.applyDomainAllowList(ctx, info.ID, domainAllowList); err != nil {
+			// Remove the kernel gate before deleting the unused durable binding.
+			if err := d.applyEgressPolicy(ctx, info, domainAllowList); err != nil {
 				return err
 			}
 			if err := d.updateSandboxPolicyDomains(ctx, info.ID, containerId, ipAddress, domainAllowList, env); err != nil {

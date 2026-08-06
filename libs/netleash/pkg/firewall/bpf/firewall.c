@@ -35,12 +35,19 @@ int firewall_egress(struct __sk_buff *skb) {
 	if (first_byte == 169 || (first_byte >= 224 && first_byte <= 239))
 		return 1;
 
+	int unrestricted = unrestricted_egress_enabled();
+
 	// Filter DNS queries (UDP port 53): only allow queries for allowed domains.
 	if (ip.protocol == IPPROTO_UDP) {
 		struct udphdr udp;
 		int ip_hdr_len = ip.ihl * 4;
 		if (bpf_skb_load_bytes(skb, ip_hdr_len, &udp, sizeof(udp)) == 0) {
 			if (udp.dest == bpf_htons(53)) {
+				// An open-network secret sandbox still needs ordinary DNS. Its
+				// standard web traffic is forced through the proxy below/connect4.
+				if (unrestricted)
+					return 1;
+
 				int dns_off = ip_hdr_len + sizeof(struct udphdr);
 
 				// Load DNS header and verify it's a query (QR=0).
@@ -156,6 +163,12 @@ int firewall_egress(struct __sk_buff *skb) {
 		emit_ip_decision(skb, 0, dst_ip, &ip, EV_BLOCKED, EV_REASON_WEB_NOT_PROXIED);
 		return 0; // Drop
 	}
+
+	// Open-network policies restrict only the web ports handled by the gate.
+	// Keep this after check_proxy_gate so direct TCP 80/443 and QUIC cannot use
+	// unrestricted egress to bypass the hostname-aware proxy.
+	if (unrestricted)
+		return 1;
 
 	// Check if the destination IP is in the whitelist.
 	__u8 *allowed = bpf_map_lookup_elem(&allowed_ips, &dst_ip);

@@ -33,11 +33,11 @@ type firewallOrigDst struct {
 }
 
 type firewallProxyCfg struct {
-	_         structs.HostLayout
-	ProxyIp   uint32
-	ProxyPort uint16
-	Enforce   uint8
-	Pad       uint8
+	_            structs.HostLayout
+	ProxyIp      uint32
+	ProxyPort    uint16
+	Enforce      uint8
+	Unrestricted uint8
 }
 
 // loadFirewall returns the embedded CollectionSpec for firewall.

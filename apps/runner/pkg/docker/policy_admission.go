@@ -36,10 +36,11 @@ func (d *DockerClient) admitRunningSandboxPolicy(
 	}
 
 	env := envSliceToMap(info.Config.Env)
-	domainAllowList, domainSpecified := metadata["domainAllowList"]
+	domainAllowList := metadata["domainAllowList"]
 	networkAllowList := strings.TrimSpace(metadata["networkAllowList"])
 	blockAll := metadata["networkBlockAll"] == "true"
 	hasDomains := len(splitDomainAllowList(domainAllowList)) > 0
+	needsProxyGate := hasDomains || sandboxUsesSecrets(env)
 
 	if blockAll && (networkAllowList != "" || hasDomains) {
 		return fmt.Errorf("sandbox %s has contradictory block-all and allow-list policies", sandboxID)
@@ -86,20 +87,22 @@ func (d *DockerClient) admitRunningSandboxPolicy(
 		}
 	}
 
-	// Clearing a domain filter tears down the manager entry (including its proxy
-	// binding), so perform that relaxation before installing the desired binding.
-	// Non-empty policies take the inverse order: the proxy learns the restrictive
-	// hostname policy before the eBPF gate begins redirecting traffic to it.
-	if domainSpecified && !hasDomains {
-		if err := d.applyDomainAllowList(ctx, containerID, domainAllowList); err != nil {
+	// A proxy-gated sandbox must have its source-bound proxy policy installed
+	// before eBPF redirects traffic to it. Removal takes the inverse order: first
+	// remove the kernel gate, then erase the now-unused durable binding. These two
+	// states cover both restrictive domain policies and open-network secrets.
+	if needsProxyGate {
+		if err := d.registerSandboxPolicy(ctx, containerID, sandboxID, secretsToken, containerIP, domainAllowList, env); err != nil {
 			return err
 		}
-	}
-	if err := d.registerSandboxPolicy(ctx, containerID, sandboxID, secretsToken, containerIP, domainAllowList, env); err != nil {
-		return err
-	}
-	if hasDomains {
-		if err := d.applyDomainAllowList(ctx, containerID, domainAllowList); err != nil {
+		if err := d.applyEgressPolicy(ctx, info, domainAllowList); err != nil {
+			return err
+		}
+	} else {
+		if err := d.applyEgressPolicy(ctx, info, domainAllowList); err != nil {
+			return err
+		}
+		if err := d.registerSandboxPolicy(ctx, containerID, sandboxID, secretsToken, containerIP, domainAllowList, env); err != nil {
 			return err
 		}
 	}

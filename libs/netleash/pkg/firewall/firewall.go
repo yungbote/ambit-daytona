@@ -29,26 +29,27 @@ const cgroupBase = "/sys/fs/cgroup"
 
 // Config holds all configuration for the firewall.
 type Config struct {
-	Domains          []string                                         // whitelisted domains for egress
-	InternalDNSZones []string                                         // cluster-internal DNS zones (e.g. "cluster.local") whose queries pass through to the resolver
-	AllowedExecs     []string                                         // whitelisted executable paths (empty = no exec filtering)
-	ProxyAddr        string                                           // "127.0.0.1:18080" (empty = no proxy)
-	EnforceProxy     bool                                             // gate web ports (TCP 80/443, UDP 443) so HTTP(S) can only reach ProxyAddr — the hostname-aware proxy becomes the mandatory egress path for web traffic
-	SecretsEnv       map[string]string                                // env var NAME → placeholder value
-	CACertFile       string                                           // path to combined CA cert file
-	JavaTrustStore   string                                           // path to PKCS12 keystore for JVM TLS (empty = no JVM truststore)
-	CgroupPath       string                                           // attach to existing cgroup (empty = create new) — cgroup mode
-	PinPath          string                                           // bpffs dir to pin links+maps (empty = no pinning) — cgroup mode; survives a restart of this process
-	Interface        string                                           // network interface name (e.g., "tap0", "veth0") — TC mode
-	Tap              bool                                             // swap TC attach directions for tap devices (use with Interface)
-	Stdout           io.Writer                                        // child process stdout (nil = os.Stdout)
-	Stderr           io.Writer                                        // child process stderr (nil = os.Stderr)
-	Stdin            io.Reader                                        // child process stdin (nil = os.Stdin)
-	Env              []string                                         // additional env vars for the child process
-	User             string                                           // drop privileges to this user (e.g., "goran" or "1000")
-	OnBlocked        func(dstIP string, dstPort uint16, proto string) // optional callback for blocked packets
-	OnExecBlocked    func(path string)                                // optional callback for blocked exec attempts
-	Logger           *slog.Logger                                     // if nil, slog.Default() is used
+	Domains            []string                                         // whitelisted domains for egress
+	InternalDNSZones   []string                                         // cluster-internal DNS zones (e.g. "cluster.local") whose queries pass through to the resolver
+	AllowedExecs       []string                                         // whitelisted executable paths (empty = no exec filtering)
+	ProxyAddr          string                                           // "127.0.0.1:18080" (empty = no proxy)
+	EnforceProxy       bool                                             // gate web ports (TCP 80/443, UDP 443) so HTTP(S) can only reach ProxyAddr — the hostname-aware proxy becomes the mandatory egress path for web traffic
+	UnrestrictedEgress bool                                             // allow DNS and non-web IPv4 after the proxy gate; valid only with EnforceProxy
+	SecretsEnv         map[string]string                                // env var NAME → placeholder value
+	CACertFile         string                                           // path to combined CA cert file
+	JavaTrustStore     string                                           // path to PKCS12 keystore for JVM TLS (empty = no JVM truststore)
+	CgroupPath         string                                           // attach to existing cgroup (empty = create new) — cgroup mode
+	PinPath            string                                           // bpffs dir to pin links+maps (empty = no pinning) — cgroup mode; survives a restart of this process
+	Interface          string                                           // network interface name (e.g., "tap0", "veth0") — TC mode
+	Tap                bool                                             // swap TC attach directions for tap devices (use with Interface)
+	Stdout             io.Writer                                        // child process stdout (nil = os.Stdout)
+	Stderr             io.Writer                                        // child process stderr (nil = os.Stderr)
+	Stdin              io.Reader                                        // child process stdin (nil = os.Stdin)
+	Env                []string                                         // additional env vars for the child process
+	User               string                                           // drop privileges to this user (e.g., "goran" or "1000")
+	OnBlocked          func(dstIP string, dstPort uint16, proto string) // optional callback for blocked packets
+	OnExecBlocked      func(path string)                                // optional callback for blocked exec attempts
+	Logger             *slog.Logger                                     // if nil, slog.Default() is used
 }
 
 // Firewall manages the eBPF-based egress firewall for a child process.

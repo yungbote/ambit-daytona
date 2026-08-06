@@ -136,8 +136,15 @@ struct {
 // set, traffic on the standard web ports (TCP 80/443, UDP 443) may only go to
 // the proxy itself — the hostname-aware MITM proxy becomes the mandatory path
 // for HTTP(S), enforcing the domain allow list by SNI/Host instead of by
-// DNS-learned IP (which is spoofable via shared IPs / domain fronting). All
-// other protocols and ports keep the IP-allowlist behavior.
+// DNS-learned IP (which is spoofable via shared IPs / domain fronting).
+//
+// `unrestricted` makes DNS and non-web IPv4 egress pass through after that web
+// gate. This is the open-network + mandatory-web-proxy state used by workloads
+// with runtime secrets but no domain restriction: arbitrary egress remains
+// available, while clients that ignore HTTP(S)_PROXY still cannot bypass secret
+// substitution on TCP 80/443. The byte intentionally reuses the struct's former
+// padding so pinned map values keep the same eight-byte ABI; an older pin reads
+// as restricted (zero), which is the fail-closed migration behavior.
 //
 // In cgroup mode this is achieved primarily by the connect4 program, which
 // transparently rewrites a web-port connect() to the proxy (so clients that
@@ -149,7 +156,7 @@ struct proxy_cfg {
 	__u32 proxy_ip;   // proxy IPv4, network byte order (0 = none)
 	__u16 proxy_port; // proxy port, network byte order
 	__u8 enforce;     // 1 = web-port egress must go to the proxy
-	__u8 pad;
+	__u8 unrestricted; // 1 = allow DNS/non-web IPv4 after the proxy gate
 } __attribute__((packed));
 
 // Single-entry array holding the proxy enforcement settings (index 0).
@@ -276,6 +283,15 @@ static __always_inline int check_proxy_gate(struct __sk_buff *skb, int l3_off,
 		return PROXY_GATE_DROP;
 
 	return PROXY_GATE_NONE;
+}
+
+// unrestricted_egress_enabled reports whether this firewall represents an
+// open network with only standard web ports forced through the proxy. Callers
+// must still apply check_proxy_gate before using this to allow general egress.
+static __always_inline int unrestricted_egress_enabled(void) {
+	__u32 zero = 0;
+	struct proxy_cfg *cfg = bpf_map_lookup_elem(&proxy_config, &zero);
+	return cfg && cfg->enforce && cfg->unrestricted;
 }
 
 // ipv6_gate_allows decides IPv6 egress under proxy enforcement. This firewall's

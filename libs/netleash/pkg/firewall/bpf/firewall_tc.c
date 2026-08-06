@@ -53,12 +53,18 @@ int firewall_tc_egress(struct __sk_buff *skb) {
 	if (first_byte == 192 && ((dst_ip >> 8) & 0xFF) == 168)
 		return TC_ACT_OK;
 
+	int unrestricted = unrestricted_egress_enabled();
+
 	// Filter DNS queries (UDP port 53): only allow queries for allowed domains.
 	if (ip.protocol == IPPROTO_UDP) {
 		struct udphdr udp;
 		int ip_hdr_len = L3_OFF + ip.ihl * 4;
 		if (bpf_skb_load_bytes(skb, ip_hdr_len, &udp, sizeof(udp)) == 0) {
 			if (udp.dest == bpf_htons(53)) {
+				// Open-network proxy policies do not restrict DNS.
+				if (unrestricted)
+					return TC_ACT_OK;
+
 				int dns_off = ip_hdr_len + sizeof(struct udphdr);
 
 				// Load DNS header and verify it's a query (QR=0).
@@ -144,6 +150,11 @@ int firewall_tc_egress(struct __sk_buff *skb) {
 		emit_ip_decision(skb, L3_OFF, dst_ip, &ip, EV_BLOCKED, EV_REASON_WEB_NOT_PROXIED);
 		return TC_ACT_SHOT; // Drop
 	}
+
+	// TC cannot transparently redirect connects, but it still prevents a client
+	// from bypassing the configured proxy on web ports. Non-web IPv4 remains open.
+	if (unrestricted)
+		return TC_ACT_OK;
 
 	// Check if the destination IP is in the whitelist.
 	__u8 *allowed = bpf_map_lookup_elem(&allowed_ips, &dst_ip);

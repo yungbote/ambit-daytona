@@ -230,28 +230,32 @@ func (fw *Firewall) allowProxyIP() error {
 	return fw.AllowIP(fw.cfg.ProxyAddr)
 }
 
-// populateProxyConfig seeds the eBPF proxy_config map from Config.ProxyAddr and
-// Config.EnforceProxy during Setup. With enforcement on, the egress programs
-// gate the standard web ports (TCP 80/443, UDP 443) so HTTP(S) can only reach
-// the proxy — which then enforces the domain allow list on the requested
-// hostname (SNI/Host) rather than on DNS-learned IPs. A zeroed map (the
-// default) leaves the gate off.
+// populateProxyConfig seeds the eBPF proxy_config map from the desired policy
+// during Setup. With enforcement on, the egress programs gate the standard web
+// ports (TCP 80/443, UDP 443) so HTTP(S) can only reach the proxy — which then
+// enforces the domain allow list on the requested hostname (SNI/Host) rather
+// than on DNS-learned IPs. UnrestrictedEgress leaves DNS and non-web IPv4 open
+// after that gate. A zeroed map (the default) leaves both behaviors off.
 func (fw *Firewall) populateProxyConfig() error {
-	if !fw.cfg.EnforceProxy && fw.cfg.ProxyAddr == "" {
+	if !fw.cfg.EnforceProxy && fw.cfg.ProxyAddr == "" && !fw.cfg.UnrestrictedEgress {
 		return nil
 	}
-	return fw.SetProxyEnforcement(fw.cfg.ProxyAddr, fw.cfg.EnforceProxy)
+	return fw.SetProxyPolicy(fw.cfg.ProxyAddr, fw.cfg.EnforceProxy, fw.cfg.UnrestrictedEgress)
 }
 
-// SetProxyEnforcement updates the egress-proxy gate of a live (or adopted)
-// firewall in place: proxyAddr ("ip:port") is the hostname-aware proxy web
-// traffic must use, and enforce turns the web-port gate on or off. Enabling
-// enforcement requires a resolvable IPv4 proxy address — gating web ports with
-// no reachable proxy would silently brick all HTTP(S) egress. Disabling always
-// succeeds (for firewalls that have the map). Firewalls adopted from a pin set
-// that predates proxy enforcement have no proxy_config map (and no gate in
-// their programs); enabling on those returns an error.
-func (fw *Firewall) SetProxyEnforcement(proxyAddr string, enforce bool) error {
+// SetProxyPolicy updates the egress-proxy policy of a live (or adopted)
+// firewall in place. proxyAddr ("ip:port") is the hostname-aware proxy web
+// traffic must use; enforce turns the web-port gate on or off; unrestricted
+// keeps DNS and non-web IPv4 open only after that gate. Enabling enforcement
+// requires a resolvable IPv4 proxy address — gating web ports with no reachable
+// proxy would silently brick all HTTP(S) egress. An unrestricted policy without
+// enforcement is rejected because it would make a restrictive firewall
+// accidentally permissive. Firewalls adopted from a pin set that predates proxy
+// enforcement have no proxy_config map and cannot enable either behavior.
+func (fw *Firewall) SetProxyPolicy(proxyAddr string, enforce, unrestricted bool) error {
+	if unrestricted && !enforce {
+		return fmt.Errorf("unrestricted egress requires proxy enforcement")
+	}
 	if fw.maps.ProxyConfig == nil {
 		if enforce {
 			return fmt.Errorf("firewall predates proxy enforcement (no proxy_config map); rebuild it to enable gating")
@@ -279,29 +283,45 @@ func (fw *Firewall) SetProxyEnforcement(proxyAddr string, enforce bool) error {
 	if enforce {
 		val.Enforce = 1
 	}
+	if unrestricted {
+		val.Unrestricted = 1
+	}
 
 	if err := fw.maps.ProxyConfig.Put(uint32(0), &val); err != nil {
 		return fmt.Errorf("updating proxy_config: %w", err)
 	}
 	fw.cfg.ProxyAddr = proxyAddr
 	fw.cfg.EnforceProxy = enforce
-	fw.log.Debug("proxy enforcement updated", "proxy", proxyAddr, "enforce", enforce)
+	fw.cfg.UnrestrictedEgress = unrestricted
+	fw.log.Debug("proxy policy updated", "proxy", proxyAddr, "enforce", enforce, "unrestricted", unrestricted)
 	return nil
 }
 
-// ProxyEnforcementEnabled reads the durable gate state from a live or adopted
-// firewall. The proxy_config map is pinned with the policy, so callers can
-// recover intent without inventing a side-channel or assuming every Manager
-// consumer uses hostname enforcement.
-func (fw *Firewall) ProxyEnforcementEnabled() (bool, error) {
+// ProxyPolicy is the durable proxy_config state of a live or adopted firewall.
+// The map is pinned with the policy, so callers can recover both the mandatory
+// web gate and the orthogonal open-network bit without a side channel.
+type ProxyPolicy struct {
+	Enforced           bool
+	UnrestrictedEgress bool
+}
+
+// ReadProxyPolicy reads and validates the durable policy state.
+func (fw *Firewall) ReadProxyPolicy() (ProxyPolicy, error) {
 	if fw.maps.ProxyConfig == nil {
-		return false, fmt.Errorf("firewall has no proxy_config map")
+		return ProxyPolicy{}, fmt.Errorf("firewall has no proxy_config map")
 	}
 	var val firewallProxyCfg
 	if err := fw.maps.ProxyConfig.Lookup(uint32(0), &val); err != nil {
-		return false, fmt.Errorf("reading proxy_config: %w", err)
+		return ProxyPolicy{}, fmt.Errorf("reading proxy_config: %w", err)
 	}
-	return val.Enforce != 0, nil
+	policy := ProxyPolicy{
+		Enforced:           val.Enforce != 0,
+		UnrestrictedEgress: val.Unrestricted != 0,
+	}
+	if policy.UnrestrictedEgress && !policy.Enforced {
+		return ProxyPolicy{}, fmt.Errorf("proxy_config contains unrestricted egress without enforcement")
+	}
+	return policy, nil
 }
 
 // parseIPv4Port splits an "ip:port" address into its IPv4 bytes and port,

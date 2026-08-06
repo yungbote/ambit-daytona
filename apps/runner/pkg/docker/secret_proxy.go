@@ -187,9 +187,9 @@ func (d *DockerClient) sandboxNeedsProxyWiring(env map[string]string, domainAllo
 }
 
 // sandboxProxyEnforced reports whether a sandbox's web-port egress must be gated
-// through the shared proxy (hostname-level allow-list enforcement) — i.e. the
-// eBPF connect4 hook should transparently redirect its TCP 80/443 to the proxy,
-// which enforces the allow list on the requested SNI/Host.
+// through the shared proxy — either to enforce a hostname allow list or to make
+// secret substitution mandatory on an otherwise open network. In cgroup mode
+// the eBPF connect4 hook transparently redirects TCP 80/443 to the proxy.
 //
 // Crucially this does NOT require the sandbox to carry the proxy wiring
 // (HTTP(S)_PROXY env + mounted CA): connect4 redirects transparently without the
@@ -201,18 +201,18 @@ func (d *DockerClient) sandboxNeedsProxyWiring(env map[string]string, domainAllo
 // a sandbox that resolved an allowed domain on a shared CDN IP could reach any
 // co-hosted domain by dialing that IP with a forged Host/SNI.
 //
-// A secret-using sandbox is the one exception: its secret-injection hosts are
-// MITM'd, so it must trust the proxy CA (present only with the wiring) or its TLS
-// to those hosts would break. Such sandboxes always receive the wiring at
-// creation, so gating them on it costs nothing.
+// A secret-using sandbox must carry the proxy CA/wiring because its injection
+// hosts are MITM'd. Domain-only policies can be transparently enforced without
+// wiring in cgroup mode because non-secret TLS is spliced end-to-end.
 func (d *DockerClient) sandboxProxyEnforced(env map[string]string, domainAllowList string) bool {
 	if !d.proxyEnforcementEnabled || d.secretProxyAddr == "" {
 		return false
 	}
-	if len(splitDomainAllowList(domainAllowList)) == 0 {
+	usesSecrets := sandboxUsesSecrets(env)
+	if !usesSecrets && len(splitDomainAllowList(domainAllowList)) == 0 {
 		return false
 	}
-	return d.hasProxyWiring(env) || !sandboxUsesSecrets(env)
+	return !usesSecrets || d.hasProxyWiring(env)
 }
 
 // proxyWiringEnvVars returns the env vars that route a sandbox's HTTP(S)
@@ -314,18 +314,18 @@ func (d *DockerClient) secretBindingsDir() string {
 }
 
 // registerSandboxPolicy registers (and persists) the shared-proxy binding for a
-// sandbox that is wired through the proxy: its host allow list and — for a
-// secret-using sandbox — a resolver that fetches the sandbox's secrets from the
-// API authenticating as that sandbox. Sandboxes without secrets get an
-// enforcement-only binding when proxy enforcement is on and they have a domain
-// allow list (the proxy is their mandatory web-egress path, so it must know
-// their policy). No-op only when the sandbox has neither proxy wiring, secrets,
-// nor a domain policy.
+// sandbox whose declared secrets or domain policy make the proxy authoritative:
+// its host allow list and — for a secret-using sandbox — a resolver that fetches
+// the sandbox's secrets from the API authenticating as that sandbox. Sandboxes
+// without secrets get an enforcement-only binding when they have a domain allow
+// list. A running container whose policy was just removed temporarily retains an
+// allow-all binding while its immutable HTTP(S)_PROXY env remains; that transport
+// binding does not install an eBPF gate and disappears on recreation.
 // containerID is the full Docker ID (the manager workload key, matching
 // Remove); sandboxID is used for the API call. domainAllowList empty means
 // unrestricted egress (allow-all).
 func (d *DockerClient) registerSandboxPolicy(ctx context.Context, containerID, sandboxID string, secretsToken *string, containerIP, domainAllowList string, env map[string]string) error {
-	needsPolicy := d.hasProxyWiring(env) || d.sandboxNeedsProxyWiring(env, domainAllowList) || d.sandboxProxyEnforced(env, domainAllowList)
+	needsPolicy := d.hasProxyWiring(env) || sandboxUsesSecrets(env) || len(splitDomainAllowList(domainAllowList)) > 0
 	if !needsPolicy {
 		if d.netleashManager != nil {
 			d.netleashManager.UnregisterSandboxPolicy(containerID)
@@ -556,17 +556,15 @@ func (d *DockerClient) ReconcileSecretBindings(ctx context.Context) {
 // (e.g. one whose record was lost, or one whose allow list was applied after
 // creation) gets a fresh enforcement-only binding, since the proxy is its
 // mandatory web-egress path and an unknown client would be rejected. No-op when
-// the proxy is off or the sandbox neither carries the wiring nor is transparently
-// enforced.
+// the sandbox has neither secrets, a domain policy, nor immutable proxy wiring
+// that still needs an allow-all transport binding until recreation.
 func (d *DockerClient) updateSandboxPolicyDomains(ctx context.Context, containerID, sandboxID, containerIP, domainAllowList string, env map[string]string) error {
-	// Register the binding whenever the sandbox routes through the proxy: either
-	// it carries the proxy wiring (secret-using / explicitly-proxied sandboxes) or
-	// its web-port egress is transparently gated through the proxy by eBPF
-	// (sandboxProxyEnforced — e.g. an allow list applied after creation). Without
-	// the binding the proxy can't map the client IP to an allow list and would
-	// reject its redirected traffic, so enforcement without registration would
-	// break the sandbox's egress instead of scoping it.
-	needsPolicy := d.hasProxyWiring(env) || d.sandboxNeedsProxyWiring(env, domainAllowList) || d.sandboxProxyEnforced(env, domainAllowList)
+	// Register the binding whenever the sandbox routes through the proxy: its
+	// declared secrets/domain policy requires the eBPF gate, or immutable wiring
+	// from a just-relaxed policy still sends cooperating clients through the proxy.
+	// Without a binding the proxy cannot map the client IP to a destination policy
+	// and would reject that traffic instead of scoping it.
+	needsPolicy := d.hasProxyWiring(env) || sandboxUsesSecrets(env) || len(splitDomainAllowList(domainAllowList)) > 0
 	if !needsPolicy {
 		d.revokeSandboxPolicy(containerID)
 		return nil
