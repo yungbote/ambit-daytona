@@ -29,7 +29,7 @@ metadata:
     app.kubernetes.io/component: proxy
   annotations:
     ambit.sh/source-url: https://github.com/yungbote/ambit-daytona
-    ambit.sh/source-revision: c4e3f5d21e2a544314ca28c4ce875a37ad5abfc6
+    ambit.sh/source-revision: 9cfc0e9a2987b55489052e8b0479f6b33ed83d5a
 spec:
   replicas: 2
   strategy:
@@ -113,4 +113,3 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
-

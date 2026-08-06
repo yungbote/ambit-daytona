@@ -10,7 +10,7 @@ metadata:
     app.kubernetes.io/name: daytona
     app.kubernetes.io/component: migration
   annotations:
-    ambit.sh/source-revision: c4e3f5d21e2a544314ca28c4ce875a37ad5abfc6
+    ambit.sh/source-revision: 9cfc0e9a2987b55489052e8b0479f6b33ed83d5a
 spec:
   backoffLimit: 6
   activeDeadlineSeconds: 900
@@ -65,4 +65,3 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: 1Gi
-
