@@ -1,0 +1,224 @@
+# Official Harbor chart 1.19.2 / Harbor 2.15.2.
+# Chart archive SHA-256: 36d8eeb41b4df1aeff18c9af7709110a2fac2194b491d37957822b3359cd5e9a
+
+expose:
+  type: clusterIP
+  tls:
+    enabled: false
+  clusterIP:
+    name: daytona-harbor
+    ports:
+      httpPort: 80
+
+externalURL: https://registry.daytona.ambit.sh
+
+persistence:
+  enabled: true
+  resourcePolicy: keep
+  imageChartStorage:
+    type: gcs
+    disableredirect: true
+    gcs:
+      bucket: mwcc-ambit-daytona-registry-411589140767
+      useWorkloadIdentity: true
+
+existingSecretAdminPassword: daytona-harbor-admin
+existingSecretAdminPasswordKey: HARBOR_ADMIN_PASSWORD
+existingSecretSecretKey: daytona-harbor-shared
+
+internalTLS:
+  enabled: false
+
+ipFamily:
+  ipv6:
+    enabled: false
+  ipv4:
+    enabled: true
+
+imagePullPolicy: IfNotPresent
+updateStrategy:
+  type: RollingUpdate
+logLevel: info
+secretKey: ""
+caBundleSecretName: daytona-harbor-redis-ca
+
+containerSecurityContext:
+  privileged: false
+  allowPrivilegeEscalation: false
+  seccompProfile:
+    type: RuntimeDefault
+  runAsNonRoot: true
+  capabilities:
+    drop: ["ALL"]
+
+nginx:
+  image:
+    repository: docker.io/goharbor/nginx-photon
+    tag: v2.15.2@sha256:0ccc1eca228ecea120d7ad9e4386b8e86ced200212f00060a9abc753dbe7f17f
+  serviceAccountName: daytona-harbor
+  automountServiceAccountToken: false
+  replicas: 2
+  nodeSelector:
+    iam.gke.io/gke-metadata-server-enabled: "true"
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+portal:
+  image:
+    repository: docker.io/goharbor/harbor-portal
+    tag: v2.15.2@sha256:b811b67f7a7f6f1614e4bdf7478b207d13e8aa3f815ff6ad84f216a5098d213d
+  serviceAccountName: daytona-harbor
+  automountServiceAccountToken: false
+  replicas: 2
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+core:
+  image:
+    repository: docker.io/goharbor/harbor-core
+    tag: v2.15.2@sha256:d7b780d23721a000f0fb8e181add6675eafa336de5d033b77fd7da0c171ff7f7
+  serviceAccountName: daytona-harbor-cloud
+  automountServiceAccountToken: false
+  replicas: 2
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  existingSecret: daytona-harbor-shared
+  secretName: daytona-harbor-token
+  existingXsrfSecret: daytona-harbor-xsrf
+  existingXsrfSecretKey: CSRF_KEY
+  nodeSelector:
+    iam.gke.io/gke-metadata-server-enabled: "true"
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+jobservice:
+  image:
+    repository: docker.io/goharbor/harbor-jobservice
+    tag: v2.15.2@sha256:f71a4452a095bcd2a8f0683648a3ae28415432df87ccfb00ec7625f3e340a598
+  serviceAccountName: daytona-harbor-cloud
+  automountServiceAccountToken: false
+  nodeSelector:
+    iam.gke.io/gke-metadata-server-enabled: "true"
+  replicas: 2
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  existingSecret: daytona-harbor-shared
+  jobLoggers: [stdout]
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+registry:
+  registry:
+    image:
+      repository: docker.io/goharbor/registry-photon
+      tag: v2.15.2@sha256:c4ebef61ceb50a3d8bc21d149bc280422db20a1e69df317b64b74098c3615855
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+  controller:
+    image:
+      repository: docker.io/goharbor/harbor-registryctl
+      tag: v2.15.2@sha256:223d5cb49d5dbf0ba4ae022e7dd9775fa459904112dc12084d3aaa36c1408362
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+  serviceAccountName: daytona-harbor-cloud
+  automountServiceAccountToken: false
+  replicas: 2
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  nodeSelector:
+    iam.gke.io/gke-metadata-server-enabled: "true"
+  existingSecret: daytona-harbor-shared
+  credentials:
+    username: harbor_registry_user
+    password: ""
+    existingSecret: daytona-harbor-registry-credentials
+  relativeurls: false
+
+trivy:
+  enabled: false
+
+database:
+  type: external
+  external:
+    host: 127.0.0.1
+    port: "5432"
+    username: harbor
+    coreDatabase: harbor
+    existingSecret: daytona-harbor-db
+    sslmode: disable
+  maxIdleConns: 20
+  maxOpenConns: 100
+
+redis:
+  type: external
+  external:
+    addr: 10.160.5.116:6378
+    tlsOptions:
+      enable: true
+    coreDatabaseIndex: "0"
+    jobserviceDatabaseIndex: "1"
+    registryDatabaseIndex: "2"
+    trivyAdapterIndex: "5"
+    username: default
+    existingSecret: daytona-harbor-redis
+
+exporter:
+  image:
+    repository: docker.io/goharbor/harbor-exporter
+    tag: v2.15.2@sha256:e1b0a248f61aad5084c5d1612d5f1da89f99c23ce743eaf8cba913d6d00c0547
+  serviceAccountName: daytona-harbor-cloud
+  automountServiceAccountToken: false
+  replicas: 1
+  nodeSelector:
+    iam.gke.io/gke-metadata-server-enabled: "true"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: false

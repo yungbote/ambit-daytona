@@ -1,0 +1,16 @@
+# Copyright 2026 Ambit
+# SPDX-License-Identifier: AGPL-3.0
+
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: daytona-standard-rwo
+  labels:
+    app.kubernetes.io/name: daytona
+provisioner: pd.csi.storage.gke.io
+parameters:
+  type: pd-standard
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Retain
+

@@ -44,6 +44,9 @@ func (d *DockerClient) Start(ctx context.Context, containerId string, authToken 
 		if containerIP == "" {
 			return nil, "", errors.New("sandbox IP not found? Is the sandbox started?")
 		}
+		if err := d.admitRunningSandboxPolicy(ctx, c, containerId, secretsToken, metadata); err != nil {
+			return nil, "", d.rejectSandboxAdmission(ctx, c, err)
+		}
 
 		if isAndroidDeviceContainer(c) {
 			if err := d.waitForAdbRunning(ctx, containerIP); err != nil {
@@ -56,10 +59,6 @@ func (d *DockerClient) Start(ctx context.Context, containerId string, authToken 
 		if err != nil {
 			return nil, "", err
 		}
-
-		// Re-register secrets for an already-running sandbox (e.g. idempotent
-		// Start retry); no-op when it uses none.
-		d.registerSandboxSecrets(ctx, c.ID, containerId, secretsToken, containerIP, metadata["domainAllowList"], envSliceToMap(c.Config.Env))
 
 		return c, daemonVersion, nil
 	}
@@ -82,7 +81,7 @@ func (d *DockerClient) Start(ctx context.Context, containerId string, authToken 
 	// to the daemon env while it was): when the desired secret env differs from the
 	// container's, recreate it with matching placeholders and proxy wiring.
 	if secretEnvsJSON, ok := metadata["secretEnvs"]; ok && !isAndroidDeviceContainer(c) {
-		c, err = d.syncSecretEnvOnStart(ctx, containerId, c, secretEnvsJSON)
+		c, err = d.syncSecretEnvOnStart(ctx, containerId, c, secretEnvsJSON, metadata["domainAllowList"])
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to apply updated sandbox secrets: %w", err)
 		}
@@ -114,22 +113,15 @@ func (d *DockerClient) Start(ctx context.Context, containerId string, authToken 
 	if containerIP == "" {
 		return nil, "", errors.New("sandbox IP not found? Is the sandbox started?")
 	}
+	if err := d.admitRunningSandboxPolicy(ctx, runningContainer, containerId, secretsToken, metadata); err != nil {
+		return nil, "", d.rejectSandboxAdmission(ctx, runningContainer, err)
+	}
 
 	// Android-device sandboxes do not run the daytona daemon. Readiness is signaled by
 	// the ADB port accepting TCP connections inside the container.
 	if isAndroidDeviceContainer(runningContainer) {
 		if err := d.waitForAdbRunning(ctx, containerIP); err != nil {
 			return nil, "", err
-		}
-
-		if metadata["limitNetworkEgress"] == "true" {
-			veth := resolveHostVeth(d.logger, runningContainer, containerIP)
-			go func() {
-				containerShortId := c.ID[:12]
-				if err := d.netRulesManager.SetNetworkLimiter(containerShortId, containerIP, veth); err != nil {
-					d.logger.ErrorContext(ctx, "Failed to set network limiter", "error", err)
-				}
-			}()
 		}
 
 		return runningContainer, "", nil
@@ -151,25 +143,6 @@ func (d *DockerClient) Start(ctx context.Context, containerId string, authToken 
 	if err != nil {
 		return nil, "", err
 	}
-
-	if metadata["limitNetworkEgress"] == "true" {
-		veth := resolveHostVeth(d.logger, runningContainer, containerIP)
-		go func() {
-			containerShortId := c.ID[:12]
-			err = d.netRulesManager.SetNetworkLimiter(containerShortId, containerIP, veth)
-			if err != nil {
-				d.logger.ErrorContext(ctx, "Failed to set network limiter", "error", err)
-			}
-		}()
-	}
-
-	if domainAllowList := metadata["domainAllowList"]; domainAllowList != "" {
-		go d.applyDomainAllowList(context.Background(), c.ID, domainAllowList)
-	}
-
-	// Register this sandbox's secrets with the shared injection proxy after it
-	// (re)starts; no-op when it uses none.
-	d.registerSandboxSecrets(context.Background(), runningContainer.ID, containerId, secretsToken, containerIP, metadata["domainAllowList"], envSliceToMap(runningContainer.Config.Env))
 
 	return runningContainer, daemonVersion, nil
 }

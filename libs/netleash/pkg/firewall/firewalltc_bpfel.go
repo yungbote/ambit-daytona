@@ -25,6 +25,14 @@ type firewallTcDnsNameKey struct {
 	Name [128]int8
 }
 
+type firewallTcProxyCfg struct {
+	_         structs.HostLayout
+	ProxyIp   uint32
+	ProxyPort uint16
+	Enforce   uint8
+	Pad       uint8
+}
+
 // loadFirewallTc returns the embedded CollectionSpec for firewallTc.
 func loadFirewallTc() (*ebpf.CollectionSpec, error) {
 	reader := bytes.NewReader(_FirewallTcBytes)
@@ -81,6 +89,7 @@ type firewallTcMapSpecs struct {
 	Events           *ebpf.MapSpec `ebpf:"events"`
 	InboundConns     *ebpf.MapSpec `ebpf:"inbound_conns"`
 	InternalDnsZones *ebpf.MapSpec `ebpf:"internal_dns_zones"`
+	ProxyConfig      *ebpf.MapSpec `ebpf:"proxy_config"`
 	ReportedIps      *ebpf.MapSpec `ebpf:"reported_ips"`
 }
 
@@ -116,6 +125,7 @@ type firewallTcMaps struct {
 	Events           *ebpf.Map `ebpf:"events"`
 	InboundConns     *ebpf.Map `ebpf:"inbound_conns"`
 	InternalDnsZones *ebpf.Map `ebpf:"internal_dns_zones"`
+	ProxyConfig      *ebpf.Map `ebpf:"proxy_config"`
 	ReportedIps      *ebpf.Map `ebpf:"reported_ips"`
 }
 
@@ -127,6 +137,7 @@ func (m *firewallTcMaps) Close() error {
 		m.Events,
 		m.InboundConns,
 		m.InternalDnsZones,
+		m.ProxyConfig,
 		m.ReportedIps,
 	)
 }

@@ -5,6 +5,7 @@ package docker
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -89,13 +90,17 @@ func (d *DockerClient) ReconcileNetleash(ctx context.Context) {
 		// programs never detached, so this is a zero-gap adoption).
 		if !d.netleashManager.IsManaged(id) {
 			if err := d.netleashManager.Adopt(id); err != nil {
-				// The pin set is incomplete/corrupt (e.g. the runner was killed
-				// mid-pin), so it can't be adopted and would otherwise be retried
-				// every tick forever, leaving a half-attached filter stuck. Tear it
-				// down for a clean state; the control plane re-applies filtering on
-				// the next network-settings change.
-				d.logger.ErrorContext(ctx, "netleash reconcile: pinned filter is not adoptable; tearing it down", "containerId", id, "error", err)
-				d.netleashManager.Remove(id)
+				// Never tear down an unadoptable filter while its workload is still
+				// running: that converts a recovery error into unrestricted egress.
+				// Quarantine and stop it; the surviving pin remains the backstop until
+				// the next reconcile observes the terminal container and removes it.
+				info, inspectErr := d.ContainerInspect(ctx, id)
+				if inspectErr != nil {
+					d.logger.ErrorContext(ctx, "netleash reconcile: pinned filter is not adoptable and container inspection failed; leaving filter attached", "containerId", id, "error", err, "inspectError", inspectErr)
+					continue
+				}
+				containmentErr := d.rejectSandboxAdmission(ctx, info, fmt.Errorf("adopting persisted hostname policy: %w", err))
+				d.logger.ErrorContext(ctx, "netleash reconcile: pinned filter is not adoptable; sandbox quarantined", "containerId", id, "error", containmentErr)
 				continue
 			}
 			d.logger.InfoContext(ctx, "netleash reconcile: adopted pinned filter (zero gap)", "containerId", id)

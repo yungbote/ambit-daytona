@@ -1,0 +1,11 @@
+# Copyright 2026 Ambit
+# SPDX-License-Identifier: AGPL-3.0
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: daytona-api
+  namespace: daytona-system
+  annotations:
+    iam.gke.io/gcp-service-account: ambit-daytona-runtime@mwcc-infrastructure.iam.gserviceaccount.com
+

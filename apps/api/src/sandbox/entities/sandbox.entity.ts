@@ -63,6 +63,9 @@ import { SandboxSecret } from './sandbox-secret.entity'
 @Index('sandbox_buildinfosnapshotref_idx', { synchronize: false })
 @Index('sandbox_labels_gin_full_idx', { synchronize: false })
 @Index('idx_sandbox_volumes_gin', { synchronize: false })
+// The partial index is owned by the non-transactional post-deploy migration.
+// Keeping only its name in metadata tells TypeORM not to synchronize it.
+@Index('idx_sandbox_auto_destroy_at', { synchronize: false })
 @Index('sandbox_linked_sandbox_id_idx', ['linkedSandboxId'])
 export class Sandbox {
   @PrimaryColumn({ default: () => 'uuid_generate_v4()' })
@@ -250,6 +253,11 @@ export class Sandbox {
   @Column({ default: -1, type: 'int' })
   autoDeleteInterval: number | undefined = -1
 
+  // Absolute wall-clock deadline. Unlike activity-based intervals, this remains
+  // authoritative while the sandbox is stopped, paused, archived, or recovering.
+  @Column({ nullable: true, type: 'timestamp with time zone' })
+  autoDestroyAt: Date | null = null
+
   @Column({ default: false, type: 'boolean' })
   pending: boolean | undefined = false
 
@@ -430,20 +438,9 @@ export class Sandbox {
         }
         throw new Error(`Sandbox ${this.id} is not in a valid state to be archived. State: ${this.state}`)
       case SandboxDesiredState.DESTROYED:
-        if (
-          [
-            SandboxState.DESTROYED,
-            SandboxState.DESTROYING,
-            SandboxState.STOPPED,
-            SandboxState.STARTED,
-            SandboxState.ARCHIVED,
-            SandboxState.ERROR,
-            SandboxState.BUILD_FAILED,
-            SandboxState.ARCHIVING,
-            SandboxState.PENDING_BUILD,
-            SandboxState.PAUSED,
-          ].includes(this.state)
-        ) {
+        // Destruction is the terminal transition and must be able to preempt any
+        // recognized lifecycle state, including pending or stuck operations.
+        if (Object.values(SandboxState).includes(this.state)) {
           break
         }
         throw new Error(`Sandbox ${this.id} is not in a valid state to be destroyed. State: ${this.state}`)

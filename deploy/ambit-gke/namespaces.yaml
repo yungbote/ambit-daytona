@@ -1,0 +1,27 @@
+# Copyright 2026 Ambit
+# SPDX-License-Identifier: AGPL-3.0
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: daytona-system
+  labels:
+    app.kubernetes.io/part-of: ambit-daytona
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: daytona-runners
+  labels:
+    app.kubernetes.io/part-of: ambit-daytona
+    # The c4 runner image starts an inner Docker daemon and its netleash eBPF
+    # service. Keep that unavoidable privilege out of the control-plane
+    # namespace and schedule it only onto the dedicated, tainted node pool.
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest
+

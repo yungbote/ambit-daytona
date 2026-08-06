@@ -54,6 +54,10 @@ func run() int {
 		logger.Error("Failed to get config", "error", err)
 		return 2
 	}
+	if cfg.NetleashSecretsEnabled && !cfg.NetleashEnabled {
+		logger.Error("NETLEASH_SECRETS_ENABLED requires NETLEASH_ENABLED")
+		return 2
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -199,24 +203,21 @@ func run() int {
 	}
 	defer dockerClient.Close()
 
-	// Re-attach / adopt netleash domain filters for sandboxes that are already
-	// running (e.g. after a runner restart) and keep them reconciled. Pinned
-	// filters survive the restart with zero gap; this restores management of
-	// them and re-applies any that were lost.
-	if netleashManager != nil {
-		dockerClient.StartNetleashReconcile(ctx)
-	}
-
-	// Bring up the shared secret-injection proxy (if enabled) and re-register
-	// secret bindings for sandboxes that survived a runner restart. The proxy's
-	// fixed address and persisted CA stay valid across the restart; this restores
-	// the in-memory per-sandbox bindings the registry lost.
-	if cfg.NetleashEnabled && cfg.NetleashSecretsEnabled {
-		if err := dockerClient.EnableSecretInjection(ctx); err != nil {
-			logger.Error("Failed to enable secret injection proxy; continuing without it", "error", err)
-		} else {
-			dockerClient.StartSecretReconcile(ctx)
+	// Bring up the shared hostname-aware egress proxy before admitting work. It
+	// is the mandatory web-egress path for every domain-restricted sandbox and,
+	// when enabled, also injects secrets. Running netleash without this boundary
+	// would silently degrade hostname policies to spoofable IP allow lists, so a
+	// startup or reconciliation failure is fatal rather than fail-open.
+	if cfg.NetleashEnabled {
+		if err := dockerClient.EnableEgressProxy(ctx); err != nil {
+			logger.Error("Failed to enable required egress proxy", "error", err)
+			return 2
 		}
+		// Adopt surviving domain filters only after the proxy is live. Adoption
+		// verifies the hostname gate; incompatible legacy pins are quarantined by
+		// the reconcile path instead of being accepted as IP-only enforcement.
+		dockerClient.StartNetleashReconcile(ctx)
+		dockerClient.StartSecretReconcile(ctx)
 	}
 
 	// Start Docker events monitor

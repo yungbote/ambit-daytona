@@ -21,6 +21,7 @@ import (
 
 	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -36,6 +37,10 @@ type SSHGateway struct {
 	hostKey    ssh.Signer
 	privateKey ssh.Signer
 	publicKey  ssh.PublicKey
+	// runnerHostKeyCallback cryptographically binds the internal runner hop to
+	// an operator-provided OpenSSH known_hosts trust set. It is never nil after
+	// successful startup.
+	runnerHostKeyCallback ssh.HostKeyCallback
 }
 
 func main() {
@@ -44,6 +49,9 @@ func main() {
 	apiKey := getEnv("API_KEY", "")
 	sshPk := getEnv("SSH_PRIVATE_KEY", "")
 	sshHostKey := getEnv("SSH_HOST_KEY", "")
+	runnerKnownHostsPath := getEnv("RUNNER_SSH_KNOWN_HOSTS_PATH", "")
+	runnerInsecureIgnoreHostKey := strings.EqualFold(getEnv("RUNNER_SSH_INSECURE_IGNORE_HOST_KEY", "false"), "true")
+	environment := strings.ToLower(getEnv("ENVIRONMENT", "production"))
 
 	if apiKey == "" {
 		log.Fatal("API_KEY environment variable is required")
@@ -55,6 +63,15 @@ func main() {
 
 	if sshHostKey == "" {
 		log.Fatal("SSH_HOST_KEY environment variable is required")
+	}
+
+	runnerHostKeyCallback, err := newRunnerHostKeyCallback(
+		runnerKnownHostsPath,
+		runnerInsecureIgnoreHostKey,
+		environment,
+	)
+	if err != nil {
+		log.Fatalf("Failed to configure runner SSH host verification: %v", err)
 	}
 
 	// Decode base64 encoded private key
@@ -100,11 +117,12 @@ func main() {
 	publicKey := privateKey.PublicKey()
 
 	gateway := &SSHGateway{
-		port:       port,
-		apiClient:  apiClient,
-		hostKey:    hostKey,
-		privateKey: privateKey,
-		publicKey:  publicKey,
+		port:                  port,
+		apiClient:             apiClient,
+		hostKey:               hostKey,
+		privateKey:            privateKey,
+		publicKey:             publicKey,
+		runnerHostKeyCallback: runnerHostKeyCallback,
 	}
 
 	log.Printf("Host key loaded from SSH_HOST_KEY environment variable (base64 decoded)")
@@ -424,7 +442,7 @@ func (g *SSHGateway) connectToRunner(sandboxId string, runnerDomain string, sign
 		Auth: []ssh.AuthMethod{
 			ssh.PublicKeys(signer),
 		},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: g.runnerHostKeyCallback,
 		Timeout:         30 * time.Second,
 	}
 
@@ -434,6 +452,35 @@ func (g *SSHGateway) connectToRunner(sandboxId string, runnerDomain string, sign
 	}
 
 	return client, nil
+}
+
+func newRunnerHostKeyCallback(
+	knownHostsPath string,
+	insecureIgnoreHostKey bool,
+	environment string,
+) (ssh.HostKeyCallback, error) {
+	if knownHostsPath != "" {
+		callback, err := knownhosts.New(knownHostsPath)
+		if err != nil {
+			return nil, fmt.Errorf("load RUNNER_SSH_KNOWN_HOSTS_PATH: %w", err)
+		}
+		return callback, nil
+	}
+
+	if insecureIgnoreHostKey {
+		if environment != "development" && environment != "preview" {
+			return nil, fmt.Errorf(
+				"RUNNER_SSH_INSECURE_IGNORE_HOST_KEY is forbidden in environment %q",
+				environment,
+			)
+		}
+		log.Warn("RUNNER_SSH_INSECURE_IGNORE_HOST_KEY=true: runner SSH host identity is not verified")
+		return ssh.InsecureIgnoreHostKey(), nil // #nosec G106 -- explicit development-only opt-out
+	}
+
+	return nil, fmt.Errorf(
+		"RUNNER_SSH_KNOWN_HOSTS_PATH is required; set RUNNER_SSH_INSECURE_IGNORE_HOST_KEY=true only for disposable development environments",
+	)
 }
 
 // sendErrorAndClose sends an error message to the client and closes the connection

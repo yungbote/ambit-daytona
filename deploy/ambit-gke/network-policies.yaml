@@ -1,0 +1,115 @@
+# Copyright 2026 Ambit
+# SPDX-License-Identifier: AGPL-3.0
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: daytona-system
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: public-control-plane-ports
+  namespace: daytona-system
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: ["api", "proxy", "ssh-gateway"]
+  policyTypes: ["Ingress"]
+  ingress:
+    # Service/Gateway exposure remains the outer boundary. These are the only
+    # pod ports accepted once traffic reaches this namespace.
+    - ports:
+        - protocol: TCP
+          port: 3000
+        - protocol: TCP
+          port: 4000
+        - protocol: TCP
+          port: 2222
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: daytona-runners
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: runner-from-api
+  namespace: daytona-runners
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: daytona
+      app.kubernetes.io/component: runner
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: daytona-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: daytona
+              app.kubernetes.io/component: api
+      ports:
+        - protocol: TCP
+          port: 3003
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: runner-from-proxy
+  namespace: daytona-runners
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: daytona
+      app.kubernetes.io/component: runner
+  policyTypes: ["Ingress"]
+  ingress:
+    # Do not narrow this to 3003: sandbox ports are dynamically published on
+    # the runner pod and are the actual proxy data path.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: daytona-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: daytona
+              app.kubernetes.io/component: proxy
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: runner-from-ssh-gateway
+  namespace: daytona-runners
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: daytona
+      app.kubernetes.io/component: runner
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: daytona-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: daytona
+              app.kubernetes.io/component: ssh-gateway
+      ports:
+        - protocol: TCP
+          port: 2220
+

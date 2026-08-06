@@ -68,8 +68,21 @@ type Config struct {
 	ForceSnapshotRemoval               bool          `envconfig:"FORCE_SNAPSHOT_REMOVAL" default:"true"`
 	MountKvmToAndroidSandbox           bool          `envconfig:"MOUNT_KVM_TO_ANDROID_SANDBOX" default:"false"`
 	// NetleashEnabled turns on the netleash service, which enforces per-sandbox
-	// domain allow lists via eBPF egress filtering. Requires root/CAP_BPF and a
-	// cgroup v2 host; disabled by default so it can be rolled out per runner.
+	// domain allow lists via eBPF egress filtering. Allow lists are
+	// proxy-enforced: sandboxes created with one are wired through the shared
+	// netleash egress proxy (HTTP(S)_PROXY env + trusted CA) and their web-port
+	// egress (TCP 80/443, UDP 443) is gated in eBPF so only the proxy is
+	// reachable — the allow list is enforced on the requested hostname
+	// (SNI/Host), closing the shared-IP / domain-fronting gap of IP-based
+	// allowlisting. Non-web protocols keep the DNS-learned IP allowlist, and
+	// non-local IPv6 egress is dropped for enforced sandboxes (the IPv4-only
+	// allow list would otherwise be fully bypassable via AAAA records). Note the
+	// proxy terminates TLS, so allowlisted workloads that pin upstream
+	// certificates will break. Persisted filters that predate hostname enforcement
+	// are rejected and their workloads quarantined instead of being adopted in an
+	// IP-only compatibility mode.
+	// Requires root/CAP_BPF and a cgroup v2 host; disabled by default so it can
+	// be rolled out per runner.
 	NetleashEnabled bool `envconfig:"NETLEASH_ENABLED" default:"false"`
 	// NetleashInternalDNSZones are cluster-internal DNS zones whose queries are
 	// passed through to the resolver instead of being dropped by the domain

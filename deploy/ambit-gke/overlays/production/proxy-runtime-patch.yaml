@@ -1,0 +1,33 @@
+# Copyright 2026 Ambit
+# SPDX-License-Identifier: AGPL-3.0
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: daytona-proxy
+  namespace: daytona-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: proxy
+          env:
+            - name: REDIS_USERNAME
+              value: default
+            # The Go runtime loads this file in addition to the system cert
+            # directories, preserving public OIDC/TLS trust.
+            - name: SSL_CERT_FILE
+              value: /var/run/secrets/daytona/redis/ca.pem
+          volumeMounts:
+            - name: redis-ca
+              mountPath: /var/run/secrets/daytona/redis
+              readOnly: true
+      volumes:
+        - name: redis-ca
+          secret:
+            secretName: daytona-redis-ca
+            defaultMode: 0444
+            items:
+              - key: CA_CERT
+                path: ca.pem
+

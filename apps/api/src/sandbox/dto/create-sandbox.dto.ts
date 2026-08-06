@@ -10,6 +10,7 @@ import {
   IsOptional,
   IsString,
   IsNumber,
+  IsInt,
   IsBoolean,
   IsArray,
   Max,
@@ -211,6 +212,17 @@ export class CreateSandboxDto {
   @IsOptional()
   @IsNumber()
   autoDeleteInterval?: number
+
+  @ApiPropertyOptional({
+    description:
+      'Maximum time to live in minutes, counted as wall-clock time since creation regardless of sandbox state (0 means disabled)',
+    example: 120,
+    type: 'integer',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  ttlMinutes?: number
 
   @ApiPropertyOptional({
     description: 'Array of volumes to attach to the sandbox',

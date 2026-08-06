@@ -20,7 +20,10 @@ int firewall_tc_egress(struct __sk_buff *skb) {
 	if (bpf_skb_load_bytes(skb, L3_OFF, &ip, sizeof(ip)) < 0)
 		return TC_ACT_OK; // Can't parse → allow
 
-	// Only filter IPv4 traffic.
+	// IPv6: unfiltered by the IPv4-only allow list, but fail-closed under proxy
+	// enforcement (see ipv6_gate_allows). Other versions pass.
+	if (ip.version == 6)
+		return ipv6_gate_allows(skb, L3_OFF) ? TC_ACT_OK : TC_ACT_SHOT;
 	if (ip.version != 4)
 		return TC_ACT_OK;
 
@@ -126,6 +129,20 @@ int firewall_tc_egress(struct __sk_buff *skb) {
 				return TC_ACT_SHOT; // Drop
 			}
 		}
+	}
+
+	// Egress-proxy enforcement: web ports must go through the hostname-aware
+	// proxy. Private/link-local ranges were already allowed above, so this only
+	// gates traffic bound for the public internet; the proxy itself sits on an
+	// RFC1918 gateway address and stays reachable regardless.
+	int gate = check_proxy_gate(skb, L3_OFF, &ip, dst_ip);
+	if (gate == PROXY_GATE_ALLOW) {
+		emit_ip_decision(skb, L3_OFF, dst_ip, &ip, EV_ALLOWED, EV_REASON_PROXY_ALLOWED);
+		return TC_ACT_OK;
+	}
+	if (gate == PROXY_GATE_DROP) {
+		emit_ip_decision(skb, L3_OFF, dst_ip, &ip, EV_BLOCKED, EV_REASON_WEB_NOT_PROXIED);
+		return TC_ACT_SHOT; // Drop
 	}
 
 	// Check if the destination IP is in the whitelist.

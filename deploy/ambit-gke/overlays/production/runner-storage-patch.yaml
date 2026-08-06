@@ -1,0 +1,32 @@
+# Copyright 2026 Ambit
+# SPDX-License-Identifier: AGPL-3.0
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: daytona-runner
+  namespace: daytona-runners
+spec:
+  volumeClaimTemplates:
+    - metadata:
+        name: docker-data
+        labels:
+          app.kubernetes.io/name: daytona
+          app.kubernetes.io/component: runner
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: daytona-standard-rwo
+        resources:
+          requests:
+            storage: 250Gi
+    - metadata:
+        name: runner-state
+        labels:
+          app.kubernetes.io/name: daytona
+          app.kubernetes.io/component: runner
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: daytona-standard-rwo
+        resources:
+          requests:
+            storage: 10Gi

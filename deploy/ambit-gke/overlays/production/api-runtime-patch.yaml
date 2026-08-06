@@ -1,0 +1,69 @@
+# Copyright 2026 Ambit
+# SPDX-License-Identifier: AGPL-3.0
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: daytona-api
+  namespace: daytona-system
+spec:
+  template:
+    spec:
+      nodeSelector:
+        iam.gke.io/gke-metadata-server-enabled: "true"
+      # A native sidecar init container starts before the API and remains for
+      # the pod lifetime. Connector enforcement on Cloud SQL means the API has
+      # no alternate direct-database path.
+      initContainers:
+        - name: cloud-sql-proxy
+          image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.23.0@sha256:54e23cad9aeeedbf88ab75f993146631b878035f702b31c51885a932e0c7286c
+          imagePullPolicy: IfNotPresent
+          restartPolicy: Always
+          args:
+            - --address=127.0.0.1
+            - --port=5432
+            - --private-ip
+            - --structured-logs
+            - --exit-zero-on-sigterm
+            - --max-sigterm-delay=30s
+            - mwcc-infrastructure:us-east4:ambit-daytona-postgres-prod
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            capabilities:
+              drop: ["ALL"]
+      containers:
+        - name: api
+          env:
+            - name: DB_USERNAME
+              value: daytona
+            - name: REDIS_USERNAME
+              value: default
+            - name: HEALTH_CHECK_API_KEY
+              value: 29875676-8e7b-47c5-a5e8-d47aed8375fa
+            # Node adds this CA to, rather than replacing, its public roots.
+            - name: NODE_EXTRA_CA_CERTS
+              value: /var/run/secrets/daytona/redis/ca.pem
+          volumeMounts:
+            - name: redis-ca
+              mountPath: /var/run/secrets/daytona/redis
+              readOnly: true
+      volumes:
+        - name: redis-ca
+          secret:
+            secretName: daytona-redis-ca
+            defaultMode: 0444
+            items:
+              - key: CA_CERT
+                path: ca.pem
+

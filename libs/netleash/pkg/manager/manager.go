@@ -45,18 +45,22 @@ type Manager struct {
 	// separately; Remove and Close tear down both.
 	proxies map[string]*proxyEntry
 
-	// Shared secret-injection proxy (EnableSecretInjection): a single MITM proxy
-	// that serves every secret-using workload, choosing the per-workload policy
-	// (allow list + secrets) from the client's IP via secretRegistry. Unlike the
-	// per-workload proxies it has a fixed, restart-stable address — required
-	// because a workload's HTTP(S)_PROXY is baked in at creation time.
-	secretProxy      *proxy.Server
-	secretRegistry   *proxy.Registry
-	secretCACertFile string
-	// secretProxyAddr is the shared proxy's listen address; it is also fed into
+	// Shared egress proxy (EnableEgressProxy): a single hostname-aware MITM
+	// proxy that serves every workload needing it, choosing the per-workload
+	// policy (allow list + secrets) from the client's IP via proxyRegistry. It
+	// has two jobs: secret injection, and — for workloads configured with
+	// enforceProxy — being the mandatory path for web-port egress, enforcing the
+	// domain allow list on the requested hostname instead of on DNS-learned IPs.
+	// Unlike the per-workload proxies it has a fixed, restart-stable address —
+	// required because a workload's HTTP(S)_PROXY is baked in at creation time.
+	egressProxy     *proxy.Server
+	proxyRegistry   *proxy.Registry
+	proxyCACertFile string
+	// egressProxyAddr is the shared proxy's listen address; it is also fed into
 	// every firewall's Config.ProxyAddr (via Configure) so the eBPF egress filter
-	// allows the workload to reach the proxy. Empty until EnableSecretInjection.
-	secretProxyAddr string
+	// allows the workload to reach the proxy, and into the eBPF proxy gate for
+	// enforcing workloads. Empty until EnableEgressProxy.
+	egressProxyAddr string
 
 	// internalDNSZones are cluster-internal DNS zones (e.g. "cluster.local")
 	// applied to every managed workload: queries for subdomains of these zones
@@ -77,8 +81,13 @@ type Manager struct {
 type entry struct {
 	domains []string // normalized + sorted; used to detect changes
 	target  attachTarget
-	fw      *firewall.Firewall
-	cancel  context.CancelFunc
+	// enforceProxy records whether the caller asked for web-port egress to be
+	// gated through the shared proxy. It is the *requested* state; the effective
+	// eBPF gate additionally requires the proxy to be running (EnableEgressProxy),
+	// and is re-applied when the proxy comes up.
+	enforceProxy bool
+	fw           *firewall.Firewall
+	cancel       context.CancelFunc
 }
 
 // attachTarget describes where a workload's egress firewall attaches.
@@ -153,8 +162,20 @@ func (m *Manager) pinPathFor(id string) string {
 // websockets, pooled toolbox connections, in-flight downloads — making them
 // hang. The workload ID is the container ID, which maps to exactly one cgroup,
 // so an existing entry is always the same workload and can be updated directly.
-func (m *Manager) Configure(id, cgroupPath string, domains []string) error {
-	return m.configure(id, attachTarget{cgroupPath: cgroupPath}, domains)
+//
+// enforceProxy additionally routes the standard web ports (TCP 80/443) through
+// the shared egress proxy, which enforces the same allow list on the requested
+// hostname (SNI/Host) — closing the shared-IP/domain-fronting gap of IP-based
+// allowlisting. In cgroup mode an eBPF connect4 hook does this transparently
+// (rewriting the connect() destination to the proxy), so the workload need not
+// honor HTTP(S)_PROXY; the egress drop of un-redirected web ports (and all of TC
+// mode) remains the backstop. QUIC (UDP 443) is always dropped. Connections the
+// proxy MITMs (secret-injection hosts) require the workload to trust the proxy
+// CA; connections to other allowed hosts are spliced end-to-end and need no CA.
+// It takes effect while the shared proxy is running (EnableEgressProxy) and is
+// re-applied automatically when the proxy comes up later.
+func (m *Manager) Configure(id, cgroupPath string, domains []string, enforceProxy bool) error {
+	return m.configure(id, attachTarget{cgroupPath: cgroupPath}, domains, enforceProxy)
 }
 
 // ConfigureInterface is the TC/interface-mode counterpart of Configure for
@@ -165,21 +186,25 @@ func (m *Manager) Configure(id, cgroupPath string, domains []string) error {
 // workload's traffic (the host side of its veth pair); hostVeth must be true for
 // such an interface so the TC directions are swapped (workload egress arrives as
 // ingress on the host veth). Semantics otherwise match Configure exactly
-// (idempotent; empty domains remove the filter; changes update in place).
-func (m *Manager) ConfigureInterface(id, iface string, hostVeth bool, domains []string) error {
+// (idempotent; empty domains remove the filter; changes update in place;
+// enforceProxy gates web ports through the shared egress proxy).
+func (m *Manager) ConfigureInterface(id, iface string, hostVeth bool, domains []string, enforceProxy bool) error {
 	if iface == "" && len(normalizeDomains(domains)) > 0 {
 		return fmt.Errorf("netleash: ConfigureInterface for workload %s requires an interface name", id)
 	}
-	return m.configure(id, attachTarget{iface: iface, hostVeth: hostVeth}, domains)
+	return m.configure(id, attachTarget{iface: iface, hostVeth: hostVeth}, domains, enforceProxy)
 }
 
 // configure is the shared implementation behind Configure (cgroup mode) and
 // ConfigureInterface (TC mode); see Configure's doc for the idempotency rules.
-func (m *Manager) configure(id string, target attachTarget, domains []string) error {
+func (m *Manager) configure(id string, target attachTarget, domains []string, enforceProxy bool) error {
 	norm := normalizeDomains(domains)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if len(norm) > 0 && enforceProxy && m.egressProxyAddr == "" {
+		return fmt.Errorf("netleash: proxy enforcement requested for workload %s but the egress proxy is not running", id)
+	}
 
 	existing, ok := m.entries[id]
 
@@ -198,16 +223,25 @@ func (m *Manager) configure(id string, target attachTarget, domains []string) er
 	// domain's already-resolved IPs stop being reachable. Pure additions keep the
 	// cache so in-flight connections to still-allowed domains aren't disrupted.
 	if ok {
-		if equalDomains(existing.domains, norm) {
-			return nil // unchanged
+		if equalDomains(existing.domains, norm) && existing.enforceProxy == enforceProxy {
+			// Reassert the gate even when desired state is unchanged. A previous
+			// map-write failure must remain retryable rather than being mistaken for
+			// successful convergence on the next idempotent admission.
+			return m.applyProxyEnforcementLocked(id, existing)
 		}
-		clearLearned := len(existing.domains) == 0 || domainsRemoved(existing.domains, norm)
-		if err := existing.fw.UpdateDomains(norm, clearLearned); err != nil {
-			return fmt.Errorf("netleash: updating workload %s: %w", id, err)
+		if !equalDomains(existing.domains, norm) {
+			clearLearned := len(existing.domains) == 0 || domainsRemoved(existing.domains, norm)
+			if err := existing.fw.UpdateDomains(norm, clearLearned); err != nil {
+				return fmt.Errorf("netleash: updating workload %s: %w", id, err)
+			}
+			existing.domains = norm
+			m.log.Info("domain allow list updated", "workload", id, "domains", norm, "cleared_learned_ips", clearLearned)
 		}
-		existing.domains = norm
-		m.log.Info("domain allow list updated", "workload", id, "domains", norm, "cleared_learned_ips", clearLearned)
-		return nil
+		// Re-apply the web-port proxy gate idempotently and surface failures for
+		// the runner to quarantine. Hostname enforcement is part of the policy
+		// contract, not an optional layer over the IP allow list.
+		existing.enforceProxy = enforceProxy
+		return m.applyProxyEnforcementLocked(id, existing)
 	}
 
 	// New workload → attach a fresh firewall and pin it.
@@ -223,12 +257,13 @@ func (m *Manager) configure(id string, target attachTarget, domains []string) er
 		CgroupPath: target.cgroupPath,
 		Interface:  target.iface,
 		Tap:        target.hostVeth,
-		// When the shared secret-injection proxy is enabled, allow its IP through
-		// the egress filter so a domain-restricted workload can still reach the
-		// proxy (the proxy then enforces the same allow list on the workload's
-		// behalf for the traffic it intercepts). Empty when secret injection is off.
-		ProxyAddr: m.secretProxyAddr,
-		Logger:    m.log.With(slog.String("workload", id)),
+		// When the shared egress proxy is enabled, allow its IP through the egress
+		// filter so a domain-restricted workload can still reach the proxy (the
+		// proxy then enforces the same allow list on the workload's behalf for the
+		// traffic it intercepts). Empty when the proxy is off.
+		ProxyAddr:    m.egressProxyAddr,
+		EnforceProxy: enforceProxy,
+		Logger:       m.log.With(slog.String("workload", id)),
 	})
 	if err := fw.Setup(); err != nil {
 		fw.Cleanup()
@@ -238,23 +273,42 @@ func (m *Manager) configure(id string, target attachTarget, domains []string) er
 	fw.StartEventReader(ctx)
 
 	// Pin the new filter so it survives a restart of this process (zero gap).
-	// Pinning failure is non-fatal: the filter is attached and enforcing now; it
-	// just won't survive a restart. Pin is atomic — on failure it rolls back any
-	// partial pins, so no half-pinned (un-adoptable) state is left behind.
+	// A configured pin root makes restart-safe enforcement part of admission.
+	// Pin is atomic, so on failure no half-pinned state remains; tear down the
+	// unpinned filter and surface the error rather than admitting a workload whose
+	// policy would disappear during a runner restart.
 	if pinPath := m.pinPathFor(id); pinPath != "" {
 		if err := fw.Pin(pinPath); err != nil {
-			m.log.Error("netleash: failed to pin firewall; filter active but won't survive a restart",
-				"workload", id, "error", err)
+			fw.Cleanup()
+			cancel()
+			return fmt.Errorf("netleash: pinning workload %s firewall: %w", id, err)
 		}
 	}
 
 	m.entries[id] = &entry{
-		domains: norm,
-		target:  target,
-		fw:      fw,
-		cancel:  cancel,
+		domains:      norm,
+		target:       target,
+		enforceProxy: enforceProxy,
+		fw:           fw,
+		cancel:       cancel,
 	}
-	m.log.Info("domain allow list applied", "workload", id, "domains", norm, "interface", target.iface)
+	m.log.Info("domain allow list applied", "workload", id, "domains", norm, "interface", target.iface, "enforce_proxy", enforceProxy)
+	return nil
+}
+
+// applyProxyEnforcementLocked writes the entry's desired web-port proxy gate to
+// its firewall: on when the entry requested enforcement AND the shared proxy is
+// running, off otherwise. Hostname enforcement is a required policy boundary,
+// so requested enforcement without a live proxy or writable gate is an error.
+// Caller must hold m.mu.
+func (m *Manager) applyProxyEnforcementLocked(id string, e *entry) error {
+	effective := e.enforceProxy && m.egressProxyAddr != ""
+	if e.enforceProxy && !effective {
+		return fmt.Errorf("netleash: proxy enforcement requested for workload %s but the egress proxy is not running", id)
+	}
+	if err := e.fw.SetProxyEnforcement(m.egressProxyAddr, effective); err != nil {
+		return fmt.Errorf("netleash: applying proxy enforcement for workload %s: %w", id, err)
+	}
 	return nil
 }
 
@@ -287,13 +341,38 @@ func (m *Manager) Adopt(id string) error {
 		cancel()
 		return fmt.Errorf("netleash: adopting workload %s: %w", id, err)
 	}
+	// Recover hostname-enforcement intent from the pinned policy itself. This
+	// keeps Manager generic while allowing the runner to reject legacy pin sets
+	// that lack the map entirely. When enforcement is requested and the shared
+	// proxy is already live (normal runner startup order), verify reachability and
+	// the gate before declaring the entry managed. Cleanup leaves pins attached
+	// on failure so the host can quarantine/stop the workload.
+	enforceProxy, err := fw.ProxyEnforcementEnabled()
+	if err != nil {
+		fw.Cleanup()
+		cancel()
+		return fmt.Errorf("netleash: reading hostname policy for adopted workload %s: %w", id, err)
+	}
+	if enforceProxy && m.egressProxyAddr != "" {
+		if err := fw.AllowIP(m.egressProxyAddr); err != nil {
+			fw.Cleanup()
+			cancel()
+			return fmt.Errorf("netleash: allowing egress proxy for adopted workload %s: %w", id, err)
+		}
+		if err := fw.SetProxyEnforcement(m.egressProxyAddr, true); err != nil {
+			fw.Cleanup()
+			cancel()
+			return fmt.Errorf("netleash: enabling hostname enforcement for adopted workload %s: %w", id, err)
+		}
+	}
 	fw.StartEventReader(ctx)
 
 	// domains/cgroupPath are intentionally left zero: the live allow list lives
 	// in the adopted pinned maps, not in this record.
 	m.entries[id] = &entry{
-		fw:     fw,
-		cancel: cancel,
+		enforceProxy: enforceProxy,
+		fw:           fw,
+		cancel:       cancel,
 	}
 	m.log.Info("domain allow list adopted after restart", "workload", id)
 	return nil
@@ -337,15 +416,15 @@ func (m *Manager) IsManaged(id string) bool {
 // (e.g. the workload was removed while this process was down).
 func (m *Manager) Remove(id string) {
 	m.mu.Lock()
-	// Drop any shared-proxy secret binding for this workload so its IP stops
+	// Drop any shared-proxy policy binding for this workload so its IP stops
 	// resolving to a removed sandbox, and remember the IP + proxy so we can
 	// terminate its active tunnels after releasing the lock (immediate
 	// revocation). (Registry has its own lock; safe under m.mu.)
 	var revokedIP net.IP
-	if m.secretRegistry != nil {
-		revokedIP = m.secretRegistry.Unregister(id)
+	if m.proxyRegistry != nil {
+		revokedIP = m.proxyRegistry.Unregister(id)
 	}
-	revokedProxy := m.secretProxy
+	revokedProxy := m.egressProxy
 	// Detach the secret-injection proxy (if any) under the lock, but shut it down
 	// after releasing it — server.Close blocks on in-flight connections and must
 	// not stall other workloads' Manager operations. This is independent of
@@ -394,15 +473,15 @@ func (m *Manager) Close() {
 	proxies := m.proxies
 	m.proxies = make(map[string]*proxyEntry)
 
-	// The shared secret-injection proxy is also in-process only; stop it and drop
-	// its registry. The runner re-enables it (same fixed address + persisted CA)
+	// The shared egress proxy is also in-process only; stop it and drop its
+	// registry. The runner re-enables it (same fixed address + persisted CA)
 	// and re-registers running sandboxes on restart.
-	sharedProxy := m.secretProxy
-	sharedCACert := m.secretCACertFile
-	m.secretProxy = nil
-	m.secretRegistry = nil
-	m.secretCACertFile = ""
-	m.secretProxyAddr = ""
+	sharedProxy := m.egressProxy
+	sharedCACert := m.proxyCACertFile
+	m.egressProxy = nil
+	m.proxyRegistry = nil
+	m.proxyCACertFile = ""
+	m.egressProxyAddr = ""
 	m.mu.Unlock()
 
 	for id, p := range proxies {
@@ -415,7 +494,7 @@ func (m *Manager) Close() {
 				m.log.Warn("netleash: failed to remove shared proxy CA bundle", "error", err)
 			}
 		}
-		m.log.Info("secret injection proxy disabled")
+		m.log.Info("egress proxy disabled")
 	}
 }
 
@@ -556,9 +635,9 @@ func (m *Manager) shutdownProxy(id string, p *proxyEntry) {
 	m.log.Info("secret injection proxy stopped", "workload", id)
 }
 
-// SecretInjectionConfig configures the shared secret-injection proxy started by
-// EnableSecretInjection.
-type SecretInjectionConfig struct {
+// EgressProxyConfig configures the shared egress proxy started by
+// EnableEgressProxy.
+type EgressProxyConfig struct {
 	// ListenAddr is where the shared proxy binds. It must be a concrete address
 	// reachable by every secret-using workload and stable across restarts —
 	// typically the bridge gateway IP with a fixed port (e.g. "172.20.0.1:18080")
@@ -585,27 +664,29 @@ type SecretInjectionConfig struct {
 	AuthToken string
 }
 
-// SecretInjectionHandle describes the running shared secret-injection proxy.
-type SecretInjectionHandle struct {
+// EgressProxyHandle describes the running shared egress proxy.
+type EgressProxyHandle struct {
 	Addr       string // actual listen address (host:port)
 	CACertFile string // combined CA bundle workloads must trust (e.g. via SSL_CERT_FILE)
 }
 
-// EnableSecretInjection starts the shared secret-injection proxy if it isn't
-// already running, and returns its address and CA bundle path. It is idempotent:
-// repeated calls return the existing handle. The proxy chooses each connection's
-// policy (allow list + secrets) from the client IP via the bindings registered
-// with RegisterSandboxSecrets.
+// EnableEgressProxy starts the shared egress proxy — the hostname-aware MITM
+// proxy that injects secrets and enforces domain allow lists for workloads
+// configured with proxy enforcement — if it isn't already running, and returns
+// its address and CA bundle path. It is idempotent: repeated calls return the
+// existing handle. The proxy chooses each connection's policy (allow list +
+// secrets) from the client IP via the bindings registered with
+// RegisterSandboxPolicy.
 //
 // The returned handle is non-nil and usable whenever the proxy started, even if
 // the error is non-nil: a non-nil error with a non-nil handle means the proxy is
 // running but one or more already-managed workloads' egress filters could not be
-// updated to allow it (those workloads won't get secret injection until their
+// updated to allow it (those workloads won't reach the proxy until their
 // firewall is rebuilt). A nil handle means the proxy failed to start at all.
-func (m *Manager) EnableSecretInjection(cfg SecretInjectionConfig) (*SecretInjectionHandle, error) {
+func (m *Manager) EnableEgressProxy(cfg EgressProxyConfig) (*EgressProxyHandle, error) {
 	m.mu.Lock()
-	if m.secretProxy != nil {
-		h := &SecretInjectionHandle{Addr: m.secretProxyAddr, CACertFile: m.secretCACertFile}
+	if m.egressProxy != nil {
+		h := &EgressProxyHandle{Addr: m.egressProxyAddr, CACertFile: m.proxyCACertFile}
 		m.mu.Unlock()
 		return h, nil
 	}
@@ -630,7 +711,7 @@ func (m *Manager) EnableSecretInjection(cfg SecretInjectionConfig) (*SecretInjec
 
 	registry := proxy.NewRegistry()
 	opts := []proxy.Option{
-		proxy.WithLogger(m.log.With(slog.String("subcomponent", "secret_proxy"))),
+		proxy.WithLogger(m.log.With(slog.String("subcomponent", "egress_proxy"))),
 		proxy.WithBindingResolver(registry.Lookup),
 	}
 	if cfg.AuthToken != "" {
@@ -642,37 +723,47 @@ func (m *Manager) EnableSecretInjection(cfg SecretInjectionConfig) (*SecretInjec
 	addr, err := server.Start()
 	if err != nil {
 		os.Remove(caCertFile)
-		return nil, fmt.Errorf("netleash: starting secret proxy: %w", err)
+		return nil, fmt.Errorf("netleash: starting egress proxy: %w", err)
 	}
 
 	m.mu.Lock()
-	if m.secretProxy != nil {
-		// Lost a race with a concurrent EnableSecretInjection; keep theirs.
-		h := &SecretInjectionHandle{Addr: m.secretProxyAddr, CACertFile: m.secretCACertFile}
+	if m.egressProxy != nil {
+		// Lost a race with a concurrent EnableEgressProxy; keep theirs.
+		h := &EgressProxyHandle{Addr: m.egressProxyAddr, CACertFile: m.proxyCACertFile}
 		m.mu.Unlock()
 		server.Close()
 		os.Remove(caCertFile)
 		return h, nil
 	}
-	m.secretProxy = server
-	m.secretRegistry = registry
-	m.secretCACertFile = caCertFile
-	m.secretProxyAddr = addr
+	m.egressProxy = server
+	m.proxyRegistry = registry
+	m.proxyCACertFile = caCertFile
+	m.egressProxyAddr = addr
 	// Allow the proxy IP on firewalls that already exist (freshly attached or
 	// adopted after a restart). Configure only sets ProxyAddr for new/rebuilt
-	// firewalls, so without this a workload managed before secret injection was
-	// enabled would have its egress filter block the proxy.
+	// firewalls, so without this a workload managed before the proxy was
+	// enabled would have its egress filter block the proxy. For entries whose
+	// caller requested proxy enforcement while the proxy was down (or that were
+	// adopted mid-enforcement), also (re-)apply the web-port gate now that the
+	// proxy is reachable.
 	var failedFirewalls []string
 	for id, e := range m.entries {
 		if err := e.fw.AllowIP(addr); err != nil {
-			m.log.Error("netleash: failed to allow secret proxy IP on existing firewall", "workload", id, "error", err)
+			m.log.Error("netleash: failed to allow egress proxy IP on existing firewall", "workload", id, "error", err)
 			failedFirewalls = append(failedFirewalls, id)
+			continue
+		}
+		if e.enforceProxy {
+			if err := m.applyProxyEnforcementLocked(id, e); err != nil {
+				m.log.Error("netleash: failed to enable proxy enforcement on existing firewall", "workload", id, "error", err)
+				failedFirewalls = append(failedFirewalls, id)
+			}
 		}
 	}
 	m.mu.Unlock()
 
-	m.log.Info("secret injection proxy enabled", "addr", addr)
-	handle := &SecretInjectionHandle{Addr: addr, CACertFile: caCertFile}
+	m.log.Info("egress proxy enabled", "addr", addr)
+	handle := &EgressProxyHandle{Addr: addr, CACertFile: caCertFile}
 	if len(failedFirewalls) > 0 {
 		// The proxy is up and serves every workload whose firewall was updated,
 		// so the handle is returned for the caller to use. But these already-
@@ -682,15 +773,16 @@ func (m *Manager) EnableSecretInjection(cfg SecretInjectionConfig) (*SecretInjec
 		// network-settings change re-runs Configure with ProxyAddr). Surface that
 		// rather than reporting unqualified success.
 		sort.Strings(failedFirewalls)
-		return handle, fmt.Errorf("netleash: secret proxy enabled, but %d existing firewall(s) could not allow the proxy IP and won't inject secrets until rebuilt: %s",
+		return handle, fmt.Errorf("netleash: egress proxy enabled, but %d existing firewall(s) could not allow the proxy IP and won't reach the proxy until rebuilt: %s",
 			len(failedFirewalls), strings.Join(failedFirewalls, ", "))
 	}
 	return handle, nil
 }
 
-// SandboxSecretConfig describes one workload's secret-injection policy for the
-// shared proxy.
-type SandboxSecretConfig struct {
+// SandboxPolicyConfig describes one workload's policy for the shared egress
+// proxy: which hosts it may reach through the proxy and (optionally) which
+// secrets to inject.
+type SandboxPolicyConfig struct {
 	// ClientIP is the workload's IP — the demux key the shared proxy uses to find
 	// this binding. Required.
 	ClientIP string
@@ -702,66 +794,70 @@ type SandboxSecretConfig struct {
 	AllowedDomains []string
 
 	// Resolver supplies the workload's secrets (e.g. secrets.NewAPIResolver,
-	// authenticating as the sandbox). Required.
+	// authenticating as the sandbox). Optional: when nil, the binding does no
+	// secret injection and only enforces the allow list — the shape used for
+	// proxy-enforced workloads without secrets.
 	Resolver proxy.SecretResolver
 
 	// CacheTTL bounds how long resolved secrets are cached; non-positive uses the
 	// injector default. PlaceholderMarker is the cheap pre-check substring (set to
 	// the known placeholder prefix to skip resolution for requests without one).
+	// Both are ignored when Resolver is nil.
 	CacheTTL          time.Duration
 	PlaceholderMarker string
 }
 
-// RegisterSandboxSecrets registers (or replaces) the shared proxy's binding for
-// workload id, so the proxy injects that workload's secrets for connections from
-// its ClientIP. EnableSecretInjection must have been called first.
-func (m *Manager) RegisterSandboxSecrets(id string, cfg SandboxSecretConfig) error {
-	if cfg.Resolver == nil {
-		return fmt.Errorf("netleash: RegisterSandboxSecrets for %s requires a resolver", id)
-	}
+// RegisterSandboxPolicy registers (or replaces) the shared proxy's binding for
+// workload id, so connections from its ClientIP get that workload's host allow
+// list and — when a Resolver is set — its secret injection. EnableEgressProxy
+// must have been called first.
+func (m *Manager) RegisterSandboxPolicy(id string, cfg SandboxPolicyConfig) error {
 	ip := net.ParseIP(cfg.ClientIP)
 	if ip == nil {
-		return fmt.Errorf("netleash: RegisterSandboxSecrets for %s: invalid client IP %q", id, cfg.ClientIP)
+		return fmt.Errorf("netleash: RegisterSandboxPolicy for %s: invalid client IP %q", id, cfg.ClientIP)
 	}
 
 	m.mu.Lock()
-	reg := m.secretRegistry
+	reg := m.proxyRegistry
 	m.mu.Unlock()
 	if reg == nil {
-		return fmt.Errorf("netleash: RegisterSandboxSecrets for %s: secret injection not enabled", id)
+		return fmt.Errorf("netleash: RegisterSandboxPolicy for %s: egress proxy not enabled", id)
 	}
 
-	injector := proxy.NewResolvingInjector(cfg.Resolver, cfg.CacheTTL, cfg.PlaceholderMarker)
+	var injector *proxy.Injector
+	if cfg.Resolver != nil {
+		injector = proxy.NewResolvingInjector(cfg.Resolver, cfg.CacheTTL, cfg.PlaceholderMarker)
+	}
 	binding := proxy.NewBinding(id, cfg.AllowAll, cfg.AllowedDomains, injector)
 	reg.Register(id, ip, binding)
-	m.log.Info("registered sandbox secrets", "workload", id, "clientIP", cfg.ClientIP, "allowAll", cfg.AllowAll)
+	m.log.Info("registered sandbox proxy policy", "workload", id, "clientIP", cfg.ClientIP, "allowAll", cfg.AllowAll, "secrets", cfg.Resolver != nil)
 	return nil
 }
 
-// HasSandboxSecrets reports whether a shared-proxy secret binding is currently
-// registered for workload id. Returns false when secret injection is disabled.
-func (m *Manager) HasSandboxSecrets(id string) bool {
+// HasSandboxPolicy reports whether a shared-proxy binding is currently
+// registered for workload id. Returns false when the egress proxy is disabled.
+func (m *Manager) HasSandboxPolicy(id string) bool {
 	m.mu.Lock()
-	reg := m.secretRegistry
+	reg := m.proxyRegistry
 	m.mu.Unlock()
 	return reg != nil && reg.Has(id)
 }
 
-// UnregisterSandboxSecrets removes the shared proxy's binding for workload id.
-// Safe to call when id is unknown or secret injection is disabled. (Remove also
-// does this, so an explicit call is only needed when a workload loses secrets
-// without being removed.)
-func (m *Manager) UnregisterSandboxSecrets(id string) {
+// UnregisterSandboxPolicy removes the shared proxy's binding for workload id.
+// Safe to call when id is unknown or the egress proxy is disabled. (Remove also
+// does this, so an explicit call is only needed when a workload loses its
+// binding without being removed.)
+func (m *Manager) UnregisterSandboxPolicy(id string) {
 	m.mu.Lock()
-	reg := m.secretRegistry
-	srv := m.secretProxy
+	reg := m.proxyRegistry
+	srv := m.egressProxy
 	m.mu.Unlock()
 	if reg == nil {
 		return
 	}
 	ip := reg.Unregister(id)
-	// Terminate the workload's active tunnels so injection stops immediately,
-	// not just for new connections.
+	// Terminate the workload's active tunnels so the old policy stops applying
+	// immediately, not just for new connections.
 	if srv != nil && ip != nil {
 		srv.CloseClient(ip)
 	}

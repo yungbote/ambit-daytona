@@ -34,6 +34,11 @@ func (d *DockerClient) UpdateNetworkSettings(ctx context.Context, containerId st
 		allowListTrimmed = strings.TrimSpace(*updateNetworkSettingsDto.NetworkAllowList)
 		hasAllowList = allowListTrimmed != ""
 	}
+	needsUnspoofableAnchor := blockAll || hasAllowList ||
+		(updateNetworkSettingsDto.NetworkLimitEgress != nil && *updateNetworkSettingsDto.NetworkLimitEgress)
+	if needsUnspoofableAnchor && veth == "" {
+		return d.rejectSandboxAdmission(ctx, info, errors.New("sandbox network policy requires an unspoofable host-veth anchor"))
+	}
 
 	switch {
 	case blockAll:
@@ -51,13 +56,19 @@ func (d *DockerClient) UpdateNetworkSettings(ctx context.Context, containerId st
 		err = nil
 	}
 	if err != nil {
+		// A failure while installing a restrictive policy may leave a partially
+		// cleared iptables chain. Quarantine and stop instead of reporting an error
+		// while the sandbox continues with ambiguous egress.
+		if blockAll || hasAllowList {
+			return d.rejectSandboxAdmission(ctx, info, err)
+		}
 		return err
 	}
 
 	if updateNetworkSettingsDto.NetworkLimitEgress != nil && *updateNetworkSettingsDto.NetworkLimitEgress {
 		err = d.netRulesManager.SetNetworkLimiter(containerShortId, ipAddress, veth)
 		if err != nil {
-			return err
+			return d.rejectSandboxAdmission(ctx, info, err)
 		}
 	} else if updateNetworkSettingsDto.NetworkLimitEgress != nil && !*updateNetworkSettingsDto.NetworkLimitEgress {
 		err = d.netRulesManager.RemoveNetworkLimiter(containerShortId)
@@ -71,10 +82,28 @@ func (d *DockerClient) UpdateNetworkSettings(ctx context.Context, containerId st
 	// An empty list clears any existing restriction.
 	if updateNetworkSettingsDto.DomainAllowList != nil {
 		domainAllowList := *updateNetworkSettingsDto.DomainAllowList
-		go d.applyDomainAllowList(context.Background(), info.ID, domainAllowList)
-		// Keep the shared proxy's per-sandbox allow list in sync with the new
-		// domain allow list (no-op when the sandbox uses no secrets).
-		d.updateSandboxSecretDomains(ctx, info.ID, ipAddress, domainAllowList, envSliceToMap(info.Config.Env))
+		env := envSliceToMap(info.Config.Env)
+		if len(splitDomainAllowList(domainAllowList)) > 0 {
+			// Tighten the hostname policy before enabling/updating the eBPF gate.
+			// If either half fails, rejectSandboxAdmission revokes the binding and
+			// stops the workload rather than retaining an IP-only compatibility mode.
+			if err := d.updateSandboxPolicyDomains(ctx, info.ID, containerId, ipAddress, domainAllowList, env); err != nil {
+				return d.rejectSandboxAdmission(ctx, info, err)
+			}
+			if err := d.applyDomainAllowList(ctx, info.ID, domainAllowList); err != nil {
+				return d.rejectSandboxAdmission(ctx, info, err)
+			}
+		} else {
+			// Clearing a domain policy is intentionally relaxing. Remove the eBPF
+			// gate first, then preserve an allow-all proxy binding only for containers
+			// that still carry proxy wiring (for example secret-using sandboxes).
+			if err := d.applyDomainAllowList(ctx, info.ID, domainAllowList); err != nil {
+				return err
+			}
+			if err := d.updateSandboxPolicyDomains(ctx, info.ID, containerId, ipAddress, domainAllowList, env); err != nil {
+				return err
+			}
+		}
 	}
 
 	return nil

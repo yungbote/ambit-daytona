@@ -28,7 +28,7 @@ RUN yarn install --immutable
 COPY nx.json .nxignore ./
 
 # Go dependency layer (cached unless go.mod/go.sum change)
-COPY go.work go.work.sum ./
+COPY go.work ./
 COPY apps/ssh-gateway/go.mod apps/ssh-gateway/go.sum apps/ssh-gateway/
 COPY libs/api-client-go/go.mod libs/api-client-go/go.sum libs/api-client-go/
 RUN head -1 go.work > go.work.tmp && printf '\nuse (\n\t./apps/ssh-gateway\n\t./libs/api-client-go\n)\n' >> go.work.tmp && mv go.work.tmp go.work

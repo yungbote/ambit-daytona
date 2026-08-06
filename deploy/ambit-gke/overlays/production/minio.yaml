@@ -1,0 +1,257 @@
+# Copyright 2026 Ambit
+# SPDX-License-Identifier: AGPL-3.0
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio-headless
+  namespace: daytona-state
+  labels:
+    app.kubernetes.io/name: daytona
+    app.kubernetes.io/component: object-storage
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: daytona
+    app.kubernetes.io/component: object-storage
+  ports:
+    - name: s3
+      port: 9000
+      targetPort: s3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: daytona-state
+  labels:
+    app.kubernetes.io/name: daytona
+    app.kubernetes.io/component: object-storage
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: daytona
+    app.kubernetes.io/component: object-storage
+  ports:
+    - name: s3
+      port: 9000
+      targetPort: s3
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: minio
+  namespace: daytona-state
+  labels:
+    app.kubernetes.io/name: daytona
+    app.kubernetes.io/component: object-storage
+  annotations:
+    ambit.sh/source-url: https://github.com/minio/minio
+    ambit.sh/source-revision: RELEASE.2025-10-15T17-29-55Z
+spec:
+  serviceName: minio-headless
+  replicas: 4
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: daytona
+      app.kubernetes.io/component: object-storage
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: daytona
+        app.kubernetes.io/component: object-storage
+    spec:
+      serviceAccountName: daytona-minio
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 120
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: daytona
+              app.kubernetes.io/component: object-storage
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: daytona
+              app.kubernetes.io/component: object-storage
+      containers:
+        - name: minio
+          # MinIO Community is source-only. Build the cited AGPL security
+          # release, publish its corresponding source, and replace this image
+          # with the resulting immutable digest before applying the overlay.
+          image: us-east4-docker.pkg.dev/mwcc-infrastructure/ambit/daytona-minio@sha256:e23cd8b73383664a40c00bd8c5dd41a62157a48b71525b5e17c2bf50d9966831
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/bin/minio"]
+          args:
+            - server
+            - --address=:9000
+            - --console-address=:9001
+            - http://minio-{0...3}.minio-headless.daytona-state.svc.cluster.local:9000/data
+          ports:
+            - name: s3
+              containerPort: 9000
+          env:
+            - name: MINIO_SITE_REGION
+              value: us-east4
+            - name: MINIO_SERVER_URL
+              value: https://minio.daytona.ambit.sh
+            - name: MINIO_BROWSER
+              value: "off"
+            - name: HOME
+              value: /tmp
+          envFrom:
+            - secretRef:
+                name: daytona-minio-root
+          startupProbe:
+            httpGet:
+              path: /minio/health/live
+              port: s3
+            periodSeconds: 5
+            failureThreshold: 120
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: s3
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: s3
+            periodSeconds: 30
+            failureThreshold: 3
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 500m
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: daytona
+          app.kubernetes.io/component: object-storage
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: daytona-standard-rwo
+        resources:
+          requests:
+            storage: 250Gi
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: minio
+  namespace: daytona-state
+spec:
+  minAvailable: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: daytona
+      app.kubernetes.io/component: object-storage
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-bootstrap
+  namespace: daytona-state
+  labels:
+    app.kubernetes.io/name: daytona
+    app.kubernetes.io/component: object-storage-bootstrap
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 1200
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: daytona
+        app.kubernetes.io/component: object-storage-bootstrap
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: daytona-minio
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bootstrap
+          image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              attempt=0
+              until mc alias set daytona "$MINIO_ENDPOINT" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" --api S3v4 >/dev/null 2>&1 && mc ready daytona >/dev/null 2>&1; do
+                attempt=$((attempt + 1))
+                if [ "$attempt" -ge 180 ]; then
+                  echo "MinIO did not become ready before the bootstrap deadline" >&2
+                  exit 1
+                fi
+                sleep 5
+              done
+              mc mb --ignore-existing --region us-east4 daytona/ambit-daytona
+          env:
+            - name: MINIO_ENDPOINT
+              value: http://minio.daytona-state.svc.cluster.local:9000
+            - name: MC_CONFIG_DIR
+              value: /tmp/.mc
+          envFrom:
+            - secretRef:
+                name: daytona-minio-root
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 128Mi

@@ -46,6 +46,7 @@ func main() {
 	var tapMode bool
 	var secretFile string
 	var proxyToken string
+	var enforceProxy bool
 	var serverMode bool
 	var listenAddr string
 	var dnsServer string
@@ -56,6 +57,7 @@ func main() {
 	flag.Var(&secretSpecs, "secret", "Secret in NAME=VALUE:host1,host2 format (can be repeated)")
 	flag.StringVar(&secretFile, "secret-file", "", "Read secrets from file (one NAME=VALUE:host1,host2 per line; use - for stdin)")
 	flag.StringVar(&proxyToken, "proxy-token", "", "Require Bearer token for proxy authentication")
+	flag.BoolVar(&enforceProxy, "enforce-proxy", false, "Force HTTP(S) through the MITM proxy: web ports (TCP 80/443, UDP 443) are blocked in eBPF except to the proxy, which enforces the allow list by hostname (starts the proxy even without secrets)")
 	flag.BoolVar(&serverMode, "server", false, "Run as standalone proxy server (no eBPF, no root required)")
 	flag.StringVar(&listenAddr, "listen", "127.0.0.1:8080", "Proxy listen address (server mode)")
 	flag.BoolVar(&verbose, "v", false, "Verbose output")
@@ -133,6 +135,10 @@ func main() {
 		slog.Error("--server cannot be combined with --cgroup, --container, or a command")
 		os.Exit(1)
 	}
+	if enforceProxy && serverMode {
+		slog.Error("--enforce-proxy requires eBPF (process wrapper or attach mode); in --server mode the proxy already enforces the allow list for clients that use it")
+		os.Exit(1)
+	}
 	if attachMode && len(cmdArgs) > 0 {
 		slog.Error("cannot specify a command in attach mode (--cgroup/--container)")
 		os.Exit(1)
@@ -189,6 +195,7 @@ func main() {
 			User:         runAsUser,
 			Secrets:      secrets,
 			ProxyToken:   proxyToken,
+			EnforceProxy: enforceProxy,
 		}, cmdArgs)
 		if err != nil {
 			slog.Error("execution failed", "error", err)
@@ -198,7 +205,7 @@ func main() {
 	}
 
 	// Attach mode: container/cgroup/interface (uses internal packages directly).
-	runAttachMode(domains, allowedExecs, secretSpecs, secretFile, proxyToken, cgroupPath, containerID, interfaceName, tapMode)
+	runAttachMode(domains, allowedExecs, secretSpecs, secretFile, proxyToken, cgroupPath, containerID, interfaceName, tapMode, enforceProxy)
 }
 
 // runServerMode starts a standalone MITM proxy (no eBPF, no root required).
@@ -302,7 +309,7 @@ func runServerMode(domains, secretSpecs stringList, secretFile, proxyToken, list
 }
 
 // runAttachMode handles --cgroup and --container attach modes.
-func runAttachMode(domains stringList, allowedExecs stringList, secretSpecs stringList, secretFile, proxyToken, cgroupPath, containerID, interfaceName string, tapMode bool) {
+func runAttachMode(domains stringList, allowedExecs stringList, secretSpecs stringList, secretFile, proxyToken, cgroupPath, containerID, interfaceName string, tapMode, enforceProxy bool) {
 	// Resolve --container to a cgroup path.
 	var rt runtime.Runtime
 	if containerID != "" {
@@ -362,12 +369,14 @@ func runAttachMode(domains stringList, allowedExecs stringList, secretSpecs stri
 		CgroupPath:   cgroupPath,
 		Interface:    interfaceName,
 		Tap:          tapMode,
+		EnforceProxy: enforceProxy,
 	}
 
-	// If secrets are configured, start the MITM proxy.
+	// Start the MITM proxy when secrets are configured or when the allow list is
+	// proxy-enforced (the proxy is then the mandatory path for web traffic).
 	var proxyServer *proxy.Server
 	var caCertFile string
-	if len(secrets) > 0 {
+	if len(secrets) > 0 || enforceProxy {
 		ca, err := proxy.GenerateCA()
 		if err != nil {
 			slog.Error("failed to generate CA", "error", err)

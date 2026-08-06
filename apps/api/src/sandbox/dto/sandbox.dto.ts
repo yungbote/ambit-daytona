@@ -245,6 +245,14 @@ export class SandboxDto {
   autoDeleteInterval?: number
 
   @ApiPropertyOptional({
+    description: 'Absolute wall-clock destruction deadline',
+    example: '2026-08-06T18:00:00Z',
+    required: false,
+  })
+  @IsOptional()
+  autoDestroyAt?: string
+
+  @ApiPropertyOptional({
     description: 'Array of volumes attached to the sandbox',
     type: [SandboxVolume],
     required: false,
@@ -355,6 +363,7 @@ export class SandboxDto {
       autoPauseInterval: sandbox.autoPauseInterval,
       autoArchiveInterval: sandbox.autoArchiveInterval,
       autoDeleteInterval: sandbox.autoDeleteInterval,
+      autoDestroyAt: sandbox.autoDestroyAt ? new Date(sandbox.autoDestroyAt).toISOString() : undefined,
       sandboxClass: sandbox.sandboxClass,
       createdAt: sandbox.createdAt ? new Date(sandbox.createdAt).toISOString() : undefined,
       updatedAt: sandbox.updatedAt ? new Date(sandbox.updatedAt).toISOString() : undefined,

@@ -28,7 +28,7 @@ RUN yarn install --immutable
 COPY nx.json .nxignore ./
 
 # Go dependency layer (cached unless go.mod/go.sum change)
-COPY go.work go.work.sum ./
+COPY go.work ./
 COPY apps/otel-collector/exporter/go.mod apps/otel-collector/exporter/go.sum apps/otel-collector/exporter/
 COPY libs/api-client-go/go.mod libs/api-client-go/go.sum libs/api-client-go/
 COPY libs/common-go/go.mod libs/common-go/go.sum libs/common-go/

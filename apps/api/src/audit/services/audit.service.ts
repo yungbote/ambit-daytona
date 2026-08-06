@@ -95,6 +95,10 @@ export class AuditService implements OnApplicationBootstrap {
       auditLog.organizationId = updateDto.organizationId
     }
 
+    if (updateDto.metadata !== undefined) {
+      auditLog.metadata = updateDto.metadata
+    }
+
     if (this.configService.get('audit.consoleLogEnabled')) {
       this.logger.log(`AUDIT_ENTRY: ${JSON.stringify(auditLog)}`)
     }
@@ -225,7 +229,18 @@ export class AuditService implements OnApplicationBootstrap {
     await this.createSystemActionSandboxAuditLog(AuditAction.AUTO_DELETE, event)
   }
 
-  private async createSystemActionSandboxAuditLog(action: AuditAction, event: SandboxAutoActionEvent): Promise<void> {
+  @OnAsyncEvent({ event: SandboxEvents.AUTO_DESTROYED })
+  async handleAutoDestroyed(event: SandboxAutoActionEvent): Promise<void> {
+    await this.createSystemActionSandboxAuditLog(AuditAction.AUTO_DESTROY, event, {
+      autoDestroyAt: event.sandbox.autoDestroyAt ? new Date(event.sandbox.autoDestroyAt).toISOString() : null,
+    })
+  }
+
+  private async createSystemActionSandboxAuditLog(
+    action: AuditAction,
+    event: SandboxAutoActionEvent,
+    metadata?: AuditLog['metadata'],
+  ): Promise<void> {
     await this.createLog(
       {
         actorId: AUDIT_LOG_SYSTEM_ACTOR_ID,
@@ -235,6 +250,7 @@ export class AuditService implements OnApplicationBootstrap {
         targetType: AuditTarget.SANDBOX,
         targetId: event.sandbox.id,
         statusCode: 200,
+        metadata,
       },
       event.entityManager,
     )

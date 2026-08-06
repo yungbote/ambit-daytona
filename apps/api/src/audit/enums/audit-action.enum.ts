@@ -35,6 +35,7 @@ export enum AuditAction {
   SET_AUTO_PAUSE_INTERVAL = 'set_auto_pause_interval',
   SET_AUTO_ARCHIVE_INTERVAL = 'set_auto_archive_interval',
   SET_AUTO_DELETE_INTERVAL = 'set_auto_delete_interval',
+  SET_TTL = 'set_ttl',
   ARCHIVE = 'archive',
   SNAPSHOT = 'snapshot',
   FORK = 'fork',
@@ -60,4 +61,5 @@ export enum AuditAction {
   AUTO_STOP = 'auto_stop',
   AUTO_ARCHIVE = 'auto_archive',
   AUTO_DELETE = 'auto_delete',
+  AUTO_DESTROY = 'auto_destroy',
 }

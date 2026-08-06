@@ -1,0 +1,176 @@
+# Copyright 2026 Ambit
+# SPDX-License-Identifier: AGPL-3.0
+
+# Values beginning with REQUIRED_ are deliberate fail-closed deployment
+# inputs. A production overlay must replace every one before applying.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: daytona-api-config
+  namespace: daytona-system
+  labels:
+    app.kubernetes.io/name: daytona
+    app.kubernetes.io/component: api
+data:
+  NODE_ENV: production
+  ENVIRONMENT: production
+  PORT: "3000"
+  APP_ROLE: all
+  RUN_MIGRATIONS: "false"
+  DONT_SERVE_DASHBOARD: "true"
+  DISABLE_CRON_JOBS: "false"
+  NOTIFICATION_GATEWAY_DISABLED: "true"
+  MAINTENANCE_MODE: "false"
+  LOG_LEVEL: info
+  LOG_REQUESTS_ENABLED: "true"
+  DB_HOST: REQUIRED_EXTERNAL_POSTGRES_HOST
+  DB_PORT: "5432"
+  DB_DATABASE: daytona
+  DB_TLS_ENABLED: "true"
+  DB_TLS_REJECT_UNAUTHORIZED: "true"
+  DB_POOL_MAX: "30"
+  DB_POOL_MIN: "2"
+  DB_POOL_CONNECTION_TIMEOUT_MS: "10000"
+  DB_STATEMENT_TIMEOUT_MS: "20000"
+  DB_QUERY_TIMEOUT_MS: "25000"
+  REDIS_HOST: REQUIRED_EXTERNAL_REDIS_HOST
+  REDIS_PORT: "6379"
+  REDIS_TLS: "true"
+  OIDC_CLIENT_ID: REQUIRED_OIDC_CLIENT_ID
+  OIDC_ISSUER_BASE_URL: REQUIRED_HTTPS_OIDC_ISSUER
+  PUBLIC_OIDC_DOMAIN: REQUIRED_HTTPS_OIDC_ISSUER
+  OIDC_AUDIENCE: REQUIRED_OIDC_AUDIENCE
+  OIDC_MANAGEMENT_API_ENABLED: "false"
+  APP_URL: https://api.daytona.ambit.sh
+  DASHBOARD_URL: https://api.daytona.ambit.sh/dashboard
+  DASHBOARD_BASE_API_URL: https://api.daytona.ambit.sh
+  DEFAULT_SNAPSHOT: REQUIRED_PINNED_SANDBOX_IMAGE
+  DEFAULT_SANDBOX_CLASS: container
+  DEFAULT_QUOTA_SANDBOX_CLASSES: container
+  PROXY_DOMAIN: proxy.daytona.ambit.sh
+  PROXY_PROTOCOL: https
+  PROXY_TEMPLATE_URL: https://{{PORT}}-{{sandboxId}}.proxy.daytona.ambit.sh
+  DEFAULT_RUNNER_DOMAIN: daytona-runner.daytona-runners.svc.cluster.local
+  DEFAULT_RUNNER_API_URL: http://daytona-runner.daytona-runners.svc.cluster.local:3003
+  DEFAULT_RUNNER_PROXY_URL: http://daytona-runner.daytona-runners.svc.cluster.local:3003
+  DEFAULT_RUNNER_API_VERSION: "2"
+  DEFAULT_RUNNER_NAME: ambit-us-east4-c-01
+  DEFAULT_RUNNER_CPU: "6"
+  DEFAULT_RUNNER_MEMORY: "24"
+  DEFAULT_RUNNER_DISK: "200"
+  DEFAULT_REGION_ID: us-east4-c
+  DEFAULT_REGION_NAME: us-east4-c
+  DEFAULT_REGION_ENFORCE_QUOTAS: "false"
+  # Logical quotas are intentionally above one runner's capacity. Scheduling
+  # and actual runner capacity remain the physical backstop; the API should not
+  # invent a provider tier restriction ahead of that capacity.
+  DEFAULT_ORG_QUOTA_CONTAINER_TOTAL_CPU_QUOTA: "100000"
+  DEFAULT_ORG_QUOTA_CONTAINER_TOTAL_MEMORY_QUOTA: "100000"
+  DEFAULT_ORG_QUOTA_CONTAINER_TOTAL_DISK_QUOTA: "1000000"
+  DEFAULT_ORG_QUOTA_CONTAINER_MAX_CPU_PER_SANDBOX: "6"
+  DEFAULT_ORG_QUOTA_CONTAINER_MAX_MEMORY_PER_SANDBOX: "24"
+  DEFAULT_ORG_QUOTA_CONTAINER_MAX_DISK_PER_SANDBOX: "200"
+  DEFAULT_ORG_QUOTA_CONTAINER_SNAPSHOT_QUOTA: "100000"
+  DEFAULT_ORG_QUOTA_CONTAINER_MAX_SNAPSHOT_SIZE: "200"
+  DEFAULT_ORG_QUOTA_CONTAINER_VOLUME_QUOTA: "100000"
+  DEFAULT_ORG_QUOTA_CONTAINER_MAX_CONCURRENT_SNAPSHOT_PROCESSING: "1000"
+  ADMIN_TOTAL_CPU_QUOTA: "100000"
+  ADMIN_TOTAL_MEMORY_QUOTA: "100000"
+  ADMIN_TOTAL_DISK_QUOTA: "1000000"
+  ADMIN_MAX_CPU_PER_SANDBOX: "6"
+  ADMIN_MAX_MEMORY_PER_SANDBOX: "24"
+  ADMIN_MAX_DISK_PER_SANDBOX: "200"
+  ADMIN_SNAPSHOT_QUOTA: "100000"
+  ADMIN_MAX_SNAPSHOT_SIZE: "200"
+  ADMIN_VOLUME_QUOTA: "100000"
+  ADMIN_MAX_CONCURRENT_SNAPSHOT_PROCESSING: "1000"
+  RUNNER_AVAILABILITY_SCORE_THRESHOLD: "0"
+  RUNNER_START_SCORE_THRESHOLD: "0"
+  RUNNER_DECLARATIVE_BUILD_SCORE_THRESHOLD: "0"
+  RUNNER_HEALTH_TIMEOUT_SECONDS: "10"
+  ORGANIZATION_SANDBOX_DEFAULT_LIMITED_NETWORK_EGRESS: "false"
+  ORGANIZATION_DEFAULT_PREVIEW_WARNING_ENABLED: "false"
+  TRANSIENT_REGISTRY_URL: REQUIRED_HTTPS_TRANSIENT_REGISTRY
+  TRANSIENT_REGISTRY_PROJECT_ID: daytona
+  INTERNAL_REGISTRY_URL: REQUIRED_HTTPS_INTERNAL_REGISTRY
+  INTERNAL_REGISTRY_PROJECT_ID: daytona
+  S3_ENDPOINT: REQUIRED_HTTPS_S3_ENDPOINT
+  S3_STS_ENDPOINT: REQUIRED_HTTPS_S3_STS_ENDPOINT
+  S3_REGION: us-east4
+  S3_DEFAULT_BUCKET: ambit-daytona
+  S3_ACCOUNT_ID: /
+  S3_ROLE_NAME: /
+  SSH_GATEWAY_URL: ssh.daytona.ambit.sh:2222
+  SSH_GATEWAY_COMMAND: ssh -p 2222 {{TOKEN}}@ssh.daytona.ambit.sh
+  SKIP_USER_EMAIL_VERIFICATION: "false"
+  OTEL_ENABLED: "false"
+  AUDIT_CONSOLE_LOG_ENABLED: "true"
+  AUDIT_PUBLISH_ENABLED: "false"
+  SANDBOX_SEARCH_PUBLISH_ENABLED: "false"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: daytona-proxy-config
+  namespace: daytona-system
+  labels:
+    app.kubernetes.io/name: daytona
+    app.kubernetes.io/component: proxy
+data:
+  DAYTONA_API_URL: http://daytona-api.daytona-system.svc.cluster.local:3000/api
+  PROXY_PORT: "4000"
+  PROXY_PROTOCOL: https
+  PROXY_DOMAIN: proxy.daytona.ambit.sh
+  COOKIE_DOMAIN: proxy.daytona.ambit.sh
+  OIDC_CLIENT_ID: REQUIRED_OIDC_CLIENT_ID
+  OIDC_DOMAIN: REQUIRED_HTTPS_OIDC_ISSUER
+  OIDC_PUBLIC_DOMAIN: REQUIRED_HTTPS_OIDC_ISSUER
+  OIDC_AUDIENCE: REQUIRED_OIDC_AUDIENCE
+  REDIS_HOST: REQUIRED_EXTERNAL_REDIS_HOST
+  REDIS_PORT: "6379"
+  REDIS_TLS: "true"
+  TOOLBOX_ONLY_MODE: "false"
+  PREVIEW_WARNING_ENABLED: "false"
+  API_CLIENT_TIMEOUT_SEC: "60"
+  SHUTDOWN_TIMEOUT_SEC: "3600"
+  METRICS_PORT: "9090"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: daytona-runner-config
+  namespace: daytona-runners
+  labels:
+    app.kubernetes.io/name: daytona
+    app.kubernetes.io/component: runner
+data:
+  ENVIRONMENT: production
+  LOG_LEVEL: info
+  API_PORT: "3003"
+  API_VERSION: "2"
+  DAYTONA_API_URL: http://daytona-api.daytona-system.svc.cluster.local:3000/api
+  RUNNER_DOMAIN: daytona-runner.daytona-runners.svc.cluster.local
+  RESOURCE_LIMITS_DISABLED: "false"
+  INTER_SANDBOX_NETWORK_ENABLED: "false"
+  LOG_FILE_PATH: /var/lib/daytona/logs/runner.log
+  AWS_ENDPOINT_URL: REQUIRED_HTTPS_S3_ENDPOINT
+  AWS_REGION: us-east4
+  AWS_DEFAULT_BUCKET: ambit-daytona
+  BUILD_ENGINE: buildkit
+  BUILD_CPU_CORES: "4"
+  BUILD_MEMORY_GB: "8"
+  NETLEASH_ENABLED: "true"
+  NETLEASH_SECRETS_ENABLED: "true"
+  NETLEASH_INTERNAL_DNS_ZONES: cluster.local
+  NETLEASH_PIN_PATH: /sys/fs/bpf/netleash
+  NETLEASH_SECRET_CA_DIR: /var/lib/daytona/netleash
+  NETLEASH_SECRET_PROXY_PORT: "18080"
+  SSH_GATEWAY_ENABLE: "true"
+  SSH_GATEWAY_PORT: "2220"
+  SSH_HOST_KEY_PATH: /etc/daytona/ssh/runner_host_key
+  # The c4 container image ships an inner runc Docker daemon. This is explicit,
+  # not an assertion of hostile-tenant kernel isolation; see README.md.
+  SKIP_KATA_CONVERSION: "true"
+  VOLUME_CLEANUP_DRY_RUN: "true"
+  OTEL_LOGGING_ENABLED: "false"
+  OTEL_TRACING_ENABLED: "false"

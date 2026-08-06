@@ -1,0 +1,43 @@
+# Copyright 2026 Ambit
+# SPDX-License-Identifier: AGPL-3.0
+
+steps:
+  - id: fetch-public-minio-source
+    name: gcr.io/cloud-builders/git
+    entrypoint: bash
+    args:
+      - -euo
+      - pipefail
+      - -c
+      - |
+        git clone --filter=blob:none --no-checkout https://github.com/minio/minio.git /workspace/minio-source
+        git -C /workspace/minio-source fetch --depth=1 origin 9e49d5e7a648f00e26f2246f4dc28e6b07f8c84a
+        git -C /workspace/minio-source checkout --detach FETCH_HEAD
+        test "$(git -C /workspace/minio-source rev-parse HEAD)" = 9e49d5e7a648f00e26f2246f4dc28e6b07f8c84a
+        git -C /workspace/minio-source rev-parse HEAD > /workspace/minio-source/.ambit-source-revision
+
+  - id: build-minio-from-source
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --file=/workspace/deploy/ambit-gke/images/minio/Dockerfile
+      - --tag=us-east4-docker.pkg.dev/$PROJECT_ID/ambit/daytona-minio:release-2025-10-15-9e49d5e7a648
+      - /workspace/minio-source
+    waitFor: [fetch-public-minio-source]
+
+  - id: push-minio
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - us-east4-docker.pkg.dev/$PROJECT_ID/ambit/daytona-minio:release-2025-10-15-9e49d5e7a648
+    waitFor: [build-minio-from-source]
+
+images:
+  - us-east4-docker.pkg.dev/$PROJECT_ID/ambit/daytona-minio:release-2025-10-15-9e49d5e7a648
+
+options:
+  machineType: E2_HIGHCPU_8
+  diskSizeGb: 200
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 3600s

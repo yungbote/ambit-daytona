@@ -13,6 +13,24 @@ func (manager *NetRulesManager) DeleteNetworkRules(name string) error {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 
+	// Deletion is used to converge an authoritative open-network policy during
+	// idempotent create retries. Treat an already-absent chain as success so the
+	// caller does not need a racy preflight check.
+	chains, err := manager.ipt.ListChains("filter")
+	if err != nil {
+		return err
+	}
+	found := false
+	for _, chain := range chains {
+		if chain == chainName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil
+	}
+
 	// First unassign the rules from the container (atomic within the same mutex)
 	rules, err := manager.ipt.List("filter", "DOCKER-USER")
 	if err != nil {

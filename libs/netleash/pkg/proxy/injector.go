@@ -146,6 +146,26 @@ func (inj *Injector) HasSecrets() bool {
 // a secret placeholder on a channel where injection won't run (cleartext HTTP).
 func (inj *Injector) Marker() string { return inj.marker }
 
+// TargetsHost reports whether any secret this injector holds may be injected for
+// host. The proxy uses it to decide, per connection, between terminating TLS
+// (MITM — required to inject/scrub secrets) and splicing the connection through
+// untouched. Splicing preserves end-to-end TLS, so websockets, HTTP/2/gRPC and
+// certificate pinning keep working on connections to hosts with no secret
+// mapped. For a resolving injector this consults the cached snapshot (refreshing
+// it if stale), so an unrestricted secret ("*") makes every host a MITM target.
+func (inj *Injector) TargetsHost(host string) bool {
+	h := stripPort(host)
+	for _, s := range inj.snapshot() {
+		if s.Value == "" || s.Placeholder == "" {
+			continue
+		}
+		if hostAllowed(h, s.Hosts) {
+			return true
+		}
+	}
+	return false
+}
+
 // responseReplacements returns the value→placeholder pairs for the secrets that
 // may be injected for host, so the proxy can strip real values back out of the
 // upstream response. The sandbox is supposed to only ever see placeholders;

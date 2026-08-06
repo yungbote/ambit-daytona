@@ -5,6 +5,7 @@ package docker
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/docker/docker/api/types/container"
@@ -40,24 +41,44 @@ func splitDomainAllowList(domainAllowList string) []string {
 // list clears any existing restriction (unrestricted egress). No-op when
 // netleash is disabled.
 //
-// This resolves the container cgroup and programs eBPF, which can take a moment,
-// so callers should invoke it from a goroutine to avoid blocking the lifecycle
-// path (mirroring how network rules are applied).
-func (d *DockerClient) applyDomainAllowList(ctx context.Context, containerId, domainAllowList string) {
+// Policy installation is synchronous: returning success before eBPF and the
+// hostname gate are live would admit unrestricted egress on setup failure.
+func (d *DockerClient) applyDomainAllowList(ctx context.Context, containerId, domainAllowList string) error {
 	if d.netleashManager == nil {
-		return
+		if len(splitDomainAllowList(domainAllowList)) == 0 {
+			return nil
+		}
+		return fmt.Errorf("netleash is unavailable for domain-restricted sandbox %s", containerId)
 	}
 
 	domains := splitDomainAllowList(domainAllowList)
 	if len(domains) == 0 {
 		d.netleashManager.Remove(containerId)
-		return
+		return nil
+	}
+	if !d.proxyEnforcementEnabled || d.secretProxyAddr == "" {
+		return fmt.Errorf("hostname-aware egress proxy is unavailable for domain-restricted sandbox %s", containerId)
 	}
 
 	info, err := d.ContainerInspect(ctx, containerId)
 	if err != nil {
-		d.logger.ErrorContext(ctx, "Failed to inspect container for netleash", "containerId", containerId, "error", err)
-		return
+		return fmt.Errorf("inspecting sandbox %s for domain enforcement: %w", containerId, err)
+	}
+
+	env := envSliceToMap(info.Config.Env)
+
+	// Gate web ports through the shared egress proxy so the allow list is enforced
+	// on the requested hostname (SNI/Host) rather than on spoofable DNS-learned
+	// IPs. In cgroup mode this must NOT hinge on the sandbox carrying the proxy
+	// wiring: the eBPF connect4 hook redirects transparently and non-secret hosts
+	// are spliced end-to-end (no proxy CA needed), so enforcement works even for an
+	// allow list applied after creation (when the wiring could no longer be
+	// injected). Requiring the wiring here is exactly what left such sandboxes open
+	// to the shared-IP / domain-fronting bypass. See sandboxProxyEnforced for the
+	// secret-using exception (MITM'd hosts need the mounted CA).
+	enforce := d.sandboxProxyEnforced(env, domainAllowList)
+	if !enforce {
+		return fmt.Errorf("sandbox %s lacks the proxy prerequisites required for hostname enforcement", containerId)
 	}
 
 	// kata-clh runs the workload inside a guest VM. Its network traffic never
@@ -67,25 +88,32 @@ func (d *DockerClient) applyDomainAllowList(ctx context.Context, containerId, do
 	// that veth instead. runc/sysbox processes live in the host cgroup, so cgroup
 	// mode applies to them as before.
 	if isKataRuntime(info) {
+		// TC/interface mode has no connect4 hook, so the proxy can only be the
+		// egress path when the workload honors HTTP(S)_PROXY — i.e. it is wired.
+		// Without the wiring, gating web ports would drop all web egress instead of
+		// redirecting it. Reject admission instead of degrading to the spoofable IP
+		// allow list; a stopped sandbox can be recreated with wiring on its next start.
+		if enforce && !d.hasProxyWiring(env) {
+			return fmt.Errorf("kata sandbox %s lacks required hostname-proxy wiring", containerId)
+		}
 		ip := GetContainerIpAddress(ctx, info)
 		veth := resolveHostVeth(d.logger, info, ip)
 		if veth == "" {
-			d.logger.ErrorContext(ctx, "Failed to resolve host veth for kata sandbox; domain allow list NOT applied (egress is unfiltered)", "containerId", containerId)
-			return
+			return fmt.Errorf("resolving host veth for kata sandbox %s", containerId)
 		}
-		if err := d.netleashManager.ConfigureInterface(containerId, veth, true, domains); err != nil {
-			d.logger.ErrorContext(ctx, "Failed to apply domain allow list (kata/interface mode)", "containerId", containerId, "veth", veth, "error", err)
+		if err := d.netleashManager.ConfigureInterface(containerId, veth, true, domains, enforce); err != nil {
+			return fmt.Errorf("applying hostname allow list to kata sandbox %s: %w", containerId, err)
 		}
-		return
+		return nil
 	}
 
 	cgroupPath, err := resolveContainerCgroup(info)
 	if err != nil {
-		d.logger.ErrorContext(ctx, "Failed to resolve container cgroup for netleash", "containerId", containerId, "error", err)
-		return
+		return fmt.Errorf("resolving sandbox %s cgroup for domain enforcement: %w", containerId, err)
 	}
 
-	if err := d.netleashManager.Configure(containerId, cgroupPath, domains); err != nil {
-		d.logger.ErrorContext(ctx, "Failed to apply domain allow list", "containerId", containerId, "error", err)
+	if err := d.netleashManager.Configure(containerId, cgroupPath, domains, enforce); err != nil {
+		return fmt.Errorf("applying hostname allow list to sandbox %s: %w", containerId, err)
 	}
+	return nil
 }

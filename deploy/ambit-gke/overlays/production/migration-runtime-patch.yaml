@@ -1,0 +1,47 @@
+# Copyright 2026 Ambit
+# SPDX-License-Identifier: AGPL-3.0
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: daytona-migrate
+  namespace: daytona-system
+spec:
+  template:
+    spec:
+      nodeSelector:
+        iam.gke.io/gke-metadata-server-enabled: "true"
+      initContainers:
+        - name: cloud-sql-proxy
+          image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.23.0@sha256:54e23cad9aeeedbf88ab75f993146631b878035f702b31c51885a932e0c7286c
+          imagePullPolicy: IfNotPresent
+          restartPolicy: Always
+          args:
+            - --address=127.0.0.1
+            - --port=5432
+            - --private-ip
+            - --structured-logs
+            - --exit-zero-on-sigterm
+            - --max-sigterm-delay=30s
+            - mwcc-infrastructure:us-east4:ambit-daytona-postgres-prod
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            capabilities:
+              drop: ["ALL"]
+      containers:
+        - name: migrate
+          env:
+            - name: DB_USERNAME
+              value: daytona
+

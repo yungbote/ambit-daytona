@@ -33,8 +33,11 @@ const (
 	reasonDNSAllowedWild  = 4
 	reasonDNSBlocked      = 5
 	reasonDNSLearned      = 6
-	reasonDNSAllowedInt   = 7 // DNS query for a cluster-internal zone, passed to the resolver
-	reasonIPAllowedInbnd  = 8 // egress reply on a peer-initiated inbound connection
+	reasonDNSAllowedInt   = 7  // DNS query for a cluster-internal zone, passed to the resolver
+	reasonIPAllowedInbnd  = 8  // egress reply on a peer-initiated inbound connection
+	reasonProxyAllowed    = 9  // egress to the enforcement proxy itself
+	reasonWebNotProxied   = 10 // web-port egress bypassing the mandatory proxy (dropped)
+	reasonIPv6Enforced    = 11 // IPv6 egress dropped under proxy enforcement
 )
 
 // StartEventReader reads egress-decision events from the ring buffer and logs
@@ -113,6 +116,20 @@ func (fw *Firewall) handleEvent(raw []byte) {
 	case reasonIPAllowed:
 		fw.log.Debug("netleash: allowed egress — destination IP was resolved from an allowed domain",
 			"dst", dst, "proto", proto)
+	case reasonProxyAllowed:
+		fw.log.Debug("netleash: allowed egress — destination is the enforcement proxy",
+			"dst", dst, "proto", proto)
+	case reasonWebNotProxied:
+		fw.log.Warn("netleash: blocked egress — web-port traffic must go through the egress proxy",
+			"dst", dst, "proto", proto)
+		if fw.cfg.OnBlocked != nil {
+			fw.cfg.OnBlocked(ip.String(), port, proto)
+		}
+	case reasonIPv6Enforced:
+		fw.log.Warn("netleash: blocked IPv6 egress — IPv6 bypasses the IPv4-only allow list and is disabled under proxy enforcement")
+		if fw.cfg.OnBlocked != nil {
+			fw.cfg.OnBlocked("::", 0, "IPv6")
+		}
 	case reasonDNSBlocked:
 		fw.log.Warn("netleash: blocked DNS query — domain is not in the allow list",
 			"domain", domain, "resolver", dst)

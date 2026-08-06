@@ -183,6 +183,15 @@ export class AppService implements OnApplicationBootstrap, OnApplicationShutdown
       return
     }
 
+    const configuredAdminApiKey = this.configService.get('admin.apiKey')
+    if (this.configService.get('production') && !configuredAdminApiKey) {
+      throw new Error('ADMIN_API_KEY is required for the initial production bootstrap')
+    }
+
+    if (!configuredAdminApiKey) {
+      this.logger.warn('ADMIN_API_KEY is not configured; the generated development key will not be logged')
+    }
+
     const user = await this.userService.create({
       id: DAYTONA_ADMIN_USER_ID,
       name: 'Daytona Admin',
@@ -202,22 +211,15 @@ export class AppService implements OnApplicationBootstrap, OnApplicationShutdown
       role: SystemRole.ADMIN,
     })
     const personalOrg = await this.organizationService.findPersonal(user.id)
-    const { value } = await this.apiKeyService.createApiKey(
+    await this.apiKeyService.createApiKey(
       personalOrg.id,
       user.id,
       DAYTONA_ADMIN_USER_ID,
       Object.values(OrganizationResourcePermission),
       undefined,
-      this.configService.getOrThrow('admin.apiKey'),
+      configuredAdminApiKey,
     )
-    this.logger.log(
-      `
-=========================================
-=========================================
-Admin user created with API key: ${value}
-=========================================
-=========================================`,
-    )
+    this.logger.log('Admin user and API key created successfully')
   }
 
   private async initializeTransientRegistry(): Promise<void> {

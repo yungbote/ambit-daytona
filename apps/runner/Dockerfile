@@ -28,7 +28,7 @@ RUN yarn install --immutable
 COPY nx.json .nxignore ./
 
 # Go dependency layer (cached unless go.mod/go.sum change)
-COPY go.work go.work.sum ./
+COPY go.work ./
 COPY apps/runner/go.mod apps/runner/go.sum apps/runner/
 COPY apps/daemon/go.mod apps/daemon/go.sum apps/daemon/
 COPY libs/common-go/go.mod libs/common-go/go.sum libs/common-go/

@@ -22,6 +22,7 @@ import {
   RawBodyRequest,
   Next,
   ParseBoolPipe,
+  ParseIntPipe,
 } from '@nestjs/common'
 import { SandboxService } from '../services/sandbox.service'
 import { CreateSandboxDto } from '../dto/create-sandbox.dto'
@@ -277,6 +278,7 @@ export class SandboxController {
         autoPauseInterval: req.body?.autoPauseInterval,
         autoArchiveInterval: req.body?.autoArchiveInterval,
         autoDeleteInterval: req.body?.autoDeleteInterval,
+        ttlMinutes: req.body?.ttlMinutes,
         volumes: req.body?.volumes,
         buildInfo: req.body?.buildInfo,
         networkBlockAll: req.body?.networkBlockAll,
@@ -1167,6 +1169,50 @@ export class SandboxController {
       interval,
       authContext.organizationId,
     )
+    return this.sandboxService.toSandboxDto(sandbox)
+  }
+
+  @Post(':sandboxIdOrName/ttl/:ttlMinutes')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Set sandbox TTL',
+    operationId: 'setTtl',
+  })
+  @ApiParam({
+    name: 'sandboxIdOrName',
+    description: 'ID or name of the sandbox',
+    type: 'string',
+  })
+  @ApiParam({
+    name: 'ttlMinutes',
+    description: 'Maximum time to live in minutes, re-anchored from the current time (0 to disable)',
+    type: 'number',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Sandbox TTL has been set',
+    type: SandboxDto,
+  })
+  @UseGuards(OrganizationAuthContextGuard, SandboxAccessGuard)
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
+  @Audit({
+    action: AuditAction.SET_TTL,
+    targetType: AuditTarget.SANDBOX,
+    targetIdFromRequest: (req) => req.params.sandboxIdOrName,
+    targetIdFromResult: (result: SandboxDto) => result?.id,
+    requestMetadata: {
+      requestedTtlMinutes: (req) => req.params.ttlMinutes,
+    },
+    resultMetadata: {
+      autoDestroyAt: (result: SandboxDto) => result?.autoDestroyAt ?? null,
+    },
+  })
+  async setTtl(
+    @IsOrganizationAuthContext() authContext: OrganizationAuthContext,
+    @Param('sandboxIdOrName') sandboxIdOrName: string,
+    @Param('ttlMinutes', ParseIntPipe) ttlMinutes: number,
+  ): Promise<SandboxDto> {
+    const sandbox = await this.sandboxService.setTtl(sandboxIdOrName, ttlMinutes, authContext.organizationId)
     return this.sandboxService.toSandboxDto(sandbox)
   }
 

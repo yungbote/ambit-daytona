@@ -1,0 +1,39 @@
+# Copyright 2026 Ambit
+# SPDX-License-Identifier: AGPL-3.0
+
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: daytona-api
+  namespace: daytona-system
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: daytona
+      app.kubernetes.io/component: api
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: daytona-proxy
+  namespace: daytona-system
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: daytona
+      app.kubernetes.io/component: proxy
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: daytona-ssh-gateway
+  namespace: daytona-system
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: daytona
+      app.kubernetes.io/component: ssh-gateway
+

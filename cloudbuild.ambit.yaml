@@ -1,0 +1,84 @@
+timeout: 3600s
+
+options:
+  machineType: E2_HIGHCPU_8
+  diskSizeGb: 200
+  logging: CLOUD_LOGGING_ONLY
+  dynamicSubstitutions: true
+
+substitutions:
+  _REGISTRY: us-east4-docker.pkg.dev/${PROJECT_ID}/ambit
+  # A caller can supply a release tag, but an omitted substitution must never
+  # overwrite a shared mutable development tag.
+  _TAG: ${BUILD_ID}
+
+steps:
+  - id: computer-use-image
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --tag=computer-use-amd64:${BUILD_ID}
+      - --file=hack/computer-use/Dockerfile
+      - .
+
+  - id: computer-use-binary
+    name: gcr.io/cloud-builders/docker
+    waitFor: [computer-use-image]
+    entrypoint: bash
+    args:
+      - -ec
+      - |
+        mkdir -p /workspace/dist/libs
+        docker run --rm \
+          --volume=/workspace/dist:/dist \
+          computer-use-amd64:${BUILD_ID}
+
+  - id: api
+    name: gcr.io/cloud-builders/docker
+    waitFor: ['-']
+    env: [DOCKER_BUILDKIT=1]
+    args:
+      - build
+      - --build-arg=VERSION=${_TAG}
+      - --tag=${_REGISTRY}/daytona-oss-api:${_TAG}
+      - --file=apps/api/Dockerfile
+      - .
+
+  - id: proxy
+    name: gcr.io/cloud-builders/docker
+    waitFor: ['-']
+    env: [DOCKER_BUILDKIT=1]
+    args:
+      - build
+      - --build-arg=VERSION=${_TAG}
+      - --tag=${_REGISTRY}/daytona-oss-proxy:${_TAG}
+      - --file=apps/proxy/Dockerfile
+      - .
+
+  - id: ssh-gateway
+    name: gcr.io/cloud-builders/docker
+    waitFor: ['-']
+    env: [DOCKER_BUILDKIT=1]
+    args:
+      - build
+      - --build-arg=VERSION=${_TAG}
+      - --tag=${_REGISTRY}/daytona-oss-ssh-gateway:${_TAG}
+      - --file=apps/ssh-gateway/Dockerfile
+      - .
+
+  - id: runner
+    name: gcr.io/cloud-builders/docker
+    waitFor: [computer-use-binary]
+    env: [DOCKER_BUILDKIT=1]
+    args:
+      - build
+      - --build-arg=VERSION=${_TAG}
+      - --tag=${_REGISTRY}/daytona-oss-runner:${_TAG}
+      - --file=apps/runner/Dockerfile
+      - .
+
+images:
+  - ${_REGISTRY}/daytona-oss-api:${_TAG}
+  - ${_REGISTRY}/daytona-oss-proxy:${_TAG}
+  - ${_REGISTRY}/daytona-oss-runner:${_TAG}
+  - ${_REGISTRY}/daytona-oss-ssh-gateway:${_TAG}

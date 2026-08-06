@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/asm"
 	"github.com/cilium/ebpf/link"
 	"golang.org/x/sys/unix"
 )
@@ -32,6 +33,7 @@ type Config struct {
 	InternalDNSZones []string                                         // cluster-internal DNS zones (e.g. "cluster.local") whose queries pass through to the resolver
 	AllowedExecs     []string                                         // whitelisted executable paths (empty = no exec filtering)
 	ProxyAddr        string                                           // "127.0.0.1:18080" (empty = no proxy)
+	EnforceProxy     bool                                             // gate web ports (TCP 80/443, UDP 443) so HTTP(S) can only reach ProxyAddr — the hostname-aware proxy becomes the mandatory egress path for web traffic
 	SecretsEnv       map[string]string                                // env var NAME → placeholder value
 	CACertFile       string                                           // path to combined CA cert file
 	JavaTrustStore   string                                           // path to PKCS12 keystore for JVM TLS (empty = no JVM truststore)
@@ -62,20 +64,31 @@ type Firewall struct {
 	lsmObjs     *firewallLsmObjects  // non-nil when exec filtering is active
 	egressLink  link.Link
 	ingressLink link.Link
-	lsmLink     link.Link
-	adopted     bool        // true if re-opened from pinned objects (Adopt) rather than freshly attached
-	pinnedMaps  []*ebpf.Map // maps re-opened during Adopt (closed on teardown)
+	// connect4Link / getpeernameLink attach the transparent-redirect programs
+	// (cgroup mode only). They redirect web-port connect() to the enforcement
+	// proxy and restore the original peer for getpeername(). Nil in TC mode and
+	// when adopted from a pin set that predates transparent redirect;
+	// getpeernameLink is additionally nil on kernels < 5.8, which lack the
+	// getpeername4 attach type.
+	connect4Link    link.Link
+	getpeernameLink link.Link
+	lsmLink         link.Link
+	adopted         bool        // true if re-opened from pinned objects (Adopt) rather than freshly attached
+	pinnedMaps      []*ebpf.Map // maps re-opened during Adopt (closed on teardown)
 }
 
 // Pin filenames under Config.PinPath for the cgroup-mode firewall.
 const (
 	pinEgressLink       = "egress_link"
 	pinIngressLink      = "ingress_link"
+	pinConnect4Link     = "connect4_link"
+	pinGetpeernameLink  = "getpeername4_link"
 	pinAllowedDomains   = "allowed_domains"
 	pinAllowedWildcards = "allowed_wildcards"
 	pinAllowedIps       = "allowed_ips"
 	pinInternalZones    = "internal_dns_zones"
 	pinEvents           = "events"
+	pinProxyConfig      = "proxy_config"
 )
 
 // New creates a new Firewall with the given configuration.
@@ -99,6 +112,28 @@ func (fw *Firewall) Setup() error {
 		return fw.setupTC()
 	}
 	return fw.setupCgroup()
+}
+
+// kernelSupportsGetpeername4 reports whether the running kernel accepts cgroup
+// sock_addr programs with the BPF_CGROUP_INET4_GETPEERNAME attach type
+// (introduced in Linux 5.8; the documented minimum kernel for cgroup mode is
+// 5.7). Probed by loading a minimal program: older kernels reject the attach
+// type at load time.
+func kernelSupportsGetpeername4() bool {
+	prog, err := ebpf.NewProgram(&ebpf.ProgramSpec{
+		Type:       ebpf.CGroupSockAddr,
+		AttachType: ebpf.AttachCgroupInet4GetPeername,
+		Instructions: asm.Instructions{
+			asm.Mov.Imm(asm.R0, 1),
+			asm.Return(),
+		},
+		License: "GPL",
+	})
+	if err != nil {
+		return false
+	}
+	prog.Close()
+	return true
 }
 
 // setupCgroup creates or attaches to a cgroup, loads cgroup_skb programs, and attaches them.
@@ -129,10 +164,38 @@ func (fw *Firewall) setupCgroup() error {
 		fw.cgroupFD = fd
 	}
 
-	// Load the compiled eBPF objects (programs + maps).
+	// Load the compiled eBPF objects (programs + maps). The getpeername4
+	// program's attach type (BPF_CGROUP_INET4_GETPEERNAME) only exists on Linux
+	// ≥ 5.8, while the documented minimum kernel is 5.7 — on older kernels the
+	// program is stripped from the spec before loading (the kernel would reject
+	// the whole collection otherwise). Everything else, including the connect4
+	// redirect, still works; workloads there merely see the proxy's address from
+	// getpeername() on redirected sockets.
 	var objs firewallObjects
-	if err := loadFirewallObjects(&objs, nil); err != nil {
-		return fmt.Errorf("loading eBPF objects: %w", err)
+	if kernelSupportsGetpeername4() {
+		if err := loadFirewallObjects(&objs, nil); err != nil {
+			return fmt.Errorf("loading eBPF objects: %w", err)
+		}
+	} else {
+		fw.log.Warn("kernel lacks cgroup/getpeername4 (Linux < 5.8); redirected sockets will observe the proxy address from getpeername()")
+		spec, err := loadFirewall()
+		if err != nil {
+			return fmt.Errorf("loading eBPF collection spec: %w", err)
+		}
+		delete(spec.Programs, "firewall_getpeername4")
+		var partial struct {
+			firewallMaps
+			FirewallConnect4   *ebpf.Program `ebpf:"firewall_connect4"`
+			FirewallDnsIngress *ebpf.Program `ebpf:"firewall_dns_ingress"`
+			FirewallEgress     *ebpf.Program `ebpf:"firewall_egress"`
+		}
+		if err := spec.LoadAndAssign(&partial, nil); err != nil {
+			return fmt.Errorf("loading eBPF objects: %w", err)
+		}
+		objs.firewallMaps = partial.firewallMaps
+		objs.FirewallConnect4 = partial.FirewallConnect4
+		objs.FirewallDnsIngress = partial.FirewallDnsIngress
+		objs.FirewallEgress = partial.FirewallEgress
 	}
 	fw.cgObjs = &objs
 	fw.maps = firewallMapsAccessor{
@@ -141,6 +204,7 @@ func (fw *Firewall) setupCgroup() error {
 		AllowedWildcards: objs.AllowedWildcards,
 		InternalDNSZones: objs.InternalDnsZones,
 		Events:           objs.Events,
+		ProxyConfig:      objs.ProxyConfig,
 	}
 
 	// Attach the cgroup_skb/egress program (domain firewall).
@@ -165,6 +229,41 @@ func (fw *Firewall) setupCgroup() error {
 		return fmt.Errorf("attaching eBPF ingress to cgroup: %w", err)
 	}
 	fw.ingressLink = il
+
+	// Attach the transparent-redirect programs: cgroup/connect4 rewrites web-port
+	// connect() to the enforcement proxy so clients that ignore HTTP(S)_PROXY still
+	// route through it, and cgroup/getpeername4 restores the original peer for
+	// getpeername(). Both consult proxy_config, so they are inert until proxy
+	// enforcement is turned on — attaching them unconditionally keeps the pin set
+	// uniform (enforcement can be toggled in place afterwards).
+	c4, err := link.AttachCgroup(link.CgroupOptions{
+		Path:    fw.cgroupPath,
+		Attach:  ebpf.AttachCGroupInet4Connect,
+		Program: objs.FirewallConnect4,
+	})
+	if err != nil {
+		il.Close()
+		el.Close()
+		return fmt.Errorf("attaching eBPF connect4 to cgroup: %w", err)
+	}
+	fw.connect4Link = c4
+
+	// getpeername4 is nil on kernels without BPF_CGROUP_INET4_GETPEERNAME
+	// (Linux < 5.8); the pin/adopt paths already tolerate its absence.
+	if objs.FirewallGetpeername4 != nil {
+		gp, err := link.AttachCgroup(link.CgroupOptions{
+			Path:    fw.cgroupPath,
+			Attach:  ebpf.AttachCgroupInet4GetPeername,
+			Program: objs.FirewallGetpeername4,
+		})
+		if err != nil {
+			c4.Close()
+			il.Close()
+			el.Close()
+			return fmt.Errorf("attaching eBPF getpeername4 to cgroup: %w", err)
+		}
+		fw.getpeernameLink = gp
+	}
 	fw.log.Debug("eBPF programs attached to cgroup")
 
 	// Populate the allowed_domains eBPF map so the ingress program knows which
@@ -182,6 +281,11 @@ func (fw *Firewall) setupCgroup() error {
 	// Allow the proxy IP in the egress filter (if proxy is configured).
 	if err := fw.allowProxyIP(); err != nil {
 		return fmt.Errorf("allowing proxy IP: %w", err)
+	}
+
+	// Seed the egress-proxy gate (proxy IP:port + enforce flag).
+	if err := fw.populateProxyConfig(); err != nil {
+		return fmt.Errorf("populating proxy config: %w", err)
 	}
 
 	// Pin links + maps to bpffs so the filter survives a restart of this
@@ -260,6 +364,7 @@ func (fw *Firewall) setupTC() error {
 		AllowedWildcards: objs.AllowedWildcards,
 		InternalDNSZones: objs.InternalDnsZones,
 		Events:           objs.Events,
+		ProxyConfig:      objs.ProxyConfig,
 	}
 
 	// Determine attachment directions. On tap devices, TC directions are
@@ -304,6 +409,9 @@ func (fw *Firewall) setupTC() error {
 	}
 	if err := fw.allowProxyIP(); err != nil {
 		return fmt.Errorf("allowing proxy IP: %w", err)
+	}
+	if err := fw.populateProxyConfig(); err != nil {
+		return fmt.Errorf("populating proxy config: %w", err)
 	}
 
 	return nil
@@ -471,6 +579,18 @@ func (fw *Firewall) pinAll() error {
 	if err := fw.ingressLink.Pin(filepath.Join(fw.cfg.PinPath, pinIngressLink)); err != nil {
 		return fmt.Errorf("pinning ingress link: %w", err)
 	}
+	// connect4/getpeername4 exist only in cgroup mode; skip in TC mode where they
+	// are nil. Pinning them keeps transparent redirect attached across a restart.
+	if fw.connect4Link != nil {
+		if err := fw.connect4Link.Pin(filepath.Join(fw.cfg.PinPath, pinConnect4Link)); err != nil {
+			return fmt.Errorf("pinning connect4 link: %w", err)
+		}
+	}
+	if fw.getpeernameLink != nil {
+		if err := fw.getpeernameLink.Pin(filepath.Join(fw.cfg.PinPath, pinGetpeernameLink)); err != nil {
+			return fmt.Errorf("pinning getpeername4 link: %w", err)
+		}
+	}
 	for name, m := range fw.pinnableMaps() {
 		if err := m.Pin(filepath.Join(fw.cfg.PinPath, name)); err != nil {
 			return fmt.Errorf("pinning map %s: %w", name, err)
@@ -492,6 +612,7 @@ func (fw *Firewall) pinnableMaps() map[string]*ebpf.Map {
 		pinAllowedIps:       fw.maps.AllowedIps,
 		pinInternalZones:    fw.maps.InternalDNSZones,
 		pinEvents:           fw.maps.Events,
+		pinProxyConfig:      fw.maps.ProxyConfig,
 	}
 }
 
@@ -518,9 +639,32 @@ func (fw *Firewall) Adopt() error {
 	}
 	fw.ingressLink = il
 
-	for _, name := range []string{pinAllowedDomains, pinAllowedWildcards, pinAllowedIps, pinInternalZones, pinEvents} {
+	// connect4/getpeername4 links were added with transparent redirect. A pin set
+	// written by an older version doesn't have them — tolerate their absence (the
+	// egress program still enforces via its drop path) rather than failing the
+	// whole adoption, which would tear down a working filter.
+	if c4, err := link.LoadPinnedLink(filepath.Join(fw.cfg.PinPath, pinConnect4Link), nil); err == nil {
+		fw.connect4Link = c4
+	} else if !os.IsNotExist(err) {
+		fw.Cleanup()
+		return fmt.Errorf("loading pinned connect4 link: %w", err)
+	} else {
+		fw.log.Warn("pinned firewall predates transparent redirect; web egress falls back to the drop path until rebuilt")
+	}
+	if gp, err := link.LoadPinnedLink(filepath.Join(fw.cfg.PinPath, pinGetpeernameLink), nil); err == nil {
+		fw.getpeernameLink = gp
+	} else if !os.IsNotExist(err) {
+		fw.Cleanup()
+		return fmt.Errorf("loading pinned getpeername4 link: %w", err)
+	}
+
+	for _, name := range []string{pinAllowedDomains, pinAllowedWildcards, pinAllowedIps, pinInternalZones, pinEvents, pinProxyConfig} {
 		m, err := ebpf.LoadPinnedMap(filepath.Join(fw.cfg.PinPath, name), nil)
 		if err != nil {
+			// Every adopted domain policy must carry the hostname-enforcement map.
+			// Accepting an older pin set here would silently revive the shared-IP/SNI
+			// bypass. Cleanup closes only this process's handles and deliberately
+			// leaves the still-enforcing pins for the runner to quarantine/stop.
 			fw.Cleanup()
 			return fmt.Errorf("loading pinned map %s: %w", name, err)
 		}
@@ -536,6 +680,8 @@ func (fw *Firewall) Adopt() error {
 			fw.maps.InternalDNSZones = m
 		case pinEvents:
 			fw.maps.Events = m
+		case pinProxyConfig:
+			fw.maps.ProxyConfig = m
 		}
 	}
 
@@ -564,6 +710,12 @@ func (fw *Firewall) teardown(unpin bool) {
 	}
 	if fw.ingressLink != nil {
 		fw.ingressLink.Close()
+	}
+	if fw.connect4Link != nil {
+		fw.connect4Link.Close()
+	}
+	if fw.getpeernameLink != nil {
+		fw.getpeernameLink.Close()
 	}
 	if fw.lsmLink != nil {
 		fw.lsmLink.Close()

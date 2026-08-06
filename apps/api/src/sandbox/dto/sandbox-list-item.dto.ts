@@ -36,6 +36,7 @@ interface SandboxListItemDtoFields {
   autoPauseInterval?: number
   autoArchiveInterval?: number
   autoDeleteInterval?: number
+  autoDestroyAt?: string
   createdAt?: string
   updatedAt?: string
   lastActivityAt?: string
@@ -229,6 +230,14 @@ export class SandboxListItemDto {
   autoDeleteInterval?: number
 
   @ApiPropertyOptional({
+    description: 'Absolute wall-clock destruction deadline',
+    example: '2026-08-06T18:00:00Z',
+    required: false,
+  })
+  @IsOptional()
+  autoDestroyAt?: string
+
+  @ApiPropertyOptional({
     description: 'The creation timestamp of the sandbox',
     example: '2024-10-01T12:00:00Z',
     required: false,
@@ -291,6 +300,7 @@ export class SandboxListItemDto {
     autoPauseInterval,
     autoArchiveInterval,
     autoDeleteInterval,
+    autoDestroyAt,
     createdAt,
     updatedAt,
     lastActivityAt,
@@ -320,6 +330,7 @@ export class SandboxListItemDto {
     this.autoPauseInterval = autoPauseInterval
     this.autoArchiveInterval = autoArchiveInterval
     this.autoDeleteInterval = autoDeleteInterval
+    this.autoDestroyAt = autoDestroyAt
     this.createdAt = createdAt
     this.updatedAt = updatedAt
     this.lastActivityAt = lastActivityAt

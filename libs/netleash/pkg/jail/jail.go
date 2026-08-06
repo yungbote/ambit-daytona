@@ -55,6 +55,14 @@ type Config struct {
 	// When non-empty, an ephemeral CA and MITM proxy are started automatically.
 	Secrets []Secret
 
+	// EnforceProxy hardens the domain allow list: the MITM proxy is started even
+	// without secrets, and the eBPF filter gates the standard web ports (TCP
+	// 80/443, UDP 443) so the child's HTTP(S) traffic can only go through the
+	// proxy — which enforces the allow list on the requested hostname (SNI/Host)
+	// instead of on DNS-learned IPs, closing the shared-IP / domain-fronting
+	// bypass. Non-web protocols keep the IP-allowlist behavior. Optional.
+	EnforceProxy bool
+
 	// Stdout and Stderr control where the child process writes its output.
 	// If nil, they default to os.Stdout and os.Stderr respectively.
 	Stdout io.Writer
@@ -164,8 +172,9 @@ func (j *Jail) Setup() error {
 		Logger:        j.log,
 	}
 
-	// If secrets are configured, start the MITM proxy.
-	if len(j.cfg.Secrets) > 0 {
+	// Start the MITM proxy when secrets are configured or when the allow list is
+	// proxy-enforced (the proxy is then the mandatory path for web traffic).
+	if len(j.cfg.Secrets) > 0 || j.cfg.EnforceProxy {
 		if err := j.setupProxy(&fwCfg, domainList); err != nil {
 			return err
 		}
@@ -230,6 +239,7 @@ func (j *Jail) setupProxy(fwCfg *firewall.Config, domainList []string) error {
 
 	fwCfg.ProxyAddr = proxyAddr
 	fwCfg.CACertFile = caCertFile
+	fwCfg.EnforceProxy = j.cfg.EnforceProxy
 
 	// Create a Java truststore (system CAs + our CA) for JVM applications.
 	if javaTrustStore := proxy.CreateJavaTrustStore(rawCAFile.Name()); javaTrustStore != "" {

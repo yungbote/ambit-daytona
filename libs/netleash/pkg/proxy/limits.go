@@ -48,6 +48,16 @@ func (c *idleConn) Write(b []byte) (int, error) {
 	return c.Conn.Write(b)
 }
 
+// CloseWrite forwards a write-half shutdown to the wrapped connection when it
+// supports one (e.g. *net.TCPConn), so a spliced tunnel can signal EOF to one
+// peer without fully closing the connection. A no-op otherwise.
+func (c *idleConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return nil
+}
+
 // acquireConn admits a freshly accepted connection under the global and per-IP
 // concurrency caps. It returns false (and the caller must drop the connection)
 // when either cap is already reached. releaseConn must be called for every

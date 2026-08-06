@@ -3,9 +3,12 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import type { AuditLogMetadata } from '../entities/audit-log.entity'
+
 export class UpdateAuditLogInternalDto {
   statusCode?: number
   errorMessage?: string
   targetId?: string
   organizationId?: string
+  metadata?: AuditLogMetadata
 }

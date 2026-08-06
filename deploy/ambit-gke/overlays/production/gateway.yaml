@@ -1,0 +1,167 @@
+# Copyright 2026 Ambit
+# SPDX-License-Identifier: AGPL-3.0
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: daytona-gateway
+  labels:
+    app.kubernetes.io/part-of: ambit-daytona
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ambit-daytona-public
+  namespace: daytona-gateway
+  annotations:
+    networking.gke.io/certmap: ambit-daytona-public
+spec:
+  gatewayClassName: gke-l7-global-external-managed
+  addresses:
+    - type: NamedAddress
+      value: ambit-daytona-gateway-ip
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        kinds:
+          - kind: HTTPRoute
+        namespaces:
+          from: Same
+    - name: https
+      protocol: HTTPS
+      port: 443
+      allowedRoutes:
+        kinds:
+          - kind: HTTPRoute
+        namespaces:
+          from: Same
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: https-redirect
+  namespace: daytona-gateway
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ambit-daytona-public
+      sectionName: http
+  hostnames:
+    - api.daytona.ambit.sh
+    - proxy.daytona.ambit.sh
+    - "*.proxy.daytona.ambit.sh"
+    - minio.daytona.ambit.sh
+    - registry.daytona.ambit.sh
+  rules:
+    - filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            # GKE's managed Gateway currently accepts only 301 or 302 here.
+            statusCode: 301
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: api
+  namespace: daytona-gateway
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ambit-daytona-public
+      sectionName: https
+  hostnames:
+    - api.daytona.ambit.sh
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: daytona-api
+          namespace: daytona-system
+          port: 3000
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: proxy
+  namespace: daytona-gateway
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ambit-daytona-public
+      sectionName: https
+  hostnames:
+    - proxy.daytona.ambit.sh
+    - "*.proxy.daytona.ambit.sh"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: daytona-proxy
+          namespace: daytona-system
+          port: 4000
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: minio
+  namespace: daytona-gateway
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ambit-daytona-public
+      sectionName: https
+  hostnames:
+    - minio.daytona.ambit.sh
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: minio
+          namespace: daytona-state
+          port: 9000
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: registry
+  namespace: daytona-gateway
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: ambit-daytona-public
+      sectionName: https
+  hostnames:
+    - registry.daytona.ambit.sh
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - group: ""
+          kind: Service
+          name: daytona-harbor
+          namespace: daytona-state
+          port: 80

@@ -25,6 +25,21 @@ type firewallDnsNameKey struct {
 	Name [128]int8
 }
 
+type firewallOrigDst struct {
+	_    structs.HostLayout
+	Ip   uint32
+	Port uint16
+	Pad  uint16
+}
+
+type firewallProxyCfg struct {
+	_         structs.HostLayout
+	ProxyIp   uint32
+	ProxyPort uint16
+	Enforce   uint8
+	Pad       uint8
+}
+
 // loadFirewall returns the embedded CollectionSpec for firewall.
 func loadFirewall() (*ebpf.CollectionSpec, error) {
 	reader := bytes.NewReader(_FirewallBytes)
@@ -67,8 +82,10 @@ type firewallSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type firewallProgramSpecs struct {
-	FirewallDnsIngress *ebpf.ProgramSpec `ebpf:"firewall_dns_ingress"`
-	FirewallEgress     *ebpf.ProgramSpec `ebpf:"firewall_egress"`
+	FirewallConnect4     *ebpf.ProgramSpec `ebpf:"firewall_connect4"`
+	FirewallDnsIngress   *ebpf.ProgramSpec `ebpf:"firewall_dns_ingress"`
+	FirewallEgress       *ebpf.ProgramSpec `ebpf:"firewall_egress"`
+	FirewallGetpeername4 *ebpf.ProgramSpec `ebpf:"firewall_getpeername4"`
 }
 
 // firewallMapSpecs contains maps before they are loaded into the kernel.
@@ -81,6 +98,8 @@ type firewallMapSpecs struct {
 	Events           *ebpf.MapSpec `ebpf:"events"`
 	InboundConns     *ebpf.MapSpec `ebpf:"inbound_conns"`
 	InternalDnsZones *ebpf.MapSpec `ebpf:"internal_dns_zones"`
+	OrigDstMap       *ebpf.MapSpec `ebpf:"orig_dst_map"`
+	ProxyConfig      *ebpf.MapSpec `ebpf:"proxy_config"`
 	ReportedIps      *ebpf.MapSpec `ebpf:"reported_ips"`
 }
 
@@ -116,6 +135,8 @@ type firewallMaps struct {
 	Events           *ebpf.Map `ebpf:"events"`
 	InboundConns     *ebpf.Map `ebpf:"inbound_conns"`
 	InternalDnsZones *ebpf.Map `ebpf:"internal_dns_zones"`
+	OrigDstMap       *ebpf.Map `ebpf:"orig_dst_map"`
+	ProxyConfig      *ebpf.Map `ebpf:"proxy_config"`
 	ReportedIps      *ebpf.Map `ebpf:"reported_ips"`
 }
 
@@ -127,6 +148,8 @@ func (m *firewallMaps) Close() error {
 		m.Events,
 		m.InboundConns,
 		m.InternalDnsZones,
+		m.OrigDstMap,
+		m.ProxyConfig,
 		m.ReportedIps,
 	)
 }
@@ -141,14 +164,18 @@ type firewallVariables struct {
 //
 // It can be passed to loadFirewallObjects or ebpf.CollectionSpec.LoadAndAssign.
 type firewallPrograms struct {
-	FirewallDnsIngress *ebpf.Program `ebpf:"firewall_dns_ingress"`
-	FirewallEgress     *ebpf.Program `ebpf:"firewall_egress"`
+	FirewallConnect4     *ebpf.Program `ebpf:"firewall_connect4"`
+	FirewallDnsIngress   *ebpf.Program `ebpf:"firewall_dns_ingress"`
+	FirewallEgress       *ebpf.Program `ebpf:"firewall_egress"`
+	FirewallGetpeername4 *ebpf.Program `ebpf:"firewall_getpeername4"`
 }
 
 func (p *firewallPrograms) Close() error {
 	return _FirewallClose(
+		p.FirewallConnect4,
 		p.FirewallDnsIngress,
 		p.FirewallEgress,
+		p.FirewallGetpeername4,
 	)
 }
 

@@ -53,7 +53,9 @@ func (d *DockerClient) UpdateSandboxSecrets(ctx context.Context, sandboxId strin
 		return errors.New("sandbox IP not found? Is the sandbox started?")
 	}
 
-	d.refreshSandboxSecretBinding(ctx, c.ID, containerIP)
+	if err := d.refreshSandboxSecretBinding(ctx, c.ID, containerIP); err != nil {
+		return fmt.Errorf("failed to refresh sandbox proxy binding: %w", err)
+	}
 
 	if err := d.updateDaemonEnv(ctx, containerIP, req.Env, secrets.DaytonaPlaceholderPrefix); err != nil {
 		return fmt.Errorf("failed to update daemon env: %w", err)
@@ -62,32 +64,50 @@ func (d *DockerClient) UpdateSandboxSecrets(ctx context.Context, sandboxId strin
 	return nil
 }
 
+// secretEnvInSync reports whether a container's env already matches both the
+// desired secret placeholders AND the proxy wiring the sandbox needs. Wiring
+// can drift with no secret change at all: a domain allow list added or removed
+// while the sandbox was stopped flips whether a proxy-enforced sandbox must be
+// wired (HTTP(S)_PROXY + CA), and a changed proxy address makes existing
+// wiring stale. An enforced sandbox missing its wiring silently falls back to
+// IP-only filtering; stale wiring with no proxy policy binding gets every web
+// request rejected — both must trigger recreation, not just secret diffs.
+func (d *DockerClient) secretEnvInSync(env []string, desired map[string]string, domainAllowList string) bool {
+	envMap := envSliceToMap(env)
+	current := make(map[string]string)
+	for k, v := range envMap {
+		if strings.HasPrefix(v, secrets.DaytonaPlaceholderPrefix) {
+			current[k] = v
+		}
+	}
+	if !maps.Equal(current, desired) {
+		return false
+	}
+	wiringPresent := d.hasProxyWiring(envMap)
+	wiringDesired := len(d.proxyWiringEnvVars(desired, domainAllowList)) > 0
+	return wiringPresent == wiringDesired
+}
+
 // syncSecretEnvOnStart reconciles a stopped container's env with the sandbox's
 // desired secret env (env var -> placeholder, JSON-encoded in the start job's
-// metadata). When they differ the container is recreated under the same ID with
-// placeholders and proxy wiring (env + CA mount) added or removed to match. A
-// restart is therefore what applies secret changes that could not be applied
-// live — most importantly attaching the first secret to a sandbox created
-// without any, which needs the full wiring.
-func (d *DockerClient) syncSecretEnvOnStart(ctx context.Context, containerId string, c *container.InspectResponse, secretEnvsJSON string) (*container.InspectResponse, error) {
+// metadata) and proxy wiring (see secretEnvInSync). When either differs the
+// container is recreated under the same ID with placeholders and proxy wiring
+// (env + CA mount) added or removed to match. A restart is therefore what
+// applies changes that could not be applied live — attaching the first secret
+// to a sandbox created without any, or attaching a domain allow list to a
+// proxy-enforced sandbox created without one; both need the full wiring.
+func (d *DockerClient) syncSecretEnvOnStart(ctx context.Context, containerId string, c *container.InspectResponse, secretEnvsJSON, domainAllowList string) (*container.InspectResponse, error) {
 	var desired map[string]string
 	if err := json.Unmarshal([]byte(secretEnvsJSON), &desired); err != nil {
 		return nil, fmt.Errorf("invalid secretEnvs metadata: %w", err)
 	}
 
-	current := make(map[string]string)
-	for k, v := range envSliceToMap(c.Config.Env) {
-		if strings.HasPrefix(v, secrets.DaytonaPlaceholderPrefix) {
-			current[k] = v
-		}
-	}
-
-	if maps.Equal(current, desired) {
+	if d.secretEnvInSync(c.Config.Env, desired, domainAllowList) {
 		return c, nil
 	}
 
-	d.logger.InfoContext(ctx, "Sandbox secret env changed while stopped; recreating container to apply",
-		"containerId", containerId, "currentSecrets", len(current), "desiredSecrets", len(desired))
+	d.logger.InfoContext(ctx, "Sandbox secret env or proxy wiring changed while stopped; recreating container to apply",
+		"containerId", containerId, "desiredSecrets", len(desired), "domainAllowList", domainAllowList != "")
 
 	// Rebuild the env: drop the old placeholders and previously injected wiring,
 	// keep everything else in order, then append the desired placeholders and
@@ -108,9 +128,9 @@ func (d *DockerClient) syncSecretEnvOnStart(ctx context.Context, containerId str
 	for k, v := range desired {
 		newEnv = append(newEnv, fmt.Sprintf("%s=%s", k, v))
 	}
-	newEnv = append(newEnv, d.secretProxyEnvVars(desired)...)
+	newEnv = append(newEnv, d.proxyWiringEnvVars(desired, domainAllowList)...)
 
-	caBind := d.secretProxyCABind(desired)
+	caBind := d.proxyCABind(desired, domainAllowList)
 
 	return d.recreateContainerUnderSameID(ctx, containerId, "daytona-secret-env", c,
 		func(cfg *container.Config) {

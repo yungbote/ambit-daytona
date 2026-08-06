@@ -62,9 +62,13 @@ type DockerClientConfig struct {
 	ContainerdAddress   string
 	ContainerdNamespace string
 
-	// Secret injection (netleash shared MITM proxy). When SecretProxyEnabled is
-	// set (and a NetleashManager is present), the runner runs a single proxy that
-	// swaps secret placeholders for real values in sandboxes' outbound requests.
+	// Shared netleash egress proxy (hostname-aware MITM). Whenever a
+	// NetleashManager is present the proxy runs, sandboxes with a domain allow
+	// list are wired through it, and their web-port egress is gated in eBPF so
+	// the allow list is enforced on the requested hostname (SNI/Host), not just
+	// on DNS-learned IPs. When SecretProxyEnabled is additionally set, the proxy
+	// also swaps secret placeholders for real values in sandboxes' outbound
+	// requests.
 	SecretProxyEnabled bool
 	SecretProxyPort    int    // fixed port the shared proxy binds on the bridge gateway
 	SecretCADir        string // dir for the proxy's persisted CA (survives restarts)
@@ -211,6 +215,8 @@ func NewDockerClient(ctx context.Context, config DockerClientConfig) (*DockerCli
 		containerdAddress:            containerdAddress,
 		containerdNamespace:          config.ContainerdNamespace,
 		secretProxyEnabled:           config.SecretProxyEnabled && config.NetleashManager != nil,
+		proxyEnforcementEnabled:      config.NetleashManager != nil,
+		egressProxyEnabled:           config.NetleashManager != nil,
 		secretProxyPort:              config.SecretProxyPort,
 		secretCADir:                  config.SecretCADir,
 		daytonaApiUrl:                config.DaytonaApiUrl,
@@ -298,12 +304,14 @@ type DockerClient struct {
 	containerdConn      *grpc.ClientConn
 	containerdConnMu    sync.Mutex
 
-	// Secret injection config (see DockerClientConfig).
-	secretProxyEnabled bool
-	secretProxyPort    int
-	secretCADir        string
-	daytonaApiUrl      string
-	// Set by EnableSecretInjection once the shared proxy is running.
-	secretProxyAddr   string // "<gatewayIP>:<port>"; empty when secret injection is off
-	secretProxyCACert string // host path to the CA bundle mounted into secret-using sandboxes
+	// Shared egress proxy config (see DockerClientConfig).
+	secretProxyEnabled      bool // register secret-injecting bindings
+	proxyEnforcementEnabled bool // wire allowlisted sandboxes through the proxy + gate web ports in eBPF (on whenever netleash is)
+	egressProxyEnabled      bool // run the shared proxy (on whenever netleash is)
+	secretProxyPort         int
+	secretCADir             string
+	daytonaApiUrl           string
+	// Set by EnableEgressProxy once the shared proxy is running.
+	secretProxyAddr   string // "<gatewayIP>:<port>"; empty when the proxy is off
+	secretProxyCACert string // host path to the CA bundle mounted into proxy-wired sandboxes
 }

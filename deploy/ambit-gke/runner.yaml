@@ -1,0 +1,169 @@
+# Copyright 2026 Ambit
+# SPDX-License-Identifier: AGPL-3.0
+
+# Headless is required: the proxy connects to arbitrary sandbox ports published
+# on the runner pod, not only to the runner API and SSH ports named here.
+apiVersion: v1
+kind: Service
+metadata:
+  name: daytona-runner
+  namespace: daytona-runners
+  labels:
+    app.kubernetes.io/name: daytona
+    app.kubernetes.io/component: runner
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: false
+  selector:
+    app.kubernetes.io/name: daytona
+    app.kubernetes.io/component: runner
+  ports:
+    - name: api
+      port: 3003
+      targetPort: api
+    - name: ssh-gateway
+      port: 2220
+      targetPort: ssh-gateway
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: daytona-runner
+  namespace: daytona-runners
+  labels:
+    app.kubernetes.io/name: daytona
+    app.kubernetes.io/component: runner
+  annotations:
+    ambit.sh/source-url: https://github.com/yungbote/ambit-daytona
+    ambit.sh/source-revision: c4e3f5d21e2a544314ca28c4ce875a37ad5abfc6
+spec:
+  serviceName: daytona-runner
+  replicas: 1
+  podManagementPolicy: OrderedReady
+  # Runner upgrades require an API-level drain before the pod is replaced.
+  # Deliberately do not let an image edit kill active tenant sandboxes.
+  updateStrategy:
+    type: OnDelete
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: daytona
+      app.kubernetes.io/component: runner
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: daytona
+        app.kubernetes.io/component: runner
+    spec:
+      serviceAccountName: daytona-runner
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 180
+      nodeSelector:
+        daytona-sandbox-c: "true"
+      tolerations:
+        - key: sandbox
+          operator: Equal
+          value: "true"
+          effect: NoSchedule
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+        seccompProfile:
+          type: Unconfined
+      containers:
+        - name: runner
+          image: daytona-runner:build-required
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: api
+              containerPort: 3003
+            - name: ssh-gateway
+              containerPort: 2220
+          envFrom:
+            - configMapRef:
+                name: daytona-runner-config
+            - secretRef:
+                name: daytona-runner-secrets
+          startupProbe:
+            exec:
+              command:
+                - sh
+                - -ec
+                - docker info >/dev/null && curl -fsS http://127.0.0.1:3003/ >/dev/null
+            periodSeconds: 5
+            failureThreshold: 90
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -ec
+                - docker info >/dev/null && curl -fsS http://127.0.0.1:3003/ >/dev/null
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -ec
+                - docker info >/dev/null && curl -fsS http://127.0.0.1:3003/ >/dev/null
+            periodSeconds: 30
+            failureThreshold: 3
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: "4"
+              memory: 12Gi
+            limits:
+              cpu: 7500m
+              memory: 28Gi
+          securityContext:
+            privileged: true
+            allowPrivilegeEscalation: true
+            readOnlyRootFilesystem: false
+          volumeMounts:
+            - name: docker-data
+              mountPath: /var/lib/docker
+            - name: runner-state
+              mountPath: /var/lib/daytona
+            - name: runner-host-key
+              mountPath: /etc/daytona/ssh
+              readOnly: true
+            - name: netleash-bpf
+              mountPath: /sys/fs/bpf/netleash
+              mountPropagation: HostToContainer
+      volumes:
+        - name: runner-host-key
+          secret:
+            secretName: daytona-runner-host-key
+            defaultMode: 0400
+            items:
+              - key: RUNNER_SSH_HOST_PRIVATE_KEY
+                path: runner_host_key
+        - name: netleash-bpf
+          hostPath:
+            path: /sys/fs/bpf/daytona
+            type: DirectoryOrCreate
+  volumeClaimTemplates:
+    - metadata:
+        name: docker-data
+        labels:
+          app.kubernetes.io/name: daytona
+          app.kubernetes.io/component: runner
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: standard-rwo
+        resources:
+          requests:
+            storage: 250Gi
+    - metadata:
+        name: runner-state
+        labels:
+          app.kubernetes.io/name: daytona
+          app.kubernetes.io/component: runner
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: standard-rwo
+        resources:
+          requests:
+            storage: 10Gi

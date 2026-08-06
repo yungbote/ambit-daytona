@@ -1,0 +1,145 @@
+# Copyright 2026 Ambit
+# SPDX-License-Identifier: AGPL-3.0
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: daytona-state
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: minio-cluster-and-daytona-clients
+  namespace: daytona-state
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: daytona
+      app.kubernetes.io/component: object-storage
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: daytona-state
+      ports:
+        - protocol: TCP
+          port: 9000
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: daytona-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: daytona
+              app.kubernetes.io/component: api
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: daytona-runners
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: daytona
+              app.kubernetes.io/component: runner
+      ports:
+        - protocol: TCP
+          port: 9000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: harbor-internal
+  namespace: daytona-state
+spec:
+  podSelector:
+    matchLabels:
+      app: harbor
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: daytona-state
+          podSelector:
+            matchLabels:
+              app: harbor
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: harbor-daytona-clients
+  namespace: daytona-state
+spec:
+  podSelector:
+    matchLabels:
+      app: harbor
+      component: nginx
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: daytona-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: daytona
+              app.kubernetes.io/component: api
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: daytona-runners
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: daytona
+              app.kubernetes.io/component: runner
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# A global external Application Load Balancer reaches zonal NEG Pods from the
+# shared Google Front End and health-check ranges. Standard NetworkPolicy has
+# no identity selector for one specific Gateway, so keep the allowance to the
+# documented ranges, selected Pods, and exact serving ports.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: minio-from-gke-gateway
+  namespace: daytona-state
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: daytona
+      app.kubernetes.io/component: object-storage
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 35.191.0.0/16
+        - ipBlock:
+            cidr: 130.211.0.0/22
+      ports:
+        - protocol: TCP
+          port: 9000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: harbor-from-gke-gateway
+  namespace: daytona-state
+spec:
+  podSelector:
+    matchLabels:
+      app: harbor
+      component: nginx
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 35.191.0.0/16
+        - ipBlock:
+            cidr: 130.211.0.0/22
+      ports:
+        - protocol: TCP
+          port: 8080

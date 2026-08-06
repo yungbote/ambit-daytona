@@ -1,0 +1,181 @@
+# Copyright 2026 Ambit
+# SPDX-License-Identifier: AGPL-3.0
+
+# GKE requires backend and health-check policies to share the target Service's
+# namespace. ReferenceGrants name the only Services that platform-owned Routes
+# in daytona-gateway may use across that namespace boundary.
+apiVersion: gateway.networking.k8s.io/v1
+kind: ReferenceGrant
+metadata:
+  name: daytona-gateway-backends
+  namespace: daytona-system
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: daytona-gateway
+  to:
+    - group: ""
+      kind: Service
+      name: daytona-api
+    - group: ""
+      kind: Service
+      name: daytona-proxy
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: ReferenceGrant
+metadata:
+  name: daytona-gateway-backends
+  namespace: daytona-state
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: daytona-gateway
+  to:
+    - group: ""
+      kind: Service
+      name: minio
+    - group: ""
+      kind: Service
+      name: daytona-harbor
+---
+apiVersion: networking.gke.io/v1
+kind: HealthCheckPolicy
+metadata:
+  name: daytona-api-gateway
+  namespace: daytona-system
+spec:
+  default:
+    checkIntervalSec: 10
+    timeoutSec: 5
+    healthyThreshold: 2
+    unhealthyThreshold: 3
+    config:
+      type: HTTP
+      httpHealthCheck:
+        host: api.daytona.ambit.sh
+        portSpecification: USE_SERVING_PORT
+        requestPath: /api/health/29875676-8e7b-47c5-a5e8-d47aed8375fa
+  targetRef:
+    group: ""
+    kind: Service
+    name: daytona-api
+---
+apiVersion: networking.gke.io/v1
+kind: GCPBackendPolicy
+metadata:
+  name: daytona-api-gateway
+  namespace: daytona-system
+spec:
+  default:
+    timeoutSec: 86400
+  targetRef:
+    group: ""
+    kind: Service
+    name: daytona-api
+---
+apiVersion: networking.gke.io/v1
+kind: HealthCheckPolicy
+metadata:
+  name: daytona-proxy-gateway
+  namespace: daytona-system
+spec:
+  default:
+    checkIntervalSec: 10
+    timeoutSec: 5
+    healthyThreshold: 2
+    unhealthyThreshold: 3
+    config:
+      type: HTTP
+      httpHealthCheck:
+        host: proxy.daytona.ambit.sh
+        portSpecification: USE_SERVING_PORT
+        requestPath: /health
+  targetRef:
+    group: ""
+    kind: Service
+    name: daytona-proxy
+---
+apiVersion: networking.gke.io/v1
+kind: GCPBackendPolicy
+metadata:
+  name: daytona-proxy-gateway
+  namespace: daytona-system
+spec:
+  default:
+    timeoutSec: 86400
+  targetRef:
+    group: ""
+    kind: Service
+    name: daytona-proxy
+---
+apiVersion: networking.gke.io/v1
+kind: HealthCheckPolicy
+metadata:
+  name: minio-gateway
+  namespace: daytona-state
+spec:
+  default:
+    checkIntervalSec: 10
+    timeoutSec: 5
+    healthyThreshold: 2
+    unhealthyThreshold: 3
+    config:
+      type: HTTP
+      httpHealthCheck:
+        host: minio.daytona.ambit.sh
+        portSpecification: USE_SERVING_PORT
+        requestPath: /minio/health/ready
+  targetRef:
+    group: ""
+    kind: Service
+    name: minio
+---
+apiVersion: networking.gke.io/v1
+kind: GCPBackendPolicy
+metadata:
+  name: minio-gateway
+  namespace: daytona-state
+spec:
+  default:
+    timeoutSec: 86400
+  targetRef:
+    group: ""
+    kind: Service
+    name: minio
+---
+apiVersion: networking.gke.io/v1
+kind: HealthCheckPolicy
+metadata:
+  name: daytona-harbor-gateway
+  namespace: daytona-state
+spec:
+  default:
+    checkIntervalSec: 10
+    timeoutSec: 5
+    healthyThreshold: 2
+    unhealthyThreshold: 3
+    config:
+      type: HTTP
+      httpHealthCheck:
+        host: registry.daytona.ambit.sh
+        portSpecification: USE_SERVING_PORT
+        requestPath: /api/v2.0/ping
+  targetRef:
+    group: ""
+    kind: Service
+    name: daytona-harbor
+---
+apiVersion: networking.gke.io/v1
+kind: GCPBackendPolicy
+metadata:
+  name: daytona-harbor-gateway
+  namespace: daytona-state
+spec:
+  default:
+    timeoutSec: 86400
+  targetRef:
+    group: ""
+    kind: Service
+    name: daytona-harbor

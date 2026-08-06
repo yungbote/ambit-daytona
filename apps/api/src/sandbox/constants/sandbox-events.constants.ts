@@ -19,6 +19,7 @@ export const SandboxEvents = {
   AUTO_STOPPED_EPHEMERAL: 'sandbox.auto-stopped-ephemeral',
   AUTO_ARCHIVED: 'sandbox.auto-archived',
   AUTO_DELETED: 'sandbox.auto-deleted',
+  AUTO_DESTROYED: 'sandbox.auto-destroyed',
 } as const
 
 export type SandboxEvent = (typeof SandboxEvents)[keyof typeof SandboxEvents]

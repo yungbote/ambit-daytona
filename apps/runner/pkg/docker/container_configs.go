@@ -100,11 +100,13 @@ func (d *DockerClient) getContainerCreateConfig(sandboxDto dto.CreateSandboxDTO,
 		envVars = append(envVars, "DAYTONA_REGION_ID="+*sandboxDto.RegionId)
 	}
 
-	// Route a secret-using sandbox's HTTP(S) traffic through the shared netleash
-	// proxy and trust its CA, so placeholders in outbound requests get swapped
-	// for real secret values. No-op for sandboxes without secrets.
-	if secretEnv := d.secretProxyEnvVars(sandboxDto.Env); len(secretEnv) > 0 {
-		envVars = append(envVars, secretEnv...)
+	// Route the sandbox's HTTP(S) traffic through the shared netleash egress
+	// proxy and trust its CA when it uses secrets (placeholders in outbound
+	// requests get swapped for real values) or when proxy enforcement is on and
+	// it has a domain allow list (the proxy enforces the list on the requested
+	// hostname; eBPF gates web ports so it can't be bypassed). No-op otherwise.
+	if wiringEnv := d.proxyWiringEnvVars(sandboxDto.Env, derefString(sandboxDto.DomainAllowList)); len(wiringEnv) > 0 {
+		envVars = append(envVars, wiringEnv...)
 	}
 
 	labels := make(map[string]string)
@@ -207,9 +209,9 @@ func (d *DockerClient) getContainerHostConfig(sandboxDto dto.CreateSandboxDTO, v
 		binds = append(binds, volumeMountPathBinds...)
 	}
 
-	// Mount the shared proxy's CA bundle into secret-using sandboxes so the
+	// Mount the shared proxy's CA bundle into proxy-wired sandboxes so the
 	// injected *_CA_BUNDLE / SSL_CERT_FILE env vars resolve to it.
-	if bind := d.secretProxyCABind(sandboxDto.Env); bind != "" {
+	if bind := d.proxyCABind(sandboxDto.Env, derefString(sandboxDto.DomainAllowList)); bind != "" {
 		binds = append(binds, bind)
 	}
 
@@ -312,9 +314,13 @@ func (d *DockerClient) getContainerNetworkingConfig(sandboxDto dto.CreateSandbox
 }
 
 func (d *DockerClient) getAndroidDeviceHostConfig(sandboxDto dto.CreateSandboxDTO, volumeMountPathBinds []string) *container.HostConfig {
+	binds := append([]string{}, volumeMountPathBinds...)
+	if bind := d.proxyCABind(sandboxDto.Env, derefString(sandboxDto.DomainAllowList)); bind != "" {
+		binds = append(binds, bind)
+	}
 	hostConfig := &container.HostConfig{
 		Privileged: false,
-		Binds:      append([]string{}, volumeMountPathBinds...),
+		Binds:      binds,
 	}
 
 	if sandboxDto.OtelEndpoint != nil && strings.Contains(*sandboxDto.OtelEndpoint, "host.docker.internal") {

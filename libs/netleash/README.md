@@ -19,6 +19,12 @@ Both modes use the same filtering logic:
 
 4. **MITM proxy** (optional) — an ephemeral-CA HTTPS proxy that intercepts outbound requests and replaces placeholder values with real secrets on the wire. The sandboxed process sees `__LEASH_SECRET_a1b2c3...` in its environment; the proxy swaps it for `sk-real-key` before the request reaches the upstream API. The process never has access to the actual secret.
 
+5. **Proxy-enforced allow list** (optional, `--enforce-proxy`) — hardens the domain allow list by making the hostname-aware proxy the _mandatory_ path for web traffic. IP-based allowlisting alone can be sidestepped when an allowed domain shares IPs with other sites (CDNs, shared hosting, domain fronting): once a DNS answer for an allowed domain populates `allowed_ips`, any traffic to those IPs passes, whatever hostname it actually targets. With enforcement on (cgroup mode), an eBPF `connect4` hook **transparently redirects** TCP 80/443 `connect()` calls to the proxy — the workload never has to honor `HTTP(S)_PROXY`, so clients that ignore proxy env vars (Node's `fetch`/undici, Deno, most gRPC stacks) route through it too. The proxy enforces the allow list on the hostname the connection actually names (TLS SNI, CONNECT host, or `Host` header). A `getpeername4` hook (Linux ≥ 5.8; skipped on older kernels) reports the workload's original destination so it isn't surprised to find it "connected" to the proxy. QUIC (UDP 443) is dropped so clients fall back to TCP; the egress-filter drop path remains the backstop for web-port packets that reach egress un-redirected (TC/VM mode, or sockets opened before the filter attached). Non-web protocols (SSH, databases, gRPC on non-web ports) keep the zero-overhead learned-IP path.
+
+   **Security exception — local and link-local destinations.** Destinations the egress filter always passes directly are deliberately _not_ redirected through the proxy: loopback (`127.0.0.0/8`), the link-local range (`169.0.0.0/8` pass-through, which includes the cloud instance metadata endpoint `169.254.169.254`) and multicast (`224.0.0.0/4`). This keeps local services and infrastructure endpoints working, but it means hostname enforcement does **not** apply to them — in particular, a workload can reach the cloud metadata service directly. If the workload must not access instance metadata, block it at the infrastructure level (e.g. require IMDSv2 with a hop limit of 1, disable the instance metadata endpoint, or use provider network policy).
+
+   **Splice vs. MITM.** The proxy only terminates TLS (MITM) for connections to hosts that have a secret mapped — where it must see the plaintext to inject. Every other allowed connection is **spliced** through end-to-end: the proxy verifies the SNI against the allow list, resolves and dials that hostname itself (defeating shared-IP/fronting), and copies bytes without decrypting. Because the client completes real TLS with the real origin, certificate pinning, ALPN/HTTP-2, and WebSockets all keep working on spliced connections — MITM (and its CA-trust requirement) is confined to secret-injection hosts.
+
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Sandboxed Process                                      │
@@ -52,6 +58,7 @@ Both modes use the same filtering logic:
 ## Features
 
 - **Domain-based egress filtering** — allow by domain name, not IP. Supports exact match and `*.example.com` wildcards
+- **Proxy-enforced allow list** — `--enforce-proxy` gates web ports (TCP 80/443, UDP 443) in eBPF so HTTP(S) can only go through the MITM proxy, which enforces the allow list on the requested hostname — closing the shared-IP/domain-fronting gap of IP-based filtering (loopback, link-local incl. cloud metadata, and multicast destinations are exempt — see above)
 - **DNS exfiltration prevention** — outbound DNS queries are filtered against the allowlist in the eBPF program itself; queries for unauthorized domains are dropped at the kernel level
 - **Secret injection** — MITM proxy replaces placeholders with real secrets on the wire, scoped to specific hosts. The sandboxed process never sees real credentials
 - **Interface mode (TC eBPF)** — attach to any network interface (veth, tap) using TC/TCX programs. Filters VM traffic in network namespaces where cgroup-based filtering doesn't apply
@@ -133,6 +140,16 @@ GITHUB_TOKEN=ghp-xxx:api.github.com,github.com
 ```
 
 Read from stdin with `--secret-file -` for piping from a secret manager.
+
+### Proxy-enforced allow list
+
+By default, allowed traffic flows at kernel speed against the DNS-learned IP allowlist. `--enforce-proxy` trades that zero-overhead path (for web ports only) for hostname-level enforcement: the MITM proxy starts even without secrets, the child is wired to it via `HTTP(S)_PROXY` + `SSL_CERT_FILE`, and the eBPF filter drops any TCP 80/443 or UDP 443 packet that isn't addressed to the proxy — so a process that ignores the proxy env vars is blocked rather than able to reach an allowed domain's shared IP under a different hostname:
+
+```bash
+sudo netleash --allow api.openai.com --enforce-proxy -- python agent.py
+```
+
+In cgroup mode this no longer depends on the process honoring the proxy env vars: the `connect4` hook transparently redirects its web-port connections to the proxy. Connections to hosts without a mapped secret are spliced end-to-end, so certificate pinning, HTTP-2/gRPC and WebSockets keep working there; only secret-injection hosts are MITM'd (and only those require the workload to trust the proxy CA). Caveats: QUIC/HTTP3 is blocked (clients fall back to TCP); non-web ports are unaffected and still enforced by IP; certificate pinning still fails for a host that has a secret mapped (it is MITM'd). Because the allow list is IPv4-only (DNS A-record learning), enforcement also drops all non-local IPv6 egress — on a dual-stack host an allowed domain's AAAA record would otherwise bypass both the allow list and the gate entirely.
 
 ### Container mode
 
@@ -261,6 +278,9 @@ Options:
   --secret <spec>        Secret in NAME=VALUE:host1,host2 format (repeatable)
   --secret-file <path>   Read secrets from file (use - for stdin)
   --proxy-token <token>  Require Bearer token for proxy authentication
+  --enforce-proxy        Gate web ports (TCP 80/443, UDP 443) in eBPF so HTTP(S)
+                         must go through the MITM proxy (hostname enforcement);
+                         starts the proxy even without secrets
   --server               Run as standalone proxy (no eBPF, no root)
   --listen <addr>        Proxy listen address, server mode (default 127.0.0.1:8080)
   --cgroup <path>        Attach to existing cgroup path

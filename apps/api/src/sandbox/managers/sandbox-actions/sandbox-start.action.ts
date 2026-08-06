@@ -720,9 +720,12 @@ export class SandboxStartAction extends SandboxAction {
           sandbox.volumes.map((v) => ({ volumeId: v.volumeId, mountPath: v.mountPath, subpath: v.subpath })),
         )
       }
-      if (sandbox.domainAllowList) {
-        metadata['domainAllowList'] = sandbox.domainAllowList
-      }
+      // Send an explicit empty value when unrestricted. The runner must be able
+      // to distinguish "clear the prior proxy policy" from an omitted field on
+      // resume/recovery; otherwise a persisted secret binding can retain stale
+      // domain restrictions (or be accidentally widened by a metadata-free
+      // start path).
+      metadata['domainAllowList'] = sandbox.domainAllowList ?? ''
 
       // The full desired secret env (env var -> placeholder). The runner diffs this
       // against the container's env on start and recreates the container when secrets
@@ -779,7 +782,9 @@ export class SandboxStartAction extends SandboxAction {
     }
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
-    await runnerAdapter.startSandbox(sandbox.id, sandbox.authToken, sandbox.secretsToken)
+    await runnerAdapter.startSandbox(sandbox.id, sandbox.authToken, sandbox.secretsToken, {
+      domainAllowList: sandbox.domainAllowList ?? '',
+    })
     await this.updateSandboxState(sandbox, SandboxState.RESUMING, lockCode)
     return SYNC_AGAIN
   }

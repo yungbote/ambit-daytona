@@ -1,0 +1,38 @@
+# Copyright 2026 Ambit
+# SPDX-License-Identifier: AGPL-3.0
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  # Kustomize rejects an overlay that imports an ancestor Kustomization as a
+  # cycle, even when the ancestor does not list the overlay. Keep this list in
+  # the same order as the base Kustomization.
+  - ../../namespaces.yaml
+  - ../../serviceaccounts.yaml
+  - ../../configmaps.yaml
+  - ../../migration-job.yaml
+  - ../../api.yaml
+  - ../../proxy.yaml
+  - ../../runner.yaml
+  - ../../ssh-gateway.yaml
+  - ../../availability.yaml
+  - ../../network-policies.yaml
+  - state-namespace.yaml
+  - state-serviceaccounts.yaml
+  - secret-sync-system.yaml
+  - secret-sync-runners.yaml
+  - secret-sync-state.yaml
+  - storage-class.yaml
+  - minio.yaml
+  - state-network-policies.yaml
+  - gateway.yaml
+  - gateway-backend-policies.yaml
+
+patches:
+  - path: configmaps-patch.yaml
+  - path: workload-identity-patches.yaml
+  - path: api-runtime-patch.yaml
+  - path: migration-runtime-patch.yaml
+  - path: proxy-runtime-patch.yaml
+  - path: runner-storage-patch.yaml

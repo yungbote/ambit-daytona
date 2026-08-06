@@ -36,6 +36,14 @@ export class SandboxDestroyAction extends SandboxAction {
       return DONT_SYNC_AGAIN
     }
 
+    // A lifecycle operation may expire before a runner is assigned. There is no
+    // remote resource to destroy in that case; the state CAS prevents a late
+    // provisioning update from reviving the sandbox after this transition.
+    if (!sandbox.runnerId) {
+      await this.updateSandboxState(sandbox, SandboxState.DESTROYED, lockCode)
+      return DONT_SYNC_AGAIN
+    }
+
     const runner = await this.runnerService.findOneOrFail(sandbox.runnerId)
     if (runner.state !== RunnerState.READY) {
       return DONT_SYNC_AGAIN

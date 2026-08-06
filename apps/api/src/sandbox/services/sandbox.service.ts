@@ -756,6 +756,8 @@ export class SandboxService {
         sandbox.autoDeleteInterval = createSandboxDto.autoDeleteInterval
       }
 
+      sandbox.autoDestroyAt = this.resolveAutoDestroyAt(createSandboxDto.ttlMinutes)
+
       if (resolvedVolumes !== undefined) {
         sandbox.volumes = resolvedVolumes
       }
@@ -891,6 +893,8 @@ export class SandboxService {
     } else if (createSandboxDto.autoDeleteInterval !== undefined) {
       updateData.autoDeleteInterval = createSandboxDto.autoDeleteInterval
     }
+
+    updateData.autoDestroyAt = this.resolveAutoDestroyAt(createSandboxDto.ttlMinutes)
 
     this.validateNetworkSettingsCompatibility(
       createSandboxDto.networkBlockAll,
@@ -1118,6 +1122,8 @@ export class SandboxService {
         sandbox.autoDeleteInterval = createSandboxDto.autoDeleteInterval
       }
 
+      sandbox.autoDestroyAt = this.resolveAutoDestroyAt(createSandboxDto.ttlMinutes)
+
       if (resolvedVolumes !== undefined) {
         sandbox.volumes = resolvedVolumes
       }
@@ -1306,6 +1312,7 @@ export class SandboxService {
       forkedSandbox.autoPauseInterval = sourceSandbox.autoPauseInterval
       forkedSandbox.autoArchiveInterval = sourceSandbox.autoArchiveInterval
       forkedSandbox.autoDeleteInterval = sourceSandbox.autoDeleteInterval
+      forkedSandbox.autoDestroyAt = sourceSandbox.autoDestroyAt ? new Date(sourceSandbox.autoDestroyAt) : null
       forkedSandbox.volumes = sourceSandbox.volumes?.map((volume) => ({ ...volume }))
       forkedSandbox.networkBlockAll = sourceSandbox.networkBlockAll
       forkedSandbox.networkAllowList = sourceSandbox.networkAllowList
@@ -1837,6 +1844,8 @@ export class SandboxService {
         createdAtBefore: query.createdAtBefore,
         lastEventAfter: query.lastEventAfter,
         lastEventBefore: query.lastEventBefore,
+        autoDestroyAtAfter: query.autoDestroyAtAfter,
+        autoDestroyAtBefore: query.autoDestroyAtBefore,
       },
       pagination: {
         cursor: query.cursor,
@@ -3492,6 +3501,14 @@ export class SandboxService {
     return await this.sandboxRepository.update(sandbox.id, { updateData, entity: sandbox })
   }
 
+  async setTtl(sandboxIdOrName: string, ttlMinutes: number, organizationId?: string): Promise<Sandbox> {
+    const sandbox = await this.findOneByIdOrName(sandboxIdOrName, organizationId)
+    const updateData: Partial<Sandbox> = {
+      autoDestroyAt: this.resolveAutoDestroyAt(ttlMinutes),
+    }
+    return await this.sandboxRepository.update(sandbox.id, { updateData, entity: sandbox })
+  }
+
   async updateNetworkSettings(
     sandboxIdOrName: string,
     networkBlockAll?: boolean,
@@ -3854,6 +3871,21 @@ export class SandboxService {
     }
 
     return Math.min(autoArchiveInterval, maxAutoArchiveInterval)
+  }
+
+  private resolveAutoDestroyAt(ttlMinutes: number | undefined): Date | null {
+    if (ttlMinutes === undefined || ttlMinutes === 0) {
+      return null
+    }
+    if (!Number.isSafeInteger(ttlMinutes) || ttlMinutes < 0) {
+      throw new BadRequestError('TTL must be a non-negative integer')
+    }
+    const epochMilliseconds = Date.now() + ttlMinutes * 60_000
+    const deadline = new Date(epochMilliseconds)
+    if (!Number.isFinite(epochMilliseconds) || Number.isNaN(deadline.getTime())) {
+      throw new BadRequestError('TTL exceeds the supported wall-clock range')
+    }
+    return deadline
   }
 
   private resolveNetworkAllowList(networkAllowList: string): string {

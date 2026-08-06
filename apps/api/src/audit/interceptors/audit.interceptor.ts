@@ -101,8 +101,10 @@ export class AuditInterceptor implements NestInterceptor {
 
         const resolvedOrganizationId = this.resolveOrganizationId(organizationId, result)
         const resolvedTargetId = this.resolveTargetId(auditContext, request, result)
+        const resultMetadata = this.resolveResultMetadata(auditContext, result)
+        const metadata = resultMetadata ? { ...(auditLog.metadata ?? {}), ...resultMetadata } : undefined
         const statusCode = response.statusCode || HttpStatus.NO_CONTENT
-        await this.recordHandlerSuccess(auditLog, resolvedOrganizationId, resolvedTargetId, statusCode)
+        await this.recordHandlerSuccess(auditLog, resolvedOrganizationId, resolvedTargetId, statusCode, metadata)
 
         observer.next(result)
         observer.complete()
@@ -150,17 +152,29 @@ export class AuditInterceptor implements NestInterceptor {
   }
 
   private resolveRequestMetadata(auditContext: AuditContext, request: Request): AuditLogMetadata | null {
-    if (!auditContext.requestMetadata) {
+    return this.resolveMetadata(auditContext.requestMetadata, request, 'request')
+  }
+
+  private resolveResultMetadata(auditContext: AuditContext, result: any): AuditLogMetadata | null {
+    return this.resolveMetadata(auditContext.resultMetadata, result, 'result')
+  }
+
+  private resolveMetadata<T>(
+    resolvers: Record<string, (source: T) => any> | undefined,
+    source: T,
+    sourceName: 'request' | 'result',
+  ): AuditLogMetadata | null {
+    if (!resolvers) {
       return null
     }
 
     const resolvedMetadata: AuditLogMetadata = {}
 
-    for (const [key, resolver] of Object.entries(auditContext.requestMetadata)) {
+    for (const [key, resolver] of Object.entries(resolvers)) {
       try {
-        resolvedMetadata[key] = resolver(request)
+        resolvedMetadata[key] = resolver(source)
       } catch (error) {
-        this.logger.warn(`Failed to resolve audit log metadata key "${key}":`, error)
+        this.logger.warn(`Failed to resolve audit log ${sourceName} metadata key "${key}":`, error)
         resolvedMetadata[key] = null
       }
     }
@@ -173,12 +187,14 @@ export class AuditInterceptor implements NestInterceptor {
     organizationId: string | null,
     targetId: string | null,
     statusCode: number,
+    metadata?: AuditLogMetadata,
   ): Promise<void> {
     try {
       await this.auditService.updateLog(auditLog.id, {
         organizationId,
         targetId,
         statusCode,
+        metadata,
       })
     } catch (error) {
       this.logger.error('Failed to record handler result:', error)

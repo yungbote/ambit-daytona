@@ -6,7 +6,6 @@ package docker
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
 	"strings"
@@ -69,37 +68,19 @@ func (d *DockerClient) Create(ctx context.Context, sandboxDto dto.CreateSandboxD
 	}
 
 	if state == enums.SandboxStateStarted || state == enums.SandboxStateStarting {
-		c, err := d.ContainerInspect(ctx, sandboxDto.Id)
-		if err != nil {
-			return "", "", err
-		}
-
 		// Re-assert link-network wiring on retries so idempotent creates still end
 		// up with both sandboxes connected to the shared network.
 		if _, err := d.reconcileFollowerLinkNetwork(ctx, sandboxDto); err != nil {
 			return "", "", err
 		}
-
-		containerIP := GetContainerIpAddress(ctx, c)
-		if containerIP == "" {
-			return "", "", errors.New("sandbox IP not found? Is the sandbox started?")
-		}
-
-		// Android-device sandboxes do not run the daytona daemon; their readiness is
-		// signaled by the ADB port accepting TCP connections. Match Start's behavior
-		// by branching on the inspected container label rather than the DTO.
-		if isAndroidDeviceContainer(c) {
-			if err := d.waitForAdbRunning(ctx, containerIP); err != nil {
-				return "", "", err
-			}
-			return sandboxDto.Id, "", nil
-		}
-
-		daemonVersion, err := d.waitForDaemonRunning(ctx, containerIP, sandboxDto.AuthToken)
+		metadata, err := createStartMetadata(sandboxDto)
 		if err != nil {
 			return "", "", err
 		}
-
+		_, daemonVersion, err := d.Start(ctx, sandboxDto.Id, sandboxDto.AuthToken, sandboxDto.SecretsToken, metadata)
+		if err != nil {
+			return "", "", err
+		}
 		return sandboxDto.Id, daemonVersion, nil
 	}
 
@@ -110,23 +91,9 @@ func (d *DockerClient) Create(ctx context.Context, sandboxDto dto.CreateSandboxD
 			return "", "", err
 		}
 
-		metadata := maps.Clone(sandboxDto.Metadata)
-		if len(sandboxDto.Volumes) > 0 {
-			if metadata == nil {
-				metadata = make(map[string]string)
-			}
-			volumesJSON, err := json.Marshal(sandboxDto.Volumes)
-			if err == nil {
-				metadata["volumes"] = string(volumesJSON)
-			}
-		}
-		// Carry the domain allow list through to Start so resuming a stopped
-		// sandbox re-applies the netleash egress filter.
-		if sandboxDto.DomainAllowList != nil && *sandboxDto.DomainAllowList != "" {
-			if metadata == nil {
-				metadata = make(map[string]string)
-			}
-			metadata["domainAllowList"] = *sandboxDto.DomainAllowList
+		metadata, err := createStartMetadata(sandboxDto)
+		if err != nil {
+			return "", "", err
 		}
 		_, daemonVersion, err := d.Start(ctx, sandboxDto.Id, sandboxDto.AuthToken, sandboxDto.SecretsToken, metadata)
 		if err != nil {
@@ -248,9 +215,14 @@ func (d *DockerClient) Create(ctx context.Context, sandboxDto dto.CreateSandboxD
 	if err != nil {
 		// Container already exists and is being created by another process
 		if errdefs.IsConflict(err) {
-			return sandboxDto.Id, "", nil
+			existing, inspectErr := d.ContainerInspect(ctx, sandboxDto.Id)
+			if inspectErr != nil {
+				return "", "", fmt.Errorf("inspecting concurrently-created sandbox %s: %w", sandboxDto.Id, inspectErr)
+			}
+			c.ID = existing.ID
+			err = nil
 		}
-		if !isOCIRuntimeCreateError(err) {
+		if err != nil && !isOCIRuntimeCreateError(err) {
 			return "", "", err
 		}
 	}
@@ -286,7 +258,14 @@ func (d *DockerClient) Create(ctx context.Context, sandboxDto dto.CreateSandboxD
 		return c.ID, "", nil
 	}
 
-	runningContainer, daemonVersion, err := d.Start(ctx, sandboxDto.Id, sandboxDto.AuthToken, sandboxDto.SecretsToken, sandboxDto.Metadata)
+	// Start owns the single synchronous policy-admission boundary. Every create
+	// path, including conflict/idempotent retries and Android sandboxes, reaches it
+	// before readiness is reported.
+	startMetadata, err := createStartMetadata(sandboxDto)
+	if err != nil {
+		return "", "", err
+	}
+	_, daemonVersion, err := d.Start(ctx, sandboxDto.Id, sandboxDto.AuthToken, sandboxDto.SecretsToken, startMetadata)
 	if err != nil {
 		if isOCIRuntimeCreateError(err) {
 			if didTryWithoutSysbox {
@@ -307,49 +286,26 @@ func (d *DockerClient) Create(ctx context.Context, sandboxDto dto.CreateSandboxD
 		}
 	}
 
-	containerShortId := runningContainer.ID[:12]
-
-	ip := GetContainerIpAddress(ctx, runningContainer)
-	veth := resolveHostVeth(d.logger, runningContainer, ip)
-	if sandboxDto.NetworkBlockAll != nil && *sandboxDto.NetworkBlockAll {
-		go func() {
-			err = d.netRulesManager.SetNetworkRules(containerShortId, ip, veth, "")
-			if err != nil {
-				d.logger.ErrorContext(ctx, "Failed to update sandbox network settings", "error", err)
-			}
-		}()
-	} else if sandboxDto.NetworkAllowList != nil && *sandboxDto.NetworkAllowList != "" {
-		go func() {
-			err = d.netRulesManager.SetNetworkRules(containerShortId, ip, veth, *sandboxDto.NetworkAllowList)
-			if err != nil {
-				d.logger.ErrorContext(ctx, "Failed to update sandbox network settings", "error", err)
-			}
-		}()
-	}
-
-	if sandboxDto.Metadata != nil && sandboxDto.Metadata["limitNetworkEgress"] == "true" {
-		go func() {
-			err = d.netRulesManager.SetNetworkLimiter(containerShortId, ip, veth)
-			if err != nil {
-				d.logger.ErrorContext(ctx, "Failed to update sandbox network settings", "error", err)
-			}
-		}()
-	}
-
-	if sandboxDto.DomainAllowList != nil && *sandboxDto.DomainAllowList != "" {
-		go d.applyDomainAllowList(context.Background(), runningContainer.ID, *sandboxDto.DomainAllowList)
-	}
-
-	// Register this sandbox's secrets with the shared injection proxy (no-op when
-	// it uses none). Keyed by the full container ID, matching the eBPF/lifecycle
-	// teardown path. An empty domain allow list means unrestricted egress.
-	domainAllowList := ""
-	if sandboxDto.DomainAllowList != nil {
-		domainAllowList = *sandboxDto.DomainAllowList
-	}
-	d.registerSandboxSecrets(context.Background(), runningContainer.ID, sandboxDto.Id, sandboxDto.SecretsToken, ip, domainAllowList, sandboxDto.Env)
-
 	return c.ID, daemonVersion, nil
+}
+
+func createStartMetadata(sandboxDto dto.CreateSandboxDTO) (map[string]string, error) {
+	metadata := maps.Clone(sandboxDto.Metadata)
+	if metadata == nil {
+		metadata = make(map[string]string)
+	}
+	metadata[freshPolicyAdmissionMetadata] = "true"
+	if len(sandboxDto.Volumes) > 0 {
+		volumesJSON, err := json.Marshal(sandboxDto.Volumes)
+		if err != nil {
+			return nil, fmt.Errorf("encoding sandbox volumes for start: %w", err)
+		}
+		metadata["volumes"] = string(volumesJSON)
+	}
+	metadata["networkBlockAll"] = fmt.Sprintf("%t", sandboxDto.NetworkBlockAll != nil && *sandboxDto.NetworkBlockAll)
+	metadata["networkAllowList"] = derefString(sandboxDto.NetworkAllowList)
+	metadata["domainAllowList"] = derefString(sandboxDto.DomainAllowList)
+	return metadata, nil
 }
 
 func (p *DockerClient) validateImageArchitecture(image *image.InspectResponse) error {

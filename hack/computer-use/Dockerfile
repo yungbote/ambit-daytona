@@ -21,8 +21,6 @@ WORKDIR /app
 
 RUN echo "go 1.25.4\n\nuse (\n  ./libs/computer-use\n   ./apps/daemon\n     ./libs/common-go\n)" > /app/go.work
 
-COPY go.work.sum /app/go.work.sum
-
 COPY ./apps/daemon /app/apps/daemon
 COPY ./libs/common-go /app/libs/common-go
 COPY ./libs/computer-use /app/libs/computer-use

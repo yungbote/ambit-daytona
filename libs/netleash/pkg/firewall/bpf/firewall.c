@@ -16,7 +16,10 @@ int firewall_egress(struct __sk_buff *skb) {
 	if (bpf_skb_load_bytes(skb, 0, &ip, sizeof(ip)) < 0)
 		return 1; // Can't parse → allow
 
-	// Only filter IPv4 traffic.
+	// IPv6: unfiltered by the IPv4-only allow list, but fail-closed under proxy
+	// enforcement (see ipv6_gate_allows). Other versions pass.
+	if (ip.version == 6)
+		return ipv6_gate_allows(skb, 0);
 	if (ip.version != 4)
 		return 1;
 
@@ -141,6 +144,19 @@ int firewall_egress(struct __sk_buff *skb) {
 		}
 	}
 
+	// Egress-proxy enforcement: web ports must go through the hostname-aware
+	// proxy (checked after inbound-conn replies, which are never gated, and
+	// before the IP allow list, which it deliberately overrides for web ports).
+	int gate = check_proxy_gate(skb, 0, &ip, dst_ip);
+	if (gate == PROXY_GATE_ALLOW) {
+		emit_ip_decision(skb, 0, dst_ip, &ip, EV_ALLOWED, EV_REASON_PROXY_ALLOWED);
+		return 1;
+	}
+	if (gate == PROXY_GATE_DROP) {
+		emit_ip_decision(skb, 0, dst_ip, &ip, EV_BLOCKED, EV_REASON_WEB_NOT_PROXIED);
+		return 0; // Drop
+	}
+
 	// Check if the destination IP is in the whitelist.
 	__u8 *allowed = bpf_map_lookup_elem(&allowed_ips, &dst_ip);
 	if (allowed) {
@@ -151,6 +167,104 @@ int firewall_egress(struct __sk_buff *skb) {
 	// Blocked — report (de-duplicated per destination) and drop.
 	emit_ip_decision(skb, 0, dst_ip, &ip, EV_BLOCKED, EV_REASON_IP_BLOCKED);
 	return 0; // Drop
+}
+
+// ---------------------------------------------------------------------------
+// connect4 program — transparent redirect of web-port egress to the proxy
+// ---------------------------------------------------------------------------
+//
+// Under proxy enforcement, redirecting the connect() destination — rather than
+// dropping the packets in the egress program and relying on the workload to have
+// set HTTP(S)_PROXY — makes the hostname-aware proxy the transparent path for
+// web traffic. This is what lets clients that ignore proxy env vars (Node's
+// undici global fetch, Deno, most gRPC/HTTP-2 stacks, JVM without -Dhttp.proxy*)
+// keep reaching allowed hosts: their direct connect() to a learned IP:443 is
+// rewritten to the proxy's IP:port before a packet leaves the socket, and the
+// proxy enforces the allow list on the SNI/Host it observes. The workload never
+// has to know a proxy exists. Only standard web ports (TCP 80/443) are
+// redirected; every other port keeps the IP-allow-list behavior.
+//
+// Runs only in cgroup mode (VM/TC-mode workloads have no cgroup connect hook and
+// keep the egress-program drop behavior — see check_proxy_gate).
+
+// orig_dst records a redirected socket's original destination, keyed by socket
+// cookie, so getpeername4 can report the real peer address back to the workload
+// (some clients call getpeername() and would otherwise see the proxy's address).
+// LRU self-evicts; entries are only read by getpeername4 on the same socket.
+struct orig_dst {
+	__u32 ip;   // original destination IPv4, network byte order
+	__u16 port; // original destination port, network byte order
+	__u16 pad;
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
+	__type(key, __u64); // socket cookie
+	__type(value, struct orig_dst);
+	__uint(max_entries, 65536);
+} orig_dst_map SEC(".maps");
+
+SEC("cgroup/connect4")
+int firewall_connect4(struct bpf_sock_addr *ctx) {
+	// Only TCP is redirected; DNS (UDP 53) and QUIC (UDP 443) are handled by the
+	// egress program (QUIC is dropped so clients fall back to TCP).
+	if (ctx->protocol != IPPROTO_TCP)
+		return 1;
+
+	__u32 zero = 0;
+	struct proxy_cfg *cfg = bpf_map_lookup_elem(&proxy_config, &zero);
+	if (!cfg || !cfg->enforce || !cfg->proxy_ip)
+		return 1; // enforcement off → leave the connect() untouched
+
+	// user_port holds the destination port in network byte order (low 16 bits).
+	__u32 dport = ctx->user_port;
+	if (dport != bpf_htons(80) && dport != bpf_htons(443))
+		return 1; // not a standard web port → not redirected
+
+	// Leave the destinations the egress program always allows directly untouched,
+	// so local services and infrastructure endpoints don't get bounced through the
+	// proxy: loopback (127/8), link-local incl. cloud metadata (169.254/16) and
+	// multicast (224–239). first_byte is the low byte of the network-order address.
+	__u8 first_byte = ctx->user_ip4 & 0xFF;
+	if (first_byte == 127 || first_byte == 169 ||
+	    (first_byte >= 224 && first_byte <= 239))
+		return 1;
+
+	// A connect() already aimed at the proxy itself must not be rewritten (the
+	// proxy's own upstream dials run outside this cgroup, but the workload may
+	// legitimately talk to the proxy address directly).
+	if (ctx->user_ip4 == cfg->proxy_ip && dport == cfg->proxy_port)
+		return 1;
+
+	// Remember where the workload meant to go so getpeername4 can restore it.
+	__u64 cookie = bpf_get_socket_cookie(ctx);
+	struct orig_dst d = {};
+	d.ip = ctx->user_ip4;
+	d.port = (__u16)dport;
+	bpf_map_update_elem(&orig_dst_map, &cookie, &d, BPF_ANY);
+
+	// Redirect to the proxy. Both fields are already in network byte order.
+	ctx->user_ip4 = cfg->proxy_ip;
+	ctx->user_port = cfg->proxy_port;
+	return 1;
+}
+
+// Requires Linux >= 5.8 (BPF_CGROUP_INET4_GETPEERNAME). The Go setup
+// feature-detects the attach type and strips this program on older kernels, so
+// cgroup mode keeps working on the documented 5.7 minimum — redirected sockets
+// there just observe the proxy's address from getpeername().
+SEC("cgroup/getpeername4")
+int firewall_getpeername4(struct bpf_sock_addr *ctx) {
+	// Report the original destination (not the proxy) for sockets we redirected,
+	// so a workload calling getpeername() sees the address it dialed. Sockets we
+	// did not redirect have no entry and are left untouched.
+	__u64 cookie = bpf_get_socket_cookie(ctx);
+	struct orig_dst *d = bpf_map_lookup_elem(&orig_dst_map, &cookie);
+	if (!d)
+		return 1;
+	ctx->user_ip4 = d->ip;
+	ctx->user_port = d->port;
+	return 1;
 }
 
 // ---------------------------------------------------------------------------
