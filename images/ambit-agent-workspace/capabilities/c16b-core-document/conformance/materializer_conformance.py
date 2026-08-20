@@ -336,7 +336,8 @@ assert_success(one, relative_path=one_path, payload=b"\x04", mode=0o444, operati
 cases.extend(["zero_and_one_byte_frames", "same_session_fd_reattach"])
 
 missing_verify = invoke("verify-only/missing.bin", b"missing", operation="verify_only")
-assert assert_failure(missing_verify, 4)["code"] == "existing_mismatch"
+missing_verify_receipt = assert_failure(missing_verify, 4)
+assert missing_verify_receipt["code"] == "existing_mismatch", missing_verify_receipt
 assert not (WORKSPACE / "verify-only").exists()
 safe_create = invoke("verify-only/missing.bin", b"missing", operation="create_or_verify")
 assert_success(safe_create, relative_path="verify-only/missing.bin", payload=b"missing", mode=0o444, operation="create_or_verify", outcome="created")

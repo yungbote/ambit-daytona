@@ -49,12 +49,12 @@ exact Git archive; no Daytona duplicate or repository-wide relicensing remains.
 
 `/opt/ambit/runtime-pack/core-document/bin/ambit-atomic-materialize` is a
 deterministic, statically linked Go 1.25.13 helper. It is built from backend
-commit `e881a566d7171a91a13abb765bf60fe9e2a2e5da`, subtree
-`4269cdaa8d4c16b47da9f0bc5222e92236a2f7a1`, and exact commit-scoped
+commit `03fd4463d84c5236bab9d5d9141af7537a51afe9`, subtree
+`4e2dead7bd994f3783cf8b54428374e26367b21a`, and exact commit-scoped
 full-path archive
-`sha256:ff705ac82601b7ac7fceeddd24c48c79ecc0bcd6fec6026637fa785f05f652c3`.
+`sha256:700f38a8f0b6ea02b9761e8dd1547bdf93fd2a7e1420e2a482f7b89ce8a0425b`.
 The expected binary digest is
-`sha256:366bd7ac1c6bc42181548312c83d096ab4ec4ee603b9057637b2e9df5dbe5462`.
+`sha256:09e0d936c23d7625af9f67c09b703ed41135b185c3822a98f1f62cd401ded3ed`.
 The final image contains neither Go nor a compiler. Unicode NFC validation
 uses checksum-locked `golang.org/x/text` v0.41.0. The scoped package license is
 `LicenseRef-Ambit-Proprietary` / `UNLICENSED`; its exact license lock and

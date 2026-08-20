@@ -27,7 +27,7 @@ if [[ -S /var/run/docker.sock ]]; then
   exit 92
 fi
 test ! -w "${pack_root}"
-test "$(locale charmap)" = "UTF-8"
+test "$(python3 -c 'import locale; print(locale.getpreferredencoding(False))')" = "UTF-8"
 test "${LANG}" = "C.UTF-8"
 test "${LC_ALL}" = "C.UTF-8"
 if env | cut -d= -f1 | grep -Eiq '(api[_-]?key|password|private[_-]?key|secret|token)'; then

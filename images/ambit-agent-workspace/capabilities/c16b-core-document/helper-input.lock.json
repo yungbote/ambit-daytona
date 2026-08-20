@@ -1,0 +1,29 @@
+{
+  "schema": "ambit.runtime-pack-helper-input-lock/v1",
+  "repository": "https://github.com/yungbote/m-backend",
+  "revision": "03fd4463d84c5236bab9d5d9141af7537a51afe9",
+  "tree": "4e2dead7bd994f3783cf8b54428374e26367b21a",
+  "path": "runtime/agent-workspace-atomic-materializer",
+  "modulePath": "github.com/yungbote/m-backend/runtime/agent-workspace-atomic-materializer",
+  "archive": {
+    "layout": "commit-scoped-full-path",
+    "command": "git archive --format=tar 03fd4463d84c5236bab9d5d9141af7537a51afe9 -- runtime/agent-workspace-atomic-materializer",
+    "sha256": "700f38a8f0b6ea02b9761e8dd1547bdf93fd2a7e1420e2a482f7b89ce8a0425b"
+  },
+  "inputs": {
+    "sourceManifestSha256": "90cb7ec58bcdeb6f7b4f7ae769caeaa4957e7d3f4cc1b5ad7bde3f0aaec8e0c6",
+    "buildLockSha256": "bb183c43dde9142e29173068adf8a91978a44c2a62a41c1212d01ce32c848ab1",
+    "binaryManifestSha256": "bcbe8216844868bf9c5801342e0d4f1799abecfb0bae4851a5bf6819cf245263",
+    "licenseLockSha256": "710d581169c105538897e9b6a719c47d437ceaeb980784e7996f8227264cc89c",
+    "noticeSha256": "ebda4883114f2939d766c552df33881f40da5710f6af5abbfe31a92c73070aff"
+  },
+  "binary": {
+    "bytes": 2314388,
+    "sha256": "09e0d936c23d7625af9f67c09b703ed41135b185c3822a98f1f62cd401ded3ed"
+  },
+  "license": {
+    "packageLicenseField": "UNLICENSED",
+    "spdxLicenseExpression": "LicenseRef-Ambit-Proprietary"
+  },
+  "protocolSha256": "1274e0bb27dfb15d9d7564d71fc02a7117631b405de73d84f39defb415a5f7ad"
+}

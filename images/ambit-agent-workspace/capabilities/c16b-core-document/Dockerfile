@@ -13,11 +13,15 @@ ARG BUILD_HELPER_LICENSE_LOCK_SHA256=unbound
 ARG BUILD_HELPER_NOTICE_SHA256=unbound
 
 FROM ${MATERIALIZER_BUILDER_IMAGE} AS materializer_builder
+WORKDIR /
+COPY helper-input.sha256 /tmp/helper-input.sha256
+COPY --from=materializer_source . /helper-input/
+RUN --network=none sha256sum -c /tmp/helper-input.sha256
 WORKDIR /src
-COPY --from=materializer_source go.mod go.sum ./
+RUN cp /helper-input/go.mod /helper-input/go.sum ./
 RUN GOWORK=off GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org go mod download
-COPY --from=materializer_source main.go main_test.go source.sha256 ./
-COPY --from=materializer_source binary.sha256 /tmp/ambit-atomic-materialize.sha256
+RUN cp /helper-input/main.go /helper-input/main_test.go /helper-input/source.sha256 ./ \
+    && cp /helper-input/binary.sha256 /tmp/ambit-atomic-materialize.sha256
 RUN --network=none set -eux; \
     sha256sum -c source.sha256; \
     GOWORK=off go test ./...; \
@@ -80,6 +84,8 @@ RUN set -eux; \
     done < /tmp/ambit-c16b-apk-direct-packages.lock; \
     addgroup -g 1000 daytona; \
     adduser -D -u 1000 -G daytona -s /bin/bash daytona; \
+    ln -s python3.14 /usr/bin/python3; \
+    ln -s python3 /usr/bin/python; \
     install -d -m 0755 -o root -g root \
       /opt/ambit/runtime-pack/core-document/bin \
       /usr/share/licenses/ambit-atomic-materialize; \
@@ -88,7 +94,7 @@ RUN set -eux; \
 
 COPY --from=python_dependencies --chown=root:root /opt/ambit/runtime-pack/core-document/python /opt/ambit/runtime-pack/core-document/python
 COPY --from=materializer_builder --chown=root:root /out/ambit-atomic-materialize /opt/ambit/runtime-pack/core-document/bin/ambit-atomic-materialize
-COPY --from=materializer_source --chown=root:root LICENSE.md license.lock.json /usr/share/licenses/ambit-atomic-materialize/
+COPY --from=materializer_builder --chown=root:root /helper-input/LICENSE.md /helper-input/license.lock.json /usr/share/licenses/ambit-atomic-materialize/
 
 RUN set -eux; \
     find /opt/ambit/runtime-pack/core-document -type d -exec chmod 0555 {} +; \
@@ -111,7 +117,8 @@ LABEL org.opencontainers.image.title="ambit-c16b-core-document" \
       io.ambit.helper-license-lock-sha256="${BUILD_HELPER_LICENSE_LOCK_SHA256}" \
       io.ambit.helper-notice-sha256="${BUILD_HELPER_NOTICE_SHA256}" \
       io.ambit.runtime-pack="ambit.runtime-pack/core-document@3" \
-      io.ambit.atomic-materializer-sha256="sha256:366bd7ac1c6bc42181548312c83d096ab4ec4ee603b9057637b2e9df5dbe5462" \
+      io.ambit.atomic-materializer-sha256="sha256:09e0d936c23d7625af9f67c09b703ed41135b185c3822a98f1f62cd401ded3ed" \
+      io.ambit.atomic-materializer-license="LicenseRef-Ambit-Proprietary" \
       io.ambit.atomic-materializer-protocol="sha256:1274e0bb27dfb15d9d7564d71fc02a7117631b405de73d84f39defb415a5f7ad"
 
 ENV PATH=/opt/ambit/runtime-pack/core-document/python/bin:/opt/ambit/runtime-pack/core-document/bin:/usr/sbin:/usr/bin:/sbin:/bin \
