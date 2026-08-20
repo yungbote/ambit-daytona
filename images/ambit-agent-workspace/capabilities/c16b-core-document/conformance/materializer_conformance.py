@@ -536,7 +536,13 @@ unknown_session.write(MAGICS["end"] + struct.pack(">Q", len(unknown_payload)) + 
 os.close(unknown_session.fd)
 unknown_session.fd = -1
 unknown_process_status = unknown_session.process.wait(timeout=10)
-assert unknown_process_status in (0, 5), unknown_process_status
+# Once END has been handed to the PTY, closing the transport deliberately makes
+# the Action's outcome unknowable to the caller. Depending on the exact kernel
+# scheduling boundary, the helper can finish before hangup (0), observe the
+# hangup while consuming the final frame (3), or lose its response write (5).
+# None is interpreted as custody. Only a new verify_only Action below may
+# reconcile the already-published inode.
+assert unknown_process_status in (0, 3, 5), unknown_process_status
 reconciled = invoke(unknown_path, unknown_payload, operation="verify_only")
 assert_success(reconciled, relative_path=unknown_path, payload=unknown_payload, mode=0o444, operation="verify_only", outcome="already_identical")
 ensure_file(unknown_path, unknown_payload, 0o444)
@@ -580,6 +586,7 @@ cases.append("full_32mib_framed_pty_no_argv_env_staging")
             "publication": "O_TMPFILE_linkat_AT_EMPTY_PATH_no_replace",
             "workspaceRoot": "/workspace",
             "reconnect": "never_replay_reconcile_with_new_verify_only",
+            "postEndLostResponseProcessStatus": unknown_process_status,
             "cases": cases,
         },
         indent=2,
