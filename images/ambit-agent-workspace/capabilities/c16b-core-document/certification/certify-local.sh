@@ -76,6 +76,7 @@ source_revision=$(git -C "${repo_root}" rev-parse --verify "${1}^{commit}")
 source_head=$(git -C "${repo_root}" rev-parse HEAD)
 source_tree=$(git -C "${repo_root}" rev-parse "${source_revision}^{tree}")
 source_pack_tree=$(git -C "${repo_root}" rev-parse "${source_revision}:${pack_path}")
+source_date_epoch=$(git -C "${repo_root}" show -s --format=%ct "${source_revision}")
 artifact_root=$2
 
 backend_repo=${BACKEND_REPO:?BACKEND_REPO is required}
@@ -213,6 +214,7 @@ helper_admission_fence=$(jq -er '.atomicMaterializer.admissionFenceCommit' "${ar
 expected_build_args=${artifact_root}/expected-build-args.json
 jq -n -S \
   --arg source_revision "${source_revision}" \
+  --arg source_date_epoch "${source_date_epoch}" \
   --arg source_tree "${source_tree}" \
   --arg source_pack_tree "${source_pack_tree}" \
   --arg source_input "${source_archive_sha256}" \
@@ -233,6 +235,7 @@ jq -n -S \
   --arg provider_adapter "${helper_provider_adapter}" \
   --arg admission_fence "${helper_admission_fence}" \
   '{
+    "build-arg:SOURCE_DATE_EPOCH":$source_date_epoch,
     "build-arg:BUILD_SOURCE_REVISION":$source_revision,
     "build-arg:BUILD_SOURCE_TREE":$source_tree,
     "build-arg:BUILD_SOURCE_PACK_TREE":$source_pack_tree,
@@ -257,7 +260,7 @@ jq -n -S \
 
 expected_labels=${artifact_root}/expected-labels.json
 jq -n -S \
-  --arg source_revision "${source_revision}" --arg source_tree "${source_tree}" \
+  --arg source_revision "${source_revision}" --arg source_date_epoch "${source_date_epoch}" --arg source_tree "${source_tree}" \
   --arg source_pack_tree "${source_pack_tree}" --arg source_input "${source_archive_sha256}" \
   --arg dockerfile "${dockerfile_sha256}" --arg locks "${lock_set_sha256}" \
   --arg conformance "${conformance_set_sha256}" --arg policy "${policy_set_sha256}" \
@@ -270,6 +273,7 @@ jq -n -S \
   --arg helper_protocol "${helper_protocol_sha256}" \
   '{
     "org.opencontainers.image.revision":$source_revision,
+    "io.ambit.source-date-epoch":$source_date_epoch,
     "io.ambit.source-tree":$source_tree,
     "io.ambit.source-pack-tree":$source_pack_tree,
     "io.ambit.build-input-sha256":$source_input,

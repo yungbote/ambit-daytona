@@ -1,5 +1,6 @@
 ARG WOLFI_BASE_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:df3f0bac868b88029d6071734ea42cd3073d6d99aa840671cbf30af609aadc5d
 ARG MATERIALIZER_BUILDER_IMAGE=docker.io/library/golang@sha256:40dfc169bd5ad8a8617e49c8ead7fe16c6873e79d6937539e9c2e5947b7984ef
+ARG SOURCE_DATE_EPOCH=0
 ARG BUILD_SOURCE_REVISION=uncommitted
 ARG BUILD_SOURCE_TREE=unbound
 ARG BUILD_SOURCE_PACK_TREE=unbound
@@ -66,6 +67,7 @@ RUN set -eux; \
 FROM ${WOLFI_BASE_IMAGE}
 
 ARG BUILD_SOURCE_REVISION
+ARG SOURCE_DATE_EPOCH
 ARG BUILD_SOURCE_TREE
 ARG BUILD_SOURCE_PACK_TREE
 ARG BUILD_SOURCE_INPUT_SHA256
@@ -137,6 +139,7 @@ LABEL org.opencontainers.image.title="ambit-c16b-core-document" \
       org.opencontainers.image.source="https://github.com/yungbote/ambit-daytona" \
       org.opencontainers.image.version="3.0.0-candidate" \
       org.opencontainers.image.revision="${BUILD_SOURCE_REVISION}" \
+      io.ambit.source-date-epoch="${SOURCE_DATE_EPOCH}" \
       io.ambit.source-tree="${BUILD_SOURCE_TREE}" \
       io.ambit.source-pack-tree="${BUILD_SOURCE_PACK_TREE}" \
       io.ambit.build-input-sha256="${BUILD_SOURCE_INPUT_SHA256}" \
