@@ -108,7 +108,8 @@ printf '%s\n' \
   'console.log(result);' > "${code_probe}/typed-probe.ts"
 tsc --noEmit --strict --skipLibCheck "${code_probe}/typed-probe.ts" \
   > "${output_root}/typescript-receipt.log" 2>&1
-npx --no-install ts-node "${code_probe}/typed-probe.ts" \
+npx --no-install ts-node -T --ignore-diagnostics 5107 \
+  -O '{"module":"CommonJS"}' "${code_probe}/typed-probe.ts" \
   > "${output_root}/typescript-execution-receipt.log" 2>&1
 test "$(cat "${output_root}/typescript-execution-receipt.log")" = "42"
 
