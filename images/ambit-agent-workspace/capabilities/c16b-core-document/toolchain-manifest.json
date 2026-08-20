@@ -3,6 +3,7 @@
   "pack": "ambit.runtime-pack/core-document@2",
   "baseImage": "docker.io/library/python@sha256:ff05d1a05204fb9f7444c435db8e8ec104e587a413280dc9ffc27a4797554182",
   "nodeRuntimeImage": "docker.io/library/node@sha256:a17d50af28002a160548bd4225b3cfcb12c5efcb171f79e68758f2885fb1b066",
+  "materializerBuilderImage": "docker.io/library/golang@sha256:40dfc169bd5ad8a8617e49c8ead7fe16c6873e79d6937539e9c2e5947b7984ef",
   "platform": "linux/amd64",
   "python": "3.11.16",
   "uv": "0.9.26",
@@ -14,6 +15,17 @@
   "tsNode": "10.9.2",
   "typescript": "5.9.3",
   "typescriptLanguageServer": "5.1.3",
+  "atomicMaterializer": {
+    "version": 1,
+    "goVersion": "1.25.13",
+    "binarySha256": "8000f41f07f3bf0a0755f59dfac97c14f81ce2192d7e7fe5e3161f72584da4e9",
+    "maximumBytes": 33554432,
+    "transport": "framed_binary_stream_v1",
+    "protocolDigest": "sha256:1274e0bb27dfb15d9d7564d71fc02a7117631b405de73d84f39defb415a5f7ad",
+    "protocolAuthorityCommit": "2120aa9b31209fb765e0ac15367cd3aab27f9ae3",
+    "publication": "O_TMPFILE-linkat-AT_EMPTY_PATH-no-replace",
+    "unicodeNormalization": "golang.org/x/text/unicode/norm@v0.41.0"
+  },
   "libreofficeWriter": "25.2.3.2",
   "runtimeUser": "daytona",
   "runtimeUid": 1000,
@@ -29,6 +41,7 @@
     "python-runtime-and-dependency-resolution",
     "node-typescript-runtime",
     "python-and-typescript-code-intelligence",
+    "provider-owned-atomic-artifact-materialization",
     "docx-create-edit-render-inspect-validate"
   ],
   "movedToC18SpecialistPacks": [

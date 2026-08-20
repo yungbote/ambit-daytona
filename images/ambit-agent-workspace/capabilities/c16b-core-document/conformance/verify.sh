@@ -16,9 +16,14 @@ export XDG_RUNTIME_DIR="${output_root}/run"
 mkdir -p "${HOME}" "${XDG_CACHE_HOME}" "${XDG_CONFIG_HOME}" "${XDG_RUNTIME_DIR}"
 chmod 0700 "${XDG_RUNTIME_DIR}"
 
-test "$(id -u)" = "1000"
-test "$(id -un)" = "daytona"
-test ! -S /var/run/docker.sock
+if [[ $(id -u) != "1000" || $(id -un) != "daytona" ]]; then
+  echo "runtime-user-gate: expected uid 1000 user daytona" >&2
+  exit 91
+fi
+if [[ -S /var/run/docker.sock ]]; then
+  echo "host-socket-gate: /var/run/docker.sock is forbidden" >&2
+  exit 92
+fi
 test ! -w "${pack_root}"
 test "$(locale charmap)" = "UTF-8"
 test "${LANG}" = "C.UTF-8"
@@ -39,6 +44,10 @@ test "$(typescript-language-server --version)" = "5.1.3"
 test "$(ts-node --version)" = "v10.9.2"
 test "$(tsc --version)" = "Version 5.9.3"
 test "$(uv --version)" = "uv 0.9.26"
+test "$(command -v ambit-atomic-materialize)" = "/opt/ambit/runtime-pack/core-document/bin/ambit-atomic-materialize"
+materializer_expected=$(jq -er '.binary.sha256' "${pack_root}/materializer.lock.json")
+test "$(sha256sum /opt/ambit/runtime-pack/core-document/bin/ambit-atomic-materialize | cut -d' ' -f1)" = "${materializer_expected}"
+file /opt/ambit/runtime-pack/core-document/bin/ambit-atomic-materialize | grep -F 'statically linked' >/dev/null
 libreoffice --version | grep -F 'LibreOffice 25.2.3.2' >/dev/null
 qpdf --version | grep -F 'qpdf version 12.2.0' >/dev/null
 git lfs version | grep -F 'git-lfs/3.6.1' >/dev/null
@@ -120,6 +129,8 @@ npx --no-install ts-node -T --ignore-diagnostics 5107 \
   -O '{"module":"CommonJS"}' "${code_probe}/typed-probe.ts" \
   > "${output_root}/typescript-execution-receipt.log" 2>&1
 test "$(cat "${output_root}/typescript-execution-receipt.log")" = "42"
+
+python3 "${pack_root}/conformance/materializer_conformance.py" "${output_root}"
 
 python3 "${pack_root}/conformance/artifact_conformance.py" "${output_root}"
 

@@ -1,0 +1,34 @@
+{
+  "schema": "ambit.atomic-materializer-build-lock/v1",
+  "builderImage": "docker.io/library/golang@sha256:40dfc169bd5ad8a8617e49c8ead7fe16c6873e79d6937539e9c2e5947b7984ef",
+  "goVersion": "1.25.13",
+  "platform": "linux/amd64",
+  "build": {
+    "cgoEnabled": false,
+    "flags": [
+      "-trimpath",
+      "-buildvcs=false",
+      "-ldflags=-s -w -buildid="
+    ]
+  },
+  "sourceSha256": {
+    "go.mod": "6becba515f235dcfb709ea3b56b0164405c5287f79fdf1adaf52d03a1dde0819",
+    "go.sum": "c5601e71a91165dc42d7f1bc40d8a3f7801202f881b5f0d229aca2f01d5ab035",
+    "main.go": "35b67c35b405805bde26c507272862ef09036846c612ec6215c360201e428057"
+  },
+  "dependencies": {
+    "golang.org/x/text": {
+      "version": "v0.41.0",
+      "moduleSum": "h1:vz/seA0lnX87Othu2f/0L24RcgrXD9/YFTSuGjj3rH8="
+    }
+  },
+  "binary": {
+    "installedPath": "/opt/ambit/runtime-pack/core-document/bin/ambit-atomic-materialize",
+    "bytes": 2314388,
+    "sha256": "8000f41f07f3bf0a0755f59dfac97c14f81ce2192d7e7fe5e3161f72584da4e9"
+  },
+  "protocol": {
+    "backendAuthorityCommit": "2120aa9b31209fb765e0ac15367cd3aab27f9ae3",
+    "digest": "sha256:1274e0bb27dfb15d9d7564d71fc02a7117631b405de73d84f39defb415a5f7ad"
+  }
+}

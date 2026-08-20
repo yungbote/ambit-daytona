@@ -42,6 +42,7 @@ receipt = {
         "python-runtime-and-dependency-resolution",
         "node-typescript-runtime",
         "python-and-typescript-code-intelligence",
+        "provider-owned-atomic-artifact-materialization",
         "docx-create-edit-render-inspect-validate",
     ],
     "artifactConformance": artifact,
@@ -52,6 +53,7 @@ receipt = {
         "specialist_artifact_families_require_independent_c18_packs",
         "dependency_installation_requires_a_separately_admitted_content_addressed_cache",
         "load_and_checkpoint_slos_not_exercised_by_local_pack_conformance",
+        "daytona_provider_binary_stream_adapter_not_exercised_by_pack_conformance",
     ],
 }
 (root / "conformance-receipt.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
