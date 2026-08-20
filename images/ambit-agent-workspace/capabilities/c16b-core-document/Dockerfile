@@ -70,9 +70,9 @@ ARG BUILD_HELPER_NOTICE_SHA256
 
 USER root
 
-COPY apk-direct-packages.lock /tmp/ambit-c16b-apk-direct-packages.lock
+COPY apk-direct-packages.lock apk-packages.lock /tmp/
 RUN set -eux; \
-    xargs -r apk add --no-cache < /tmp/ambit-c16b-apk-direct-packages.lock; \
+    xargs -r apk add --no-cache < /tmp/apk-direct-packages.lock; \
     while IFS= read -r expected; do \
       package="${expected%%=*}"; \
       wanted="${expected#*=}"; \
@@ -81,7 +81,7 @@ RUN set -eux; \
         found && /^V:/ { print substr($0, 3); exit } \
         found && $0 == "" { found=0 }' /lib/apk/db/installed)"; \
       test "${actual}" = "${wanted}"; \
-    done < /tmp/ambit-c16b-apk-direct-packages.lock; \
+    done < /tmp/apk-direct-packages.lock; \
     addgroup -g 1000 daytona; \
     adduser -D -u 1000 -G daytona -s /bin/bash daytona; \
     ln -s python3.14 /usr/bin/python3; \
@@ -90,7 +90,17 @@ RUN set -eux; \
       /opt/ambit/runtime-pack/core-document/bin \
       /usr/share/licenses/ambit-atomic-materialize; \
     install -d -m 0755 -o daytona -g daytona /workspace; \
-    rm -rf /var/cache/apk/* /usr/lib/python3.14/ensurepip /usr/bin/pip /usr/bin/pip3 /usr/bin/pip3.14 /usr/bin/apk
+    awk '/^P:/ { package=substr($0,3) } /^V:/ { print package "=" substr($0,3) }' \
+      /lib/apk/db/installed | LC_ALL=C sort > /tmp/apk-packages.actual.lock; \
+    cmp /tmp/apk-packages.lock /tmp/apk-packages.actual.lock; \
+    rm -rf \
+      /var/cache/apk/* \
+      /usr/lib/python3.14/ensurepip \
+      /usr/share/python-wheels \
+      /usr/bin/pip \
+      /usr/bin/pip3 \
+      /usr/bin/pip3.14 \
+      /usr/bin/apk
 
 COPY --from=python_dependencies --chown=root:root /opt/ambit/runtime-pack/core-document/python /opt/ambit/runtime-pack/core-document/python
 COPY --from=materializer_builder --chown=root:root /out/ambit-atomic-materialize /opt/ambit/runtime-pack/core-document/bin/ambit-atomic-materialize

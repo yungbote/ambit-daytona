@@ -97,15 +97,9 @@ receipt_path.write_text(
 )
 PY
 
-while IFS= read -r expected; do
-  package="${expected%%=*}"
-  wanted="${expected#*=}"
-  actual="$(awk -v package="${package}" '
-    $0 == "P:" package { found=1; next }
-    found && /^V:/ { print substr($0, 3); exit }
-    found && $0 == "" { found=0 }' /lib/apk/db/installed)"
-  test "${actual}" = "${wanted}"
-done < "${source_root}/apk-direct-packages.lock"
+awk '/^P:/ { package=substr($0,3) } /^V:/ { print package "=" substr($0,3) }' \
+  /lib/apk/db/installed | LC_ALL=C sort > "${output_root}/apk-packages.actual.lock"
+cmp "${source_root}/apk-packages.lock" "${output_root}/apk-packages.actual.lock"
 
 for absent in apk pip pip3 uv node npm npx pyright tsc ts-node typescript-language-server \
   libreoffice soffice qpdf pdfinfo pdftotext pdftoppm gs tesseract pandoc chromium \
@@ -115,6 +109,9 @@ for absent in apk pip pip3 uv node npm npx pyright tsc ts-node typescript-langua
     exit 1
   fi
 done
+test ! -d /usr/lib/python3.14/ensurepip
+test ! -d /usr/share/python-wheels
+test -z "$(find /usr /opt/ambit/runtime-pack/core-document -type f -iname '*pip*.whl' -print -quit 2>/dev/null)"
 
 python3 - <<'PY'
 import importlib.util

@@ -34,6 +34,7 @@ receipt = {
         "hostSocket": "absent",
         "packRoot": "read_only",
         "runtimePackageInstallers": "absent",
+        "buildOnlyPipWheelPayload": "removed_from_runtime_files_package_metadata_retained",
         "locale": "C.UTF-8",
         "timezone": "UTC",
     },
