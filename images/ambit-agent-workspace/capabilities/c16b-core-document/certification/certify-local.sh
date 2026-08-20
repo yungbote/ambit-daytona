@@ -10,6 +10,7 @@ Required environment:
   GRYPE_DB_CACHE_DIR           absolute immutable Grype database cache
   GRYPE_DB_EXPECTED_TREE_SHA256 expected lowercase SHA-256 of cache file manifest
   VEX_EVIDENCE_DIR             absolute directory containing the exact reviewed snapshots
+  WOLFI_PACKAGE_EVIDENCE_DIR   absolute directory containing exact locked Wolfi package SPDX files
   GLIBC_GIT_DIR                absolute Git repository containing every locked glibc fix/source commit
   OPENSSL_GIT_DIR              absolute Git repository containing the locked OpenSSL source/fix commits
   PROVIDER_ADAPTER_RECEIPT     absolute passed backend adapter test receipt
@@ -84,6 +85,7 @@ backend_repo=${BACKEND_REPO:?BACKEND_REPO is required}
 grype_cache=${GRYPE_DB_CACHE_DIR:?GRYPE_DB_CACHE_DIR is required}
 grype_expected_tree=${GRYPE_DB_EXPECTED_TREE_SHA256:?GRYPE_DB_EXPECTED_TREE_SHA256 is required}
 vex_evidence_dir=${VEX_EVIDENCE_DIR:?VEX_EVIDENCE_DIR is required}
+wolfi_package_evidence_dir=${WOLFI_PACKAGE_EVIDENCE_DIR:?WOLFI_PACKAGE_EVIDENCE_DIR is required}
 glibc_git_dir=${GLIBC_GIT_DIR:?GLIBC_GIT_DIR is required}
 openssl_git_dir=${OPENSSL_GIT_DIR:?OPENSSL_GIT_DIR is required}
 provider_adapter_receipt=${PROVIDER_ADAPTER_RECEIPT:?PROVIDER_ADAPTER_RECEIPT is required}
@@ -102,6 +104,7 @@ provider_adapter_log=${PROVIDER_ADAPTER_LOG:?PROVIDER_ADAPTER_LOG is required}
 require_absolute_directory BACKEND_REPO "${backend_repo}"
 require_absolute_directory GRYPE_DB_CACHE_DIR "${grype_cache}"
 require_absolute_directory VEX_EVIDENCE_DIR "${vex_evidence_dir}"
+require_absolute_directory WOLFI_PACKAGE_EVIDENCE_DIR "${wolfi_package_evidence_dir}"
 require_absolute_directory GLIBC_GIT_DIR "${glibc_git_dir}"
 require_absolute_directory OPENSSL_GIT_DIR "${openssl_git_dir}"
 require_absolute_file PROVIDER_ADAPTER_RECEIPT "${provider_adapter_receipt}"
@@ -584,9 +587,15 @@ jq -n -S --argjson status "${install_status}" --arg log "$(sha256_file "${artifa
 
 wolfi_spdx_dir=${artifact_root}/vex-primary/wolfi-sboms
 mkdir -p "${wolfi_spdx_dir}"
-chmod 0777 "${wolfi_spdx_dir}"
-docker run "${docker_run_base[@]}" -v "${wolfi_spdx_dir}:/wolfi-evidence:rw" --entrypoint /bin/bash \
-  "${runtime_ref}" -ceu 'cp /var/lib/db/sbom/glibc-2.43-2.43-r14.spdx.json /wolfi-evidence/; cp /var/lib/db/sbom/libcrypto3-3.6.3-r5.spdx.json /wolfi-evidence/; cp /var/lib/db/sbom/libssl3-3.6.3-r5.spdx.json /wolfi-evidence/; chmod 0644 /wolfi-evidence/*.json'
+for package_spdx in \
+  glibc-2.43-2.43-r14.spdx.json \
+  libcrypto3-3.6.3-r5.spdx.json \
+  libssl3-3.6.3-r5.spdx.json
+do
+  require_absolute_file "WOLFI_PACKAGE_EVIDENCE_DIR/${package_spdx}" \
+    "${wolfi_package_evidence_dir}/${package_spdx}"
+  cp -- "${wolfi_package_evidence_dir}/${package_spdx}" "${wolfi_spdx_dir}/${package_spdx}"
+done
 
 cp -- "${vex_evidence_dir}/glibc-2.43.yaml" "${artifact_root}/vex-primary/glibc-2.43.yaml"
 cp -- "${vex_evidence_dir}/openssl.yaml" "${artifact_root}/vex-primary/openssl.yaml"
@@ -611,6 +620,7 @@ grype_db_tree=$(sha256_file "${artifact_root}/security/grype-db-files.sha256")
 
 docker run --rm --network none \
   -e GRYPE_CHECK_FOR_APP_UPDATE=false -e GRYPE_DB_AUTO_UPDATE=false \
+  -e GRYPE_DB_CACHE_DIR=/cache \
   -v "${artifact_root}/oci:/input:ro" -v "${artifact_root}/security:/output" -v "${grype_cache}:/cache:ro" \
   "${grype}" sbom:/input/sbom.spdx.json -o json --file /output/vulnerability.grype.json
 grype_database=$(jq -c '.descriptor.db.status' "${artifact_root}/security/vulnerability.grype.json")

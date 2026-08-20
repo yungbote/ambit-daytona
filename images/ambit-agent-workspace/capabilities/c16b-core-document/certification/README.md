@@ -44,10 +44,13 @@ The pipeline then:
    environment, history entry, and sensitive path for secrets;
 7. scans the complete attested SPDX with the caller-supplied immutable Grype
    DB, preserving every raw and scanner-ignored row;
-8. extracts exact Wolfi package-build SPDX from that runtime manifest and
-   verifies each VEX row one-to-one against the raw report, installed APK
-   closure, DB tree, package source/build metadata, fix ancestry or exact
-   cherry-pick, authority snapshots, and final conformance receipt;
+8. verifies the exact caller-supplied Wolfi package-build SPDX files named by
+   `WOLFI_PACKAGE_EVIDENCE_DIR` against their locked hashes, then proves each
+   VEX row one-to-one against the raw report, installed APK closure, DB tree,
+   package source/build metadata, fix ancestry or exact cherry-pick, authority
+   snapshots, and final conformance receipt. These build-evidence SBOMs are
+   absent from the runtime filesystem so the runtime SBOM cannot recursively
+   recatalog build metadata as installed packages;
 9. applies reviewed license conclusions and VEX dispositions in policy-gate
    schema v2, while reporting raw, disposition, and effective counts;
 10. signs one binding covering OCI identities, raw attestations/reports,
@@ -71,6 +74,13 @@ Expected VEX snapshot filenames under `VEX_EVIDENCE_DIR` are:
 - `CVE-2019-1010023.html`
 - `sourceware-bug-22850.json`
 - `sourceware-bug-22851.json`
+
+Expected package-build evidence filenames under
+`WOLFI_PACKAGE_EVIDENCE_DIR` are:
+
+- `glibc-2.43-2.43-r14.spdx.json`
+- `libcrypto3-3.6.3-r5.spdx.json`
+- `libssl3-3.6.3-r5.spdx.json`
 
 Full invocation and environment requirements are available through
 `certify-local.sh --help`.
