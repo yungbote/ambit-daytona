@@ -36,7 +36,8 @@ COPY libs/api-client-go/go.mod libs/api-client-go/go.sum libs/api-client-go/
 COPY libs/netleash/go.mod libs/netleash/go.sum libs/netleash/
 RUN head -1 go.work > go.work.tmp && printf '\nuse (\n\t./apps/runner\n\t./apps/daemon\n\t./libs/common-go\n\t./libs/api-client-go\n\t./libs/netleash\n)\n' >> go.work.tmp && mv go.work.tmp go.work
 
-ENV NX_DAEMON=false
+ENV NX_DAEMON=false \
+    NX_NO_CLOUD=true
 ENV GONOSUMDB=github.com/daytonaio/daytona
 
 RUN go -C apps/runner mod download \

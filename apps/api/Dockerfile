@@ -32,7 +32,8 @@ COPY libs/toolbox-api-client/ libs/toolbox-api-client/
 COPY libs/runner-proto/ libs/runner-proto/
 COPY libs/billing-api-client/ libs/billing-api-client/
 
-ENV NX_DAEMON=false
+ENV NX_DAEMON=false \
+    NX_NO_CLOUD=true
 
 RUN yarn nx build api --configuration=production --nxBail=true
 
