@@ -11,13 +11,6 @@ if find "${output_root}" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
   echo "conformance output must be an empty directory: ${output_root}" >&2
   exit 1
 fi
-export HOME="${output_root}/home"
-export XDG_CACHE_HOME="${output_root}/cache"
-export XDG_CONFIG_HOME="${output_root}/config"
-export XDG_RUNTIME_DIR="${output_root}/run"
-mkdir -p "${HOME}" "${XDG_CACHE_HOME}" "${XDG_CONFIG_HOME}" "${XDG_RUNTIME_DIR}"
-chmod 0700 "${XDG_RUNTIME_DIR}"
-
 if [[ $(id -u) != "1000" || $(id -un) != "daytona" ]]; then
   echo "runtime-user-gate: expected uid 1000 user daytona" >&2
   exit 91
@@ -26,6 +19,13 @@ if [[ -S /var/run/docker.sock ]]; then
   echo "host-socket-gate: /var/run/docker.sock is forbidden" >&2
   exit 92
 fi
+export HOME="${output_root}/home"
+export XDG_CACHE_HOME="${output_root}/cache"
+export XDG_CONFIG_HOME="${output_root}/config"
+export XDG_RUNTIME_DIR="${output_root}/run"
+mkdir -p "${HOME}" "${XDG_CACHE_HOME}" "${XDG_CONFIG_HOME}" "${XDG_RUNTIME_DIR}"
+chmod 0700 "${XDG_RUNTIME_DIR}"
+
 test ! -w "${pack_root}"
 test "$(python3 -c 'import locale; print(locale.getpreferredencoding(False))')" = "UTF-8"
 test "${LANG}" = "C.UTF-8"
