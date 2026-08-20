@@ -263,6 +263,7 @@ def build_research_and_web() -> tuple[Path, Path]:
     index.write_text(
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<link rel='icon' href='data:,'>"
         "<title>Ambit Runtime</title><style>body{font-family:sans-serif;margin:2rem;max-width:60rem}"
         "main{display:grid;gap:1rem}.card{border:1px solid #789;padding:1rem;border-radius:.5rem}"
         "@media(max-width:500px){body{margin:1rem}}</style></head><body>"

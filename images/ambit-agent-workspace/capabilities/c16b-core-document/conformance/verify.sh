@@ -106,7 +106,7 @@ cleanup_server() {
 }
 trap cleanup_server EXIT
 for _ in $(seq 1 50); do
-  if curl --fail --silent --show-error http://127.0.0.1:8123/ >/dev/null; then
+  if curl --fail --silent http://127.0.0.1:8123/ >/dev/null; then
     break
   fi
   sleep 0.1
