@@ -8,7 +8,8 @@ presentation, browser-automation, and local-analysis tooling.
 The source alone is not a promoted pack. Promotion requires all of the
 following to bind the resulting OCI manifest digest:
 
-- the exact `apt-packages.lock`, hash-locked `requirements.lock`, and npm
+- the exact direct `apt-packages.lock`, complete 652-package
+  `dpkg-packages.lock`, hash-locked `requirements.lock`, and npm
   `package-lock.json`;
 - an SBOM, source/build provenance, verified signature, license report, and
   vulnerability report;

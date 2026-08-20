@@ -2,6 +2,8 @@
   "schema": "ambit.runtime-pack-toolchain/v1",
   "pack": "ambit.runtime-pack/core-document@1",
   "baseImage": "docker.io/daytonaio/sandbox:0.6.0-slim@sha256:825533a16c854304facdff594bc1a0ff3eb223a25c2ff9b1b70b5e05fb754492",
+  "dpkgClosureLock": "dpkg-packages.lock",
+  "dpkgClosurePackageCount": 652,
   "platform": "linux/amd64",
   "python": "3.11.14",
   "node": "20.19.2",

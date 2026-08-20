@@ -61,6 +61,12 @@ while IFS= read -r expected; do
   test "${package}=${version}" = "${expected}"
 done < "${pack_root}/apt-packages.lock"
 
+while IFS= read -r expected; do
+  package="${expected%%=*}"
+  version="$(dpkg-query -W -f='${Version}' "${package}")"
+  test "${package}=${version}" = "${expected}"
+done < "${pack_root}/dpkg-packages.lock"
+
 python3 -m pip check
 
 malicious_python="${output_root}/malicious-python"

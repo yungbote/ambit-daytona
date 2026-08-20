@@ -16,15 +16,15 @@ ARG BUILD_SOURCE_INPUT_SHA256
 
 USER root
 
-COPY apt-packages.lock /tmp/ambit-c16b-apt-packages.lock
+COPY apt-packages.lock dpkg-packages.lock /tmp/ambit-c16b-locks/
 RUN set -eux; \
     apt-get update; \
-    xargs -r apt-get install -y --no-install-recommends < /tmp/ambit-c16b-apt-packages.lock; \
+    xargs -r apt-get install -y --no-install-recommends < /tmp/ambit-c16b-locks/dpkg-packages.lock; \
     while IFS= read -r expected; do \
       package="${expected%%=*}"; \
       version="$(dpkg-query -W -f='${Version}' "${package}")"; \
       test "${package}=${version}" = "${expected}"; \
-    done < /tmp/ambit-c16b-apt-packages.lock; \
+    done < /tmp/ambit-c16b-locks/dpkg-packages.lock; \
     rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \
@@ -44,7 +44,7 @@ COPY --from=node_dependencies --chown=root:root /pack/node_modules /opt/ambit/ru
 COPY --from=node_dependencies --chown=root:root /usr/local/lib/node_modules/npm /opt/ambit/runtime-pack/core-document/node/npm
 COPY bin/npx /opt/ambit/runtime-pack/core-document/node/bin/npx
 
-COPY apt-packages.lock /opt/ambit/runtime-pack/core-document/apt-packages.lock
+COPY apt-packages.lock dpkg-packages.lock /opt/ambit/runtime-pack/core-document/
 COPY toolchain-manifest.json /opt/ambit/runtime-pack/core-document/toolchain-manifest.json
 COPY policy /opt/ambit/runtime-pack/core-document/policy
 COPY conformance /opt/ambit/runtime-pack/core-document/conformance
