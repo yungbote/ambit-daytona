@@ -67,6 +67,11 @@ while IFS= read -r expected; do
   test "${package}=${version}" = "${expected}"
 done < "${pack_root}/dpkg-packages.lock"
 
+dpkg-query -W -f='${db:Status-Abbrev}\t${binary:Package}=${Version}\n' \
+  | awk '$1 == "ii" {print $2}' \
+  | LC_ALL=C sort > "${output_root}/dpkg-packages.actual.lock"
+cmp "${pack_root}/dpkg-packages.lock" "${output_root}/dpkg-packages.actual.lock"
+
 python3 -m pip check
 
 malicious_python="${output_root}/malicious-python"
