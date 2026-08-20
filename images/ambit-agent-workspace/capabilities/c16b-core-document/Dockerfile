@@ -14,14 +14,6 @@ ARG DEBIAN_FRONTEND=noninteractive
 ARG BUILD_SOURCE_REVISION
 ARG BUILD_SOURCE_INPUT_SHA256
 
-LABEL org.opencontainers.image.title="ambit-c16b-core-document" \
-      org.opencontainers.image.description="Ambit C16b local core/document capability pack" \
-      org.opencontainers.image.source="https://github.com/yungbote/ambit-daytona" \
-      org.opencontainers.image.version="1.0.0" \
-      org.opencontainers.image.revision="${BUILD_SOURCE_REVISION}" \
-      io.ambit.runtime-pack="ambit.runtime-pack/core-document@1" \
-      io.ambit.build-input-sha256="${BUILD_SOURCE_INPUT_SHA256}"
-
 USER root
 
 COPY apt-packages.lock /tmp/ambit-c16b-apt-packages.lock
@@ -64,6 +56,14 @@ RUN set -eux; \
     find /opt/ambit/runtime-pack/core-document -type f -exec chmod a-w,go+r {} +; \
     chmod 0555 /opt/ambit/runtime-pack/core-document/conformance/verify.sh; \
     install -d -m 0755 -o daytona -g daytona /workspace
+
+LABEL org.opencontainers.image.title="ambit-c16b-core-document" \
+      org.opencontainers.image.description="Ambit C16b local core/document capability pack" \
+      org.opencontainers.image.source="https://github.com/yungbote/ambit-daytona" \
+      org.opencontainers.image.version="1.0.0" \
+      org.opencontainers.image.revision="${BUILD_SOURCE_REVISION}" \
+      io.ambit.runtime-pack="ambit.runtime-pack/core-document@1" \
+      io.ambit.build-input-sha256="${BUILD_SOURCE_INPUT_SHA256}"
 
 ENV PATH=/opt/ambit/runtime-pack/core-document/python/bin:/opt/ambit/runtime-pack/core-document/node/bin:/opt/ambit/runtime-pack/core-document/node/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     NODE_PATH=/opt/ambit/runtime-pack/core-document/node/node_modules \
