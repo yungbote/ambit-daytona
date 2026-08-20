@@ -10,10 +10,13 @@ images
 node_modules
 .env.local
 dist
-!dist/libs/computer-use-amd64
 !dist/apps/runner-amd64
 !dist/apps/snapshot-manager
-docker
+docker/*
+!docker/ambit-local
+docker/ambit-local/*
+!docker/ambit-local/computer-use-binary.sha256
+!docker/ambit-local/computer-use-build.lock.json
 .tmp
 libs
 !libs/computer-use

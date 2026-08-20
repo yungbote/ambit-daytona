@@ -1,0 +1,32 @@
+{
+  "schema": "ambit.local-daytona-computer-use-build-lock/v1",
+  "toolchain": {
+    "image": "docker.io/library/golang@sha256:49be5c3f5f2b766e5ba74e0bb690fea4fa03ebf5df8fe94665d42dfa727acf31",
+    "goVersion": "go1.25.11",
+    "platform": "linux/amd64",
+    "libc": "glibc"
+  },
+  "source": {
+    "paths": [
+      "apps/daemon",
+      "libs/common-go",
+      "libs/computer-use"
+    ],
+    "workspace": "minimal-generated-go.work"
+  },
+  "build": {
+    "cgoEnabled": true,
+    "flags": [
+      "-trimpath",
+      "-buildvcs=false",
+      "-ldflags=-s -w -buildid="
+    ],
+    "independentBuilds": 2,
+    "byteComparison": "required"
+  },
+  "binary": {
+    "sha256": "21c00cd7b6e98213b134cc3d8bc374b410f7e66fc5cea5815ad4f4715982c76b",
+    "sizeBytes": 21969096
+  },
+  "ambientDistInput": "forbidden"
+}
