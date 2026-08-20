@@ -1,0 +1,364 @@
+name: ambit-daytona-local
+
+services:
+  api:
+    image: ${AMBIT_DAYTONA_API_IMAGE:?set an exact image@sha256 reference}
+    pull_policy: never
+    restart: unless-stopped
+    ports:
+      - 127.0.0.1:${AMBIT_DAYTONA_API_PORT:?set API loopback port}:3000
+    environment:
+      OTEL_ENABLED: "false"
+      POSTHOG_API_KEY: ""
+      POSTHOG_HOST: ""
+      DEFAULT_SNAPSHOT: ${AMBIT_C16B_RUNTIME_OCI_REFERENCE:?set exact internal-registry runtime image@sha256}
+      ENCRYPTION_KEY: ${AMBIT_DAYTONA_ENCRYPTION_KEY:?set generated encryption key}
+      ENCRYPTION_SALT: ${AMBIT_DAYTONA_ENCRYPTION_SALT:?set generated encryption salt}
+      ADMIN_API_KEY: ${AMBIT_DAYTONA_ADMIN_API_KEY:?set generated admin API key}
+      NODE_ENV: production
+      PORT: "3000"
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USERNAME: ambit_daytona
+      DB_PASSWORD: ${AMBIT_DAYTONA_POSTGRES_PASSWORD:?set generated database password}
+      DB_DATABASE: ambit_daytona
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${AMBIT_DAYTONA_REDIS_PASSWORD:?set generated Redis password}
+      OIDC_CLIENT_ID: ambit-daytona-local
+      OIDC_ISSUER_BASE_URL: http://dex:5556/dex
+      PUBLIC_OIDC_DOMAIN: http://127.0.0.1:${AMBIT_DAYTONA_DEX_PORT:?set Dex loopback port}/dex
+      OIDC_AUDIENCE: ambit-daytona-local
+      OIDC_MANAGEMENT_API_ENABLED: ""
+      OIDC_MANAGEMENT_API_CLIENT_ID: ""
+      OIDC_MANAGEMENT_API_CLIENT_SECRET: ""
+      OIDC_MANAGEMENT_API_AUDIENCE: ""
+      DASHBOARD_URL: http://127.0.0.1:${AMBIT_DAYTONA_API_PORT}/dashboard
+      DASHBOARD_BASE_API_URL: http://127.0.0.1:${AMBIT_DAYTONA_API_PORT}
+      TRANSIENT_REGISTRY_URL: http://registry:6000
+      TRANSIENT_REGISTRY_ADMIN: ""
+      TRANSIENT_REGISTRY_PASSWORD: ""
+      TRANSIENT_REGISTRY_PROJECT_ID: ""
+      INTERNAL_REGISTRY_URL: http://registry:6000
+      INTERNAL_REGISTRY_ADMIN: ""
+      INTERNAL_REGISTRY_PASSWORD: ""
+      INTERNAL_REGISTRY_PROJECT_ID: ""
+      S3_ENDPOINT: http://minio:9000
+      S3_STS_ENDPOINT: http://minio:9000/minio/v1/assume-role
+      S3_REGION: us-east-1
+      S3_ACCESS_KEY: ${AMBIT_DAYTONA_MINIO_ACCESS_KEY:?set generated MinIO access key}
+      S3_SECRET_KEY: ${AMBIT_DAYTONA_MINIO_SECRET_KEY:?set generated MinIO secret key}
+      S3_DEFAULT_BUCKET: ambit-daytona
+      S3_ACCOUNT_ID: /
+      S3_ROLE_NAME: /
+      ENVIRONMENT: ambit-self-hosted-local
+      MAX_AUTO_ARCHIVE_INTERVAL: "43200"
+      MAINTENANCE_MODE: "false"
+      PROXY_DOMAIN: proxy.localhost:${AMBIT_DAYTONA_PROXY_PORT:?set proxy loopback port}
+      PROXY_PROTOCOL: http
+      PROXY_API_KEY: ${AMBIT_DAYTONA_PROXY_API_KEY:?set generated proxy API key}
+      PROXY_TEMPLATE_URL: http://{{PORT}}-{{sandboxId}}.proxy.localhost:${AMBIT_DAYTONA_PROXY_PORT}
+      DEFAULT_RUNNER_DOMAIN: runner
+      DEFAULT_RUNNER_API_URL: http://runner:3003
+      DEFAULT_RUNNER_PROXY_URL: http://runner:3003
+      DEFAULT_RUNNER_API_KEY: ${AMBIT_DAYTONA_RUNNER_API_KEY:?set generated runner API key}
+      DEFAULT_RUNNER_CPU: "4"
+      DEFAULT_RUNNER_MEMORY: "8"
+      DEFAULT_RUNNER_DISK: "40"
+      DEFAULT_RUNNER_API_VERSION: "2"
+      DEFAULT_RUNNER_NAME: ambit-local
+      DEFAULT_SANDBOX_CLASS: container
+      DEFAULT_QUOTA_SANDBOX_CLASSES: container
+      DEFAULT_REGION_ID: local
+      DEFAULT_REGION_NAME: local
+      DEFAULT_REGION_ENFORCE_QUOTAS: "true"
+      DEFAULT_ORG_QUOTA_CONTAINER_TOTAL_CPU_QUOTA: "4"
+      DEFAULT_ORG_QUOTA_CONTAINER_TOTAL_MEMORY_QUOTA: "8"
+      DEFAULT_ORG_QUOTA_CONTAINER_TOTAL_DISK_QUOTA: "40"
+      DEFAULT_ORG_QUOTA_CONTAINER_TOTAL_GPU_QUOTA: "0"
+      DEFAULT_ORG_QUOTA_CONTAINER_MAX_CPU_PER_SANDBOX: "2"
+      DEFAULT_ORG_QUOTA_CONTAINER_MAX_MEMORY_PER_SANDBOX: "4"
+      DEFAULT_ORG_QUOTA_CONTAINER_MAX_DISK_PER_SANDBOX: "20"
+      DEFAULT_ORG_QUOTA_CONTAINER_SNAPSHOT_QUOTA: "2"
+      DEFAULT_ORG_QUOTA_CONTAINER_MAX_SNAPSHOT_SIZE: "20"
+      DEFAULT_ORG_QUOTA_CONTAINER_VOLUME_QUOTA: "0"
+      DEFAULT_ORG_QUOTA_CONTAINER_MAX_CONCURRENT_SNAPSHOT_PROCESSING: "1"
+      ADMIN_TOTAL_CPU_QUOTA: "4"
+      ADMIN_TOTAL_MEMORY_QUOTA: "8"
+      ADMIN_TOTAL_DISK_QUOTA: "40"
+      ADMIN_MAX_CPU_PER_SANDBOX: "2"
+      ADMIN_MAX_MEMORY_PER_SANDBOX: "4"
+      ADMIN_MAX_DISK_PER_SANDBOX: "20"
+      ADMIN_SNAPSHOT_QUOTA: "2"
+      ADMIN_MAX_SNAPSHOT_SIZE: "20"
+      ADMIN_VOLUME_QUOTA: "0"
+      ADMIN_MAX_CONCURRENT_SNAPSHOT_PROCESSING: "1"
+      DEFAULT_ORG_QUOTA_WINDOWS_TOTAL_CPU_QUOTA: "0"
+      DEFAULT_ORG_QUOTA_LINUX_VM_TOTAL_CPU_QUOTA: "0"
+      BUILD_CPU_CORES: "2"
+      BUILD_MEMORY_GB: "4"
+      BUILD_INFO_MAX_SANDBOXES_PER_RUNNER: "2"
+      SSH_GATEWAY_API_KEY: ""
+      SSH_GATEWAY_COMMAND: ""
+      SSH_GATEWAY_PUBLIC_KEY: ""
+      SSH_GATEWAY_URL: ""
+      RUNNER_DECLARATIVE_BUILD_SCORE_THRESHOLD: "10"
+      RUNNER_AVAILABILITY_SCORE_THRESHOLD: "10"
+      RUNNER_START_SCORE_THRESHOLD: "3"
+      SKIP_USER_EMAIL_VERIFICATION: "false"
+      RUN_MIGRATIONS: "true"
+      HEALTH_CHECK_API_KEY: ${AMBIT_DAYTONA_HEALTH_API_KEY:?set generated health API key}
+      ORGANIZATION_SANDBOX_DEFAULT_LIMITED_NETWORK_EGRESS: "true"
+      ORGANIZATION_DEFAULT_PREVIEW_WARNING_ENABLED: "true"
+      LOG_REQUESTS_ENABLED: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      dex:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      registry:
+        condition: service_started
+      runner:
+        condition: service_healthy
+    networks:
+      - provider
+    cpus: 2.0
+    mem_limit: 3g
+    pids_limit: 1024
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, http://127.0.0.1:3000/api/config]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 30s
+
+  proxy:
+    image: ${AMBIT_DAYTONA_PROXY_IMAGE:?set an exact image@sha256 reference}
+    pull_policy: never
+    restart: unless-stopped
+    ports:
+      - 127.0.0.1:${AMBIT_DAYTONA_PROXY_PORT:?set proxy loopback port}:4000
+    environment:
+      DAYTONA_API_URL: http://api:3000/api
+      PROXY_PORT: "4000"
+      PROXY_API_KEY: ${AMBIT_DAYTONA_PROXY_API_KEY}
+      PROXY_PROTOCOL: http
+      OIDC_CLIENT_ID: ambit-daytona-local
+      OIDC_CLIENT_SECRET: ""
+      OIDC_DOMAIN: http://dex:5556/dex
+      OIDC_PUBLIC_DOMAIN: http://127.0.0.1:${AMBIT_DAYTONA_DEX_PORT}/dex
+      OIDC_AUDIENCE: ambit-daytona-local
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${AMBIT_DAYTONA_REDIS_PASSWORD}
+      TOOLBOX_ONLY_MODE: "true"
+      PREVIEW_WARNING_ENABLED: "true"
+    depends_on:
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - provider
+    cpus: 0.5
+    mem_limit: 512m
+    pids_limit: 256
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, http://127.0.0.1:4000/health]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  runner:
+    image: ${AMBIT_DAYTONA_RUNNER_IMAGE:?set an exact image@sha256 reference}
+    pull_policy: never
+    restart: unless-stopped
+    privileged: true
+    environment:
+      ENVIRONMENT: production
+      API_PORT: "3003"
+      API_VERSION: "2"
+      DAYTONA_RUNNER_TOKEN: ${AMBIT_DAYTONA_RUNNER_API_KEY}
+      LOG_FILE_PATH: /home/daytona/runner/runner.log
+      RESOURCE_LIMITS_DISABLED: "false"
+      INTER_SANDBOX_NETWORK_ENABLED: "false"
+      GPU_ENABLED: "false"
+      INITIALIZE_DAEMON_TELEMETRY: "false"
+      OTEL_LOGGING_ENABLED: "false"
+      OTEL_TRACING_ENABLED: "false"
+      AWS_ENDPOINT_URL: http://minio:9000
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: ${AMBIT_DAYTONA_MINIO_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${AMBIT_DAYTONA_MINIO_SECRET_KEY}
+      AWS_DEFAULT_BUCKET: ambit-daytona
+      DAYTONA_API_URL: http://api:3000/api
+      RUNNER_DOMAIN: runner
+      VOLUME_CLEANUP_DRY_RUN: "false"
+      VOLUME_CLEANUP_EXCLUSION_PERIOD: 120s
+      FORCE_SNAPSHOT_REMOVAL: "true"
+      NETLEASH_ENABLED: "false"
+      NETLEASH_SECRETS_ENABLED: "false"
+      SYSBOX_HEALTH_PROBES: "false"
+    volumes:
+      - type: bind
+        source: ${AMBIT_DAYTONA_STATE_ROOT:?set absolute state root under /home}/runner-docker
+        target: /var/lib/docker
+      - type: bind
+        source: ${AMBIT_DAYTONA_STATE_ROOT}/runner-log
+        target: /home/daytona/runner
+    networks:
+      - provider
+    cpus: 6.0
+    mem_limit: 12g
+    pids_limit: 8192
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, http://127.0.0.1:3003/]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 20s
+
+  db:
+    image: ${AMBIT_DAYTONA_POSTGRES_IMAGE:?set an exact image@sha256 reference}
+    pull_policy: never
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ambit_daytona
+      POSTGRES_PASSWORD: ${AMBIT_DAYTONA_POSTGRES_PASSWORD}
+      POSTGRES_DB: ambit_daytona
+    volumes:
+      - type: bind
+        source: ${AMBIT_DAYTONA_STATE_ROOT}/postgres
+        target: /var/lib/postgresql/data
+    networks:
+      - provider
+    cpus: 1.0
+    mem_limit: 1g
+    pids_limit: 256
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U ambit_daytona -d ambit_daytona]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: ${AMBIT_DAYTONA_REDIS_IMAGE:?set an exact image@sha256 reference}
+    pull_policy: never
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${AMBIT_DAYTONA_REDIS_PASSWORD}
+    volumes:
+      - type: bind
+        source: ${AMBIT_DAYTONA_STATE_ROOT}/redis
+        target: /data
+    networks:
+      - provider
+    cpus: 0.5
+    mem_limit: 512m
+    pids_limit: 256
+    healthcheck:
+      test: [CMD-SHELL, 'redis-cli -a "$${REDIS_PASSWORD}" ping | grep -Fx PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    environment:
+      REDIS_PASSWORD: ${AMBIT_DAYTONA_REDIS_PASSWORD}
+
+  minio:
+    image: ${AMBIT_DAYTONA_MINIO_IMAGE:?set an exact image@sha256 reference}
+    pull_policy: never
+    restart: unless-stopped
+    command: [server, /data]
+    environment:
+      MINIO_ROOT_USER: ${AMBIT_DAYTONA_MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${AMBIT_DAYTONA_MINIO_SECRET_KEY}
+    volumes:
+      - type: bind
+        source: ${AMBIT_DAYTONA_STATE_ROOT}/minio
+        target: /data
+    networks:
+      - provider
+    cpus: 0.5
+    mem_limit: 1g
+    pids_limit: 256
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, http://127.0.0.1:9000/minio/health/live]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  minio-init:
+    image: ${AMBIT_DAYTONA_MINIO_MC_IMAGE:?set an exact image@sha256 reference}
+    pull_policy: never
+    restart: "no"
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - >-
+        mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" >/dev/null;
+        mc mb --ignore-existing local/ambit-daytona >/dev/null
+    environment:
+      MINIO_ROOT_USER: ${AMBIT_DAYTONA_MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${AMBIT_DAYTONA_MINIO_SECRET_KEY}
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks:
+      - provider
+
+  registry:
+    image: ${AMBIT_DAYTONA_REGISTRY_IMAGE:?set an exact image@sha256 reference}
+    pull_policy: never
+    restart: unless-stopped
+    ports:
+      - 127.0.0.1:${AMBIT_DAYTONA_REGISTRY_PORT:?set registry loopback port}:6000
+    environment:
+      REGISTRY_HTTP_ADDR: 0.0.0.0:6000
+      REGISTRY_STORAGE_DELETE_ENABLED: "false"
+    volumes:
+      - type: bind
+        source: ${AMBIT_DAYTONA_STATE_ROOT}/registry
+        target: /var/lib/registry
+    networks:
+      - provider
+    cpus: 0.5
+    mem_limit: 512m
+    pids_limit: 256
+
+  dex:
+    image: ${AMBIT_DAYTONA_DEX_IMAGE:?set an exact image@sha256 reference}
+    pull_policy: never
+    restart: unless-stopped
+    command: [dex, serve, /etc/dex/config.yaml]
+    ports:
+      - 127.0.0.1:${AMBIT_DAYTONA_DEX_PORT:?set Dex loopback port}:5556
+    volumes:
+      - type: bind
+        source: ${AMBIT_DAYTONA_STATE_ROOT}/config/dex.yaml
+        target: /etc/dex/config.yaml
+        read_only: true
+      - type: bind
+        source: ${AMBIT_DAYTONA_STATE_ROOT}/dex
+        target: /var/dex
+    networks:
+      - provider
+    cpus: 0.5
+    mem_limit: 512m
+    pids_limit: 256
+    healthcheck:
+      test: [CMD, wget, --spider, --quiet, http://127.0.0.1:5556/dex/.well-known/openid-configuration]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+networks:
+  provider:
+    internal: true
+    driver: bridge

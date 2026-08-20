@@ -1,0 +1,38 @@
+{
+  "schema": "ambit.local-daytona-provider-capacity-lock/v1",
+  "authority": {
+    "repository": "https://github.com/yungbote/m-backend",
+    "revision": "4f7ef339b86a5697c1daadd061c589016b246aca",
+    "path": "src/agent-workspaces/runtime-capabilities/local-daytona-provider-capacity-profile.ts"
+  },
+  "profile": {
+    "contract": "LocalDaytonaProviderCapacityProfile@1",
+    "profileRef": "ambit.workspace-provider-capacity/local-daytona@1",
+    "provider": "daytona",
+    "deployment": "self_hosted_local",
+    "resourceLimitsDisabled": false,
+    "providerStoragePath": "/home",
+    "perSandbox": {
+      "cpuCores": 2,
+      "memoryBytes": 4294967296,
+      "diskBytes": 21474836480,
+      "gpuCount": 0
+    },
+    "maxConcurrentSandboxes": 2,
+    "aggregate": {
+      "cpuCores": 4,
+      "memoryBytes": 8589934592,
+      "diskBytes": 42949672960,
+      "gpuCount": 0
+    },
+    "digest": "sha256:9326b853b19bb4c1e0704f676751fec9269832be45fe3610b61f8644256e6cfe"
+  },
+  "readiness": {
+    "contract": "WorkspaceProviderExecutionReadiness@2",
+    "authorityRevision": "12f14028",
+    "provider": "daytona",
+    "deployment": "self_hosted_local",
+    "apiExposure": "loopback_only",
+    "requiredHostReceipt": "hostCapacityHeadroom"
+  }
+}
