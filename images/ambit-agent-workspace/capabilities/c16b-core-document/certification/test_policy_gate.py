@@ -107,6 +107,7 @@ class PolicyGateTest(unittest.TestCase):
                 "documentNamespace": "https://example.invalid/spdx/fixture",
                 "packages": [
                     {
+                        "SPDXID": "SPDXRef-Package-fixture",
                         "name": "fixture",
                         "versionInfo": "1.0-r0",
                         "licenseDeclared": "MIT",
@@ -185,6 +186,61 @@ class PolicyGateTest(unittest.TestCase):
             },
         )
 
+    def add_structural_aggregate(self, *, include_describes: bool = True) -> None:
+        sbom = json.loads(self.sbom.read_text())
+        root_id = "SPDXRef-DocumentRoot-Directory-sbom"
+        sbom["packages"].append(
+            {
+                "SPDXID": root_id,
+                "copyrightText": "NOASSERTION",
+                "downloadLocation": "NOASSERTION",
+                "filesAnalyzed": False,
+                "licenseConcluded": "NOASSERTION",
+                "licenseDeclared": "NOASSERTION",
+                "name": "sbom",
+                "primaryPackagePurpose": "FILE",
+                "supplier": "NOASSERTION",
+            }
+        )
+        sbom["relationships"] = [
+            {
+                "spdxElementId": root_id,
+                "relationshipType": "CONTAINS",
+                "relatedSpdxElement": "SPDXRef-Package-fixture",
+            },
+            *(
+                [
+                    {
+                        "spdxElementId": "SPDXRef-DOCUMENT",
+                        "relationshipType": "DESCRIBES",
+                        "relatedSpdxElement": root_id,
+                    }
+                ]
+                if include_describes
+                else []
+            ),
+        ]
+        write(self.sbom, sbom)
+        write(
+            self.license_review,
+            {
+                "schema": "ambit.runtime-pack-license-review-lock/v1",
+                "reviews": [],
+                "aggregateExclusions": [
+                    {
+                        "match": {
+                            "kind": "spdx-document-root",
+                            "name": "sbom",
+                            "primaryPackagePurpose": "FILE",
+                            "spdxId": root_id,
+                        },
+                        "rawLicense": "NOASSERTION",
+                        "disposition": "aggregate-artifact-not-a-dependency",
+                        "rationale": "fixture structural aggregate",
+                    }
+                ],
+            },
+        )
     def run_gate(self, *, allow_failed_output: bool = False) -> subprocess.CompletedProcess[str]:
         command = [
             sys.executable,
@@ -268,6 +324,35 @@ class PolicyGateTest(unittest.TestCase):
         receipt = json.loads(self.output.read_text())
         self.assertEqual(receipt["outcome"], "failed")
         self.assertEqual(receipt["violations"], [{"count": 1, "gate": "vulnerability.high"}])
+
+    def test_exact_structural_document_root_is_excluded_without_inventing_a_license(self) -> None:
+        self.add_structural_aggregate()
+        self.write_dynamic_inputs()
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        receipt = json.loads(self.output.read_text())
+        self.assertEqual(receipt["outcome"], "passed")
+        self.assertEqual(receipt["license"]["rawPackageCount"], 2)
+        self.assertEqual(receipt["license"]["evaluatedDependencyPackageCount"], 1)
+        self.assertEqual(
+            receipt["license"]["aggregateExclusions"],
+            [
+                {
+                    "kind": "spdx-document-root",
+                    "licenseDeclared": "NOASSERTION",
+                    "name": "sbom",
+                    "spdxId": "SPDXRef-DocumentRoot-Directory-sbom",
+                    "version": "",
+                }
+            ],
+        )
+
+    def test_document_root_without_exact_describes_relation_is_rejected(self) -> None:
+        self.add_structural_aggregate(include_describes=False)
+        self.write_dynamic_inputs()
+        result = self.run_gate()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not exactly describe the dependency roster", result.stderr)
 
 
 if __name__ == "__main__":

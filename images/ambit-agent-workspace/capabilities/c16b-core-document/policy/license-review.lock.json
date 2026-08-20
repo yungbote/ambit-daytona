@@ -56,12 +56,14 @@
   "aggregateExclusions": [
     {
       "match": {
-        "name": "ambit-c16b-core-document",
-        "purlPrefix": "pkg:oci/ambit-c16b-core-document@"
+        "kind": "spdx-document-root",
+        "name": "sbom",
+        "primaryPackagePurpose": "FILE",
+        "spdxId": "SPDXRef-DocumentRoot-Directory-sbom"
       },
       "rawLicense": "NOASSERTION",
       "disposition": "aggregate-artifact-not-a-dependency",
-      "rationale": "The SPDX DocumentRoot package represents the aggregate OCI subject whose third-party and proprietary components are evaluated individually; it is not a dependency package and receives no invented repository-wide license."
+      "rationale": "The exact SPDX document-root package structurally DESCRIBES and CONTAINS the complete dependency roster but has no version or package URL; it is the scanned OCI filesystem aggregate, not a dependency, and receives no invented license."
     }
   ]
 }

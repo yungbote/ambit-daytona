@@ -350,12 +350,18 @@ for index, exclusion in enumerate(aggregate_exclusions):
     )
     match = exclusion["match"]
     require(isinstance(match, dict), f"aggregate exclusion {index} match must be an object")
-    require_exact_keys(match, {"name", "purlPrefix"}, f"aggregate exclusion {index} match")
+    require_exact_keys(
+        match,
+        {"kind", "name", "primaryPackagePurpose", "spdxId"},
+        f"aggregate exclusion {index} match",
+    )
     require(
-        isinstance(match["name"], str)
+        match["kind"] == "spdx-document-root"
+        and isinstance(match["name"], str)
         and bool(match["name"])
-        and isinstance(match["purlPrefix"], str)
-        and str(match["purlPrefix"]).startswith("pkg:"),
+        and match["primaryPackagePurpose"] == "FILE"
+        and isinstance(match["spdxId"], str)
+        and str(match["spdxId"]).startswith("SPDXRef-DocumentRoot-"),
         f"aggregate exclusion {index} match is invalid",
     )
     require(
@@ -369,6 +375,61 @@ aggregate_packages: list[dict[str, str]] = []
 unknown_packages: list[dict[str, str]] = []
 denied_packages: list[dict[str, str]] = []
 unreviewed_packages: list[dict[str, str]] = []
+package_spdx_ids = [package.get("SPDXID") for package in packages if isinstance(package, dict)]
+relationships = sbom.get("relationships", [])
+if aggregate_exclusions:
+    require(
+        len(package_spdx_ids) == len(packages)
+        and all(isinstance(value, str) and value.startswith("SPDXRef-") for value in package_spdx_ids)
+        and len(set(package_spdx_ids)) == len(package_spdx_ids),
+        "SBOM package SPDX identities are incomplete or duplicated",
+    )
+    require(isinstance(relationships, list), "SBOM relationship inventory is invalid")
+
+
+def structural_aggregate_match(package: dict[str, Any], match: dict[str, Any]) -> bool:
+    if not (
+        match.get("kind") == "spdx-document-root"
+        and package.get("name") == match.get("name")
+        and package.get("SPDXID") == match.get("spdxId")
+        and package.get("primaryPackagePurpose") == match.get("primaryPackagePurpose")
+    ):
+        return False
+    root = str(package["SPDXID"])
+    require(
+        package.get("filesAnalyzed") is False
+        and package.get("licenseDeclared") == "NOASSERTION"
+        and package.get("licenseConcluded") == "NOASSERTION"
+        and package.get("downloadLocation") == "NOASSERTION"
+        and not package.get("versionInfo")
+        and not package.get("externalRefs"),
+        "SPDX document-root aggregate carries dependency-like metadata",
+    )
+    describes = [
+        relation
+        for relation in relationships
+        if isinstance(relation, dict)
+        and relation.get("spdxElementId") == "SPDXRef-DOCUMENT"
+        and relation.get("relationshipType") == "DESCRIBES"
+        and relation.get("relatedSpdxElement") == root
+    ]
+    contained_package_ids = [
+        str(relation.get("relatedSpdxElement"))
+        for relation in relationships
+        if isinstance(relation, dict)
+        and relation.get("spdxElementId") == root
+        and relation.get("relationshipType") == "CONTAINS"
+        and relation.get("relatedSpdxElement") in set(package_spdx_ids)
+    ]
+    expected_contained = [str(value) for value in package_spdx_ids if value != root]
+    require(
+        len(describes) == 1
+        and Counter(contained_package_ids) == Counter(expected_contained),
+        "SPDX document-root aggregate does not exactly describe the dependency roster",
+    )
+    return True
+
+
 for package in packages:
     require(isinstance(package, dict), "SBOM package entry is invalid")
     declared = package.get("licenseDeclared") or "NOASSERTION"
@@ -392,11 +453,7 @@ for package in packages:
     matching_exclusions = [
         (index, exclusion)
         for index, exclusion in enumerate(aggregate_exclusions)
-        if exclusion.get("match", {}).get("name") == identity["name"]
-        and any(
-            purl.startswith(str(exclusion.get("match", {}).get("purlPrefix", "")))
-            for purl in purls
-        )
+        if structural_aggregate_match(package, exclusion.get("match", {}))
     ]
     if len(matching_reviews) > 1 or len(matching_exclusions) > 1 or (matching_reviews and matching_exclusions):
         raise ValueError(f"ambiguous license review for {identity!r}")
@@ -418,7 +475,13 @@ for package in packages:
         if declared != exclusion.get("rawLicense") or exclusion.get("disposition") != "aggregate-artifact-not-a-dependency":
             raise ValueError(f"aggregate license exclusion mismatch for {identity!r}")
         exclusion_match_counts[index] += 1
-        aggregate_packages.append(identity)
+        aggregate_packages.append(
+            {
+                **identity,
+                "kind": "spdx-document-root",
+                "spdxId": str(package.get("SPDXID")),
+            }
+        )
         continue
     elif declared == "NOASSERTION":
         unknown_packages.append(identity)
