@@ -85,7 +85,7 @@ def normalize_zip_archive(path: Path) -> None:
     normalized.replace(path)
 
 
-def validate_pdf(path: Path, expected_text: str, minimum_pages: int = 1) -> None:
+def validate_pdf(path: Path, expected_text: str | tuple[str, ...], minimum_pages: int = 1) -> None:
     run("qpdf", "--check", str(path))
     with pikepdf.open(path) as document:
         assert len(document.pages) >= minimum_pages
@@ -95,7 +95,9 @@ def validate_pdf(path: Path, expected_text: str, minimum_pages: int = 1) -> None
     with Image.open(image_path) as image:
         assert image.width > 300 and image.height > 300
     extracted = run("pdftotext", str(path), "-").stdout
-    assert expected_text in extracted
+    expected_values = (expected_text,) if isinstance(expected_text, str) else expected_text
+    for value in expected_values:
+        assert value in extracted
 
 
 def build_spreadsheet() -> Path:
@@ -298,7 +300,10 @@ validate_pdf(document_v1_pdf, "Ambit Project Brief")
 document_v2 = revise_document(document_v1)
 document_v2_pdf = office_pdf(document_v2, OUTPUT / "document" / "rendered-v2")
 presentation_pdf = office_pdf(presentation, OUTPUT / "presentation" / "rendered")
-validate_pdf(spreadsheet_pdf, "Quarter Revenue Cost")
+validate_pdf(
+    spreadsheet_pdf,
+    ("Quarter Revenue Cost", "40", "60", "75", "Revenue by quarter"),
+)
 validate_pdf(document_v2_pdf, "Verified repair")
 validate_pdf(presentation_pdf, "Certified Runtime Overview", minimum_pages=2)
 validate_pdf(native_pdf, "Ambit Runtime Receipt")
