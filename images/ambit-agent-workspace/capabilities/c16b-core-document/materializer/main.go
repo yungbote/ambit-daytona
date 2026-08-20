@@ -406,6 +406,10 @@ func materialize(config materializationConfiguration, payload []byte) (string, *
 	if config.operation == "verify_only" {
 		existingStat, verifyErr := verifyExisting(parentFD, leaf, payload, config.mode)
 		if verifyErr != nil {
+			if errors.Is(verifyErr, syscall.ENOENT) {
+				failure := operationError{code: "existing_mismatch", exitCode: exitUnsafe, relativePath: &relativePath}
+				return "", &failure
+			}
 			failure := verificationFailure(verifyErr, &relativePath)
 			return "", &failure
 		}
@@ -483,19 +487,16 @@ func materialize(config materializationConfiguration, payload []byte) (string, *
 	}
 
 	if reachErr := verifyReachableArtifact(config.components[:len(config.components)-1], directoryIdentities, leaf, payload, config.mode, temporaryStat); reachErr != nil {
-		removePublishedIfIdentityMatches(parentFD, leaf, temporaryStat)
 		failure := reachabilityFailure(reachErr, &relativePath)
 		return "", &failure
 	}
 	for index := len(directoryFDs) - 1; index >= 0; index-- {
 		if err := syscall.Fsync(directoryFDs[index]); err != nil {
-			removePublishedIfIdentityMatches(parentFD, leaf, temporaryStat)
 			failure := operationError{code: "directory_durability_failure", exitCode: exitIO, relativePath: &relativePath}
 			return "", &failure
 		}
 	}
 	if reachErr := verifyReachableArtifact(config.components[:len(config.components)-1], directoryIdentities, leaf, payload, config.mode, temporaryStat); reachErr != nil {
-		removePublishedIfIdentityMatches(parentFD, leaf, temporaryStat)
 		failure := reachabilityFailure(reachErr, &relativePath)
 		return "", &failure
 	}
@@ -667,26 +668,6 @@ func verifyReachableArtifact(components []string, expectedDirectories []director
 		return pathRace
 	}
 	return nil
-}
-
-func removePublishedIfIdentityMatches(parentFD int, leaf string, expected syscall.Stat_t) bool {
-	fd, err := syscall.Openat(parentFD, leaf, syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
-	if err != nil {
-		return false
-	}
-	defer syscall.Close(fd)
-	var before syscall.Stat_t
-	if err := syscall.Fstat(fd, &before); err != nil || before.Dev != expected.Dev || before.Ino != expected.Ino {
-		return false
-	}
-	if err := syscall.Unlinkat(parentFD, leaf); err != nil {
-		return false
-	}
-	var after syscall.Stat_t
-	if err := syscall.Fstat(fd, &after); err != nil || after.Dev != expected.Dev || after.Ino != expected.Ino || after.Nlink != 0 {
-		return false
-	}
-	return syscall.Fsync(parentFD) == nil
 }
 
 func queuedInput(fd int) (bool, error) {

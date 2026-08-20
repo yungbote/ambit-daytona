@@ -336,11 +336,19 @@ assert_success(one, relative_path=one_path, payload=b"\x04", mode=0o444, operati
 cases.extend(["zero_and_one_byte_frames", "same_session_fd_reattach"])
 
 missing_verify = invoke("verify-only/missing.bin", b"missing", operation="verify_only")
-assert_failure(missing_verify, 4)
+assert assert_failure(missing_verify, 4)["code"] == "existing_mismatch"
 assert not (WORKSPACE / "verify-only").exists()
+safe_create = invoke("verify-only/missing.bin", b"missing", operation="create_or_verify")
+assert_success(safe_create, relative_path="verify-only/missing.bin", payload=b"missing", mode=0o444, operation="create_or_verify", outcome="created")
+ensure_file("verify-only/missing.bin", b"missing", 0o444)
 mismatch = invoke(primary_path, b"different")
 assert_failure(mismatch, 4)
 assert (WORKSPACE / primary_path).read_bytes() == primary_payload
+attacker_file = WORKSPACE / "attacker-owned.bin"
+attacker_file.write_bytes(b"attacker-owned")
+attacker_file.chmod(0o444)
+assert_failure(invoke("attacker-owned.bin", b"replacement"), 4)
+assert attacker_file.read_bytes() == b"attacker-owned"
 bad_digest = invoke("rejected/input.bin", b"payload", expected_sha256=f"sha256:{'0' * 64}")
 assert_failure(bad_digest, 3)
 bad_helper = invoke("rejected/helper.bin", b"payload", expected_helper_sha256=f"sha256:{'0' * 64}")
@@ -348,7 +356,7 @@ assert_failure(bad_helper, 4)
 assert not (WORKSPACE / "rejected").exists()
 invalid_path = invoke("../outside.bin", b"unsafe")
 assert assert_failure(invalid_path, 2)["relativePath"] is None
-cases.extend(["verify_only_zero_mutation", "mismatch_no_overwrite", "input_and_helper_preflight", "unsafe_path_denial"])
+cases.extend(["missing_verify_then_safe_create_reconciliation", "mismatch_no_overwrite_or_attacker_deletion", "input_and_helper_preflight", "unsafe_path_denial"])
 
 unicode_path = "unicode/<>&\u2028-artifact.bin"
 unicode_payload = b"canonical-json"
