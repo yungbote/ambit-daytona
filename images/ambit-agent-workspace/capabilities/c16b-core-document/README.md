@@ -84,9 +84,11 @@ invalid invocation/path, 3 input mismatch, 4 unsafe path/race/existing
 mismatch, and 5 I/O or durability failure.
 
 C17 deliberately admits a narrower 16 MiB caller-side limit. That is an
-adapter constraint, not a second helper protocol. The production host adapter
+adapter constraint, not a second helper protocol. The baseline frame adapter
 is frozen at backend commit
-`4a50200dd4862d67171ab324c05c22551bd76cf1`; the Daytona WebSocket-to-PTY
-boundary and short-write correction are frozen at Daytona commit
-`eca35fc52`. Shell interpolation, environment transport, base64 substitution,
-and workspace staging are not acceptable fallbacks.
+`4a50200dd4862d67171ab324c05c22551bd76cf1`; current provider/image/grant
+reinspection is backend commit
+`dfb17776f58c853b5cab7edd5dde2076ceb279b7`. The Daytona WebSocket-to-PTY
+boundary and short-write correction are frozen at Daytona commit `eca35fc52`.
+Shell interpolation, environment transport, base64 substitution, and workspace
+staging are not acceptable fallbacks.

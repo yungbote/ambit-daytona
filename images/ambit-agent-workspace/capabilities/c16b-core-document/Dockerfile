@@ -121,6 +121,7 @@ RUN set -eux; \
       /usr/bin/pip3 \
       /usr/bin/pip3.14 \
       /usr/bin/apk \
+      /var/lib/db/sbom \
       /tmp/apk-direct-packages.lock \
       /tmp/apk-packages.lock \
       /tmp/apk-packages.actual.lock

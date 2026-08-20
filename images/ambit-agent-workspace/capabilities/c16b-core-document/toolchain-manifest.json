@@ -49,6 +49,7 @@
   "timezone": "UTC",
   "installBoundary": "image-build-only",
   "runtimePackageInstallers": "absent",
+  "embeddedPackageBuildEvidence": "absent-runtime-external-certification-input",
   "osClosureState": "complete-exact-equality",
   "osClosurePackageCount": 46,
   "osClosureLockSha256": "a07ca84d0f78903a9ffcb2da984eb56ae1a08bf1026d7cf182403b836d3dd055",
