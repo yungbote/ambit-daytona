@@ -45,6 +45,18 @@ type failingWriter struct{ err error }
 
 func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
 
+type cancelingShortWriter struct {
+	cancel context.CancelFunc
+	limit  int
+	buffer bytes.Buffer
+}
+
+func (w *cancelingShortWriter) Write(payload []byte) (int, error) {
+	written, err := w.buffer.Write(payload[:min(w.limit, len(payload))])
+	w.cancel()
+	return written, err
+}
+
 func TestWritePTYInputPreservesShortWriteSuffixAndFailsClosed(t *testing.T) {
 	t.Parallel()
 	payload := make([]byte, maxPTYWebSocketInputBytes)
@@ -71,6 +83,50 @@ func TestWritePTYInputPreservesShortWriteSuffixAndFailsClosed(t *testing.T) {
 	}
 }
 
+func TestWritePTYInputStopsAtCancellationBetweenShortWrites(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	writer := &cancelingShortWriter{cancel: cancel, limit: 5}
+	payload := []byte("prefix-must-not-be-followed-by-suffix")
+	if err := writePTYInput(ctx, writer, payload); !errors.Is(err, context.Canceled) {
+		t.Fatalf("writePTYInput(cancel after short write) = %v, want context.Canceled", err)
+	}
+	if actual, expected := writer.buffer.String(), string(payload[:5]); actual != expected {
+		t.Fatalf("written bytes = %q, want prefix %q", actual, expected)
+	}
+}
+
+func TestSendToPTYBackpressureUnblocksOnSessionCancellation(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	first := []byte("first")
+	session := &PTYSession{ctx: ctx, inCh: make(chan []byte, 1)}
+	if err := session.sendToPTY(first); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		result <- session.sendToPTY([]byte("second"))
+	}()
+	select {
+	case err := <-result:
+		t.Fatalf("sendToPTY returned before cancellation: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if err == nil || !strings.Contains(err.Error(), "closed") {
+			t.Fatalf("sendToPTY after cancellation = %v, want closed error", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("sendToPTY remained blocked after cancellation")
+	}
+	if len(session.inCh) != 1 || !bytes.Equal(<-session.inCh, first) {
+		t.Fatal("backpressure cancellation enqueued or reordered input")
+	}
+}
+
 func TestInputWriteLoopPropagatesWriterFailureByCancelingSession(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -94,6 +150,9 @@ func TestInputWriteLoopPropagatesWriterFailureByCancelingSession(t *testing.T) {
 func TestControllerWebSocketToRealPTYPreservesBinaryBoundaryAndReconnect(t *testing.T) {
 	harness := newRealPTYHarness(t)
 	first := harness.connect(t)
+	if err := first.WriteControl(websocket.PingMessage, []byte("must-not-enter-pty"), time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
 
 	allBytes := make([]byte, 256)
 	for index := range allBytes {
