@@ -48,6 +48,7 @@ RUN set -eux; \
 
 COPY package.json package-lock.json /opt/ambit/runtime-pack/core-document/node/
 COPY --from=node_dependencies --chown=root:root /pack/node_modules /opt/ambit/runtime-pack/core-document/node/node_modules
+COPY --from=node_dependencies --chown=root:root /usr/local/lib/node_modules/npm /opt/ambit/runtime-pack/core-document/node/npm
 
 COPY apt-packages.lock /opt/ambit/runtime-pack/core-document/apt-packages.lock
 COPY toolchain-manifest.json /opt/ambit/runtime-pack/core-document/toolchain-manifest.json
@@ -57,12 +58,17 @@ COPY conformance /opt/ambit/runtime-pack/core-document/conformance
 RUN set -eux; \
     printf '%s\n' '[global]' 'no-index = true' 'require-virtualenv = true' > /etc/pip.conf; \
     printf '%s\n' 'ignore-scripts=true' 'audit=false' 'fund=false' > /etc/npmrc; \
+    install -d -m 0755 -o root -g root /opt/ambit/runtime-pack/core-document/node/bin; \
+    ln -s ../npm/bin/npm-cli.js /opt/ambit/runtime-pack/core-document/node/bin/npm; \
     find /opt/ambit/runtime-pack/core-document -type d -exec chmod 0555 {} +; \
     find /opt/ambit/runtime-pack/core-document -type f -exec chmod 0444 {} +; \
     chmod 0555 /opt/ambit/runtime-pack/core-document/conformance/verify.sh; \
+    chmod 0555 /opt/ambit/runtime-pack/core-document/node/npm/bin/npm-cli.js; \
+    find /opt/ambit/runtime-pack/core-document/node/node_modules/.bin -type l -print0 \
+      | while IFS= read -r -d '' link; do chmod 0555 "$(readlink -f "${link}")"; done; \
     install -d -m 0755 -o daytona -g daytona /workspace
 
-ENV PATH=/opt/ambit/runtime-pack/core-document/python/bin:/opt/ambit/runtime-pack/core-document/node/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+ENV PATH=/opt/ambit/runtime-pack/core-document/python/bin:/opt/ambit/runtime-pack/core-document/node/bin:/opt/ambit/runtime-pack/core-document/node/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     NODE_PATH=/opt/ambit/runtime-pack/core-document/node/node_modules \
     NPM_CONFIG_IGNORE_SCRIPTS=true \
     PIP_CONFIG_FILE=/etc/pip.conf \

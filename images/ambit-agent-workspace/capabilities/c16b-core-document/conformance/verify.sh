@@ -34,7 +34,7 @@ fi
 
 test "$(python3 --version)" = "Python 3.11.14"
 test "$(node --version)" = "v20.19.2"
-test "$(npm --version)" = "9.2.0"
+test "$(npm --version)" = "10.8.2"
 test "$(npm config get ignore-scripts)" = "true"
 test "$(pyright --version)" = "pyright 1.1.413"
 test "$(typescript-language-server --version)" = "5.1.3"
