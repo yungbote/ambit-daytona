@@ -1,0 +1,10 @@
+bash=5.3-r12
+coreutils=9.11-r3
+diffutils=3.12-r6
+file=5.48-r1
+findutils=4.11.0-r1
+gawk=5.4.1-r0
+grep=3.12-r7
+procps=4.0.7-r0
+python-3.14=3.14.7-r1
+sed=4.10-r1

@@ -1,22 +1,23 @@
 # C16b minimal core/document runtime pack
 
-This directory owns Ambit's smallest locally evaluated core plus DOCX runtime.
-It is deliberately not a universal artifact image. The final image uses the
-current pinned Python 3.11.16 slim runtime and copies only the Node 22.23.2
-runtime, npm, and integrity-locked Node dependencies from a separate stage.
-Compilers, inherited global packages, NVM, browsers, media stacks, and
-specialist artifact libraries are not admitted.
+This directory owns Ambit's smallest locally evaluated shell plus structural
+DOCX runtime. It is deliberately not a universal artifact or code-intelligence
+image. The final image uses an exact current Wolfi base, Python 3.14.7, and
+only runtime files. Compilers, package installers, Node, LSPs, native office
+renderers, fonts, PDF tools, browsers, and specialist artifact libraries are
+not admitted.
 
 The retained boundary is:
 
-- core shell, Git/LFS, archive, MIME, SSH client, JSON/YAML, and text tools;
-- pack-owned Python/pip/uv and Node/npm/no-download-npx runtimes;
-- TypeScript execution and Python/TypeScript code intelligence;
-- provider-owned, framed raw-stream atomic artifact materialization beneath the exact
-  workspace root with content, mode, operation, and helper-binary binding;
-- DOCX create, reopen, inspect, edit, render through LibreOffice Writer,
-  validate, raster-inspect, and preserve the original revision;
-- PDF inspection only as an internal document-render validation primitive.
+- a minimal shell/filesystem inspection fleet and Python runtime;
+- DOCX create, reopen, OOXML ZIP/XML inspect, edit, validate, and original
+  revision preservation through pinned `python-docx`/`lxml`;
+- sanitized semantic HTML preview through pinned Mammoth. This preview is
+  derived and explicitly not layout-authoritative; C19 owns native render
+  selection, font/layout fidelity, page rasterization, and visual validation;
+- a provider-owned framed atomic write implementation beneath the exact
+  workspace root. It strengthens existing workspace writes and is not
+  advertised as a new runtime capability.
 
 The following capabilities moved to independently certified C18 specialist
 packs and are intentionally absent here:
@@ -30,13 +31,19 @@ packs and are intentionally absent here:
 - research/publishing: Pandoc, citation/CSL/BibTeX, EPUB/LaTeX/Typst;
 - web applications: Chromium, Playwright, Axe, browser traces/screenshots;
 - media/diagram processing: FFmpeg, ImageMagick, and Graphviz.
+- Node/TypeScript and language intelligence: Node/npm/npx, TypeScript, LSPs,
+  type checkers, and ambient code-tool globals;
+- native document rendering: LibreOffice Writer, fonts, Poppler, qpdf, PDF
+  conversion, and page rasterization; this is owned by C19 rather than falsely
+  implied by the derived HTML preview.
 
-This pruning removes the denied AGPL Ghostscript/font chain from the intended
-pack closure. It does not turn unresolved licenses or vulnerabilities into a
-pass: promotion still requires a complete SBOM, provenance, signature,
-strict license/vulnerability policy, exact runtime conformance, and an
-external backend registration that remains candidate-only until every gate
-passes.
+This pruning removes the former Debian office/PDF/font chain, Node/npm fleet,
+and mutable runtime installer surface. It does not turn unresolved licenses or
+vulnerabilities into a pass: promotion still requires a complete SBOM,
+provenance, signature, strict license/vulnerability policy, exact runtime
+conformance, and external backend registration. The helper's repository-owned
+Go module is currently `NOASSERTION`; only root/user licensing authority may
+resolve that legal gate, so the pack remains candidate-only while it is open.
 
 ## Atomic materialization contract
 
@@ -70,6 +77,9 @@ invalid invocation/path, 3 input mismatch, 4 unsafe path/race/existing
 mismatch, and 5 I/O or durability failure.
 
 C17 deliberately admits a narrower 16 MiB caller-side limit. That is an
-adapter constraint, not a second helper protocol. A concrete Daytona provider
-binary-stream transport remains a separate backend integration gate; shell or
-base64 substitution is not an acceptable fallback.
+adapter constraint, not a second helper protocol. The production host adapter
+is frozen at backend commit
+`4a50200dd4862d67171ab324c05c22551bd76cf1`; the Daytona WebSocket-to-PTY
+boundary and short-write correction are frozen at Daytona commit
+`eca35fc52`. Shell interpolation, environment transport, base64 substitution,
+and workspace staging are not acceptable fallbacks.

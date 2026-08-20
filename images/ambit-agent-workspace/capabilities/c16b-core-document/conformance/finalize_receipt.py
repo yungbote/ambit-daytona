@@ -8,6 +8,7 @@ from pathlib import Path
 
 root = Path(sys.argv[1]).resolve()
 artifact = json.loads((root / "artifact-receipt.json").read_text())
+materializer = json.loads((root / "materializer-receipt.json").read_text())
 
 
 def pin(path: Path) -> dict[str, object]:
@@ -25,35 +26,39 @@ evidence = [
     if path.is_file() and path.name != "conformance-receipt.json"
 ]
 receipt = {
-    "schema": "ambit.runtime-pack-conformance/v2",
+    "schema": "ambit.runtime-pack-conformance/v3",
     "outcome": "passed",
     "runtime": {
         "privilege": "non_root",
-        "network": "none_with_loopback_only",
+        "network": "none",
         "hostSocket": "absent",
         "packRoot": "read_only",
-        "installScriptsDefault": "disabled",
-        "pythonSourceBuildsDefault": "disabled",
+        "runtimePackageInstallers": "absent",
         "locale": "C.UTF-8",
         "timezone": "UTC",
     },
     "capabilityFamilies": [
         "core-shell",
-        "python-runtime-and-dependency-resolution",
-        "node-typescript-runtime",
-        "python-and-typescript-code-intelligence",
-        "provider-owned-atomic-artifact-materialization",
-        "docx-create-edit-render-inspect-validate",
+        "python-runtime",
+        "docx-create-edit-structural-inspect-validate",
     ],
+    "providerImplementationEvidence": {
+        "advertisedRuntimeCapability": False,
+        "atomicMaterializer": materializer,
+    },
     "artifactConformance": artifact,
     "evidence": evidence,
     "knownLimitations": [
         "native_microsoft_office_fidelity_not_exercised",
+        "derived_html_preview_is_non_layout_authoritative",
+        "derived_html_preview_is_diagnostic_evidence_not_a_runtime_capability",
+        "document_render_v1_is_unavailable_until_C19_paginated_renderer_composes",
+        "native_document_render_and_visual_fidelity_are_owned_by_C19",
         "macro_preservation_not_exercised_no_macro_fixture",
         "specialist_artifact_families_require_independent_c18_packs",
-        "dependency_installation_requires_a_separately_admitted_content_addressed_cache",
+        "node_typescript_and_language_intelligence_are_not_in_this_pack",
+        "runtime_dependency_installation_is_not_admitted",
         "load_and_checkpoint_slos_not_exercised_by_local_pack_conformance",
-        "daytona_provider_binary_stream_adapter_not_exercised_by_pack_conformance",
     ],
 }
 (root / "conformance-receipt.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")

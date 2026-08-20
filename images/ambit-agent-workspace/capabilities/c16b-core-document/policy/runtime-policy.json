@@ -3,12 +3,16 @@
   "runtimeUser": "daytona",
   "rootEscalation": "denied",
   "hostSocketMounts": "denied",
-  "packageInstallScriptsByDefault": "disabled",
-  "pythonSourceBuildsByDefault": "disabled",
+  "runtimePackageInstallers": "absent",
+  "packageInstallScriptsByDefault": "unavailable",
+  "pythonSourceBuildsByDefault": "unavailable",
   "pythonDependencyHashes": "required",
   "dependencyNetworkByDefault": "disabled",
   "workspaceWriteRoot": "/workspace",
   "packRoot": "/opt/ambit/runtime-pack/core-document",
   "packRootMutability": "read-only",
-  "secretsInImage": "denied"
+  "secretsInImage": "denied",
+  "atomicMaterializer": "provider-implementation-not-runtime-capability",
+  "derivedHtmlPreview": "diagnostic-non-layout-authoritative",
+  "documentRenderCapability": "unavailable-until-C19-paginated-renderer"
 }
