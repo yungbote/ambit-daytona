@@ -89,7 +89,7 @@ LABEL org.opencontainers.image.title="ambit-c16b-core-document" \
       org.opencontainers.image.version="2.0.0-candidate" \
       org.opencontainers.image.revision="${BUILD_SOURCE_REVISION}" \
       io.ambit.runtime-pack="ambit.runtime-pack/core-document@2" \
-      io.ambit.atomic-materializer-sha256="sha256:8000f41f07f3bf0a0755f59dfac97c14f81ce2192d7e7fe5e3161f72584da4e9" \
+      io.ambit.atomic-materializer-sha256="sha256:3dcf066df09b5f0d2fdeecc52bde579d296ef57fff048b007e7dafc50abfd28c" \
       io.ambit.atomic-materializer-protocol="sha256:1274e0bb27dfb15d9d7564d71fc02a7117631b405de73d84f39defb415a5f7ad" \
       io.ambit.build-input-sha256="${BUILD_SOURCE_INPUT_SHA256}"
 

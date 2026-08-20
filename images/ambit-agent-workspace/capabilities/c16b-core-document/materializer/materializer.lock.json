@@ -14,7 +14,7 @@
   "sourceSha256": {
     "go.mod": "6becba515f235dcfb709ea3b56b0164405c5287f79fdf1adaf52d03a1dde0819",
     "go.sum": "c5601e71a91165dc42d7f1bc40d8a3f7801202f881b5f0d229aca2f01d5ab035",
-    "main.go": "35b67c35b405805bde26c507272862ef09036846c612ec6215c360201e428057"
+    "main.go": "991f8aba340b9881b7f5e6c85ec75ee0d568b4b4576a9295b9da72dd239004fd"
   },
   "dependencies": {
     "golang.org/x/text": {
@@ -25,7 +25,7 @@
   "binary": {
     "installedPath": "/opt/ambit/runtime-pack/core-document/bin/ambit-atomic-materialize",
     "bytes": 2314388,
-    "sha256": "8000f41f07f3bf0a0755f59dfac97c14f81ce2192d7e7fe5e3161f72584da4e9"
+    "sha256": "3dcf066df09b5f0d2fdeecc52bde579d296ef57fff048b007e7dafc50abfd28c"
   },
   "protocol": {
     "backendAuthorityCommit": "2120aa9b31209fb765e0ac15367cd3aab27f9ae3",

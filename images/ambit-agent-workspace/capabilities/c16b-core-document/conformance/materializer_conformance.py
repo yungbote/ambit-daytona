@@ -76,16 +76,17 @@ def frame_header(
 
 
 class Session:
-    def __init__(self, *, pre_ready: bytes = b"") -> None:
+    def __init__(self, *, output_prefix: bytes = b"") -> None:
         self.nonce = os.urandom(32)
         master, slave = pty.openpty()
         tty.setraw(slave)
-        if pre_ready:
-            assert len(pre_ready) <= MAXIMUM_PRE_READY
-            self._write_fd(master, pre_ready)
         nonce_hex = self.nonce.hex()
+        prefix_command = ""
+        if output_prefix:
+            assert set(output_prefix) == {ord("P")}
+            prefix_command = f"printf '%0.sP' $(seq 1 {len(output_prefix)}) && "
         bootstrap = (
-            f"stty raw -echo && exec {HELPER} --framed-stream-v1 "
+            f"{prefix_command}stty raw -echo && exec {HELPER} --framed-stream-v1 "
             f"--ready-nonce {nonce_hex}"
         )
         self.process = subprocess.Popen(
@@ -98,7 +99,13 @@ class Session:
         )
         os.close(slave)
         self.fd = master
-        self._accept_ready()
+        try:
+            self._accept_ready()
+        except BaseException:
+            self.process.terminate()
+            self.process.wait(timeout=5)
+            self.close()
+            raise
 
     @staticmethod
     def _write_fd(fd: int, payload: bytes) -> None:
@@ -177,11 +184,11 @@ def invoke(
     header_split: int | None = None,
     chunk_split: bool = False,
     trailing: bytes = b"",
-    pre_ready: bytes = b"",
+    output_prefix: bytes = b"",
     reattach: bool = False,
     inspect_after_bytes: int | None = None,
 ) -> FramedResult:
-    session = Session(pre_ready=pre_ready)
+    session = Session(output_prefix=output_prefix)
     header = frame_header(
         relative_path,
         payload,
@@ -299,7 +306,7 @@ for operation, outcome in (
     ("create_or_verify", "already_identical"),
     ("verify_only", "already_identical"),
 ):
-    result = invoke(primary_path, primary_payload, operation=operation, pre_ready=b"ignored-before-ready")
+    result = invoke(primary_path, primary_payload, operation=operation, output_prefix=b"P" * 1024)
     assert_success(
         result,
         relative_path=primary_path,
@@ -310,6 +317,14 @@ for operation, outcome in (
     )
 ensure_file(primary_path, primary_payload, 0o444)
 cases.extend(["all_256_raw_byte_values", "create_and_idempotent_verify", "bounded_pre_ready_discard"])
+
+try:
+    Session(output_prefix=b"P" * (MAXIMUM_PRE_READY + 1))
+except AssertionError:
+    pass
+else:
+    raise AssertionError("pre-READY output beyond the frozen bound was accepted")
+cases.append("over_bound_pre_ready_output_rejected")
 
 empty_path = "artifacts/empty.bin"
 empty = invoke(empty_path, b"")

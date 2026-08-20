@@ -28,7 +28,6 @@ const (
 	maximumBytes       = int64(33_554_432)
 	maximumHeaderBytes = uint32(4096)
 	maximumDataBytes   = uint32(65_536)
-	maximumPreReady    = 65_536
 	frameTimeout       = 10 * time.Second
 	totalTimeout       = 120 * time.Second
 	exitInvalid        = 2
@@ -132,13 +131,6 @@ func run() int {
 	startup, failure := parseStartup(os.Args[1:])
 	if failure != nil {
 		return emitError(*failure)
-	}
-	if err := discardPreReadyInput(int(os.Stdin.Fd())); err != nil {
-		exitCode := exitIO
-		if errors.Is(err, syscall.EOVERFLOW) {
-			exitCode = exitInput
-		}
-		return emitError(operationError{code: "pre_ready_input_invalid", exitCode: exitCode})
 	}
 	if err := writeAll(os.Stdout, append(append([]byte{}, readyMagic...), startup.readyNonce...)); err != nil {
 		return exitIO
@@ -481,6 +473,10 @@ func materialize(config materializationConfiguration, payload []byte) (string, *
 			failure := operationError{code: code, exitCode: exitUnsafe, relativePath: &relativePath}
 			return "", &failure
 		}
+		if errors.Is(linkErr, syscall.ENOENT) || errors.Is(linkErr, syscall.ELOOP) || errors.Is(linkErr, syscall.ENOTDIR) || errors.Is(linkErr, syscall.ESTALE) || errors.Is(linkErr, syscall.EBUSY) {
+			failure := operationError{code: "path_race", exitCode: exitUnsafe, relativePath: &relativePath}
+			return "", &failure
+		}
 		failure := operationError{code: "publish_io_failure", exitCode: exitIO, relativePath: &relativePath}
 		return "", &failure
 	}
@@ -661,34 +657,6 @@ func verifyReachableArtifact(components []string, expectedDirectories []director
 func removePublished(parentFD int, leaf string) {
 	_ = syscall.Unlinkat(parentFD, leaf)
 	_ = syscall.Fsync(parentFD)
-}
-
-func discardPreReadyInput(fd int) error {
-	if err := syscall.SetNonblock(fd, true); err != nil {
-		return err
-	}
-	defer syscall.SetNonblock(fd, false)
-	buffer := make([]byte, 4096)
-	discarded := 0
-	for {
-		count, err := syscall.Read(fd, buffer)
-		discarded += count
-		if discarded > maximumPreReady {
-			return syscall.EOVERFLOW
-		}
-		if errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil
-		}
-		if errors.Is(err, syscall.EINTR) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		if count == 0 {
-			return nil
-		}
-	}
 }
 
 func queuedInput(fd int) (bool, error) {
