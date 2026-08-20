@@ -159,6 +159,20 @@ terminate_exact() {
   done
   return 1
 }
+unmount_task_netns() {
+  local netns_root=${exec_root}/netns
+  [[ -d ${netns_root} ]] || return 0
+  local -a targets=()
+  mapfile -t targets < <(findmnt -R -n -o TARGET "${netns_root}" 2>/dev/null | sort -r)
+  local target filesystem
+  for target in "${targets[@]}"; do
+    [[ ${target} =~ ^${netns_root}/[A-Za-z0-9._-]+$ ]] || return 1
+    [[ $(findmnt -T "${target}" -n -o TARGET) == "${target}" ]] || return 1
+    filesystem=$(findmnt -T "${target}" -n -o FSTYPE)
+    [[ ${filesystem} == nsfs ]] || return 1
+    sudo -n umount -- "${target}" || return 1
+  done
+}
 startup_cleanup() {
   local cleanup_allowed=true
   if [[ -n ${docker_pid} ]]; then
@@ -170,6 +184,9 @@ startup_cleanup() {
     terminate_exact "${containerd_pid}" containerd "${containerd_config}" || cleanup_allowed=false
   elif [[ -f ${containerd_pidfile} ]]; then
     terminate_exact "$(<"${containerd_pidfile}")" containerd "${containerd_config}" || cleanup_allowed=false
+  fi
+  if [[ ${cleanup_allowed} == true ]]; then
+    unmount_task_netns || cleanup_allowed=false
   fi
   if [[ ${cleanup_allowed} == true ]] &&
     python3 "${runtime_root_tool}" verify "${runtime_root}" --expected "${runtime_identity}" >/dev/null 2>&1; then

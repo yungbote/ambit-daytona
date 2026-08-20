@@ -62,6 +62,20 @@ stop_exact() {
   echo "${executable} did not stop within 30 seconds" >&2
   exit 67
 }
+unmount_task_netns() {
+  local netns_root=${runtime_root}/docker-exec/netns
+  [[ -d ${netns_root} ]] || return 0
+  local -a targets=()
+  mapfile -t targets < <(findmnt -R -n -o TARGET "${netns_root}" 2>/dev/null | sort -r)
+  local target filesystem
+  for target in "${targets[@]}"; do
+    [[ ${target} =~ ^${netns_root}/[A-Za-z0-9._-]+$ ]] || return 1
+    [[ $(findmnt -T "${target}" -n -o TARGET) == "${target}" ]] || return 1
+    filesystem=$(findmnt -T "${target}" -n -o FSTYPE)
+    [[ ${filesystem} == nsfs ]] || return 1
+    sudo -n umount -- "${target}" || return 1
+  done
+}
 
 docker_pid=$(<"${pidfile}")
 containerd_pid=$(<"${containerd_pidfile}")
@@ -71,6 +85,7 @@ stop_exact "${docker_pid}" dockerd "${config}" "${docker_process_identity}"
 [[ ! -S ${socket} ]] || { echo 'isolated Docker socket remained after stop' >&2; exit 67; }
 stop_exact "${containerd_pid}" containerd "${containerd_config}" "${containerd_process_identity}"
 [[ ! -S ${containerd_socket} ]] || { echo 'dedicated containerd socket remained after stop' >&2; exit 67; }
+unmount_task_netns || { echo 'task-owned Docker network namespace mount could not be removed' >&2; exit 67; }
 unlink "${containerd_pidfile}"
 python3 "${runtime_root_tool}" verify "${runtime_root}" --expected "${runtime_identity}" >/dev/null
 sudo -n find "${runtime_root}" -depth -delete
