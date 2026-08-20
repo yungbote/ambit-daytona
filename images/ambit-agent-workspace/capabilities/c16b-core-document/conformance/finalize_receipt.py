@@ -8,7 +8,6 @@ from pathlib import Path
 
 root = Path(sys.argv[1]).resolve()
 artifact = json.loads((root / "artifact-receipt.json").read_text())
-browser = json.loads((root / "web-receipt.json").read_text())
 
 
 def pin(path: Path) -> dict[str, object]:
@@ -26,7 +25,7 @@ evidence = [
     if path.is_file() and path.name != "conformance-receipt.json"
 ]
 receipt = {
-    "schema": "ambit.runtime-pack-conformance/v1",
+    "schema": "ambit.runtime-pack-conformance/v2",
     "outcome": "passed",
     "runtime": {
         "privilege": "non_root",
@@ -38,18 +37,21 @@ receipt = {
         "locale": "C.UTF-8",
         "timezone": "UTC",
     },
+    "capabilityFamilies": [
+        "core-shell",
+        "python-runtime-and-dependency-resolution",
+        "node-typescript-runtime",
+        "python-and-typescript-code-intelligence",
+        "docx-create-edit-render-inspect-validate",
+    ],
     "artifactConformance": artifact,
-    "browserConformance": browser,
     "evidence": evidence,
     "knownLimitations": [
-        "macro_preservation_not_exercised_no_macro_fixture",
         "native_microsoft_office_fidelity_not_exercised",
-        "firefox_and_webkit_not_bundled",
-        "package_policy_environment_variables_are_defense_in_depth_not_a_process_sandbox",
+        "macro_preservation_not_exercised_no_macro_fixture",
+        "specialist_artifact_families_require_independent_c18_packs",
         "dependency_installation_requires_a_separately_admitted_content_addressed_cache",
         "load_and_checkpoint_slos_not_exercised_by_local_pack_conformance",
     ],
 }
-(root / "conformance-receipt.json").write_text(
-    json.dumps(receipt, indent=2, sort_keys=True) + "\n"
-)
+(root / "conformance-receipt.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")

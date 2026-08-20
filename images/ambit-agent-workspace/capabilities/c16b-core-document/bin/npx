@@ -5,7 +5,7 @@ pack_bin=/opt/ambit/runtime-pack/core-document/node/node_modules/.bin
 
 case "${1:-}" in
   --version|-v)
-    printf '%s\n' '10.8.2'
+    printf '%s\n' '10.9.8'
     exit 0
     ;;
   --no-install)

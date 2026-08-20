@@ -1,46 +1,37 @@
-# C16b local core/document runtime pack
+# C16b minimal core/document runtime pack
 
-This directory is the immutable build input for Ambit's first locally evaluated
-core/document runtime artifact. It extends the exact Daytona `0.6.0` full
-linux/amd64 image and adds pinned office, PDF, font, spreadsheet,
-presentation, browser-automation, and local-analysis tooling.
+This directory owns Ambit's smallest locally evaluated core plus DOCX runtime.
+It is deliberately not a universal artifact image. The final image uses the
+current pinned Python 3.11.16 slim runtime and copies only the Node 22.23.2
+runtime, npm, and integrity-locked Node dependencies from a separate stage.
+Compilers, inherited global packages, NVM, browsers, media stacks, and
+specialist artifact libraries are not admitted.
 
-The source alone is not a promoted pack. Promotion requires all of the
-following to bind the resulting OCI manifest digest:
+The retained boundary is:
 
-- the exact direct `apt-packages.lock`, complete 652-package
-  `dpkg-packages.lock`, hash-locked `requirements.lock`, and npm
-  `package-lock.json`;
-- an SBOM, source/build provenance, verified signature, license report, and
-  vulnerability report;
-- non-root, network-none executable conformance through `conformance/verify.sh`;
-- a current provider materialization observation and a passing runtime/pack
-  conformance receipt;
-- explicit limitations for anything not exercised.
+- core shell, Git/LFS, archive, MIME, SSH client, JSON/YAML, and text tools;
+- pack-owned Python/pip/uv and Node/npm/no-download-npx runtimes;
+- TypeScript execution and Python/TypeScript code intelligence;
+- DOCX create, reopen, inspect, edit, render through LibreOffice Writer,
+  validate, raster-inspect, and preserve the original revision;
+- PDF inspection only as an internal document-render validation primitive.
 
-The conformance path creates and reopens a DOCX document, an XLSX workbook
-with formulas/style/table/chart, a PPTX presentation, PDFs, Parquet-backed data
-analysis, a Pandoc research page, and a responsive browser page. LibreOffice
-and Poppler render the editable office artifacts; QPDF/PikePDF validate PDFs;
-Playwright/Chromium captures accessibility, console, network, screenshots, and
-traces at desktop and mobile viewports.
+The following capabilities moved to independently certified C18 specialist
+packs and are intentionally absent here:
 
-Runtime safety is intentionally narrower than build-time authority:
+- spreadsheets: OpenPyXL, XlsxWriter, LibreOffice Calc, formula/chart/table
+  conformance;
+- presentations: python-pptx, LibreOffice Impress, slide rendering;
+- PDF specialist/OCR: Ghostscript, PikePDF, ReportLab, signing, PDF/A,
+  redaction, Tesseract, and scan cleanup;
+- data analysis: DuckDB, Polars, PyArrow, Parquet, notebooks, and plotting;
+- research/publishing: Pandoc, citation/CSL/BibTeX, EPUB/LaTeX/Typst;
+- web applications: Chromium, Playwright, Axe, browser traces/screenshots;
+- media/diagram processing: FFmpeg, ImageMagick, and Graphviz.
 
-- the image runs as `daytona`, with the inherited passwordless sudo path
-  removed and the sudo binary de-setuid;
-- `/opt/ambit/runtime-pack/core-document` is root-owned and read-only;
-- npm install scripts and pip indexes are disabled by default;
-- `npx` resolves only commands already present in the immutable admitted pack;
-  it never downloads or installs a package at runtime;
-- the inherited NVM and ambient global Python package trees are removed after
-  the exact pack environments are materialized; they are not capability
-  authority;
-- provider network policy remains authoritative; conformance runs with Docker
-  `--network none` and uses loopback only;
-- no Docker/Kubernetes socket or secret is embedded.
-
-Known proof gaps stay explicit in the emitted conformance receipt. In
-particular, the first local fixture does not establish native Microsoft Office
-fidelity, macro preservation/execution, Firefox/WebKit parity, a durable
-offline package mirror, or production load SLOs.
+This pruning removes the denied AGPL Ghostscript/font chain from the intended
+pack closure. It does not turn unresolved licenses or vulnerabilities into a
+pass: promotion still requires a complete SBOM, provenance, signature,
+strict license/vulnerability policy, exact runtime conformance, and an
+external backend registration that remains candidate-only until every gate
+passes.

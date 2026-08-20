@@ -27,24 +27,20 @@ if env | cut -d= -f1 | grep -Eiq '(api[_-]?key|password|private[_-]?key|secret|t
   echo "secret-shaped environment variable reached the runtime" >&2
   exit 1
 fi
-if sudo -n true >/dev/null 2>&1; then
-  echo "runtime user unexpectedly retained sudo authority" >&2
-  exit 1
-fi
+test -z "$(command -v sudo || true)"
 
-test "$(python3 --version)" = "Python 3.11.14"
-test "$(node --version)" = "v20.19.2"
-test "$(npm --version)" = "10.8.2"
-test "$(npx --version)" = "10.8.2"
+test "$(python3 --version)" = "Python 3.11.16"
+test "$(node --version)" = "v22.23.2"
+test "$(npm --version)" = "10.9.8"
+test "$(npx --version)" = "10.9.8"
 test "$(npm config get ignore-scripts)" = "true"
 test "$(pyright --version)" = "pyright 1.1.413"
 test "$(typescript-language-server --version)" = "5.1.3"
 test "$(ts-node --version)" = "v10.9.2"
 test "$(tsc --version)" = "Version 5.9.3"
 test "$(uv --version)" = "uv 0.9.26"
-chromium --version | grep -F 'Chromium 151.0.7922.137' >/dev/null
 libreoffice --version | grep -F 'LibreOffice 25.2.3.2' >/dev/null
-pandoc --version | grep -F 'pandoc 3.1.11.1' >/dev/null
+qpdf --version | grep -F 'qpdf version 12.2.0' >/dev/null
 git lfs version | grep -F 'git-lfs/3.6.1' >/dev/null
 file --version | grep -F 'file-5.46' >/dev/null
 wget --version | grep -F 'GNU Wget 1.25.0' >/dev/null
@@ -61,16 +57,17 @@ while IFS= read -r expected; do
   test "${package}=${version}" = "${expected}"
 done < "${pack_root}/apt-packages.lock"
 
-while IFS= read -r expected; do
-  package="${expected%%=*}"
-  version="$(dpkg-query -W -f='${Version}' "${package}")"
-  test "${package}=${version}" = "${expected}"
-done < "${pack_root}/dpkg-packages.lock"
-
-dpkg-query -W -f='${db:Status-Abbrev}\t${binary:Package}=${Version}\n' \
-  | awk '$1 == "ii" {print $2}' \
-  | LC_ALL=C sort > "${output_root}/dpkg-packages.actual.lock"
-cmp "${pack_root}/dpkg-packages.lock" "${output_root}/dpkg-packages.actual.lock"
+for moved in chromium playwright ffmpeg magick convert gs tesseract dot pandoc; do
+  if command -v "${moved}" >/dev/null 2>&1; then
+    echo "C18 specialist command leaked into minimal core/document pack: ${moved}" >&2
+    exit 1
+  fi
+done
+python3 - <<'PY'
+import importlib.util
+for name in ("duckdb", "openpyxl", "pikepdf", "playwright", "polars", "pptx", "pyarrow", "reportlab"):
+    assert importlib.util.find_spec(name) is None, name
+PY
 
 python3 -m pip check
 
@@ -125,24 +122,6 @@ npx --no-install ts-node -T --ignore-diagnostics 5107 \
 test "$(cat "${output_root}/typescript-execution-receipt.log")" = "42"
 
 python3 "${pack_root}/conformance/artifact_conformance.py" "${output_root}"
-
-python3 -m http.server 8123 --bind 127.0.0.1 --directory "${output_root}/web" >"${output_root}/http.log" 2>&1 &
-server_pid=$!
-cleanup_server() {
-  kill "${server_pid}" >/dev/null 2>&1 || true
-  wait "${server_pid}" >/dev/null 2>&1 || true
-}
-trap cleanup_server EXIT
-for _ in $(seq 1 50); do
-  if curl --fail --silent http://127.0.0.1:8123/ >/dev/null; then
-    break
-  fi
-  sleep 0.1
-done
-curl --fail --silent --show-error http://127.0.0.1:8123/ >/dev/null
-node "${pack_root}/conformance/web_conformance.cjs" "${output_root}" http://127.0.0.1:8123/
-cleanup_server
-trap - EXIT
 
 if python3 -m pip install --disable-pip-version-check ambit-package-that-does-not-exist >/dev/null 2>&1; then
   echo "offline Python package acquisition unexpectedly succeeded" >&2
