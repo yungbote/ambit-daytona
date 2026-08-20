@@ -2,15 +2,24 @@ ARG WOLFI_BASE_IMAGE=cgr.dev/chainguard/wolfi-base@sha256:df3f0bac868b88029d6071
 ARG MATERIALIZER_BUILDER_IMAGE=docker.io/library/golang@sha256:40dfc169bd5ad8a8617e49c8ead7fe16c6873e79d6937539e9c2e5947b7984ef
 ARG BUILD_SOURCE_REVISION=uncommitted
 ARG BUILD_SOURCE_TREE=unbound
+ARG BUILD_SOURCE_PACK_TREE=unbound
 ARG BUILD_SOURCE_INPUT_SHA256=unbound
 ARG BUILD_DOCKERFILE_SHA256=unbound
 ARG BUILD_LOCK_SET_SHA256=unbound
+ARG BUILD_CONFORMANCE_SET_SHA256=unbound
+ARG BUILD_POLICY_SET_SHA256=unbound
 ARG BUILD_HELPER_SOURCE_REVISION=unbound
 ARG BUILD_HELPER_SOURCE_TREE=unbound
 ARG BUILD_HELPER_SOURCE_ARCHIVE_SHA256=unbound
+ARG BUILD_HELPER_SOURCE_MANIFEST_SHA256=unbound
 ARG BUILD_HELPER_BUILD_LOCK_SHA256=unbound
+ARG BUILD_HELPER_BINARY_MANIFEST_SHA256=unbound
+ARG BUILD_HELPER_BINARY_SHA256=unbound
 ARG BUILD_HELPER_LICENSE_LOCK_SHA256=unbound
 ARG BUILD_HELPER_NOTICE_SHA256=unbound
+ARG BUILD_HELPER_PROTOCOL_AUTHORITY_REVISION=unbound
+ARG BUILD_HELPER_PROVIDER_ADAPTER_REVISION=unbound
+ARG BUILD_HELPER_ADMISSION_FENCE_REVISION=unbound
 
 FROM ${MATERIALIZER_BUILDER_IMAGE} AS materializer_builder
 WORKDIR /
@@ -58,15 +67,24 @@ FROM ${WOLFI_BASE_IMAGE}
 
 ARG BUILD_SOURCE_REVISION
 ARG BUILD_SOURCE_TREE
+ARG BUILD_SOURCE_PACK_TREE
 ARG BUILD_SOURCE_INPUT_SHA256
 ARG BUILD_DOCKERFILE_SHA256
 ARG BUILD_LOCK_SET_SHA256
+ARG BUILD_CONFORMANCE_SET_SHA256
+ARG BUILD_POLICY_SET_SHA256
 ARG BUILD_HELPER_SOURCE_REVISION
 ARG BUILD_HELPER_SOURCE_TREE
 ARG BUILD_HELPER_SOURCE_ARCHIVE_SHA256
+ARG BUILD_HELPER_SOURCE_MANIFEST_SHA256
 ARG BUILD_HELPER_BUILD_LOCK_SHA256
+ARG BUILD_HELPER_BINARY_MANIFEST_SHA256
+ARG BUILD_HELPER_BINARY_SHA256
 ARG BUILD_HELPER_LICENSE_LOCK_SHA256
 ARG BUILD_HELPER_NOTICE_SHA256
+ARG BUILD_HELPER_PROTOCOL_AUTHORITY_REVISION
+ARG BUILD_HELPER_PROVIDER_ADAPTER_REVISION
+ARG BUILD_HELPER_ADMISSION_FENCE_REVISION
 
 USER root
 
@@ -120,15 +138,24 @@ LABEL org.opencontainers.image.title="ambit-c16b-core-document" \
       org.opencontainers.image.version="3.0.0-candidate" \
       org.opencontainers.image.revision="${BUILD_SOURCE_REVISION}" \
       io.ambit.source-tree="${BUILD_SOURCE_TREE}" \
+      io.ambit.source-pack-tree="${BUILD_SOURCE_PACK_TREE}" \
       io.ambit.build-input-sha256="${BUILD_SOURCE_INPUT_SHA256}" \
       io.ambit.dockerfile-sha256="${BUILD_DOCKERFILE_SHA256}" \
       io.ambit.lock-set-sha256="${BUILD_LOCK_SET_SHA256}" \
+      io.ambit.conformance-set-sha256="${BUILD_CONFORMANCE_SET_SHA256}" \
+      io.ambit.policy-set-sha256="${BUILD_POLICY_SET_SHA256}" \
       io.ambit.helper-source-revision="${BUILD_HELPER_SOURCE_REVISION}" \
       io.ambit.helper-source-tree="${BUILD_HELPER_SOURCE_TREE}" \
       io.ambit.helper-source-archive-sha256="${BUILD_HELPER_SOURCE_ARCHIVE_SHA256}" \
+      io.ambit.helper-source-manifest-sha256="${BUILD_HELPER_SOURCE_MANIFEST_SHA256}" \
       io.ambit.helper-build-lock-sha256="${BUILD_HELPER_BUILD_LOCK_SHA256}" \
+      io.ambit.helper-binary-manifest-sha256="${BUILD_HELPER_BINARY_MANIFEST_SHA256}" \
+      io.ambit.helper-binary-sha256="${BUILD_HELPER_BINARY_SHA256}" \
       io.ambit.helper-license-lock-sha256="${BUILD_HELPER_LICENSE_LOCK_SHA256}" \
       io.ambit.helper-notice-sha256="${BUILD_HELPER_NOTICE_SHA256}" \
+      io.ambit.helper-protocol-authority-revision="${BUILD_HELPER_PROTOCOL_AUTHORITY_REVISION}" \
+      io.ambit.helper-provider-adapter-revision="${BUILD_HELPER_PROVIDER_ADAPTER_REVISION}" \
+      io.ambit.helper-admission-fence-revision="${BUILD_HELPER_ADMISSION_FENCE_REVISION}" \
       io.ambit.runtime-pack="ambit.runtime-pack/core-document@3" \
       io.ambit.atomic-materializer-sha256="sha256:09e0d936c23d7625af9f67c09b703ed41135b185c3822a98f1f62cd401ded3ed" \
       io.ambit.atomic-materializer-license="LicenseRef-Ambit-Proprietary" \

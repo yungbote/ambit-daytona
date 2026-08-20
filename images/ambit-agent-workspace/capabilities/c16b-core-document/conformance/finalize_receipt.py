@@ -21,6 +21,9 @@ def pin(path: Path) -> dict[str, object]:
     }
 
 
+apk_closure = pin(root / "apk-packages.actual.lock")
+
+
 evidence = [
     pin(path)
     for path in sorted(root.rglob("*"))
@@ -39,6 +42,7 @@ receipt = {
         "runtimePackageInstallers": "absent",
         "buildOnlyPipWheelPayload": "removed_from_runtime_files_package_metadata_retained",
         "absentCommands": absent_commands,
+        "osClosure": apk_closure,
         "locale": "C.UTF-8",
         "timezone": "UTC",
     },
