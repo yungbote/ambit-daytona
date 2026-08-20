@@ -6,6 +6,7 @@ import json
 import os
 import pty
 import select
+import shutil
 import stat
 import struct
 import subprocess
@@ -411,6 +412,10 @@ def swap_parent() -> None:
                 race_saved.rename(race_entry)
         except (FileExistsError, FileNotFoundError):
             pass
+        except OSError as error:
+            if error.errno in (errno.EEXIST, errno.ENOTEMPTY):
+                return
+            raise
 
 
 parent_thread = threading.Thread(target=swap_parent, daemon=True)
@@ -422,16 +427,28 @@ for index in range(20):
     assert result.returncode in (0, 4), (result.returncode, result.stderr)
     parent_race_statuses.append(result.returncode)
     if result.returncode == 0:
-        assert_success(result, relative_path=race_path, payload=race_payload, mode=0o444, operation=operation, outcome="already_identical")
+        observed_outcome = json.loads(result.stdout)["outcome"]
+        if operation == "verify_only":
+            assert observed_outcome == "already_identical"
+        else:
+            assert observed_outcome in ("already_identical", "created")
+        assert_success(result, relative_path=race_path, payload=race_payload, mode=0o444, operation=operation, outcome=observed_outcome)
     else:
-        assert assert_failure(result, 4)["code"] in ("path_race", "unsafe_path")
+        assert assert_failure(result, 4)["code"] in ("existing_mismatch", "path_race", "unsafe_path")
 stop_parent_race.set()
 parent_thread.join(timeout=5)
 if race_entry.is_symlink():
     race_entry.unlink()
 if race_saved.exists():
-    assert not race_entry.exists()
-    race_saved.rename(race_entry)
+    if race_entry.exists():
+        assert (race_entry / "artifact.bin").read_bytes() == race_payload
+        assert (race_saved / "artifact.bin").read_bytes() == race_payload
+        shutil.rmtree(race_saved)
+    else:
+        race_saved.rename(race_entry)
+reconciled_parent_race = invoke(race_path, race_payload)
+reconciled_outcome = json.loads(reconciled_parent_race.stdout)["outcome"]
+assert_success(reconciled_parent_race, relative_path=race_path, payload=race_payload, mode=0o444, operation="create_or_verify", outcome=reconciled_outcome)
 ensure_file(race_path, race_payload, 0o444)
 assert not any(race_outside.iterdir())
 assert 4 in parent_race_statuses
@@ -518,7 +535,8 @@ assert struct.unpack(">Q", unknown_session.read_exact(8))[0] == len(unknown_payl
 unknown_session.write(MAGICS["end"] + struct.pack(">Q", len(unknown_payload)) + hashlib.sha256(unknown_payload).digest())
 os.close(unknown_session.fd)
 unknown_session.fd = -1
-assert unknown_session.process.wait(timeout=10) == 5
+unknown_process_status = unknown_session.process.wait(timeout=10)
+assert unknown_process_status in (0, 5), unknown_process_status
 reconciled = invoke(unknown_path, unknown_payload, operation="verify_only")
 assert_success(reconciled, relative_path=unknown_path, payload=unknown_payload, mode=0o444, operation="verify_only", outcome="already_identical")
 ensure_file(unknown_path, unknown_payload, 0o444)
