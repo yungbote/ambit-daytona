@@ -183,7 +183,7 @@ trap 'if [[ ${runtime_started} != true ]]; then startup_cleanup; fi' EXIT INT TE
 
 python3 "${runtime_root_tool}" verify "${runtime_root}" --expected "${runtime_identity}" >/dev/null
 containerd_executable=$(readlink -e -- "$(command -v containerd)")
-sudo -n sh -c 'umask 022; printf "%s\n" "$$" > "$1"; exec "$2" --config "$3" --log-level info' \
+sudo -n -b sh -c 'umask 022; printf "%s\n" "$$" > "$1"; exec "$2" --config "$3" --log-level info' \
   sh "${containerd_pidfile}" "${containerd_executable}" "${containerd_config}" > "${containerd_log}" 2>&1 &
 for _ in $(seq 1 120); do
   if [[ -f ${containerd_pidfile} ]]; then
@@ -199,7 +199,7 @@ done
   exit 68
 }
 
-sudo -n dockerd --config-file "${config}" > "${docker_log}" 2>&1 &
+sudo -n -b dockerd --config-file "${config}" > "${docker_log}" 2>&1
 for _ in $(seq 1 240); do
   if [[ -f ${pidfile} ]]; then
     docker_pid=$(<"${pidfile}")
