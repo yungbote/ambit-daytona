@@ -200,15 +200,15 @@ done
 }
 
 sudo -n dockerd --config-file "${config}" > "${docker_log}" 2>&1 &
-docker_pid=$!
 for _ in $(seq 1 240); do
-  if [[ -S ${socket} ]] && DOCKER_HOST="unix://${socket}" docker info >/dev/null 2>&1; then
-    break
+  if [[ -f ${pidfile} ]]; then
+    docker_pid=$(<"${pidfile}")
+    if [[ -S ${socket} ]] &&
+      DOCKER_HOST="unix://${socket}" docker info >/dev/null 2>&1 &&
+      safe_process "${docker_pid}" dockerd "${config}"; then
+      break
+    fi
   fi
-  safe_process "${docker_pid}" dockerd "${config}" || {
-    echo 'isolated Docker daemon exited during startup' >&2
-    exit 68
-  }
   sleep 0.25
 done
 [[ -S ${socket} && -f ${pidfile} ]] || { echo 'isolated Docker socket/pidfile was not created' >&2; exit 68; }
