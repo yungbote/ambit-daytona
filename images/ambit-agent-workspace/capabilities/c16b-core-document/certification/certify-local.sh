@@ -178,7 +178,10 @@ helper_archive_sha256=$(sha256_file "${helper_archive}")
 }
 tar -xf "${helper_archive}" -C "${artifact_root}/helper-context"
 helper_source_dir=${artifact_root}/helper-context/${helper_path}
-(cd "${helper_source_dir}" && sha256sum -c "${archived_pack_dir}/helper-input.sha256")
+python3 "${archived_cert_dir}/verify_helper_input_manifest.py" \
+  --manifest "${archived_pack_dir}/helper-input.sha256" \
+  --helper-root "${helper_source_dir}" \
+  --output "${artifact_root}/helper-input-verification.json"
 
 dockerfile_sha256=$(sha256_file "${archived_pack_dir}/Dockerfile")
 hash_set "${archived_pack_dir}" "${artifact_root}/source-lock-set.sha256" \
@@ -493,8 +496,8 @@ unlink "${socket_ready}"
 socket_fixture=
 
 set +e
-docker run "${docker_run_base[@]}" --entrypoint /bin/bash "${runtime_ref}" -ceu \
-  'command -v pip || command -v pip3 || command -v npm || command -v npx; exit 93' \
+docker run "${docker_run_base[@]}" --entrypoint /bin/bash "${runtime_ref}" \
+  /pack-source/certification/verify_runtime_installer_absence.sh \
   > "${artifact_root}/negative-install-script.log" 2>&1
 install_status=$?
 set -e
@@ -594,6 +597,7 @@ jq -n -S \
   --arg attestation_manifest "${attestation_manifest}" --arg sbom_layer "${sbom_layer}" \
   --arg provenance_layer "${provenance_layer}" \
   --arg attestation "$(sha256_file "${artifact_root}/attestation-verification.json")" \
+  --arg helper_input_verification "$(sha256_file "${artifact_root}/helper-input-verification.json")" \
   --arg reproducibility "$(sha256_file "${artifact_root}/reproducibility-receipt.json")" \
   --arg conformance "$(sha256_file "${conformance_dir}/conformance-receipt.json")" \
   --arg materializer "$(sha256_file "${conformance_dir}/materializer-receipt.json")" \
@@ -634,7 +638,7 @@ jq -n -S \
     identity:{providerPullDigest:$index,runtimeCapabilityPackRevisionArtifactDigest:$manifest,configDigest:$config},
     source:{daytona:{revision:$source_revision,tree:$source_tree,packTree:$source_pack_tree,archiveSha256:$source_archive,dockerfileSha256:$dockerfile,lockSetSha256:$locks,conformanceSetSha256:$conformance_set,policySetSha256:$policy_set},backendHelper:{revision:$helper_revision,tree:$helper_tree,archiveSha256:$helper_archive,binarySha256:$helper_binary,protocolSha256:$protocol,providerAdapterRevision:$adapter,admissionFenceRevision:$admission_fence}},
     attestations:{manifestDigest:$attestation_manifest,sbomLayerDigest:$sbom_layer,provenanceLayerDigest:$provenance_layer,sbomSpdxSha256:$sbom,provenanceStatementSha256:$provenance},
-    verification:{attestationReceiptSha256:$attestation,reproducibilityReceiptSha256:$reproducibility,conformanceReceiptSha256:$conformance,materializerReceiptSha256:$materializer,artifactReceiptSha256:$artifacts,daytonaPtyReceiptSha256:$daemon,providerAdapterReceiptSha256:$provider,vexEvidenceReceiptSha256:$vex_verification,vulnerabilityReportSha256:$vulnerability,grypeDatabaseReceiptSha256:$db,imageSecretScanSha256:$secret_scan,negativeRootReceiptSha256:$negative_root,negativeSocketReceiptSha256:$negative_socket,negativeSecretEnvReceiptSha256:$negative_secret,negativeInstallScriptReceiptSha256:$negative_install,policyReceiptSha256:$policy},
+    verification:{attestationReceiptSha256:$attestation,helperInputReceiptSha256:$helper_input_verification,reproducibilityReceiptSha256:$reproducibility,conformanceReceiptSha256:$conformance,materializerReceiptSha256:$materializer,artifactReceiptSha256:$artifacts,daytonaPtyReceiptSha256:$daemon,providerAdapterReceiptSha256:$provider,vexEvidenceReceiptSha256:$vex_verification,vulnerabilityReportSha256:$vulnerability,grypeDatabaseReceiptSha256:$db,imageSecretScanSha256:$secret_scan,negativeRootReceiptSha256:$negative_root,negativeSocketReceiptSha256:$negative_socket,negativeSecretEnvReceiptSha256:$negative_secret,negativeInstallScriptReceiptSha256:$negative_install,policyReceiptSha256:$policy},
     sourceContracts:{apkDirectLockSha256:$apk_direct,apkClosureLockSha256:$apk_closure,pythonLockSha256:$python_lock,helperInputLockSha256:$helper_input_lock,helperInputManifestSha256:$helper_input_manifest,toolchainManifestSha256:$toolchain},
     policyInputs:{licensePolicySha256:$license_policy,licenseReviewSha256:$license_review,runtimePolicySha256:$runtime_policy,vexSha256:$vex,vulnerabilityPolicySha256:$vulnerability_policy,certificationToolsLockSha256:$tools,hostToolsReceiptSha256:$host_tools},
     signingKey:{algorithm:"Ed25519",publicKeyPemSha256:$public_pem,publicKeyDerSha256:$public_der},

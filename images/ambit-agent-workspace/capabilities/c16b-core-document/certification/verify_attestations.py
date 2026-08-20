@@ -118,6 +118,7 @@ require(index.get("schemaVersion") == 2, "OCI index schema version is invalid")
 require(index.get("mediaType") == "application/vnd.oci.image.index.v1+json", "OCI index media type is invalid")
 index_manifests = index.get("manifests")
 require(isinstance(index_manifests, list), "OCI index manifest inventory is invalid")
+require(len(index_manifests) == 2, "OCI index must contain exactly one runtime and one attestation descriptor")
 runtime_descriptors = [
     item
     for item in index_manifests
@@ -233,11 +234,17 @@ require(
 )
 attestation_layers = attestation_manifest.get("layers")
 require(isinstance(attestation_layers, list), "attestation layer inventory is invalid")
-layer_by_predicate = {
-    layer.get("annotations", {}).get("in-toto.io/predicate-type"): layer
-    for layer in attestation_layers
-    if isinstance(layer, dict)
-}
+require(len(attestation_layers) == 2, "attestation manifest must contain exactly SBOM and provenance layers")
+require(all(isinstance(layer, dict) for layer in attestation_layers), "attestation layer descriptor is invalid")
+predicate_types = [
+    layer.get("annotations", {}).get("in-toto.io/predicate-type") for layer in attestation_layers
+]
+require(
+    Counter(predicate_types)
+    == Counter({"https://spdx.dev/Document": 1, "https://slsa.dev/provenance/v1": 1}),
+    "attestation predicate roster differs from exact SBOM and provenance set",
+)
+layer_by_predicate = dict(zip(predicate_types, attestation_layers, strict=True))
 sbom_descriptor = layer_by_predicate.get("https://spdx.dev/Document")
 provenance_descriptor = layer_by_predicate.get("https://slsa.dev/provenance/v1")
 require(isinstance(sbom_descriptor, dict), "SBOM layer missing")
@@ -287,10 +294,14 @@ recorded_build_args = {
 require(recorded_build_args == expected_build_args, "provenance build arguments differ from the exact expected set")
 locals_value = request.get("locals")
 require(isinstance(locals_value, list), "provenance local inputs are absent")
-local_names = {item.get("name") for item in locals_value if isinstance(item, dict)}
 require(
-    {"context", "dockerfile", "materializer_source"}.issubset(local_names),
-    "provenance does not record the backend helper named context",
+    all(isinstance(item, dict) and isinstance(item.get("name"), str) for item in locals_value),
+    "provenance local input descriptor is invalid",
+)
+local_name_list = [item["name"] for item in locals_value]
+require(
+    Counter(local_name_list) == Counter({"context": 1, "dockerfile": 1, "materializer_source": 1}),
+    "provenance local input roster differs from the exact declared set",
 )
 resolved_dependencies = build_definition.get("resolvedDependencies")
 require(isinstance(resolved_dependencies, list), "provenance resolved dependencies are absent")
@@ -334,7 +345,7 @@ receipt = {
     "sourceLabels": expected_labels,
     "provenance": {
         "buildArgs": expected_build_args,
-        "localInputs": sorted(local_names),
+        "localInputs": sorted(local_name_list),
         "expectedMaterials": [
             {"uri": uri, "digest": digest} for uri, digest in sorted(expected_materials)
         ],
