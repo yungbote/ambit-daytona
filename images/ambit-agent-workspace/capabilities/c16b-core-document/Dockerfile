@@ -77,6 +77,7 @@ ENV PATH=/opt/ambit/runtime-pack/core-document/python/bin:/opt/ambit/runtime-pac
     PIP_ONLY_BINARY=:all: \
     PIP_REQUIRE_HASHES=1 \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    TS_NODE_COMPILER_OPTIONS="{\"module\":\"CommonJS\",\"moduleResolution\":\"node\"}" \
     UV_OFFLINE=true \
     UV_NO_CACHE=true \
     TZ=UTC \
