@@ -61,11 +61,8 @@ RUN set -eux; \
     install -d -m 0755 -o root -g root /opt/ambit/runtime-pack/core-document/node/bin; \
     ln -s ../npm/bin/npm-cli.js /opt/ambit/runtime-pack/core-document/node/bin/npm; \
     find /opt/ambit/runtime-pack/core-document -type d -exec chmod 0555 {} +; \
-    find /opt/ambit/runtime-pack/core-document -type f -exec chmod 0444 {} +; \
+    find /opt/ambit/runtime-pack/core-document -type f -exec chmod a-w,go+r {} +; \
     chmod 0555 /opt/ambit/runtime-pack/core-document/conformance/verify.sh; \
-    chmod 0555 /opt/ambit/runtime-pack/core-document/node/npm/bin/npm-cli.js; \
-    find /opt/ambit/runtime-pack/core-document/node/node_modules/.bin -type l -print0 \
-      | while IFS= read -r -d '' link; do chmod 0555 "$(readlink -f "${link}")"; done; \
     install -d -m 0755 -o daytona -g daytona /workspace
 
 ENV PATH=/opt/ambit/runtime-pack/core-document/python/bin:/opt/ambit/runtime-pack/core-document/node/bin:/opt/ambit/runtime-pack/core-document/node/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
