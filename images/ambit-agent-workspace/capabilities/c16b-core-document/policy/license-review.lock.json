@@ -1,0 +1,67 @@
+{
+  "schema": "ambit.runtime-pack-license-review-lock/v1",
+  "reviews": [
+    {
+      "match": {
+        "name": "cobble",
+        "version": "0.1.4",
+        "purl": "pkg:pypi/cobble@0.1.4"
+      },
+      "rawLicense": "NOASSERTION",
+      "disposition": "concluded",
+      "concludedLicense": "BSD-2-Clause",
+      "evidence": {
+        "pypiReleaseJson": "https://pypi.org/pypi/cobble/0.1.4/json",
+        "pypiReleaseJsonSha256": "c440373c86f47f0b156e627d8bc03581270db5fcabbb550a5f0680ac9a222199",
+        "wheelSha256": "36c91b1655e599fd428e2b95fdd5f0da1ca2e9f1abb0bc871dec21a0e78a2b44",
+        "wheelMetadataSha256": "6eb2cf88cfb39b884adde1eff7d8f89f80b256572eb0c6c164d6f99943dbd49f",
+        "sdistSha256": "de38be1539992c8a06e569630717c485a5f91be2192c461ea2b220607dfa78aa",
+        "sdistReadmeSha256": "d6d46202db973b560d2f521dced9110b3e0a46d9a75e1428dade8b7608dd0cca",
+        "licenseStatement": "README.rst declares 2-Clause BSD"
+      }
+    },
+    {
+      "match": {
+        "name": "github.com/yungbote/m-backend/runtime/agent-workspace-atomic-materializer",
+        "version": "UNKNOWN",
+        "purl": "pkg:golang/github.com/yungbote/m-backend/runtime/agent-workspace-atomic-materializer"
+      },
+      "rawLicense": "NOASSERTION",
+      "disposition": "concluded",
+      "concludedLicense": "LicenseRef-Ambit-Proprietary",
+      "evidence": {
+        "backendRevision": "03fd4463d84c5236bab9d5d9141af7537a51afe9",
+        "backendTree": "4e2dead7bd994f3783cf8b54428374e26367b21a",
+        "licenseLockSha256": "710d581169c105538897e9b6a719c47d437ceaeb980784e7996f8227264cc89c",
+        "noticeSha256": "ebda4883114f2939d766c552df33881f40da5710f6af5abbfe31a92c73070aff"
+      }
+    },
+    {
+      "match": {
+        "name": "golang.org/x/text",
+        "version": "v0.41.0",
+        "purl": "pkg:golang/golang.org/x/text@v0.41.0"
+      },
+      "rawLicense": "NOASSERTION",
+      "disposition": "concluded",
+      "concludedLicense": "BSD-3-Clause",
+      "evidence": {
+        "backendRevision": "03fd4463d84c5236bab9d5d9141af7537a51afe9",
+        "licenseLockSha256": "710d581169c105538897e9b6a719c47d437ceaeb980784e7996f8227264cc89c",
+        "moduleSum": "h1:vz/seA0lnX87Othu2f/0L24RcgrXD9/YFTSuGjj3rH8=",
+        "licenseTextSha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+      }
+    }
+  ],
+  "aggregateExclusions": [
+    {
+      "match": {
+        "name": "ambit-c16b-core-document",
+        "purlPrefix": "pkg:oci/ambit-c16b-core-document@"
+      },
+      "rawLicense": "NOASSERTION",
+      "disposition": "aggregate-artifact-not-a-dependency",
+      "rationale": "The SPDX DocumentRoot package represents the aggregate OCI subject whose third-party and proprietary components are evaluated individually; it is not a dependency package and receives no invented repository-wide license."
+    }
+  ]
+}
