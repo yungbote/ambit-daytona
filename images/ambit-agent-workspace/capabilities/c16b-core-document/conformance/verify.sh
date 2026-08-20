@@ -101,14 +101,18 @@ awk '/^P:/ { package=substr($0,3) } /^V:/ { print package "=" substr($0,3) }' \
   /lib/apk/db/installed | LC_ALL=C sort > "${output_root}/apk-packages.actual.lock"
 cmp "${source_root}/apk-packages.lock" "${output_root}/apk-packages.actual.lock"
 
-for absent in apk pip pip3 uv node npm npx pyright tsc ts-node typescript-language-server \
-  libreoffice soffice qpdf pdfinfo pdftotext pdftoppm gs tesseract pandoc chromium \
-  ffmpeg magick convert dot gcc cc g++ go rustc cargo; do
+absent_commands=(
+  apk pip pip3 uv node npm npx pyright tsc ts-node typescript-language-server
+  libreoffice soffice qpdf pdfinfo pdftotext pdftoppm gs tesseract pandoc chromium
+  ffmpeg magick convert dot gcc cc g++ go rustc cargo ldd
+)
+for absent in "${absent_commands[@]}"; do
   if command -v "${absent}" >/dev/null 2>&1; then
     echo "unadmitted build, installer, or specialist command leaked into runtime: ${absent}" >&2
     exit 1
   fi
 done
+printf '%s\n' "${absent_commands[@]}" | LC_ALL=C sort > "${output_root}/absent-commands.txt"
 test ! -d /usr/lib/python3.14/ensurepip
 test ! -d /usr/share/python-wheels
 test -z "$(find /usr /opt/ambit/runtime-pack/core-document -type f -iname '*pip*.whl' -print -quit 2>/dev/null)"

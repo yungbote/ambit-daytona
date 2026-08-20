@@ -100,7 +100,10 @@ RUN set -eux; \
       /usr/bin/pip \
       /usr/bin/pip3 \
       /usr/bin/pip3.14 \
-      /usr/bin/apk
+      /usr/bin/apk \
+      /tmp/apk-direct-packages.lock \
+      /tmp/apk-packages.lock \
+      /tmp/apk-packages.actual.lock
 
 COPY --from=python_dependencies --chown=root:root /opt/ambit/runtime-pack/core-document/python /opt/ambit/runtime-pack/core-document/python
 COPY --from=materializer_builder --chown=root:root /out/ambit-atomic-materialize /opt/ambit/runtime-pack/core-document/bin/ambit-atomic-materialize

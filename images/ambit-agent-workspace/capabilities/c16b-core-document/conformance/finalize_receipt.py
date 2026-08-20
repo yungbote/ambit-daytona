@@ -9,6 +9,7 @@ from pathlib import Path
 root = Path(sys.argv[1]).resolve()
 artifact = json.loads((root / "artifact-receipt.json").read_text())
 materializer = json.loads((root / "materializer-receipt.json").read_text())
+absent_commands = (root / "absent-commands.txt").read_text().splitlines()
 
 
 def pin(path: Path) -> dict[str, object]:
@@ -35,6 +36,7 @@ receipt = {
         "packRoot": "read_only",
         "runtimePackageInstallers": "absent",
         "buildOnlyPipWheelPayload": "removed_from_runtime_files_package_metadata_retained",
+        "absentCommands": absent_commands,
         "locale": "C.UTF-8",
         "timezone": "UTC",
     },
