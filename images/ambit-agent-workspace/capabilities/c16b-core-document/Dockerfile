@@ -5,13 +5,19 @@ ARG BUILD_SOURCE_TREE=unbound
 ARG BUILD_SOURCE_INPUT_SHA256=unbound
 ARG BUILD_DOCKERFILE_SHA256=unbound
 ARG BUILD_LOCK_SET_SHA256=unbound
+ARG BUILD_HELPER_SOURCE_REVISION=unbound
+ARG BUILD_HELPER_SOURCE_TREE=unbound
+ARG BUILD_HELPER_SOURCE_ARCHIVE_SHA256=unbound
+ARG BUILD_HELPER_BUILD_LOCK_SHA256=unbound
+ARG BUILD_HELPER_LICENSE_LOCK_SHA256=unbound
+ARG BUILD_HELPER_NOTICE_SHA256=unbound
 
 FROM ${MATERIALIZER_BUILDER_IMAGE} AS materializer_builder
 WORKDIR /src
-COPY materializer/go.mod materializer/go.sum ./
+COPY --from=materializer_source go.mod go.sum ./
 RUN GOWORK=off GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org go mod download
-COPY materializer/main.go materializer/main_test.go materializer/source.sha256 ./
-COPY materializer/binary.sha256 /tmp/ambit-atomic-materialize.sha256
+COPY --from=materializer_source main.go main_test.go source.sha256 ./
+COPY --from=materializer_source binary.sha256 /tmp/ambit-atomic-materialize.sha256
 RUN --network=none set -eux; \
     sha256sum -c source.sha256; \
     GOWORK=off go test ./...; \
@@ -51,6 +57,12 @@ ARG BUILD_SOURCE_TREE
 ARG BUILD_SOURCE_INPUT_SHA256
 ARG BUILD_DOCKERFILE_SHA256
 ARG BUILD_LOCK_SET_SHA256
+ARG BUILD_HELPER_SOURCE_REVISION
+ARG BUILD_HELPER_SOURCE_TREE
+ARG BUILD_HELPER_SOURCE_ARCHIVE_SHA256
+ARG BUILD_HELPER_BUILD_LOCK_SHA256
+ARG BUILD_HELPER_LICENSE_LOCK_SHA256
+ARG BUILD_HELPER_NOTICE_SHA256
 
 USER root
 
@@ -68,12 +80,15 @@ RUN set -eux; \
     done < /tmp/ambit-c16b-apk-direct-packages.lock; \
     addgroup -g 1000 daytona; \
     adduser -D -u 1000 -G daytona -s /bin/bash daytona; \
-    install -d -m 0755 -o root -g root /opt/ambit/runtime-pack/core-document/bin; \
+    install -d -m 0755 -o root -g root \
+      /opt/ambit/runtime-pack/core-document/bin \
+      /usr/share/licenses/ambit-atomic-materialize; \
     install -d -m 0755 -o daytona -g daytona /workspace; \
     rm -rf /var/cache/apk/* /usr/lib/python3.14/ensurepip /usr/bin/pip /usr/bin/pip3 /usr/bin/pip3.14 /usr/bin/apk
 
 COPY --from=python_dependencies --chown=root:root /opt/ambit/runtime-pack/core-document/python /opt/ambit/runtime-pack/core-document/python
 COPY --from=materializer_builder --chown=root:root /out/ambit-atomic-materialize /opt/ambit/runtime-pack/core-document/bin/ambit-atomic-materialize
+COPY --from=materializer_source --chown=root:root LICENSE.md license.lock.json /usr/share/licenses/ambit-atomic-materialize/
 
 RUN set -eux; \
     find /opt/ambit/runtime-pack/core-document -type d -exec chmod 0555 {} +; \
@@ -89,8 +104,14 @@ LABEL org.opencontainers.image.title="ambit-c16b-core-document" \
       io.ambit.build-input-sha256="${BUILD_SOURCE_INPUT_SHA256}" \
       io.ambit.dockerfile-sha256="${BUILD_DOCKERFILE_SHA256}" \
       io.ambit.lock-set-sha256="${BUILD_LOCK_SET_SHA256}" \
+      io.ambit.helper-source-revision="${BUILD_HELPER_SOURCE_REVISION}" \
+      io.ambit.helper-source-tree="${BUILD_HELPER_SOURCE_TREE}" \
+      io.ambit.helper-source-archive-sha256="${BUILD_HELPER_SOURCE_ARCHIVE_SHA256}" \
+      io.ambit.helper-build-lock-sha256="${BUILD_HELPER_BUILD_LOCK_SHA256}" \
+      io.ambit.helper-license-lock-sha256="${BUILD_HELPER_LICENSE_LOCK_SHA256}" \
+      io.ambit.helper-notice-sha256="${BUILD_HELPER_NOTICE_SHA256}" \
       io.ambit.runtime-pack="ambit.runtime-pack/core-document@3" \
-      io.ambit.atomic-materializer-sha256="sha256:c64c96351a9f590431bfc86f058d02bc0a1c502f010896fc9d206e504e6a119e" \
+      io.ambit.atomic-materializer-sha256="sha256:366bd7ac1c6bc42181548312c83d096ab4ec4ee603b9057637b2e9df5dbe5462" \
       io.ambit.atomic-materializer-protocol="sha256:1274e0bb27dfb15d9d7564d71fc02a7117631b405de73d84f39defb415a5f7ad"
 
 ENV PATH=/opt/ambit/runtime-pack/core-document/python/bin:/opt/ambit/runtime-pack/core-document/bin:/usr/sbin:/usr/bin:/sbin:/bin \

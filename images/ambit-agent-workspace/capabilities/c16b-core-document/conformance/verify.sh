@@ -4,6 +4,7 @@ set -euo pipefail
 output_root="${1:-/workspace/c16b-conformance}"
 pack_root=/opt/ambit/runtime-pack/core-document
 source_root="${2:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+helper_source_root="${3:?backend helper source root is required}"
 
 mkdir -p "${output_root}"
 if find "${output_root}" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
@@ -46,7 +47,7 @@ ps --version | grep -F 'procps-ng 4.0.7' >/dev/null
 sed --version | grep -F 'sed (GNU sed) 4.10' >/dev/null
 test "$(command -v ambit-atomic-materialize)" = "${pack_root}/bin/ambit-atomic-materialize"
 
-python3 - "${pack_root}" "${output_root}/python-runtime-receipt.json" "${source_root}" <<'PY'
+python3 - "${pack_root}" "${output_root}/python-runtime-receipt.json" "${helper_source_root}" <<'PY'
 import hashlib
 import importlib.metadata
 import importlib.util
@@ -58,8 +59,8 @@ from lxml import etree
 
 pack_root = pathlib.Path(sys.argv[1])
 receipt_path = pathlib.Path(sys.argv[2])
-source_root = pathlib.Path(sys.argv[3])
-lock = json.loads((source_root / "materializer" / "materializer.lock.json").read_text())
+helper_source_root = pathlib.Path(sys.argv[3])
+lock = json.loads((helper_source_root / "materializer.lock.json").read_text())
 helper = pack_root / "bin" / "ambit-atomic-materialize"
 assert hashlib.sha256(helper.read_bytes()).hexdigest() == lock["binary"]["sha256"]
 versions = {

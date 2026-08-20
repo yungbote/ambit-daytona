@@ -41,18 +41,25 @@ This pruning removes the former Debian office/PDF/font chain, Node/npm fleet,
 and mutable runtime installer surface. It does not turn unresolved licenses or
 vulnerabilities into a pass: promotion still requires a complete SBOM,
 provenance, signature, strict license/vulnerability policy, exact runtime
-conformance, and external backend registration. The helper's repository-owned
-Go module is currently `NOASSERTION`; only root/user licensing authority may
-resolve that legal gate, so the pack remains candidate-only while it is open.
+conformance, and external backend registration. The helper is independently
+owned by the backend's narrow proprietary module and consumed only from its
+exact Git archive; no Daytona duplicate or repository-wide relicensing remains.
 
 ## Atomic materialization contract
 
 `/opt/ambit/runtime-pack/core-document/bin/ambit-atomic-materialize` is a
-deterministic, statically linked Go 1.25.13 helper. The final image contains
-neither Go nor a compiler. Unicode NFC validation uses the checksum-locked
-`golang.org/x/text` v0.41.0 module.
-Its exact source, builder, build flags, and binary digest are bound in
-`materializer/materializer.lock.json` and mechanically checked during build.
+deterministic, statically linked Go 1.25.13 helper. It is built from backend
+commit `e881a566d7171a91a13abb765bf60fe9e2a2e5da`, subtree
+`4269cdaa8d4c16b47da9f0bc5222e92236a2f7a1`, and exact commit-scoped
+full-path archive
+`sha256:ff705ac82601b7ac7fceeddd24c48c79ecc0bcd6fec6026637fa785f05f652c3`.
+The expected binary digest is
+`sha256:366bd7ac1c6bc42181548312c83d096ab4ec4ee603b9057637b2e9df5dbe5462`.
+The final image contains neither Go nor a compiler. Unicode NFC validation
+uses checksum-locked `golang.org/x/text` v0.41.0. The scoped package license is
+`LicenseRef-Ambit-Proprietary` / `UNLICENSED`; its exact license lock and
+notice are carried with the runtime without changing either repository's
+broader license.
 
 The backend/provider starts an exact raw, no-echo PTY session and uses the
 content-addressed `framed_binary_stream_v1` protocol frozen at backend commit
