@@ -1,0 +1,303 @@
+{
+  "schema": "ambit.runtime-pack-vex-lock/v1",
+  "entries": [
+    {
+      "match": {
+        "artifact": {
+          "name": "glibc-2.43",
+          "version": "2.43-r14",
+          "type": "apk",
+          "purl": "pkg:apk/wolfi/glibc-2.43@2.43-r14?arch=x86_64&distro=wolfi-20230201"
+        },
+        "vulnerability": {
+          "id": "CVE-2019-1010022",
+          "namespace": "nvd:cpe",
+          "severity": "Critical"
+        },
+        "matchType": "cpe-match",
+        "matcher": "apk-matcher",
+        "versionConstraint": "none (unknown)"
+      },
+      "status": "not_affected",
+      "justification": "upstream_disputed_non_security",
+      "evidence": {
+        "kind": "upstream-disputed-non-security",
+        "authorityUrl": "https://security-tracker.debian.org/tracker/CVE-2019-1010022",
+        "authoritySnapshotSha256": "cfcb1a18fe313dc5234986685ca08fea82f14d6be27c8f74cc1310770509d458",
+        "upstreamIssueUrl": "https://sourceware.org/bugzilla/show_bug.cgi?id=22850",
+        "upstreamIssueSnapshotSha256": "64fd9279a4549f9044bed2df7b72ede259e5a2af896cfcdf5f2c673a9695930d",
+        "verification": "authority-and-upstream-snapshots"
+      }
+    },
+    {
+      "match": {
+        "artifact": {
+          "name": "glibc-2.43",
+          "version": "2.43-r14",
+          "type": "apk",
+          "purl": "pkg:apk/wolfi/glibc-2.43@2.43-r14?arch=x86_64&distro=wolfi-20230201"
+        },
+        "vulnerability": {
+          "id": "CVE-2019-1010023",
+          "namespace": "nvd:cpe",
+          "severity": "High"
+        },
+        "matchType": "cpe-match",
+        "matcher": "apk-matcher",
+        "versionConstraint": "none (unknown)"
+      },
+      "status": "not_affected",
+      "justification": "upstream_disputed_non_security_and_ldd_absent",
+      "evidence": {
+        "kind": "upstream-disputed-non-security-and-ldd-absent",
+        "authorityUrl": "https://security-tracker.debian.org/tracker/CVE-2019-1010023",
+        "authoritySnapshotSha256": "0573da4b678a89e4b22d4e7ecf4dde8d4b768369642c7968034677ba90798877",
+        "upstreamIssueUrl": "https://sourceware.org/bugzilla/show_bug.cgi?id=22851",
+        "upstreamIssueSnapshotSha256": "4539154bcb8976d519c5057f39d08093c53d98451cabfc17bbcedfa600390409",
+        "runtimeAbsentCommand": "ldd",
+        "runtimeConfinement": "non-root-cap-drop-all-no-new-privileges-network-none",
+        "verification": "authority-upstream-snapshots-and-runtime-conformance"
+      }
+    },
+    {
+      "match": {
+        "artifact": {
+          "name": "glibc-2.43",
+          "version": "2.43-r14",
+          "type": "apk",
+          "purl": "pkg:apk/wolfi/glibc-2.43@2.43-r14?arch=x86_64&distro=wolfi-20230201"
+        },
+        "vulnerability": {
+          "id": "CVE-2026-0861",
+          "namespace": "nvd:cpe",
+          "severity": "High"
+        },
+        "matchType": "cpe-match",
+        "matcher": "apk-matcher",
+        "versionConstraint": ">= 2.30 (unknown)"
+      },
+      "status": "fixed",
+      "justification": "component_source_contains_upstream_fix",
+      "evidence": {
+        "kind": "source-contains-upstream-fix",
+        "packageBuildSpdxSha256": "0063dac730d6226b30a6768749ba97776a2a5d698fe485598eff871a6a33fe55",
+        "packageBuildConfigCommit": "328c3e48090a34436fdd48597abc7e9f23d044eb",
+        "packageBuildConfigSha256": "75e2e623e6d806b343d618b78dae6ced497f16e2360c5583866f0447167888bc",
+        "packageSourceCommit": "dae425b554207f7c4599c7fac707ad4c08545674",
+        "upstreamRepository": "https://gitlab.com/gnutools/glibc.git",
+        "fixCommit": "c9188d333717d3ceb7e3020011651f424f749f93",
+        "verification": "git-merge-base-is-ancestor"
+      }
+    },
+    {
+      "match": {
+        "artifact": {
+          "name": "glibc-2.43",
+          "version": "2.43-r14",
+          "type": "apk",
+          "purl": "pkg:apk/wolfi/glibc-2.43@2.43-r14?arch=x86_64&distro=wolfi-20230201"
+        },
+        "vulnerability": {
+          "id": "CVE-2026-4046",
+          "namespace": "nvd:cpe",
+          "severity": "High"
+        },
+        "matchType": "cpe-match",
+        "matcher": "apk-matcher",
+        "versionConstraint": ">= 2.3.3, <= 2.43 (unknown)"
+      },
+      "status": "fixed",
+      "justification": "component_source_contains_upstream_fix",
+      "evidence": {
+        "kind": "source-contains-upstream-fix",
+        "packageBuildSpdxSha256": "0063dac730d6226b30a6768749ba97776a2a5d698fe485598eff871a6a33fe55",
+        "packageBuildConfigCommit": "328c3e48090a34436fdd48597abc7e9f23d044eb",
+        "packageBuildConfigSha256": "75e2e623e6d806b343d618b78dae6ced497f16e2360c5583866f0447167888bc",
+        "packageSourceCommit": "dae425b554207f7c4599c7fac707ad4c08545674",
+        "upstreamRepository": "https://gitlab.com/gnutools/glibc.git",
+        "fixCommit": "8362e8ce10b24068bacc19552c128dd10e082fd9",
+        "verification": "git-merge-base-is-ancestor"
+      }
+    },
+    {
+      "match": {
+        "artifact": {
+          "name": "glibc-2.43",
+          "version": "2.43-r14",
+          "type": "apk",
+          "purl": "pkg:apk/wolfi/glibc-2.43@2.43-r14?arch=x86_64&distro=wolfi-20230201"
+        },
+        "vulnerability": {
+          "id": "CVE-2026-4437",
+          "namespace": "nvd:cpe",
+          "severity": "High"
+        },
+        "matchType": "cpe-match",
+        "matcher": "apk-matcher",
+        "versionConstraint": ">= 2.34, <= 2.43 (unknown)"
+      },
+      "status": "fixed",
+      "justification": "component_source_contains_upstream_fix",
+      "evidence": {
+        "kind": "source-contains-upstream-fix",
+        "packageBuildSpdxSha256": "0063dac730d6226b30a6768749ba97776a2a5d698fe485598eff871a6a33fe55",
+        "packageBuildConfigCommit": "328c3e48090a34436fdd48597abc7e9f23d044eb",
+        "packageBuildConfigSha256": "75e2e623e6d806b343d618b78dae6ced497f16e2360c5583866f0447167888bc",
+        "packageSourceCommit": "dae425b554207f7c4599c7fac707ad4c08545674",
+        "upstreamRepository": "https://gitlab.com/gnutools/glibc.git",
+        "fixCommit": "5c6fca0c62ce5bd6e68e259f138097756cbafd4d",
+        "verification": "git-merge-base-is-ancestor"
+      }
+    },
+    {
+      "match": {
+        "artifact": {
+          "name": "glibc-2.43",
+          "version": "2.43-r14",
+          "type": "apk",
+          "purl": "pkg:apk/wolfi/glibc-2.43@2.43-r14?arch=x86_64&distro=wolfi-20230201"
+        },
+        "vulnerability": {
+          "id": "CVE-2026-5435",
+          "namespace": "nvd:cpe",
+          "severity": "High"
+        },
+        "matchType": "cpe-match",
+        "matcher": "apk-matcher",
+        "versionConstraint": ">= 2.2, <= 2.43 (unknown)"
+      },
+      "status": "fixed",
+      "justification": "component_source_contains_upstream_fix",
+      "evidence": {
+        "kind": "source-contains-upstream-fix",
+        "packageBuildSpdxSha256": "0063dac730d6226b30a6768749ba97776a2a5d698fe485598eff871a6a33fe55",
+        "packageBuildConfigCommit": "328c3e48090a34436fdd48597abc7e9f23d044eb",
+        "packageBuildConfigSha256": "75e2e623e6d806b343d618b78dae6ced497f16e2360c5583866f0447167888bc",
+        "packageSourceCommit": "dae425b554207f7c4599c7fac707ad4c08545674",
+        "upstreamRepository": "https://gitlab.com/gnutools/glibc.git",
+        "fixCommit": "e64ae5a591f0604b7504df4df631857bb11cc78b",
+        "verification": "git-merge-base-is-ancestor"
+      }
+    },
+    {
+      "match": {
+        "artifact": {
+          "name": "glibc-2.43",
+          "version": "2.43-r14",
+          "type": "apk",
+          "purl": "pkg:apk/wolfi/glibc-2.43@2.43-r14?arch=x86_64&distro=wolfi-20230201"
+        },
+        "vulnerability": {
+          "id": "CVE-2026-5450",
+          "namespace": "nvd:cpe",
+          "severity": "Critical"
+        },
+        "matchType": "cpe-match",
+        "matcher": "apk-matcher",
+        "versionConstraint": ">= 2.7, <= 2.43 (unknown)"
+      },
+      "status": "fixed",
+      "justification": "component_source_contains_upstream_fix",
+      "evidence": {
+        "kind": "source-contains-upstream-fix",
+        "packageBuildSpdxSha256": "0063dac730d6226b30a6768749ba97776a2a5d698fe485598eff871a6a33fe55",
+        "packageBuildConfigCommit": "328c3e48090a34436fdd48597abc7e9f23d044eb",
+        "packageBuildConfigSha256": "75e2e623e6d806b343d618b78dae6ced497f16e2360c5583866f0447167888bc",
+        "packageSourceCommit": "dae425b554207f7c4599c7fac707ad4c08545674",
+        "upstreamRepository": "https://gitlab.com/gnutools/glibc.git",
+        "fixCommit": "4070d808bea1c077eb7e7d52b52b91cae98205d5",
+        "verification": "git-merge-base-is-ancestor"
+      }
+    },
+    {
+      "match": {
+        "artifact": {
+          "name": "glibc-2.43",
+          "version": "2.43-r14",
+          "type": "apk",
+          "purl": "pkg:apk/wolfi/glibc-2.43@2.43-r14?arch=x86_64&distro=wolfi-20230201"
+        },
+        "vulnerability": {
+          "id": "CVE-2026-5928",
+          "namespace": "nvd:cpe",
+          "severity": "High"
+        },
+        "matchType": "cpe-match",
+        "matcher": "apk-matcher",
+        "versionConstraint": ">= 2.1.1-89, <= 2.43 (unknown)"
+      },
+      "status": "fixed",
+      "justification": "component_source_contains_upstream_fix",
+      "evidence": {
+        "kind": "source-contains-upstream-fix",
+        "packageBuildSpdxSha256": "0063dac730d6226b30a6768749ba97776a2a5d698fe485598eff871a6a33fe55",
+        "packageBuildConfigCommit": "328c3e48090a34436fdd48597abc7e9f23d044eb",
+        "packageBuildConfigSha256": "75e2e623e6d806b343d618b78dae6ced497f16e2360c5583866f0447167888bc",
+        "packageSourceCommit": "dae425b554207f7c4599c7fac707ad4c08545674",
+        "upstreamRepository": "https://gitlab.com/gnutools/glibc.git",
+        "fixCommit": "2890b35cd361df2517525bf2c5f8c63f6f0d4a20",
+        "verification": "git-merge-base-is-ancestor"
+      }
+    },
+    {
+      "match": {
+        "artifact": {
+          "name": "libcrypto3",
+          "version": "3.6.3-r5",
+          "type": "apk",
+          "purl": "pkg:apk/wolfi/libcrypto3@3.6.3-r5?arch=x86_64&distro=wolfi-20230201&upstream=openssl"
+        },
+        "vulnerability": {
+          "id": "CVE-2026-14456",
+          "namespace": "nvd:cpe",
+          "severity": "High"
+        },
+        "matchType": "cpe-match",
+        "matcher": "apk-matcher",
+        "versionConstraint": ">= 3.5.0, < 3.5.8||>= 3.6.0, < 3.6.4||>= 4.0.0, < 4.0.2 (unknown)"
+      },
+      "status": "fixed",
+      "justification": "package_recipe_applies_upstream_fix",
+      "evidence": {
+        "kind": "package-recipe-applies-upstream-fix",
+        "packageBuildSpdxSha256": "f6d2f4bc82b5dc2fc19f026fc92925dc25040b1319fa8b65c5f0fd32c78cec04",
+        "packageBuildConfigCommit": "bc7122d59a1ed0b56c28272f051293a8cb326998",
+        "packageBuildConfigSha256": "ba4507e287c83c490db83fe518f9016f7110db0a39d079d346af4f192eecd6fe",
+        "packageSourceCommit": "aae016bfd52fcad2bc9657c2c782cfdf73b1ed5f",
+        "upstreamRepository": "https://github.com/openssl/openssl.git",
+        "fixCommit": "4084152e040329ca0194c4c1750b9b46d00a5b6b",
+        "verification": "exact-recipe-pinned-cherry-pick"
+      }
+    },
+    {
+      "match": {
+        "artifact": {
+          "name": "libssl3",
+          "version": "3.6.3-r5",
+          "type": "apk",
+          "purl": "pkg:apk/wolfi/libssl3@3.6.3-r5?arch=x86_64&distro=wolfi-20230201&upstream=openssl"
+        },
+        "vulnerability": {
+          "id": "CVE-2026-14456",
+          "namespace": "nvd:cpe",
+          "severity": "High"
+        },
+        "matchType": "cpe-match",
+        "matcher": "apk-matcher",
+        "versionConstraint": ">= 3.5.0, < 3.5.8||>= 3.6.0, < 3.6.4||>= 4.0.0, < 4.0.2 (unknown)"
+      },
+      "status": "fixed",
+      "justification": "package_recipe_applies_upstream_fix",
+      "evidence": {
+        "kind": "package-recipe-applies-upstream-fix",
+        "packageBuildSpdxSha256": "0da4b699f4c0909866d700bba7b298d3604e7fb3f29cb5601d31686626943096",
+        "packageBuildConfigCommit": "bc7122d59a1ed0b56c28272f051293a8cb326998",
+        "packageBuildConfigSha256": "ba4507e287c83c490db83fe518f9016f7110db0a39d079d346af4f192eecd6fe",
+        "packageSourceCommit": "aae016bfd52fcad2bc9657c2c782cfdf73b1ed5f",
+        "upstreamRepository": "https://github.com/openssl/openssl.git",
+        "fixCommit": "4084152e040329ca0194c4c1750b9b46d00a5b6b",
+        "verification": "exact-recipe-pinned-cherry-pick"
+      }
+    }
+  ]
+}

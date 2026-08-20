@@ -31,6 +31,8 @@ receipt = {
     "outcome": "passed",
     "runtime": {
         "privilege": "non_root",
+        "linuxCapabilities": "none",
+        "noNewPrivileges": True,
         "network": "none",
         "hostSocket": "absent",
         "packRoot": "read_only",
