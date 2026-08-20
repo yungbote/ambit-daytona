@@ -16,6 +16,14 @@ state_root=$1
   exit 64
 }
 
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+runtime_root_tool=${script_dir}/isolated_runtime_root.py
+process_identity_tool=${script_dir}/isolated_process_identity.py
+[[ -f ${runtime_root_tool} && -f ${process_identity_tool} ]] || {
+  echo 'isolated runtime identity verifier is absent' >&2
+  exit 66
+}
+
 runtime_id=$(printf '%s' "${state_root}" | sha256sum | cut -c1-12)
 runtime_root=/tmp/ambit-c16b-docker-${runtime_id}
 data_root=${state_root}/outer-docker
@@ -69,9 +77,20 @@ for route in routes:
         raise SystemExit(f"isolated Docker address pool overlaps host route {observed}")
 PY
 
-mkdir -p "${exec_root}" "${containerd_state}"
-chmod 0700 "${runtime_root}" "${exec_root}" "${containerd_state}"
 umask 077
+runtime_identity=$(python3 "${runtime_root_tool}" create "${runtime_root}")
+runtime_started=false
+prestart_cleanup() {
+  if [[ ${runtime_started} != true ]] &&
+    python3 "${runtime_root_tool}" verify "${runtime_root}" --expected "${runtime_identity}" >/dev/null 2>&1; then
+    rmdir -- "${exec_root}" "${containerd_state}" "${runtime_root}" >/dev/null 2>&1 || true
+  fi
+  for path in "${config}" "${containerd_config}" "${containerd_pidfile}" "${docker_log}" "${containerd_log}"; do
+    unlink -- "${path}" >/dev/null 2>&1 || true
+  done
+}
+trap prestart_cleanup EXIT INT TERM
+
 cat > "${config}" <<EOF
 {
   "data-root": "${data_root}",
@@ -120,56 +139,65 @@ chmod 0600 "${containerd_config}"
 
 containerd_pid=
 docker_pid=
-runtime_started=false
 safe_process() {
   local pid=$1
   local executable=$2
   local required=$3
-  [[ ${pid} =~ ^[1-9][0-9]*$ && -r /proc/${pid}/cmdline ]] || return 1
-  local command_line
-  command_line=$(tr '\0' ' ' < "/proc/${pid}/cmdline")
-  [[ ${command_line} == *"${executable}"* && ${command_line} == *"${required}"* ]]
+  local executable_path
+  executable_path=$(readlink -e -- "$(command -v "${executable}")") || return 1
+  sudo -n python3 "${process_identity_tool}" "${pid}" "${executable_path}" "${required}" >/dev/null
 }
 terminate_exact() {
   local pid=$1
   local executable=$2
   local required=$3
-  if safe_process "${pid}" "${executable}" "${required}"; then
-    sudo -n kill -TERM "${pid}" >/dev/null 2>&1 || true
-    for _ in $(seq 1 80); do
-      [[ ! -e /proc/${pid} ]] && break
-      sleep 0.25
-    done
-  fi
+  safe_process "${pid}" "${executable}" "${required}" || return 1
+  sudo -n kill -TERM "${pid}" >/dev/null 2>&1 || return 1
+  for _ in $(seq 1 80); do
+    [[ ! -e /proc/${pid} ]] && return 0
+    sleep 0.25
+  done
+  return 1
 }
 startup_cleanup() {
+  local cleanup_allowed=true
   if [[ -n ${docker_pid} ]]; then
-    terminate_exact "${docker_pid}" dockerd "${config}"
+    terminate_exact "${docker_pid}" dockerd "${config}" || cleanup_allowed=false
   elif [[ -f ${pidfile} ]]; then
-    terminate_exact "$(<"${pidfile}")" dockerd "${config}"
+    terminate_exact "$(<"${pidfile}")" dockerd "${config}" || cleanup_allowed=false
   fi
   if [[ -n ${containerd_pid} ]]; then
-    terminate_exact "${containerd_pid}" containerd "${containerd_config}"
+    terminate_exact "${containerd_pid}" containerd "${containerd_config}" || cleanup_allowed=false
   elif [[ -f ${containerd_pidfile} ]]; then
-    terminate_exact "$(<"${containerd_pidfile}")" containerd "${containerd_config}"
+    terminate_exact "$(<"${containerd_pidfile}")" containerd "${containerd_config}" || cleanup_allowed=false
   fi
-  sudo -n find "${runtime_root}" -depth -delete >/dev/null 2>&1 || true
-  unlink "${containerd_pidfile}" >/dev/null 2>&1 || true
+  if [[ ${cleanup_allowed} == true ]] &&
+    python3 "${runtime_root_tool}" verify "${runtime_root}" --expected "${runtime_identity}" >/dev/null 2>&1; then
+    sudo -n find "${runtime_root}" -depth -delete >/dev/null 2>&1 || true
+  fi
+  if [[ ${cleanup_allowed} == true ]]; then
+    unlink "${containerd_pidfile}" >/dev/null 2>&1 || true
+  fi
 }
 trap 'if [[ ${runtime_started} != true ]]; then startup_cleanup; fi' EXIT INT TERM
 
-sudo -n containerd --config "${containerd_config}" --log-level info > "${containerd_log}" 2>&1 &
-containerd_pid=$!
-printf '%s\n' "${containerd_pid}" > "${containerd_pidfile}"
+python3 "${runtime_root_tool}" verify "${runtime_root}" --expected "${runtime_identity}" >/dev/null
+containerd_executable=$(readlink -e -- "$(command -v containerd)")
+sudo -n sh -c 'printf "%s\n" "$$" > "$1"; exec "$2" --config "$3" --log-level info' \
+  sh "${containerd_pidfile}" "${containerd_executable}" "${containerd_config}" > "${containerd_log}" 2>&1 &
 for _ in $(seq 1 120); do
-  [[ -S ${containerd_socket} ]] && break
-  safe_process "${containerd_pid}" containerd "${containerd_config}" || {
-    echo 'dedicated containerd exited during startup' >&2
-    exit 68
-  }
+  if [[ -f ${containerd_pidfile} ]]; then
+    containerd_pid=$(<"${containerd_pidfile}")
+    if [[ -S ${containerd_socket} ]] && safe_process "${containerd_pid}" containerd "${containerd_config}"; then
+      break
+    fi
+  fi
   sleep 0.25
 done
-[[ -S ${containerd_socket} ]] || { echo 'dedicated containerd socket was not created' >&2; exit 68; }
+[[ -S ${containerd_socket} ]] && safe_process "${containerd_pid}" containerd "${containerd_config}" || {
+  echo 'dedicated containerd did not establish its exact process/socket identity' >&2
+  exit 68
+}
 
 sudo -n dockerd --config-file "${config}" > "${docker_log}" 2>&1 &
 docker_pid=$!
@@ -186,6 +214,10 @@ done
 [[ -S ${socket} && -f ${pidfile} ]] || { echo 'isolated Docker socket/pidfile was not created' >&2; exit 68; }
 docker_pid=$(<"${pidfile}")
 safe_process "${docker_pid}" dockerd "${config}" || { echo 'Docker pidfile does not identify this daemon' >&2; exit 68; }
+python3 "${runtime_root_tool}" verify "${runtime_root}" --expected "${runtime_identity}" >/dev/null
+containerd_process_identity=$(sudo -n python3 "${process_identity_tool}" "${containerd_pid}" "${containerd_executable}" "${containerd_config}")
+docker_executable=$(readlink -e -- "$(command -v dockerd)")
+docker_process_identity=$(sudo -n python3 "${process_identity_tool}" "${docker_pid}" "${docker_executable}" "${config}")
 docker_root=$(DOCKER_HOST="unix://${socket}" docker info --format '{{.DockerRootDir}}')
 [[ ${docker_root} == "${data_root}" ]] || { echo 'isolated Docker reported the wrong data root' >&2; exit 68; }
 docker_server_id=$(DOCKER_HOST="unix://${socket}" docker info --format '{{.ID}}')
@@ -194,6 +226,9 @@ docker_server_id=$(DOCKER_HOST="unix://${socket}" docker info --format '{{.ID}}'
 jq -n -S \
   --arg observedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --arg runtimeRoot "${runtime_root}" \
+  --argjson runtimeRootIdentity "${runtime_identity}" \
+  --argjson containerdProcessIdentity "${containerd_process_identity}" \
+  --argjson dockerProcessIdentity "${docker_process_identity}" \
   --arg socket "${socket}" \
   --arg dataRoot "${data_root}" \
   --arg execRoot "${exec_root}" \
@@ -207,18 +242,20 @@ jq -n -S \
   --argjson dockerPid "${docker_pid}" \
   --argjson containerdPid "${containerd_pid}" \
   '{
-    schema:"ambit.local-daytona-isolated-docker/v2",
+    schema:"ambit.local-daytona-isolated-docker/v3",
     outcome:"passed",
     observedAt:$observedAt,
     runtimeRoot:$runtimeRoot,
+    runtimeRootIdentity:$runtimeRootIdentity,
     socket:$socket,
     dataRoot:$dataRoot,
     execRoot:$execRoot,
-    containerd:{address:$containerdAddress,root:$containerdRoot,version:$containerdVersion,pid:$containerdPid,configSha256:$containerdConfigSha256},
+    containerd:{address:$containerdAddress,root:$containerdRoot,version:$containerdVersion,pid:$containerdPid,configSha256:$containerdConfigSha256,processIdentity:$containerdProcessIdentity},
     network:{defaultBridge:"disabled",addressPool:"172.30.0.0/16",hostFirewallMutation:false},
     serverId:$serverId,
     serverVersion:$serverVersion,
     dockerPid:$dockerPid,
+    dockerProcessIdentity:$dockerProcessIdentity,
     configSha256:$configSha256
   }' > "${state_root}/evidence/outer-docker-receipt.json"
 

@@ -58,10 +58,15 @@ creates a task-owned Docker daemon and a dedicated containerd. Their persistent
 data roots and bounded logs live below the generated `/home` state root; only
 short-lived sockets, PID files, and exec state live under one content-derived
 `/tmp/ambit-c16b-docker-*` runtime directory to stay within Unix socket path
-limits. The daemon disables its default bridge and all host iptables/ip6tables,
-forwarding, and masquerade mutation; Compose owns the one internal provider
-bridge and the daemon uses a disjoint address pool. It never connects to the
-shared host containerd or shared Docker graph; its minimal containerd config
+limits. That root is created atomically, opened with
+`O_DIRECTORY|O_NOFOLLOW`, and re-proved by device, inode, owner, and mode
+before daemon start, capacity measurement, and cleanup. The startup receipt
+also binds each root-owned daemon's exact executable, complete argument vector,
+process start time, and proc inode; a stale PID or substring match cannot
+authorize capacity or shutdown. The daemon disables its default bridge and all
+host iptables/ip6tables, forwarding, and masquerade mutation; Compose owns the
+one internal provider bridge and the daemon uses a disjoint address pool. It
+never connects to the shared host containerd or shared Docker graph; its minimal containerd config
 also disables unused CRI and NRI plugins and imports no host configuration.
 Export the exact `DOCKER_HOST`
 line the start script prints, then run `verify-host-capacity.sh`; that gate
@@ -70,6 +75,12 @@ process, startup receipt, and config hash before measuring headroom.
 `stop-isolated-docker.sh` verifies both exact processes before stopping them,
 removes only their content-derived ephemeral runtime directory, and leaves all
 persistent `/home` state in place for recovery.
+
+The rendered Compose environment is a closed per-service key roster. Every
+network endpoint used by the API, proxy, or runner is pinned to loopback or an
+exact internal service name, and all telemetry/export targets remain empty or
+explicitly disabled. Adding even an HTTP-only OTLP or PostHog endpoint fails
+the deployment verifier.
 
 Starting containers is not a readiness receipt. `WorkspaceProviderExecutionReadiness@2`
 remains unavailable until a live gate binds the exact source registry, profile,

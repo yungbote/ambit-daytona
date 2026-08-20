@@ -9,6 +9,11 @@ state_root=$1
 [[ ${state_root} =~ ^/home/[^/]+/[A-Za-z0-9._/-]+$ ]] || { echo 'invalid STATE_ROOT' >&2; exit 64; }
 [[ $(realpath -e -- "${state_root}") == "${state_root}" ]] || { echo 'STATE_ROOT is not canonical' >&2; exit 64; }
 
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+runtime_root_tool=${script_dir}/isolated_runtime_root.py
+process_identity_tool=${script_dir}/isolated_process_identity.py
+receipt=${state_root}/evidence/outer-docker-receipt.json
+
 runtime_id=$(printf '%s' "${state_root}" | sha256sum | cut -c1-12)
 runtime_root=/tmp/ambit-c16b-docker-${runtime_id}
 socket=${runtime_root}/docker.sock
@@ -17,26 +22,36 @@ containerd_socket=${runtime_root}/containerd.sock
 containerd_pidfile=${state_root}/config/outer-containerd.pid
 containerd_config=${state_root}/config/outer-containerd.toml
 config=${state_root}/config/outer-docker.json
-[[ -d ${runtime_root} && ! -L ${runtime_root} && -f ${pidfile} && -f ${containerd_pidfile} && -f ${containerd_config} && -f ${config} ]] || {
+[[ -f ${runtime_root_tool} && -f ${process_identity_tool} && -f ${receipt} && -d ${runtime_root} && ! -L ${runtime_root} && -f ${pidfile} && -f ${containerd_pidfile} && -f ${containerd_config} && -f ${config} ]] || {
   echo 'isolated Docker runtime identity is incomplete' >&2
   exit 65
 }
+runtime_identity=$(jq -c -e '.runtimeRootIdentity' "${receipt}")
+python3 "${runtime_root_tool}" verify "${runtime_root}" --expected "${runtime_identity}" >/dev/null || {
+  echo 'isolated Docker runtime root identity changed' >&2
+  exit 65
+}
 
-safe_process() {
+process_identity() {
   local pid=$1
   local executable=$2
   local required=$3
-  [[ ${pid} =~ ^[1-9][0-9]*$ && -r /proc/${pid}/cmdline ]] || return 1
-  local command_line
-  command_line=$(tr '\0' ' ' < "/proc/${pid}/cmdline")
-  [[ ${command_line} == *"${executable}"* && ${command_line} == *"${required}"* ]]
+  local executable_path
+  executable_path=$(readlink -e -- "$(command -v "${executable}")") || return 1
+  sudo -n python3 "${process_identity_tool}" "${pid}" "${executable_path}" "${required}"
 }
 stop_exact() {
   local pid=$1
   local executable=$2
   local required=$3
-  safe_process "${pid}" "${executable}" "${required}" || {
+  local expected_identity=$4
+  local observed_identity
+  observed_identity=$(process_identity "${pid}" "${executable}" "${required}") || {
     echo "pid does not identify task-owned ${executable}" >&2
+    exit 66
+  }
+  [[ ${observed_identity} == "${expected_identity}" ]] || {
+    echo "${executable} process identity changed after startup" >&2
     exit 66
   }
   sudo -n kill -TERM "${pid}"
@@ -50,11 +65,14 @@ stop_exact() {
 
 docker_pid=$(<"${pidfile}")
 containerd_pid=$(<"${containerd_pidfile}")
-stop_exact "${docker_pid}" dockerd "${config}"
+docker_process_identity=$(jq -cS -e '.dockerProcessIdentity' "${receipt}")
+containerd_process_identity=$(jq -cS -e '.containerd.processIdentity' "${receipt}")
+stop_exact "${docker_pid}" dockerd "${config}" "${docker_process_identity}"
 [[ ! -S ${socket} ]] || { echo 'isolated Docker socket remained after stop' >&2; exit 67; }
-stop_exact "${containerd_pid}" containerd "${containerd_config}"
+stop_exact "${containerd_pid}" containerd "${containerd_config}" "${containerd_process_identity}"
 [[ ! -S ${containerd_socket} ]] || { echo 'dedicated containerd socket remained after stop' >&2; exit 67; }
 unlink "${containerd_pidfile}"
+python3 "${runtime_root_tool}" verify "${runtime_root}" --expected "${runtime_identity}" >/dev/null
 sudo -n find "${runtime_root}" -depth -delete
 [[ ! -e ${runtime_root} ]] || { echo 'isolated runtime root remained after stop' >&2; exit 67; }
 printf 'stopped task-owned Docker/containerd; recoverable data remains at %s and %s\n' \

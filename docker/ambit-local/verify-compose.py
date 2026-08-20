@@ -62,6 +62,62 @@ EXPECTED_OUTER_CAPS = {
     "registry": (0.05, 128 * 1024**2, 256),
     "dex": (0.05, 256 * 1024**2, 256),
 }
+EXPECTED_ENVIRONMENT_KEYS = {
+    "api": frozenset(
+        """
+        ADMIN_API_KEY ADMIN_MAX_CONCURRENT_SNAPSHOT_PROCESSING ADMIN_MAX_CPU_PER_SANDBOX
+        ADMIN_MAX_DISK_PER_SANDBOX ADMIN_MAX_MEMORY_PER_SANDBOX ADMIN_MAX_SNAPSHOT_SIZE
+        ADMIN_SNAPSHOT_QUOTA ADMIN_TOTAL_CPU_QUOTA ADMIN_TOTAL_DISK_QUOTA
+        ADMIN_TOTAL_MEMORY_QUOTA ADMIN_VOLUME_QUOTA BUILD_CPU_CORES
+        BUILD_INFO_MAX_SANDBOXES_PER_RUNNER BUILD_MEMORY_GB DASHBOARD_BASE_API_URL DASHBOARD_URL
+        DB_DATABASE DB_HOST DB_PASSWORD DB_PORT DB_USERNAME DEFAULT_ORG_QUOTA_CONTAINER_MAX_CONCURRENT_SNAPSHOT_PROCESSING
+        DEFAULT_ORG_QUOTA_CONTAINER_MAX_CPU_PER_SANDBOX DEFAULT_ORG_QUOTA_CONTAINER_MAX_DISK_PER_SANDBOX
+        DEFAULT_ORG_QUOTA_CONTAINER_MAX_MEMORY_PER_SANDBOX DEFAULT_ORG_QUOTA_CONTAINER_MAX_SNAPSHOT_SIZE
+        DEFAULT_ORG_QUOTA_CONTAINER_SNAPSHOT_QUOTA DEFAULT_ORG_QUOTA_CONTAINER_TOTAL_CPU_QUOTA
+        DEFAULT_ORG_QUOTA_CONTAINER_TOTAL_DISK_QUOTA DEFAULT_ORG_QUOTA_CONTAINER_TOTAL_GPU_QUOTA
+        DEFAULT_ORG_QUOTA_CONTAINER_TOTAL_MEMORY_QUOTA DEFAULT_ORG_QUOTA_CONTAINER_VOLUME_QUOTA
+        DEFAULT_ORG_QUOTA_LINUX_VM_TOTAL_CPU_QUOTA DEFAULT_ORG_QUOTA_WINDOWS_TOTAL_CPU_QUOTA
+        DEFAULT_QUOTA_SANDBOX_CLASSES DEFAULT_REGION_ENFORCE_QUOTAS DEFAULT_REGION_ID DEFAULT_REGION_NAME
+        DEFAULT_RUNNER_API_KEY DEFAULT_RUNNER_API_URL DEFAULT_RUNNER_API_VERSION DEFAULT_RUNNER_CPU
+        DEFAULT_RUNNER_DISK DEFAULT_RUNNER_DOMAIN DEFAULT_RUNNER_MEMORY DEFAULT_RUNNER_NAME
+        DEFAULT_RUNNER_PROXY_URL DEFAULT_SANDBOX_CLASS DEFAULT_SNAPSHOT ENCRYPTION_KEY ENCRYPTION_SALT
+        ENVIRONMENT HEALTH_CHECK_API_KEY INTERNAL_REGISTRY_ADMIN INTERNAL_REGISTRY_PASSWORD
+        INTERNAL_REGISTRY_PROJECT_ID INTERNAL_REGISTRY_URL LOG_REQUESTS_ENABLED MAINTENANCE_MODE
+        MAX_AUTO_ARCHIVE_INTERVAL NODE_ENV OIDC_AUDIENCE OIDC_CLIENT_ID OIDC_ISSUER_BASE_URL
+        OIDC_MANAGEMENT_API_AUDIENCE OIDC_MANAGEMENT_API_CLIENT_ID OIDC_MANAGEMENT_API_CLIENT_SECRET
+        OIDC_MANAGEMENT_API_ENABLED ORGANIZATION_DEFAULT_PREVIEW_WARNING_ENABLED
+        ORGANIZATION_SANDBOX_DEFAULT_LIMITED_NETWORK_EGRESS OTEL_ENABLED PORT POSTHOG_API_KEY POSTHOG_HOST
+        PROXY_API_KEY PROXY_DOMAIN PROXY_PROTOCOL PROXY_TEMPLATE_URL PUBLIC_OIDC_DOMAIN REDIS_HOST
+        REDIS_PASSWORD REDIS_PORT RUNNER_AVAILABILITY_SCORE_THRESHOLD RUNNER_DECLARATIVE_BUILD_SCORE_THRESHOLD
+        RUNNER_START_SCORE_THRESHOLD RUN_MIGRATIONS S3_ACCESS_KEY S3_ACCOUNT_ID S3_DEFAULT_BUCKET S3_ENDPOINT
+        S3_REGION S3_ROLE_NAME S3_SECRET_KEY S3_STS_ENDPOINT SKIP_USER_EMAIL_VERIFICATION SSH_GATEWAY_API_KEY
+        SSH_GATEWAY_COMMAND SSH_GATEWAY_PUBLIC_KEY SSH_GATEWAY_URL TRANSIENT_REGISTRY_ADMIN
+        TRANSIENT_REGISTRY_PASSWORD TRANSIENT_REGISTRY_PROJECT_ID TRANSIENT_REGISTRY_URL
+        """.split()
+    ),
+    "proxy": frozenset(
+        """
+        DAYTONA_API_URL OIDC_AUDIENCE OIDC_CLIENT_ID OIDC_CLIENT_SECRET OIDC_DOMAIN OIDC_PUBLIC_DOMAIN
+        PREVIEW_WARNING_ENABLED PROXY_API_KEY PROXY_PORT PROXY_PROTOCOL REDIS_HOST REDIS_PASSWORD REDIS_PORT
+        TOOLBOX_ONLY_MODE
+        """.split()
+    ),
+    "runner": frozenset(
+        """
+        API_PORT API_VERSION AWS_ACCESS_KEY_ID AWS_DEFAULT_BUCKET AWS_ENDPOINT_URL AWS_REGION AWS_SECRET_ACCESS_KEY
+        DAYTONA_API_URL DAYTONA_RUNNER_TOKEN ENVIRONMENT FORCE_SNAPSHOT_REMOVAL GPU_ENABLED
+        INITIALIZE_DAEMON_TELEMETRY INTER_SANDBOX_NETWORK_ENABLED LOG_FILE_PATH NETLEASH_ENABLED
+        NETLEASH_SECRETS_ENABLED OTEL_LOGGING_ENABLED OTEL_TRACING_ENABLED RESOURCE_LIMITS_DISABLED RUNNER_DOMAIN
+        SYSBOX_HEALTH_PROBES VOLUME_CLEANUP_DRY_RUN VOLUME_CLEANUP_EXCLUSION_PERIOD
+        """.split()
+    ),
+    "db": frozenset({"POSTGRES_DB", "POSTGRES_PASSWORD", "POSTGRES_USER"}),
+    "redis": frozenset({"REDIS_PASSWORD"}),
+    "minio": frozenset({"MINIO_ROOT_PASSWORD", "MINIO_ROOT_USER"}),
+    "minio-init": frozenset({"MINIO_ROOT_PASSWORD", "MINIO_ROOT_USER"}),
+    "registry": frozenset({"REGISTRY_HTTP_ADDR", "REGISTRY_STORAGE_DELETE_ENABLED"}),
+    "dex": frozenset(),
+}
 FORBIDDEN_SERVICE_KEYS = frozenset(
     {
         "annotations",
@@ -210,6 +266,14 @@ def validate_compose(config: dict[str, Any], values: dict[str, str], state_root:
         require(float(service.get("cpus", 0)) == expected_cpu, f"outer CPU ceiling differs: {name}")
         require(int(service.get("mem_limit", 0)) == expected_memory, f"outer memory ceiling differs: {name}")
         require(int(service.get("pids_limit", 0)) == expected_pids, f"outer PID ceiling differs: {name}")
+        environment = service.get("environment")
+        observed_environment_keys = (
+            set(environment) if isinstance(environment, dict) else set()
+        )
+        require(
+            observed_environment_keys == EXPECTED_ENVIRONMENT_KEYS[name],
+            f"environment key roster differs: {name}",
+        )
 
     networks = config.get("networks")
     require(
@@ -286,6 +350,36 @@ def validate_compose(config: dict[str, Any], values: dict[str, str], state_root:
         "ADMIN_MAX_CPU_PER_SANDBOX": "2",
         "ADMIN_MAX_MEMORY_PER_SANDBOX": "4",
         "ADMIN_MAX_DISK_PER_SANDBOX": "20",
+        "BUILD_CPU_CORES": "2",
+        "BUILD_MEMORY_GB": "4",
+        "BUILD_INFO_MAX_SANDBOXES_PER_RUNNER": "2",
+        "OTEL_ENABLED": "false",
+        "POSTHOG_API_KEY": "",
+        "POSTHOG_HOST": "",
+        "DASHBOARD_URL": f"http://127.0.0.1:{values['AMBIT_DAYTONA_API_PORT']}/dashboard",
+        "DASHBOARD_BASE_API_URL": f"http://127.0.0.1:{values['AMBIT_DAYTONA_API_PORT']}",
+        "OIDC_ISSUER_BASE_URL": "http://dex:5556/dex",
+        "PUBLIC_OIDC_DOMAIN": f"http://127.0.0.1:{values['AMBIT_DAYTONA_DEX_PORT']}/dex",
+        "TRANSIENT_REGISTRY_URL": "http://registry:6000",
+        "INTERNAL_REGISTRY_URL": "http://registry:6000",
+        "S3_ENDPOINT": "http://minio:9000",
+        "S3_STS_ENDPOINT": "http://minio:9000/minio/v1/assume-role",
+        "DEFAULT_RUNNER_API_URL": "http://runner:3003",
+        "DEFAULT_RUNNER_PROXY_URL": "http://runner:3003",
+        "TRANSIENT_REGISTRY_ADMIN": "",
+        "TRANSIENT_REGISTRY_PASSWORD": "",
+        "TRANSIENT_REGISTRY_PROJECT_ID": "",
+        "INTERNAL_REGISTRY_ADMIN": "",
+        "INTERNAL_REGISTRY_PASSWORD": "",
+        "INTERNAL_REGISTRY_PROJECT_ID": "",
+        "OIDC_MANAGEMENT_API_ENABLED": "",
+        "OIDC_MANAGEMENT_API_CLIENT_ID": "",
+        "OIDC_MANAGEMENT_API_CLIENT_SECRET": "",
+        "OIDC_MANAGEMENT_API_AUDIENCE": "",
+        "SSH_GATEWAY_API_KEY": "",
+        "SSH_GATEWAY_COMMAND": "",
+        "SSH_GATEWAY_PUBLIC_KEY": "",
+        "SSH_GATEWAY_URL": "",
     }
     exact_environment(services["api"], api_expected, "api")
     exact_environment(
@@ -300,6 +394,23 @@ def validate_compose(config: dict[str, Any], values: dict[str, str], state_root:
         },
         "runner",
     )
+    exact_environment(
+        services["runner"],
+        {
+            "AWS_ENDPOINT_URL": "http://minio:9000",
+            "DAYTONA_API_URL": "http://api:3000/api",
+        },
+        "runner",
+    )
+    exact_environment(
+        services["proxy"],
+        {
+            "DAYTONA_API_URL": "http://api:3000/api",
+            "OIDC_DOMAIN": "http://dex:5556/dex",
+            "OIDC_PUBLIC_DOMAIN": f"http://127.0.0.1:{values['AMBIT_DAYTONA_DEX_PORT']}/dex",
+        },
+        "proxy",
+    )
     outer_cpu = sum(value[0] for value in EXPECTED_OUTER_CAPS.values())
     outer_memory = sum(value[1] for value in EXPECTED_OUTER_CAPS.values())
     require(outer_cpu <= 6, "provider outer CPU ceilings exceed aggregate plus headroom")
@@ -311,7 +422,7 @@ def validate_compose(config: dict[str, Any], values: dict[str, str], state_root:
     require("phc_bYtEsdMDr" not in rendered, "telemetry credential leaked")
 
     return {
-        "schema": "ambit.local-daytona-compose-verification/v1",
+        "schema": "ambit.local-daytona-compose-verification/v2",
         "outcome": "passed",
         "provider": "daytona",
         "deployment": "self_hosted_local",

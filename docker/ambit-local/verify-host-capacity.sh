@@ -22,6 +22,14 @@ output=$2
 }
 [[ ${output} = /* && ! -e ${output} ]] || { echo 'OUTPUT_RECEIPT must be an unused absolute path' >&2; exit 64; }
 
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+runtime_root_tool=${script_dir}/isolated_runtime_root.py
+process_identity_tool=${script_dir}/isolated_process_identity.py
+[[ -f ${runtime_root_tool} && -f ${process_identity_tool} ]] || {
+  echo 'isolated runtime identity verifier is absent' >&2
+  exit 66
+}
+
 runtime_id=$(printf '%s' "${state_root}" | sha256sum | cut -c1-12)
 runtime_root=/tmp/ambit-c16b-docker-${runtime_id}
 expected_socket=${runtime_root}/docker.sock
@@ -43,47 +51,52 @@ expected_containerd_root=${state_root}/outer-containerd
 
 config_sha256=$(sha256sum "${config}" | cut -d' ' -f1)
 containerd_config_sha256=$(sha256sum "${containerd_config}" | cut -d' ' -f1)
+runtime_root_identity=$(jq -c -e '.runtimeRootIdentity' "${isolated_receipt}")
+python3 "${runtime_root_tool}" verify "${runtime_root}" --expected "${runtime_root_identity}" >/dev/null || {
+  echo 'live Docker runtime root differs from its task-owned startup receipt' >&2
+  exit 66
+}
 docker_root=$(docker info --format '{{.DockerRootDir}}')
 docker_server_id=$(docker info --format '{{.ID}}')
 docker_server_version=$(docker version --format '{{.Server.Version}}')
+docker_pid=$(jq -er '.dockerPid' "${isolated_receipt}")
+containerd_pid=$(jq -er '.containerd.pid' "${isolated_receipt}")
+docker_executable=$(readlink -e -- "$(command -v dockerd)")
+containerd_executable=$(readlink -e -- "$(command -v containerd)")
+docker_process_identity=$(sudo -n python3 "${process_identity_tool}" "${docker_pid}" "${docker_executable}" "${config}")
+containerd_process_identity=$(sudo -n python3 "${process_identity_tool}" "${containerd_pid}" "${containerd_executable}" "${containerd_config}")
 jq -e \
   --arg runtimeRoot "${runtime_root}" \
+  --argjson runtimeRootIdentity "${runtime_root_identity}" \
   --arg socket "${expected_socket}" \
   --arg dataRoot "${expected_data_root}" \
   --arg containerdRoot "${expected_containerd_root}" \
   --arg serverId "${docker_server_id}" \
   --arg serverVersion "${docker_server_version}" \
   --arg configSha256 "${config_sha256}" \
-  --arg containerdConfigSha256 "${containerd_config_sha256}" '
-    .schema == "ambit.local-daytona-isolated-docker/v2" and
+  --arg containerdConfigSha256 "${containerd_config_sha256}" \
+  --argjson containerdProcessIdentity "${containerd_process_identity}" \
+  --argjson dockerProcessIdentity "${docker_process_identity}" '
+    .schema == "ambit.local-daytona-isolated-docker/v3" and
     .outcome == "passed" and
     .runtimeRoot == $runtimeRoot and
+    .runtimeRootIdentity == $runtimeRootIdentity and
     .socket == $socket and
     .dataRoot == $dataRoot and
     .containerd.root == $containerdRoot and
     .containerd.address == ($runtimeRoot + "/containerd.sock") and
     .containerd.configSha256 == $containerdConfigSha256 and
+    .containerd.processIdentity == $containerdProcessIdentity and
     .network == {addressPool:"172.30.0.0/16",defaultBridge:"disabled",hostFirewallMutation:false} and
     .serverId == $serverId and
     .serverVersion == $serverVersion and
+    .dockerProcessIdentity == $dockerProcessIdentity and
     .configSha256 == $configSha256
   ' "${isolated_receipt}" >/dev/null || {
     echo 'live Docker identity differs from its task-owned startup receipt' >&2
     exit 66
   }
 [[ ${docker_root} == "${expected_data_root}" ]] || { echo 'live Docker data root differs' >&2; exit 66; }
-
-docker_pid=$(jq -er '.dockerPid' "${isolated_receipt}")
-containerd_pid=$(jq -er '.containerd.pid' "${isolated_receipt}")
-for tuple in "${docker_pid}|dockerd|${config}" "${containerd_pid}|containerd|${containerd_config}"; do
-  IFS='|' read -r pid executable required <<< "${tuple}"
-  [[ ${pid} =~ ^[1-9][0-9]*$ && -r /proc/${pid}/cmdline ]] || { echo "${executable} process is absent" >&2; exit 66; }
-  command_line=$(tr '\0' ' ' < "/proc/${pid}/cmdline")
-  [[ ${command_line} == *"${executable}"* && ${command_line} == *"${required}"* ]] || {
-    echo "${executable} process identity differs" >&2
-    exit 66
-  }
-done
 
 cpu_count=$(nproc)
 memory_available_kib=$(awk '$1 == "MemAvailable:" { print $2 }' /proc/meminfo)
@@ -125,8 +138,10 @@ jq -n -S \
   --argjson memory "${memory_available_bytes}" \
   --argjson storage "${storage_available_bytes}" \
   --argjson reasons "${reasons_json}" \
+  --argjson dockerProcessIdentity "${docker_process_identity}" \
+  --argjson containerdProcessIdentity "${containerd_process_identity}" \
   '{
-    schema:"ambit.local-daytona-host-capacity-headroom/v2",
+    schema:"ambit.local-daytona-host-capacity-headroom/v3",
     outcome:$outcome,
     observedAt:$observedAt,
     capacityProfile:{
@@ -137,7 +152,7 @@ jq -n -S \
       minimumObserved:{cpuCores:6,memoryBytes:12884901888,diskBytes:64424509440,gpuCount:0}
     },
     providerOuterCeiling:{cpuCores:5.8,memoryBytes:12616466432,diskReservationBytes:64424509440},
-    isolatedDaemon:{dockerHost:$dockerHost,dockerRoot:$dockerRoot,serverId:$dockerServerId,startupReceiptSha256:$isolatedReceiptSha256,configSha256:$configSha256,containerdConfigSha256:$containerdConfigSha256},
+    isolatedDaemon:{dockerHost:$dockerHost,dockerRoot:$dockerRoot,serverId:$dockerServerId,startupReceiptSha256:$isolatedReceiptSha256,configSha256:$configSha256,containerdConfigSha256:$containerdConfigSha256,processes:{dockerd:$dockerProcessIdentity,containerd:$containerdProcessIdentity}},
     observed:{cpuCores:$cpu,memoryAvailableBytes:$memory,storageAvailableBytes:$storage,storageFilesystem:$storageFilesystem,stateRoot:$stateRoot},
     reasons:$reasons
   }' > "${output}"
