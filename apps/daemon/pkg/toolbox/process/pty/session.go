@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -112,6 +113,7 @@ func (s *PTYSession) start() error {
 
 	s.cmd = cmd
 	s.ptmx = ptmx
+	s.inputWriter = ptmx
 	s.info.Active = true
 
 	s.logger.Debug("Started PTY session", "sessionId", s.info.ID, "pid", s.cmd.Process.Pid)
@@ -212,6 +214,7 @@ func (s *PTYSession) kill() {
 	if s.ptmx != nil {
 		_ = s.ptmx.Close()
 		s.ptmx = nil
+		s.inputWriter = nil
 	}
 	if s.cmd != nil && s.cmd.Process != nil {
 		_ = s.cmd.Process.Kill()
@@ -271,15 +274,54 @@ func (s *PTYSession) inputWriteLoop() {
 		select {
 		case <-s.ctx.Done():
 			return
-		case data := <-s.inCh:
-			if s.ptmx == nil {
+		case data, ok := <-s.inCh:
+			if !ok {
 				return
 			}
-			if _, err := s.ptmx.Write(data); err != nil {
+			s.mu.Lock()
+			writer := s.inputWriter
+			cancel := s.cancel
+			s.mu.Unlock()
+			if writer == nil {
+				return
+			}
+			if err := writePTYInput(s.ctx, writer, data); err != nil {
+				s.logger.Error("PTY input write failed", "error", err)
+				if cancel != nil {
+					cancel()
+				}
 				return
 			}
 		}
 	}
+}
+
+// writePTYInput preserves every byte of one admitted WebSocket message. Go's
+// io.Writer contract permits short writes, so a single Write call is not a
+// complete transport operation. Zero progress and invalid overrun reports fail
+// closed rather than spinning or silently dropping a suffix.
+func writePTYInput(ctx context.Context, writer io.Writer, data []byte) error {
+	for len(data) > 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		written, err := writer.Write(data)
+		if written < 0 || written > len(data) {
+			return io.ErrShortWrite
+		}
+		if written > 0 {
+			data = data[written:]
+		}
+		if err != nil {
+			return err
+		}
+		if written == 0 {
+			return io.ErrNoProgress
+		}
+	}
+	return nil
 }
 
 // sendToPTY sends data from a client to the PTY
@@ -290,7 +332,7 @@ func (s *PTYSession) sendToPTY(data []byte) error {
 	}
 
 	select {
-	case s.inCh <- data:
+	case s.inCh <- append([]byte(nil), data...):
 		return nil
 	case <-s.ctx.Done():
 		return fmt.Errorf("PTY session input channel closed")

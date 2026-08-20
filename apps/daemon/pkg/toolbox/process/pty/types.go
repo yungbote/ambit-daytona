@@ -5,6 +5,7 @@ package pty
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -18,7 +19,11 @@ import (
 // Constants
 const (
 	writeWait = 10 * time.Second
-	readLimit = 64 * 1024
+	// maxPTYWebSocketInputBytes is the exact maximum for one ordered PTY input
+	// message: a 64 KiB binary payload plus a bounded 12-byte application frame.
+	// Keeping the envelope in one WebSocket message avoids transport-level
+	// fragmentation and preserves binary command boundaries.
+	maxPTYWebSocketInputBytes = (64 * 1024) + 12
 	// readDrainTimeout bounds how long the exit path waits for ptyReadLoop to
 	// finish queuing output before closing, so a lingering child that keeps the
 	// PTY open cannot stall teardown indefinitely.
@@ -69,10 +74,13 @@ type PTYSession struct {
 
 	info PTYSessionInfo
 
-	cmd    *exec.Cmd
-	ptmx   *os.File
-	ctx    context.Context
-	cancel context.CancelFunc
+	cmd  *exec.Cmd
+	ptmx *os.File
+	// inputWriter normally aliases ptmx. Keeping the narrow io.Writer boundary
+	// makes short-write behavior testable without weakening PTY ownership.
+	inputWriter io.Writer
+	ctx         context.Context
+	cancel      context.CancelFunc
 
 	// multi-attach
 	clients   cmap.ConcurrentMap[string, *wsClient]

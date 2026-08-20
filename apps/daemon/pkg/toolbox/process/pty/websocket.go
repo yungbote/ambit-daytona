@@ -109,7 +109,7 @@ drain:
 // clientReader reads input from a WebSocket client and sends to PTY
 func (s *PTYSession) clientReader(cl *wsClient) {
 	conn := cl.conn
-	conn.SetReadLimit(readLimit)
+	conn.SetReadLimit(maxPTYWebSocketInputBytes)
 
 	for {
 		_, data, err := conn.ReadMessage()
