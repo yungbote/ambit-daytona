@@ -1,0 +1,10 @@
+{
+  "schema": "ambit.runtime-pack-certification-tools/v1",
+  "buildkit": "docker.io/moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8",
+  "buildkitSbomGenerator": "docker.io/docker/buildkit-syft-scanner@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9",
+  "grype": "docker.io/anchore/grype@sha256:ddf9e9f204049f3a4a0955ef70873cabab6a31432125ad4f20a490b54950a253",
+  "registry": "docker.io/library/registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373",
+  "syft": "docker.io/anchore/syft@sha256:678bfa565b60f747aac0f8e964fe5588a24445b8d0a480e91f6efd70020dfbb0",
+  "goBuilder": "docker.io/library/golang@sha256:40dfc169bd5ad8a8617e49c8ead7fe16c6873e79d6937539e9c2e5947b7984ef",
+  "wolfiFilesystemReader": "cgr.dev/chainguard/wolfi-base@sha256:df3f0bac868b88029d6071734ea42cd3073d6d99aa840671cbf30af609aadc5d"
+}

@@ -123,6 +123,10 @@ def exactly_one_build_artifact_package(
 parser = argparse.ArgumentParser()
 parser.add_argument("--vex", required=True, type=Path)
 parser.add_argument("--conformance-receipt", required=True, type=Path)
+parser.add_argument("--actual-apk-lock", required=True, type=Path)
+parser.add_argument("--vulnerabilities", required=True, type=Path)
+parser.add_argument("--grype-db-receipt", required=True, type=Path)
+parser.add_argument("--package-evidence-receipt", required=True, type=Path)
 parser.add_argument("--glibc-package-spdx", required=True, type=Path)
 parser.add_argument("--libcrypto-package-spdx", required=True, type=Path)
 parser.add_argument("--libssl-package-spdx", required=True, type=Path)
@@ -154,6 +158,40 @@ require(runtime.get("network") == "none", "conformance did not prove network-non
 require(runtime.get("hostSocket") == "absent", "conformance did not prove host-socket absence")
 absent_commands = runtime.get("absentCommands")
 require(isinstance(absent_commands, list) and "ldd" in absent_commands, "conformance did not prove ldd absent")
+actual_apk_pin = pin(args.actual_apk_lock)
+runtime_apk_closure = runtime.get("osClosure")
+require(isinstance(runtime_apk_closure, dict), "conformance installed APK closure receipt is invalid")
+require(
+    runtime_apk_closure.get("path") == "apk-packages.actual.lock"
+    and runtime_apk_closure.get("bytes") == actual_apk_pin["bytes"]
+    and runtime_apk_closure.get("sha256") == actual_apk_pin["sha256"],
+    "conformance does not bind the exact installed APK closure",
+)
+actual_apk_packages = set(args.actual_apk_lock.read_text().splitlines())
+
+vulnerabilities = load(args.vulnerabilities)
+raw_matches = [*(vulnerabilities.get("matches") or []), *(vulnerabilities.get("ignoredMatches") or [])]
+require(all(isinstance(match, dict) for match in raw_matches), "raw Grype finding inventory is invalid")
+grype_db = vulnerabilities.get("descriptor", {}).get("db", {}).get("status", {})
+grype_db_receipt = load(args.grype_db_receipt)
+require(
+    grype_db_receipt.get("schema") == "ambit.runtime-pack-grype-database/v1"
+    and grype_db_receipt.get("outcome") == "passed",
+    "Grype database receipt is invalid",
+)
+require(grype_db_receipt.get("database") == grype_db, "Grype database receipt does not bind the raw report")
+
+package_evidence_receipt = load(args.package_evidence_receipt)
+require(
+    package_evidence_receipt.get("schema") == "ambit.runtime-pack-wolfi-package-evidence/v1"
+    and package_evidence_receipt.get("outcome") == "passed",
+    "Wolfi package evidence receipt is invalid",
+)
+require(
+    isinstance(package_evidence_receipt.get("runtimeManifestDigest"), str)
+    and package_evidence_receipt["runtimeManifestDigest"].startswith("sha256:"),
+    "Wolfi package evidence receipt does not bind a runtime manifest",
+)
 
 spdx_paths = {
     "glibc-2.43": args.glibc_package_spdx,
@@ -176,6 +214,15 @@ upstream_issue_paths = {
 loaded_spdx = {name: load(path) for name, path in spdx_paths.items()}
 indexed_spdx = {name: package_index(value) for name, value in loaded_spdx.items()}
 build_config_text = {name: path.read_text() for name, path in build_config_paths.items()}
+expected_package_evidence_files = {
+    "glibc": pin(args.glibc_package_spdx),
+    "libcrypto": pin(args.libcrypto_package_spdx),
+    "libssl": pin(args.libssl_package_spdx),
+}
+require(
+    package_evidence_receipt.get("files") == expected_package_evidence_files,
+    "Wolfi package evidence receipt does not bind the exact extracted SPDX files",
+)
 
 repository_expectations = {
     args.glibc_git_dir: "https://gitlab.com/gnutools/glibc.git",
@@ -211,6 +258,40 @@ for index, entry in enumerate(entries):
         or evidence.get("kind")
         in {"upstream-disputed-non-security", "upstream-disputed-non-security-and-ldd-absent"},
         f"VEX entry {index} package build SPDX hash mismatch",
+    )
+    require(
+        f"{artifact_name}={artifact_version}" in actual_apk_packages,
+        f"VEX entry {index} artifact is absent from the exact installed APK closure",
+    )
+    matching_raw_rows = []
+    for raw_index, raw_match in enumerate(raw_matches):
+        details = raw_match.get("matchDetails")
+        if not isinstance(details, list) or len(details) != 1 or not isinstance(details[0], dict):
+            continue
+        raw_artifact = raw_match.get("artifact", {})
+        raw_vulnerability = raw_match.get("vulnerability", {})
+        found = details[0].get("found", {})
+        identity = {
+            "artifact": {
+                "name": raw_artifact.get("name"),
+                "version": raw_artifact.get("version"),
+                "type": raw_artifact.get("type"),
+                "purl": raw_artifact.get("purl"),
+            },
+            "vulnerability": {
+                "id": raw_vulnerability.get("id"),
+                "namespace": raw_vulnerability.get("namespace"),
+                "severity": raw_vulnerability.get("severity"),
+            },
+            "matchType": details[0].get("type"),
+            "matcher": details[0].get("matcher"),
+            "versionConstraint": found.get("versionConstraint") if isinstance(found, dict) else None,
+        }
+        if identity == match:
+            matching_raw_rows.append(raw_index)
+    require(
+        len(matching_raw_rows) == 1,
+        f"VEX entry {index} must bind exactly one raw Grype row, matched {len(matching_raw_rows)}",
     )
 
     proof: dict[str, Any]
@@ -344,6 +425,7 @@ for index, entry in enumerate(entries):
     verified_entries.append(
         {
             "entryIndex": index,
+            "rawGrypeRowIndex": matching_raw_rows[0],
             "entrySha256": entry_sha256,
             "evidenceSha256": canonical_sha256(evidence),
             "status": entry.get("status"),
@@ -357,6 +439,10 @@ receipt = {
     "inputs": {
         "vex": pin(args.vex),
         "conformanceReceipt": pin(args.conformance_receipt),
+        "actualApkLock": actual_apk_pin,
+        "vulnerabilities": pin(args.vulnerabilities),
+        "grypeDatabaseReceipt": pin(args.grype_db_receipt),
+        "packageEvidenceReceipt": pin(args.package_evidence_receipt),
         "glibcPackageSpdx": pin(args.glibc_package_spdx),
         "libcryptoPackageSpdx": pin(args.libcrypto_package_spdx),
         "libsslPackageSpdx": pin(args.libssl_package_spdx),
