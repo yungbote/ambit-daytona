@@ -35,29 +35,37 @@ The pipeline then:
    and provenance objects by digest and verifies their subjects, descriptors,
    exact Ambit label roster, build arguments, named contexts, and resolved
    dependency roster;
-4. pulls and executes the exact runtime manifest under non-root,
+4. freezes a complete OCI image layout for that exact index. Every inherited
+   compressed layer must match the ordered digest/size prefix of the declared
+   digest-pinned Wolfi base and is fetched only from that source repository;
+   every pack-owned or attestation blob is fetched only from the task-local
+   candidate registry. The complete recursive descriptor graph is rehashed
+   offline before its receipt enters the signature;
+5. pulls and executes the exact runtime manifest under non-root,
    capability-none, no-new-privileges, read-only, network-none controls;
-5. runs the full framed atomic materializer and structural DOCX suite from an
+6. runs the full framed atomic materializer and structural DOCX suite from an
    external read-only source mount, plus root, host-socket, secret-environment,
    installer-script, egress, race, link, path, and input-frame negative gates;
-6. saves the executable image and scans every historical layer, config,
-   environment, history entry, and sensitive path for secrets;
-7. scans the complete attested SPDX with the caller-supplied immutable Grype
+7. uses a Docker save archive only as a squashed/historical layer secret-scan
+   input; that archive is never an OCI artifact identity or publication
+   object because Docker rewrites compressed layer representation;
+8. scans the complete attested SPDX with the caller-supplied immutable Grype
    DB, preserving every raw and scanner-ignored row;
-8. verifies the exact caller-supplied Wolfi package-build SPDX files named by
+9. verifies the exact caller-supplied Wolfi package-build SPDX files named by
    `WOLFI_PACKAGE_EVIDENCE_DIR` against their locked hashes, then proves each
    VEX row one-to-one against the raw report, installed APK closure, DB tree,
    package source/build metadata, fix ancestry or exact cherry-pick, authority
    snapshots, and final conformance receipt. These build-evidence SBOMs are
    absent from the runtime filesystem so the runtime SBOM cannot recursively
    recatalog build metadata as installed packages;
-9. applies reviewed license conclusions and VEX dispositions in policy-gate
+10. applies reviewed license conclusions and VEX dispositions in policy-gate
    schema v2, while reporting raw, disposition, and effective counts;
-10. signs one binding covering OCI identities, raw attestations/reports,
+11. signs one binding covering OCI identities, the complete portable OCI
+    layout receipt, raw attestations/reports,
     source archives, locks, policies, negative gates, transport receipts, VEX
     proof, DB proof, and secret scan with an ephemeral Ed25519 key that is
     deleted before exit; and
-11. reruns the same policy without the diagnostic-output allowance, compares
+12. reruns the same policy without the diagnostic-output allowance, compares
     the receipts byte-for-byte, and refuses promotion on any failure.
 
 The local signature proves only content binding for this evidence packet. It

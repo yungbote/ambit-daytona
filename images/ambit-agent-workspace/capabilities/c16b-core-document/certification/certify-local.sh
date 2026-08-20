@@ -141,6 +141,8 @@ mkdir -p \
   "${artifact_root}/helper-context" \
   "${artifact_root}/registry-data" \
   "${artifact_root}/oci" \
+  "${artifact_root}/oci-source/base-blobs" \
+  "${artifact_root}/oci-source/candidate-blobs" \
   "${artifact_root}/security" \
   "${artifact_root}/vex-primary" \
   "${artifact_root}/transport"
@@ -311,6 +313,23 @@ sbom_generator=$(jq -er '.buildkitSbomGenerator' "${tools_lock}")
 grype=$(jq -er '.grype' "${tools_lock}")
 registry=$(jq -er '.registry' "${tools_lock}")
 wolfi=$(jq -er '.wolfiFilesystemReader' "${tools_lock}")
+base_reference=$(jq -er '.baseImage' "${archived_pack_dir}/toolchain-manifest.json")
+base_manifest_digest=${base_reference##*@}
+python3 "${archived_cert_dir}/fetch_registry_object.py" \
+  --reference "${base_reference}" --kind manifest --digest "${base_manifest_digest}" \
+  --output "${artifact_root}/oci-source/base-manifest.json"
+base_config_digest=$(jq -er '.config.digest' "${artifact_root}/oci-source/base-manifest.json")
+base_config_size=$(jq -er '.config.size' "${artifact_root}/oci-source/base-manifest.json")
+python3 "${archived_cert_dir}/fetch_registry_object.py" \
+  --reference "${base_reference}" --kind blob --digest "${base_config_digest}" \
+  --expected-size "${base_config_size}" \
+  --output "${artifact_root}/oci-source/base-config.json"
+while IFS=$'\t' read -r digest size; do
+  python3 "${archived_cert_dir}/fetch_registry_object.py" \
+    --reference "${base_reference}" --kind blob --digest "${digest}" \
+    --expected-size "${size}" \
+    --output "${artifact_root}/oci-source/base-blobs/${digest#sha256:}"
+done < <(jq -r '.layers[] | [.digest,.size] | @tsv' "${artifact_root}/oci-source/base-manifest.json")
 expected_materials=${artifact_root}/expected-materials.json
 jq -n -S \
   --arg wolfi "sha256:$(jq -er '.baseImage' "${archived_pack_dir}/toolchain-manifest.json" | sed 's/^.*@sha256://')" \
@@ -492,6 +511,39 @@ python3 "${archived_cert_dir}/verify_attestations.py" "${artifact_root}/oci" \
   --expected-build-args "${expected_build_args}" --expected-materials "${expected_materials}" \
   --output "${artifact_root}/attestation-verification.json"
 
+candidate_repository=${registry_host}/${repository}
+base_layer_count=$(jq -er '.layers | length' "${artifact_root}/oci-source/base-manifest.json")
+while IFS=$'\t' read -r digest size; do
+  python3 "${archived_cert_dir}/fetch_registry_object.py" \
+    --reference "${candidate_repository}" --scheme http --kind blob --digest "${digest}" \
+    --expected-size "${size}" \
+    --output "${artifact_root}/oci-source/candidate-blobs/${digest#sha256:}"
+done < <(jq -r --argjson inherited "${base_layer_count}" '.layers[$inherited:][] | [.digest,.size] | @tsv' \
+  "${artifact_root}/oci/runtime-manifest.json")
+while IFS=$'\t' read -r digest size; do
+  python3 "${archived_cert_dir}/fetch_registry_object.py" \
+    --reference "${candidate_repository}" --scheme http --kind blob --digest "${digest}" \
+    --expected-size "${size}" \
+    --output "${artifact_root}/oci-source/candidate-blobs/${digest#sha256:}"
+done < <(jq -r '.layers[] | [.digest,.size] | @tsv' \
+  "${artifact_root}/oci/attestation-manifest.json")
+python3 "${archived_cert_dir}/freeze_complete_oci_layout.py" \
+  --index "${artifact_root}/oci/index.json" \
+  --runtime-manifest "${artifact_root}/oci/runtime-manifest.json" \
+  --runtime-config "${artifact_root}/oci/config.json" \
+  --attestation-manifest "${artifact_root}/oci/attestation-manifest.json" \
+  --base-reference "${base_reference}" \
+  --base-manifest "${artifact_root}/oci-source/base-manifest.json" \
+  --base-config "${artifact_root}/oci-source/base-config.json" \
+  --base-blobs "${artifact_root}/oci-source/base-blobs" \
+  --candidate-blobs "${artifact_root}/oci-source/candidate-blobs" \
+  --output-layout "${artifact_root}/complete-oci-layout" \
+  --output-receipt "${artifact_root}/complete-oci-layout-receipt.json"
+python3 "${archived_cert_dir}/verify_complete_oci_layout.py" \
+  --layout "${artifact_root}/complete-oci-layout" \
+  --receipt "${artifact_root}/complete-oci-layout-receipt.json" \
+  --output "${artifact_root}/complete-oci-layout-verification.json"
+
 runtime_ref=${registry_host}/${repository}@${runtime_manifest}
 docker pull --platform linux/amd64 "${runtime_ref}" >/dev/null
 docker image inspect "${runtime_ref}" > "${artifact_root}/runtime-image-inspect.json"
@@ -499,8 +551,8 @@ docker image inspect "${runtime_ref}" > "${artifact_root}/runtime-image-inspect.
   echo "pulled runtime config does not match OCI runtime manifest" >&2
   exit 68
 }
-docker save -o "${artifact_root}/runtime-image.tar" "${runtime_ref}"
-python3 "${archived_cert_dir}/scan_image_secrets.py" "${artifact_root}/runtime-image.tar" \
+docker save -o "${artifact_root}/runtime-image-layer-scan.tar" "${runtime_ref}"
+python3 "${archived_cert_dir}/scan_image_secrets.py" "${artifact_root}/runtime-image-layer-scan.tar" \
   --output "${artifact_root}/security/image-secret-scan.json"
 [[ $(jq -er '.input.configSha256' "${artifact_root}/security/image-secret-scan.json") == "${config_digest#sha256:}" ]] || {
   echo "image secret scan did not inspect the exact OCI config" >&2
@@ -683,6 +735,8 @@ jq -n -S \
   --arg attestation_manifest "${attestation_manifest}" --arg sbom_layer "${sbom_layer}" \
   --arg provenance_layer "${provenance_layer}" \
   --arg attestation "$(sha256_file "${artifact_root}/attestation-verification.json")" \
+  --arg complete_oci_layout "$(sha256_file "${artifact_root}/complete-oci-layout-receipt.json")" \
+  --arg complete_oci_verification "$(sha256_file "${artifact_root}/complete-oci-layout-verification.json")" \
   --arg helper_input_verification "$(sha256_file "${artifact_root}/helper-input-verification.json")" \
   --arg reproducibility "$(sha256_file "${artifact_root}/reproducibility-receipt.json")" \
   --arg conformance "$(sha256_file "${conformance_dir}/conformance-receipt.json")" \
@@ -726,7 +780,7 @@ jq -n -S \
     identity:{providerPullDigest:$index,runtimeCapabilityPackRevisionArtifactDigest:$manifest,configDigest:$config},
     source:{daytona:{revision:$source_revision,tree:$source_tree,packTree:$source_pack_tree,archiveSha256:$source_archive,dockerfileSha256:$dockerfile,lockSetSha256:$locks,conformanceSetSha256:$conformance_set,policySetSha256:$policy_set},backendHelper:{revision:$helper_revision,tree:$helper_tree,archiveSha256:$helper_archive,binarySha256:$helper_binary,protocolSha256:$protocol,providerAdapterRevision:$adapter,admissionFenceRevision:$admission_fence}},
     attestations:{manifestDigest:$attestation_manifest,sbomLayerDigest:$sbom_layer,provenanceLayerDigest:$provenance_layer,sbomSpdxSha256:$sbom,provenanceStatementSha256:$provenance},
-    verification:{attestationReceiptSha256:$attestation,helperInputReceiptSha256:$helper_input_verification,reproducibilityReceiptSha256:$reproducibility,conformanceReceiptSha256:$conformance,materializerReceiptSha256:$materializer,artifactReceiptSha256:$artifacts,daytonaPtyReceiptSha256:$daemon,providerAdapterReceiptSha256:$provider,providerAdapterRawLogSha256:$provider_log,providerAdapterVerificationSha256:$provider_verification,vexEvidenceReceiptSha256:$vex_verification,vulnerabilityReportSha256:$vulnerability,grypeDatabaseReceiptSha256:$db,imageSecretScanSha256:$secret_scan,negativeRootReceiptSha256:$negative_root,negativeSocketReceiptSha256:$negative_socket,negativeSecretEnvReceiptSha256:$negative_secret,negativeInstallScriptReceiptSha256:$negative_install,policyReceiptSha256:$policy},
+    verification:{attestationReceiptSha256:$attestation,completeOciLayoutReceiptSha256:$complete_oci_layout,completeOciLayoutVerificationSha256:$complete_oci_verification,helperInputReceiptSha256:$helper_input_verification,reproducibilityReceiptSha256:$reproducibility,conformanceReceiptSha256:$conformance,materializerReceiptSha256:$materializer,artifactReceiptSha256:$artifacts,daytonaPtyReceiptSha256:$daemon,providerAdapterReceiptSha256:$provider,providerAdapterRawLogSha256:$provider_log,providerAdapterVerificationSha256:$provider_verification,vexEvidenceReceiptSha256:$vex_verification,vulnerabilityReportSha256:$vulnerability,grypeDatabaseReceiptSha256:$db,imageSecretScanSha256:$secret_scan,negativeRootReceiptSha256:$negative_root,negativeSocketReceiptSha256:$negative_socket,negativeSecretEnvReceiptSha256:$negative_secret,negativeInstallScriptReceiptSha256:$negative_install,policyReceiptSha256:$policy},
     sourceContracts:{apkDirectLockSha256:$apk_direct,apkClosureLockSha256:$apk_closure,pythonLockSha256:$python_lock,helperInputLockSha256:$helper_input_lock,helperInputManifestSha256:$helper_input_manifest,toolchainManifestSha256:$toolchain},
     policyInputs:{licensePolicySha256:$license_policy,licenseReviewSha256:$license_review,runtimePolicySha256:$runtime_policy,vexSha256:$vex,vulnerabilityPolicySha256:$vulnerability_policy,certificationToolsLockSha256:$tools,hostToolsReceiptSha256:$host_tools},
     signingKey:{algorithm:"Ed25519",publicKeyPemSha256:$public_pem,publicKeyDerSha256:$public_der},
