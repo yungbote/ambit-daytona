@@ -116,6 +116,7 @@ printf '%s\n' "${absent_commands[@]}" | LC_ALL=C sort > "${output_root}/absent-c
 test ! -d /usr/lib/python3.14/ensurepip
 test ! -d /usr/share/python-wheels
 test ! -d /var/lib/db/sbom
+test ! -e /var/cache/ldconfig
 test -z "$(find /usr /opt/ambit/runtime-pack/core-document -type f -iname '*pip*.whl' -print -quit 2>/dev/null)"
 
 python3 - <<'PY'

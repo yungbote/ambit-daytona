@@ -115,6 +115,7 @@ RUN set -eux; \
     cmp /tmp/apk-packages.lock /tmp/apk-packages.actual.lock; \
     rm -rf \
       /var/cache/apk/* \
+      /var/cache/ldconfig \
       /usr/lib/python3.14/ensurepip \
       /usr/share/python-wheels \
       /usr/bin/pip \
