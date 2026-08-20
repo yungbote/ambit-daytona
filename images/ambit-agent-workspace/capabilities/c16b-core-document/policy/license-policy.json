@@ -1,0 +1,12 @@
+{
+  "schema": "ambit.runtime-pack-license-policy/v1",
+  "deniedSpdxExpressions": [
+    "AGPL-1.0-only",
+    "AGPL-1.0-or-later",
+    "AGPL-3.0-only",
+    "AGPL-3.0-or-later",
+    "SSPL-1.0"
+  ],
+  "unknownLicenseDisposition": "deny-promotion",
+  "unreviewedLicenseDisposition": "deny-promotion"
+}

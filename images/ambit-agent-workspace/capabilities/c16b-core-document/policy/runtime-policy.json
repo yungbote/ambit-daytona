@@ -1,0 +1,14 @@
+{
+  "schema": "ambit.runtime-pack-policy/v1",
+  "runtimeUser": "daytona",
+  "rootEscalation": "denied",
+  "hostSocketMounts": "denied",
+  "packageInstallScriptsByDefault": "disabled",
+  "pythonSourceBuildsByDefault": "disabled",
+  "pythonDependencyHashes": "required",
+  "dependencyNetworkByDefault": "disabled",
+  "workspaceWriteRoot": "/workspace",
+  "packRoot": "/opt/ambit/runtime-pack/core-document",
+  "packRootMutability": "read-only",
+  "secretsInImage": "denied"
+}

@@ -1,0 +1,16 @@
+{
+  "name": "@ambit/runtime-pack-core-document",
+  "version": "1.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "playwright-core": "1.62.1",
+    "pyright": "1.1.413",
+    "typescript": "7.0.2",
+    "typescript-language-server": "5.1.3"
+  },
+  "engines": {
+    "node": "20.19.2"
+  }
+}

@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+output_root="${1:-/workspace/c16b-conformance}"
+pack_root=/opt/ambit/runtime-pack/core-document
+
+mkdir -p "${output_root}"
+if find "${output_root}" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+  echo "conformance output must be an empty directory: ${output_root}" >&2
+  exit 1
+fi
+export HOME="${output_root}/home"
+export XDG_CACHE_HOME="${output_root}/cache"
+export XDG_CONFIG_HOME="${output_root}/config"
+export XDG_RUNTIME_DIR="${output_root}/run"
+mkdir -p "${HOME}" "${XDG_CACHE_HOME}" "${XDG_CONFIG_HOME}" "${XDG_RUNTIME_DIR}"
+chmod 0700 "${XDG_RUNTIME_DIR}"
+
+test "$(id -u)" = "1000"
+test "$(id -un)" = "daytona"
+test ! -S /var/run/docker.sock
+test ! -w "${pack_root}"
+test "$(locale charmap)" = "UTF-8"
+test "${LANG}" = "C.UTF-8"
+test "${LC_ALL}" = "C.UTF-8"
+if env | cut -d= -f1 | grep -Eiq '(api[_-]?key|password|private[_-]?key|secret|token)'; then
+  echo "secret-shaped environment variable reached the runtime" >&2
+  exit 1
+fi
+if sudo -n true >/dev/null 2>&1; then
+  echo "runtime user unexpectedly retained sudo authority" >&2
+  exit 1
+fi
+
+test "$(python3 --version)" = "Python 3.11.14"
+test "$(node --version)" = "v20.19.2"
+test "$(npm --version)" = "9.2.0"
+test "$(npm config get ignore-scripts)" = "true"
+test "$(pyright --version)" = "pyright 1.1.413"
+test "$(typescript-language-server --version)" = "5.1.3"
+test "$(tsc --version)" = "Version 7.0.2"
+chromium --version | grep -F 'Chromium 151.0.7922.137' >/dev/null
+libreoffice --version | grep -F 'LibreOffice 25.2.3.2' >/dev/null
+pandoc --version | head -1 | grep -F 'pandoc 3.1.11.1' >/dev/null
+
+while IFS= read -r expected; do
+  package="${expected%%=*}"
+  version="$(dpkg-query -W -f='${Version}' "${package}")"
+  test "${package}=${version}" = "${expected}"
+done < "${pack_root}/apt-packages.lock"
+
+python3 -m pip check
+
+malicious_python="${output_root}/malicious-python"
+mkdir -p "${malicious_python}"
+printf '%s\n' \
+  'from pathlib import Path' \
+  'from setuptools import setup' \
+  "Path('${output_root}/PYTHON_INSTALL_SCRIPT_EXECUTED').write_text('unsafe')" \
+  "setup(name='ambit-malicious-install-fixture', version='1.0.0')" \
+  > "${malicious_python}/setup.py"
+if python3 -m pip install "${malicious_python}" >"${output_root}/pip-policy.log" 2>&1; then
+  echo "unlocked Python source installation unexpectedly succeeded" >&2
+  exit 1
+fi
+test ! -e "${output_root}/PYTHON_INSTALL_SCRIPT_EXECUTED"
+
+malicious_node="${output_root}/malicious-node"
+node_target="${output_root}/node-policy-target"
+mkdir -p "${malicious_node}" "${node_target}"
+printf '%s\n' \
+  '{' \
+  '  "name": "ambit-malicious-install-fixture",' \
+  '  "version": "1.0.0",' \
+  "  \"scripts\": {\"preinstall\": \"touch ${output_root}/NODE_INSTALL_SCRIPT_EXECUTED\"}" \
+  '}' > "${malicious_node}/package.json"
+npm install --offline --no-audit --no-fund \
+  --cache "${XDG_CACHE_HOME}/npm" \
+  --prefix "${node_target}" \
+  "${malicious_node}" >"${output_root}/npm-policy.log" 2>&1
+test ! -e "${output_root}/NODE_INSTALL_SCRIPT_EXECUTED"
+
+python3 "${pack_root}/conformance/artifact_conformance.py" "${output_root}"
+
+python3 -m http.server 8123 --bind 127.0.0.1 --directory "${output_root}/web" >"${output_root}/http.log" 2>&1 &
+server_pid=$!
+cleanup_server() {
+  kill "${server_pid}" >/dev/null 2>&1 || true
+  wait "${server_pid}" >/dev/null 2>&1 || true
+}
+trap cleanup_server EXIT
+for _ in $(seq 1 50); do
+  if curl --fail --silent --show-error http://127.0.0.1:8123/ >/dev/null; then
+    break
+  fi
+  sleep 0.1
+done
+curl --fail --silent --show-error http://127.0.0.1:8123/ >/dev/null
+node "${pack_root}/conformance/web_conformance.cjs" "${output_root}" http://127.0.0.1:8123/
+cleanup_server
+trap - EXIT
+
+if python3 -m pip install --disable-pip-version-check ambit-package-that-does-not-exist >/dev/null 2>&1; then
+  echo "offline Python package acquisition unexpectedly succeeded" >&2
+  exit 1
+fi
+if curl --connect-timeout 2 --max-time 3 --silent https://example.com >/dev/null 2>&1; then
+  echo "network-none runtime unexpectedly reached public egress" >&2
+  exit 1
+fi
+
+python3 "${pack_root}/conformance/finalize_receipt.py" "${output_root}"
+test -s "${output_root}/conformance-receipt.json"
