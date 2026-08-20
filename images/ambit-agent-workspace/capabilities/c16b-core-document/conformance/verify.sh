@@ -48,7 +48,7 @@ pandoc --version | grep -F 'pandoc 3.1.11.1' >/dev/null
 git lfs version | grep -F 'git-lfs/3.6.1' >/dev/null
 file --version | grep -F 'file-5.46' >/dev/null
 wget --version | grep -F 'GNU Wget 1.25.0' >/dev/null
-ssh -V 2>&1 | grep -F 'OpenSSH_10.0p1' >/dev/null
+ssh -V 2>&1 | grep -F 'OpenSSH_10.0p2' >/dev/null
 test "$(command -v scp)" = "/usr/bin/scp"
 7z i | grep -F '7-Zip 25.01' >/dev/null
 unzip -v | grep -F 'UnZip 6.00' >/dev/null

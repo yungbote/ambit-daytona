@@ -30,6 +30,8 @@ Runtime safety is intentionally narrower than build-time authority:
   removed and the sudo binary de-setuid;
 - `/opt/ambit/runtime-pack/core-document` is root-owned and read-only;
 - npm install scripts and pip indexes are disabled by default;
+- `npx` resolves only commands already present in the immutable admitted pack;
+  it never downloads or installs a package at runtime;
 - the inherited NVM and ambient global Python package trees are removed after
   the exact pack environments are materialized; they are not capability
   authority;

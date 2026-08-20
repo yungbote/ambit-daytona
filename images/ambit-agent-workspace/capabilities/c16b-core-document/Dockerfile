@@ -42,6 +42,7 @@ RUN set -eux; \
 COPY package.json package-lock.json /opt/ambit/runtime-pack/core-document/node/
 COPY --from=node_dependencies --chown=root:root /pack/node_modules /opt/ambit/runtime-pack/core-document/node/node_modules
 COPY --from=node_dependencies --chown=root:root /usr/local/lib/node_modules/npm /opt/ambit/runtime-pack/core-document/node/npm
+COPY bin/npx /opt/ambit/runtime-pack/core-document/node/bin/npx
 
 COPY apt-packages.lock /opt/ambit/runtime-pack/core-document/apt-packages.lock
 COPY toolchain-manifest.json /opt/ambit/runtime-pack/core-document/toolchain-manifest.json
@@ -53,10 +54,10 @@ RUN set -eux; \
     printf '%s\n' 'ignore-scripts=true' 'audit=false' 'fund=false' > /etc/npmrc; \
     install -d -m 0755 -o root -g root /opt/ambit/runtime-pack/core-document/node/bin; \
     ln -s ../npm/bin/npm-cli.js /opt/ambit/runtime-pack/core-document/node/bin/npm; \
-    ln -s ../npm/bin/npx-cli.js /opt/ambit/runtime-pack/core-document/node/bin/npx; \
     find /opt/ambit/runtime-pack/core-document -type d -exec chmod 0555 {} +; \
     find /opt/ambit/runtime-pack/core-document -type f -exec chmod a-w,go+r {} +; \
     chmod 0555 /opt/ambit/runtime-pack/core-document/conformance/verify.sh; \
+    chmod 0555 /opt/ambit/runtime-pack/core-document/node/bin/npx; \
     install -d -m 0755 -o daytona -g daytona /workspace
 
 LABEL org.opencontainers.image.title="ambit-c16b-core-document" \
