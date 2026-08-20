@@ -141,7 +141,10 @@ python3 "${source_root}/conformance/artifact_conformance.py" "${output_root}"
 if python3 - <<'PY'
 import socket
 
-socket.create_connection(("93.184.216.34", 443), timeout=2)
+try:
+    socket.create_connection(("93.184.216.34", 443), timeout=2)
+except OSError:
+    raise SystemExit(1)
 PY
 then
   echo "network-none runtime unexpectedly reached public egress" >&2

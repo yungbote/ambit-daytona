@@ -533,16 +533,20 @@ unknown_session.write(MAGICS["data"] + struct.pack(">I", len(unknown_payload)) +
 assert unknown_session.read_exact(8) == MAGICS["data_ack"]
 assert struct.unpack(">Q", unknown_session.read_exact(8))[0] == len(unknown_payload)
 unknown_session.write(MAGICS["end"] + struct.pack(">Q", len(unknown_payload)) + hashlib.sha256(unknown_payload).digest())
+unknown_target = WORKSPACE / unknown_path
+publication_deadline = time.monotonic() + 10
+while not unknown_target.exists() and time.monotonic() < publication_deadline:
+    time.sleep(0.001)
+ensure_file(unknown_path, unknown_payload, 0o444)
 os.close(unknown_session.fd)
 unknown_session.fd = -1
 unknown_process_status = unknown_session.process.wait(timeout=10)
-# Once END has been handed to the PTY, closing the transport deliberately makes
-# the Action's outcome unknowable to the caller. Depending on the exact kernel
-# scheduling boundary, the helper can finish before hangup (0), observe the
-# hangup while consuming the final frame (3), or lose its response write (5).
-# None is interpreted as custody. Only a new verify_only Action below may
-# reconcile the already-published inode.
-assert unknown_process_status in (0, 3, 5), unknown_process_status
+# The exact inode is published before response loss. Depending on whether the
+# helper wins the final response-write race, it exits successfully (0) or with
+# an I/O failure (5). Input-truncation exit 3 remains rejected: that is a
+# different, not-yet-committed case. The caller still treats the Action as
+# outcome-unknown and only a new verify_only Action may reconcile custody.
+assert unknown_process_status in (0, 5), unknown_process_status
 reconciled = invoke(unknown_path, unknown_payload, operation="verify_only")
 assert_success(reconciled, relative_path=unknown_path, payload=unknown_payload, mode=0o444, operation="verify_only", outcome="already_identical")
 ensure_file(unknown_path, unknown_payload, 0o444)

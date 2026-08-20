@@ -40,7 +40,7 @@ receipt = {
         "hostSocket": "absent",
         "packRoot": "read_only",
         "runtimePackageInstallers": "absent",
-        "buildOnlyPipWheelPayload": "removed_from_runtime_files_package_metadata_retained",
+        "buildOnlyPipWheelPayload": "removed_from_runtime_files_build_evidence_external",
         "absentCommands": absent_commands,
         "osClosure": apk_closure,
         "locale": "C.UTF-8",
