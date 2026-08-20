@@ -37,7 +37,8 @@
     "transport": "framed_binary_stream_v1",
     "protocolDigest": "sha256:1274e0bb27dfb15d9d7564d71fc02a7117631b405de73d84f39defb415a5f7ad",
     "protocolAuthorityCommit": "2120aa9b31209fb765e0ac15367cd3aab27f9ae3",
-    "providerAdapterCommit": "4a50200dd4862d67171ab324c05c22551bd76cf1",
+    "providerAdapterCommit": "dfb17776f58c853b5cab7edd5dde2076ceb279b7",
+    "providerAdapterBaselineCommit": "4a50200dd4862d67171ab324c05c22551bd76cf1",
     "admissionFenceCommit": "2b2efdb2d36232600ad8c189271d049812e84e5b",
     "publication": "O_TMPFILE-linkat-AT_EMPTY_PATH-no-replace",
     "unicodeNormalization": "golang.org/x/text/unicode/norm@v0.41.0"

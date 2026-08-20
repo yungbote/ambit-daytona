@@ -13,6 +13,7 @@ Required environment:
   GLIBC_GIT_DIR                absolute Git repository containing every locked glibc fix/source commit
   OPENSSL_GIT_DIR              absolute Git repository containing the locked OpenSSL source/fix commits
   PROVIDER_ADAPTER_RECEIPT     absolute passed backend adapter test receipt
+  PROVIDER_ADAPTER_LOG         absolute raw log bound by the adapter receipt
 
 The command builds and pushes a candidate to a task-local loopback registry,
 retrieves OCI objects by digest, tests the exact linux/amd64 manifest under
@@ -86,6 +87,7 @@ vex_evidence_dir=${VEX_EVIDENCE_DIR:?VEX_EVIDENCE_DIR is required}
 glibc_git_dir=${GLIBC_GIT_DIR:?GLIBC_GIT_DIR is required}
 openssl_git_dir=${OPENSSL_GIT_DIR:?OPENSSL_GIT_DIR is required}
 provider_adapter_receipt=${PROVIDER_ADAPTER_RECEIPT:?PROVIDER_ADAPTER_RECEIPT is required}
+provider_adapter_log=${PROVIDER_ADAPTER_LOG:?PROVIDER_ADAPTER_LOG is required}
 
 [[ ${artifact_root} = /home/* ]] || { echo "ARTIFACT_ROOT must be on /home storage" >&2; exit 64; }
 [[ ! -e ${artifact_root} ]] || { echo "ARTIFACT_ROOT already exists: ${artifact_root}" >&2; exit 65; }
@@ -103,6 +105,7 @@ require_absolute_directory VEX_EVIDENCE_DIR "${vex_evidence_dir}"
 require_absolute_directory GLIBC_GIT_DIR "${glibc_git_dir}"
 require_absolute_directory OPENSSL_GIT_DIR "${openssl_git_dir}"
 require_absolute_file PROVIDER_ADAPTER_RECEIPT "${provider_adapter_receipt}"
+require_absolute_file PROVIDER_ADAPTER_LOG "${provider_adapter_log}"
 [[ ${grype_expected_tree} =~ ^[0-9a-f]{64}$ ]] || { echo "invalid expected Grype DB tree digest" >&2; exit 64; }
 
 builder_name="ambit-c16b-certify-${BASHPID}"
@@ -335,7 +338,13 @@ jq -n -S --arg revision "${source_revision}" --arg tree "${source_tree}" \
   > "${artifact_root}/transport/daytona-pty-receipt.json"
 
 cp -- "${provider_adapter_receipt}" "${artifact_root}/transport/provider-adapter-receipt.json"
-jq -e '.outcome == "passed"' "${artifact_root}/transport/provider-adapter-receipt.json" >/dev/null
+cp -- "${provider_adapter_log}" "${artifact_root}/transport/$(basename "${provider_adapter_log}")"
+python3 "${archived_cert_dir}/verify_provider_adapter_receipt.py" \
+  --receipt "${artifact_root}/transport/provider-adapter-receipt.json" \
+  --raw-log "${artifact_root}/transport/$(basename "${provider_adapter_log}")" \
+  --backend-repo "${backend_repo}" --helper-lock "${helper_lock}" \
+  --toolchain-manifest "${archived_pack_dir}/toolchain-manifest.json" \
+  --output "${artifact_root}/transport/provider-adapter-verification.json"
 
 docker run -d --name "${registry_name}" -p 127.0.0.1::5000 \
   -v "${artifact_root}/registry-data:/var/lib/registry" "${registry}" >/dev/null
@@ -608,6 +617,8 @@ jq -n -S \
   --arg artifacts "$(sha256_file "${conformance_dir}/artifact-receipt.json")" \
   --arg daemon "$(sha256_file "${artifact_root}/transport/daytona-pty-receipt.json")" \
   --arg provider "$(sha256_file "${artifact_root}/transport/provider-adapter-receipt.json")" \
+  --arg provider_log "$(sha256_file "${artifact_root}/transport/$(basename "${provider_adapter_log}")")" \
+  --arg provider_verification "$(sha256_file "${artifact_root}/transport/provider-adapter-verification.json")" \
   --arg vex_verification "$(sha256_file "${artifact_root}/vex-evidence-verification.json")" \
   --arg vulnerability "$(sha256_file "${artifact_root}/security/vulnerability.grype.json")" \
   --arg db "$(sha256_file "${artifact_root}/security/grype-db-receipt.json")" \
@@ -642,7 +653,7 @@ jq -n -S \
     identity:{providerPullDigest:$index,runtimeCapabilityPackRevisionArtifactDigest:$manifest,configDigest:$config},
     source:{daytona:{revision:$source_revision,tree:$source_tree,packTree:$source_pack_tree,archiveSha256:$source_archive,dockerfileSha256:$dockerfile,lockSetSha256:$locks,conformanceSetSha256:$conformance_set,policySetSha256:$policy_set},backendHelper:{revision:$helper_revision,tree:$helper_tree,archiveSha256:$helper_archive,binarySha256:$helper_binary,protocolSha256:$protocol,providerAdapterRevision:$adapter,admissionFenceRevision:$admission_fence}},
     attestations:{manifestDigest:$attestation_manifest,sbomLayerDigest:$sbom_layer,provenanceLayerDigest:$provenance_layer,sbomSpdxSha256:$sbom,provenanceStatementSha256:$provenance},
-    verification:{attestationReceiptSha256:$attestation,helperInputReceiptSha256:$helper_input_verification,reproducibilityReceiptSha256:$reproducibility,conformanceReceiptSha256:$conformance,materializerReceiptSha256:$materializer,artifactReceiptSha256:$artifacts,daytonaPtyReceiptSha256:$daemon,providerAdapterReceiptSha256:$provider,vexEvidenceReceiptSha256:$vex_verification,vulnerabilityReportSha256:$vulnerability,grypeDatabaseReceiptSha256:$db,imageSecretScanSha256:$secret_scan,negativeRootReceiptSha256:$negative_root,negativeSocketReceiptSha256:$negative_socket,negativeSecretEnvReceiptSha256:$negative_secret,negativeInstallScriptReceiptSha256:$negative_install,policyReceiptSha256:$policy},
+    verification:{attestationReceiptSha256:$attestation,helperInputReceiptSha256:$helper_input_verification,reproducibilityReceiptSha256:$reproducibility,conformanceReceiptSha256:$conformance,materializerReceiptSha256:$materializer,artifactReceiptSha256:$artifacts,daytonaPtyReceiptSha256:$daemon,providerAdapterReceiptSha256:$provider,providerAdapterRawLogSha256:$provider_log,providerAdapterVerificationSha256:$provider_verification,vexEvidenceReceiptSha256:$vex_verification,vulnerabilityReportSha256:$vulnerability,grypeDatabaseReceiptSha256:$db,imageSecretScanSha256:$secret_scan,negativeRootReceiptSha256:$negative_root,negativeSocketReceiptSha256:$negative_socket,negativeSecretEnvReceiptSha256:$negative_secret,negativeInstallScriptReceiptSha256:$negative_install,policyReceiptSha256:$policy},
     sourceContracts:{apkDirectLockSha256:$apk_direct,apkClosureLockSha256:$apk_closure,pythonLockSha256:$python_lock,helperInputLockSha256:$helper_input_lock,helperInputManifestSha256:$helper_input_manifest,toolchainManifestSha256:$toolchain},
     policyInputs:{licensePolicySha256:$license_policy,licenseReviewSha256:$license_review,runtimePolicySha256:$runtime_policy,vexSha256:$vex,vulnerabilityPolicySha256:$vulnerability_policy,certificationToolsLockSha256:$tools,hostToolsReceiptSha256:$host_tools},
     signingKey:{algorithm:"Ed25519",publicKeyPemSha256:$public_pem,publicKeyDerSha256:$public_der},
