@@ -25,7 +25,11 @@ resource vector on every full-image create; the compose file is not a substitute
 for backend admission. The host gate additionally reserves explicit headroom of
 2 CPU cores, 4 GiB RAM, and 20 GiB storage, so a passing observation must expose
 at least 6 CPU cores, 12 GiB currently available RAM, and 60 GiB free on the
-qualified `/home` filesystem.
+qualified `/home` filesystem. Exact outer service ceilings total 5.8 CPU cores
+and 11.75 GiB: the runner receives 4.75 CPU/9 GiB (enclosing the two sandbox
+ceilings), while the complete API/proxy/database/Redis/MinIO/registry/OIDC
+control plane fits in the remaining 1.05 CPU/2.75 GiB. Every service, including
+the one-shot bucket initializer, also has an exact PID, CPU, and memory bound.
 
 All images, including the certified C16b runtime, are required as immutable
 `image@sha256:...` references and use `pull_policy: never`. Generate the local
@@ -50,13 +54,22 @@ export AMBIT_C16B_RUNTIME_OCI_REFERENCE=registry:6000/ambit/runtime-pack-core-do
 Run this stack only through an isolated Docker daemon whose `DockerRootDir` is
 under `/home`; the normal daemon currently stores data on the capacity-limited
 root filesystem and is not an admitted provider. `start-isolated-docker.sh`
-creates a task-owned daemon with a distinct socket, data/exec roots, bridge,
-address pool, pidfile, and bounded local logs inside the generated state root.
-It does not reuse the host daemon's containerd namespace. Export the exact
-`DOCKER_HOST` line it prints, then run `verify-host-capacity.sh` and preserve its
-receipt before activation. `stop-isolated-docker.sh` verifies the exact pid and
-config path before stopping the daemon; it leaves all state in place for
-recovery and never touches the shared Docker daemon.
+creates a task-owned Docker daemon and a dedicated containerd. Their persistent
+data roots and bounded logs live below the generated `/home` state root; only
+short-lived sockets, PID files, and exec state live under one content-derived
+`/tmp/ambit-c16b-docker-*` runtime directory to stay within Unix socket path
+limits. The daemon disables its default bridge and all host iptables/ip6tables,
+forwarding, and masquerade mutation; Compose owns the one internal provider
+bridge and the daemon uses a disjoint address pool. It never connects to the
+shared host containerd or shared Docker graph; its minimal containerd config
+also disables unused CRI and NRI plugins and imports no host configuration.
+Export the exact `DOCKER_HOST`
+line the start script prints, then run `verify-host-capacity.sh`; that gate
+requires the exact socket, live server ID, data root, dedicated-containerd
+process, startup receipt, and config hash before measuring headroom.
+`stop-isolated-docker.sh` verifies both exact processes before stopping them,
+removes only their content-derived ephemeral runtime directory, and leaves all
+persistent `/home` state in place for recovery.
 
 Starting containers is not a readiness receipt. `WorkspaceProviderExecutionReadiness@2`
 remains unavailable until a live gate binds the exact source registry, profile,

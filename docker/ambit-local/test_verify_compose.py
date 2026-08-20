@@ -41,15 +41,15 @@ class VerifyComposeTest(unittest.TestCase):
                 "image": image(name),
                 "pull_policy": "never",
                 "networks": {"provider": None},
+                "cpus": MODULE.EXPECTED_OUTER_CAPS[name][0],
+                "mem_limit": MODULE.EXPECTED_OUTER_CAPS[name][1],
+                "pids_limit": MODULE.EXPECTED_OUTER_CAPS[name][2],
             }
             for name in service_names
         }
         services["runner"].update(
             {
                 "privileged": True,
-                "cpus": 6.0,
-                "mem_limit": 12 * 1024**3,
-                "pids_limit": 8192,
                 "environment": {
                     "RESOURCE_LIMITS_DISABLED": "false",
                     "INTER_SANDBOX_NETWORK_ENABLED": "false",
@@ -151,6 +151,25 @@ class VerifyComposeTest(unittest.TestCase):
                 "source", "/var/lib/docker"
             )
         )
+
+    def test_mount_on_unlisted_service_is_rejected(self) -> None:
+        self.assert_rejected(
+            lambda value: value["services"]["api"].__setitem__(
+                "volumes",
+                [
+                    {
+                        "type": "bind",
+                        "source": "/var/run/docker.sock",
+                        "target": "/var/run/docker.sock",
+                    }
+                ],
+            )
+        )
+
+    def test_host_namespace_and_resource_drift_are_rejected(self) -> None:
+        self.assert_rejected(lambda value: value["services"]["api"].__setitem__("pid", "host"))
+        self.assert_rejected(lambda value: value["services"]["api"].__setitem__("cpus", 2.0))
+        self.assert_rejected(lambda value: value["services"]["minio-init"].pop("mem_limit"))
 
     def test_extra_service_and_privilege_are_rejected(self) -> None:
         self.assert_rejected(

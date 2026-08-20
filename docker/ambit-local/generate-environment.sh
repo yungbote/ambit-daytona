@@ -69,14 +69,14 @@ for variable in "${required_images[@]}"; do
 done
 
 mkdir -p "$(dirname "${output}")" "${state_root}/config"
-for directory in outer-docker postgres redis minio registry dex runner-docker runner-log evidence; do
+for directory in outer-docker outer-containerd postgres redis minio registry dex runner-docker runner-log evidence; do
   mkdir -p "${state_root}/${directory}"
   [[ ! -L ${state_root}/${directory} ]] || { echo "state subdirectory is a symlink: ${directory}" >&2; exit 66; }
 done
 chmod 0700 "${state_root}" "${state_root}/config" "${state_root}/postgres" \
   "${state_root}/redis" "${state_root}/minio" "${state_root}/registry" \
   "${state_root}/dex" "${state_root}/runner-docker" "${state_root}/runner-log" \
-  "${state_root}/evidence" "${state_root}/outer-docker"
+  "${state_root}/evidence" "${state_root}/outer-docker" "${state_root}/outer-containerd"
 
 temporary=$(mktemp "$(dirname "${output}")/.ambit-daytona-env.XXXXXX")
 cleanup() {

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -ne 2 ]]; then
-  echo 'Usage: verify-host-capacity.sh STATE_ROOT OUTPUT_RECEIPT' >&2
+  echo 'Usage: DOCKER_HOST=unix://... verify-host-capacity.sh STATE_ROOT OUTPUT_RECEIPT' >&2
   exit 64
 fi
 
@@ -16,16 +16,79 @@ output=$2
   echo 'STATE_ROOT must not contain traversal or empty path components' >&2
   exit 64
 }
-[[ ${output} = /* ]] || { echo 'OUTPUT_RECEIPT must be absolute' >&2; exit 64; }
-[[ ! -e ${output} ]] || { echo "OUTPUT_RECEIPT already exists: ${output}" >&2; exit 65; }
-[[ -d ${state_root} ]] || { echo "STATE_ROOT does not exist: ${state_root}" >&2; exit 66; }
+[[ $(realpath -e -- "${state_root}") == "${state_root}" ]] || {
+  echo 'STATE_ROOT must be an existing canonical non-symlink path' >&2
+  exit 64
+}
+[[ ${output} = /* && ! -e ${output} ]] || { echo 'OUTPUT_RECEIPT must be an unused absolute path' >&2; exit 64; }
+
+runtime_id=$(printf '%s' "${state_root}" | sha256sum | cut -c1-12)
+runtime_root=/tmp/ambit-c16b-docker-${runtime_id}
+expected_socket=${runtime_root}/docker.sock
+expected_docker_host=unix://${expected_socket}
+isolated_receipt=${state_root}/evidence/outer-docker-receipt.json
+config=${state_root}/config/outer-docker.json
+containerd_config=${state_root}/config/outer-containerd.toml
+expected_data_root=${state_root}/outer-docker
+expected_containerd_root=${state_root}/outer-containerd
+[[ ${DOCKER_HOST:-} == "${expected_docker_host}" ]] || {
+  echo "DOCKER_HOST must name the task-owned socket: ${expected_docker_host}" >&2
+  exit 66
+}
+[[ -z ${DOCKER_CONTEXT:-} ]] || { echo 'DOCKER_CONTEXT must be unset' >&2; exit 66; }
+[[ -S ${expected_socket} && -f ${isolated_receipt} && -f ${config} && -f ${containerd_config} ]] || {
+  echo 'task-owned Docker socket/config/receipt is incomplete' >&2
+  exit 66
+}
+
+config_sha256=$(sha256sum "${config}" | cut -d' ' -f1)
+containerd_config_sha256=$(sha256sum "${containerd_config}" | cut -d' ' -f1)
+docker_root=$(docker info --format '{{.DockerRootDir}}')
+docker_server_id=$(docker info --format '{{.ID}}')
+docker_server_version=$(docker version --format '{{.Server.Version}}')
+jq -e \
+  --arg runtimeRoot "${runtime_root}" \
+  --arg socket "${expected_socket}" \
+  --arg dataRoot "${expected_data_root}" \
+  --arg containerdRoot "${expected_containerd_root}" \
+  --arg serverId "${docker_server_id}" \
+  --arg serverVersion "${docker_server_version}" \
+  --arg configSha256 "${config_sha256}" \
+  --arg containerdConfigSha256 "${containerd_config_sha256}" '
+    .schema == "ambit.local-daytona-isolated-docker/v2" and
+    .outcome == "passed" and
+    .runtimeRoot == $runtimeRoot and
+    .socket == $socket and
+    .dataRoot == $dataRoot and
+    .containerd.root == $containerdRoot and
+    .containerd.address == ($runtimeRoot + "/containerd.sock") and
+    .containerd.configSha256 == $containerdConfigSha256 and
+    .network == {addressPool:"172.30.0.0/16",defaultBridge:"disabled",hostFirewallMutation:false} and
+    .serverId == $serverId and
+    .serverVersion == $serverVersion and
+    .configSha256 == $configSha256
+  ' "${isolated_receipt}" >/dev/null || {
+    echo 'live Docker identity differs from its task-owned startup receipt' >&2
+    exit 66
+  }
+[[ ${docker_root} == "${expected_data_root}" ]] || { echo 'live Docker data root differs' >&2; exit 66; }
+
+docker_pid=$(jq -er '.dockerPid' "${isolated_receipt}")
+containerd_pid=$(jq -er '.containerd.pid' "${isolated_receipt}")
+for tuple in "${docker_pid}|dockerd|${config}" "${containerd_pid}|containerd|${containerd_config}"; do
+  IFS='|' read -r pid executable required <<< "${tuple}"
+  [[ ${pid} =~ ^[1-9][0-9]*$ && -r /proc/${pid}/cmdline ]] || { echo "${executable} process is absent" >&2; exit 66; }
+  command_line=$(tr '\0' ' ' < "/proc/${pid}/cmdline")
+  [[ ${command_line} == *"${executable}"* && ${command_line} == *"${required}"* ]] || {
+    echo "${executable} process identity differs" >&2
+    exit 66
+  }
+done
 
 cpu_count=$(nproc)
 memory_available_kib=$(awk '$1 == "MemAvailable:" { print $2 }' /proc/meminfo)
 storage_available_bytes=$(df -PB1 "${state_root}" | awk 'NR == 2 { print $4 }')
 storage_filesystem=$(df -P "${state_root}" | awk 'NR == 2 { print $1 }')
-docker_root=$(docker info --format '{{.DockerRootDir}}')
-
 required_cpu=4
 required_memory=8589934592
 required_storage=42949672960
@@ -43,10 +106,7 @@ reasons=()
 (( memory_available_bytes >= minimum_memory )) || { outcome=failed; reasons+=(memory_below_aggregate_plus_headroom); }
 (( storage_available_bytes >= minimum_storage )) || { outcome=failed; reasons+=(storage_below_aggregate_plus_headroom); }
 [[ ${docker_root} == /home/* ]] || { outcome=failed; reasons+=(docker_root_not_under_home); }
-[[ ${state_root} == "${docker_root}"/* || ${docker_root} == "${state_root}"/* ]] || {
-  outcome=failed
-  reasons+=(state_root_and_docker_root_not_same_qualified_tree)
-}
+[[ ${docker_root} == "${state_root}"/* ]] || { outcome=failed; reasons+=(docker_root_outside_state_root); }
 
 reasons_json=$(printf '%s\n' "${reasons[@]:-}" | sed '/^$/d' | jq -R . | jq -s .)
 mkdir -p "$(dirname "${output}")"
@@ -54,14 +114,19 @@ jq -n -S \
   --arg outcome "${outcome}" \
   --arg observedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --arg stateRoot "${state_root}" \
+  --arg dockerHost "${expected_docker_host}" \
   --arg dockerRoot "${docker_root}" \
+  --arg dockerServerId "${docker_server_id}" \
   --arg storageFilesystem "${storage_filesystem}" \
+  --arg isolatedReceiptSha256 "$(sha256sum "${isolated_receipt}" | cut -d' ' -f1)" \
+  --arg configSha256 "${config_sha256}" \
+  --arg containerdConfigSha256 "${containerd_config_sha256}" \
   --argjson cpu "${cpu_count}" \
   --argjson memory "${memory_available_bytes}" \
   --argjson storage "${storage_available_bytes}" \
   --argjson reasons "${reasons_json}" \
   '{
-    schema:"ambit.local-daytona-host-capacity-headroom/v1",
+    schema:"ambit.local-daytona-host-capacity-headroom/v2",
     outcome:$outcome,
     observedAt:$observedAt,
     capacityProfile:{
@@ -71,14 +136,9 @@ jq -n -S \
       requiredHeadroom:{cpuCores:2,memoryBytes:4294967296,diskBytes:21474836480,gpuCount:0},
       minimumObserved:{cpuCores:6,memoryBytes:12884901888,diskBytes:64424509440,gpuCount:0}
     },
-    observed:{
-      cpuCores:$cpu,
-      memoryAvailableBytes:$memory,
-      storageAvailableBytes:$storage,
-      storageFilesystem:$storageFilesystem,
-      stateRoot:$stateRoot,
-      dockerRoot:$dockerRoot
-    },
+    providerOuterCeiling:{cpuCores:5.8,memoryBytes:12616466432,diskReservationBytes:64424509440},
+    isolatedDaemon:{dockerHost:$dockerHost,dockerRoot:$dockerRoot,serverId:$dockerServerId,startupReceiptSha256:$isolatedReceiptSha256,configSha256:$configSha256,containerdConfigSha256:$containerdConfigSha256},
+    observed:{cpuCores:$cpu,memoryAvailableBytes:$memory,storageAvailableBytes:$storage,storageFilesystem:$storageFilesystem,stateRoot:$stateRoot},
     reasons:$reasons
   }' > "${output}"
 

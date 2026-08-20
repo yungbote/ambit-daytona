@@ -126,8 +126,8 @@ services:
         condition: service_healthy
     networks:
       - provider
-    cpus: 2.0
-    mem_limit: 3g
+    cpus: 0.5
+    mem_limit: 1g
     pids_limit: 1024
     healthcheck:
       test: [CMD, curl, --fail, --silent, http://127.0.0.1:3000/api/config]
@@ -164,8 +164,8 @@ services:
         condition: service_healthy
     networks:
       - provider
-    cpus: 0.5
-    mem_limit: 512m
+    cpus: 0.05
+    mem_limit: 128m
     pids_limit: 256
     healthcheck:
       test: [CMD, curl, --fail, --silent, http://127.0.0.1:4000/health]
@@ -212,8 +212,8 @@ services:
         target: /home/daytona/runner
     networks:
       - provider
-    cpus: 6.0
-    mem_limit: 12g
+    cpus: 4.75
+    mem_limit: 9g
     pids_limit: 8192
     healthcheck:
       test: [CMD, curl, --fail, --silent, http://127.0.0.1:3003/]
@@ -236,8 +236,8 @@ services:
         target: /var/lib/postgresql/data
     networks:
       - provider
-    cpus: 1.0
-    mem_limit: 1g
+    cpus: 0.2
+    mem_limit: 512m
     pids_limit: 256
     healthcheck:
       test: [CMD-SHELL, pg_isready -U ambit_daytona -d ambit_daytona]
@@ -261,8 +261,8 @@ services:
         target: /data
     networks:
       - provider
-    cpus: 0.5
-    mem_limit: 512m
+    cpus: 0.05
+    mem_limit: 128m
     pids_limit: 256
     healthcheck:
       test: [CMD-SHELL, 'redis-cli -a "$${REDIS_PASSWORD}" ping | grep -Fx PONG']
@@ -286,8 +286,8 @@ services:
         target: /data
     networks:
       - provider
-    cpus: 0.5
-    mem_limit: 1g
+    cpus: 0.1
+    mem_limit: 512m
     pids_limit: 256
     healthcheck:
       test: [CMD, curl, --fail, --silent, http://127.0.0.1:9000/minio/health/live]
@@ -312,6 +312,9 @@ services:
         condition: service_healthy
     networks:
       - provider
+    cpus: 0.05
+    mem_limit: 128m
+    pids_limit: 64
 
   registry:
     image: ${AMBIT_DAYTONA_REGISTRY_IMAGE:?set an exact image@sha256 reference}
@@ -328,8 +331,8 @@ services:
         target: /var/lib/registry
     networks:
       - provider
-    cpus: 0.5
-    mem_limit: 512m
+    cpus: 0.05
+    mem_limit: 128m
     pids_limit: 256
 
   dex:
@@ -349,8 +352,8 @@ services:
         target: /var/dex
     networks:
       - provider
-    cpus: 0.5
-    mem_limit: 512m
+    cpus: 0.05
+    mem_limit: 256m
     pids_limit: 256
     healthcheck:
       test: [CMD, wget, --spider, --quiet, http://127.0.0.1:5556/dex/.well-known/openid-configuration]

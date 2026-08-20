@@ -51,6 +51,48 @@ EXPECTED_PORT_KEYS = frozenset(
         "AMBIT_DAYTONA_REGISTRY_PORT",
     }
 )
+EXPECTED_OUTER_CAPS = {
+    "api": (0.5, 1 * 1024**3, 1024),
+    "proxy": (0.05, 128 * 1024**2, 256),
+    "runner": (4.75, 9 * 1024**3, 8192),
+    "db": (0.2, 512 * 1024**2, 256),
+    "redis": (0.05, 128 * 1024**2, 256),
+    "minio": (0.1, 512 * 1024**2, 256),
+    "minio-init": (0.05, 128 * 1024**2, 64),
+    "registry": (0.05, 128 * 1024**2, 256),
+    "dex": (0.05, 256 * 1024**2, 256),
+}
+FORBIDDEN_SERVICE_KEYS = frozenset(
+    {
+        "annotations",
+        "cap_add",
+        "cgroup",
+        "cgroup_parent",
+        "configs",
+        "credential_spec",
+        "develop",
+        "device_cgroup_rules",
+        "devices",
+        "dns",
+        "dns_opt",
+        "dns_search",
+        "extra_hosts",
+        "external_links",
+        "group_add",
+        "ipc",
+        "links",
+        "network_mode",
+        "pid",
+        "runtime",
+        "secrets",
+        "security_opt",
+        "sysctls",
+        "use_api_socket",
+        "userns_mode",
+        "uts",
+        "volumes_from",
+    }
+)
 PROFILE_REF = "ambit.workspace-provider-capacity/local-daytona@1"
 PROFILE_DIGEST = "sha256:9326b853b19bb4c1e0704f676751fec9269832be45fe3610b61f8644256e6cfe"
 
@@ -161,10 +203,13 @@ def validate_compose(config: dict[str, Any], values: dict[str, str], state_root:
         require(service.get("pull_policy") == "never", f"service may pull an ambient image: {name}")
         require("build" not in service, f"service has an ambient build definition: {name}")
         require(set(service.get("networks", {})) == {"provider"}, f"service network differs: {name}")
-        require(service.get("network_mode") in (None, ""), f"service has host/custom network mode: {name}")
-        require(not service.get("devices"), f"service exposes a host device: {name}")
-        require(not service.get("cap_add"), f"service adds host capabilities: {name}")
+        present_forbidden = sorted(key for key in FORBIDDEN_SERVICE_KEYS if key in service)
+        require(not present_forbidden, f"service exposes a forbidden host namespace/surface: {name}: {present_forbidden}")
         require(bool(service.get("privileged", False)) == (name == "runner"), f"privilege differs: {name}")
+        expected_cpu, expected_memory, expected_pids = EXPECTED_OUTER_CAPS[name]
+        require(float(service.get("cpus", 0)) == expected_cpu, f"outer CPU ceiling differs: {name}")
+        require(int(service.get("mem_limit", 0)) == expected_memory, f"outer memory ceiling differs: {name}")
+        require(int(service.get("pids_limit", 0)) == expected_pids, f"outer PID ceiling differs: {name}")
 
     networks = config.get("networks")
     require(
@@ -205,8 +250,9 @@ def validate_compose(config: dict[str, Any], values: dict[str, str], state_root:
         "registry": {"/var/lib/registry": "registry"},
         "dex": {"/etc/dex/config.yaml": "config/dex.yaml", "/var/dex": "dex"},
     }
-    for name, expected in expected_mounts.items():
-        mounts = services[name].get("volumes")
+    for name, service in services.items():
+        expected = expected_mounts.get(name, {})
+        mounts = service.get("volumes", [])
         require(isinstance(mounts, list) and len(mounts) == len(expected), f"mount roster differs: {name}")
         observed: dict[str, str] = {}
         for mount in mounts:
@@ -254,9 +300,10 @@ def validate_compose(config: dict[str, Any], values: dict[str, str], state_root:
         },
         "runner",
     )
-    require(float(services["runner"].get("cpus", 0)) == 6.0, "runner outer CPU limit differs")
-    require(int(services["runner"].get("mem_limit", 0)) == 12 * 1024**3, "runner outer memory limit differs")
-    require(int(services["runner"].get("pids_limit", 0)) == 8192, "runner PID limit differs")
+    outer_cpu = sum(value[0] for value in EXPECTED_OUTER_CAPS.values())
+    outer_memory = sum(value[1] for value in EXPECTED_OUTER_CAPS.values())
+    require(outer_cpu <= 6, "provider outer CPU ceilings exceed aggregate plus headroom")
+    require(outer_memory <= 12 * 1024**3, "provider outer memory ceilings exceed aggregate plus headroom")
 
     rendered = json.dumps(config, sort_keys=True)
     require("https://" not in rendered, "compose contains an external HTTPS target")
@@ -284,6 +331,15 @@ def validate_compose(config: dict[str, Any], values: dict[str, str], state_root:
         "stateRoot": str(state_root),
         "resourceLimitsDisabled": False,
         "interSandboxNetworkEnabled": False,
+        "outerResourceCeilings": {
+            "cpuCores": outer_cpu,
+            "memoryBytes": outer_memory,
+            "diskReservationBytes": 60 * 1024**3,
+            "services": {
+                name: {"cpuCores": cpu, "memoryBytes": memory, "pids": pids}
+                for name, (cpu, memory, pids) in sorted(EXPECTED_OUTER_CAPS.items())
+            },
+        },
         "credentials": {"source": "local_generated_environment", "includedInReceipt": False},
     }
 
