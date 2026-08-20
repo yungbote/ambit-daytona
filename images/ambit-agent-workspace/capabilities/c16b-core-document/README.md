@@ -30,6 +30,9 @@ Runtime safety is intentionally narrower than build-time authority:
   removed and the sudo binary de-setuid;
 - `/opt/ambit/runtime-pack/core-document` is root-owned and read-only;
 - npm install scripts and pip indexes are disabled by default;
+- the inherited NVM and ambient global Python package trees are removed after
+  the exact pack environments are materialized; they are not capability
+  authority;
 - provider network policy remains authoritative; conformance runs with Docker
   `--network none` and uses loopback only;
 - no Docker/Kubernetes socket or secret is embedded.

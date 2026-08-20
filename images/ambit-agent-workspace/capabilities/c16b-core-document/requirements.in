@@ -7,4 +7,5 @@ pyarrow==25.0.1
 python-docx==1.2.0
 python-pptx==1.0.2
 reportlab==5.0.0
+uv==0.9.26
 XlsxWriter==3.2.9

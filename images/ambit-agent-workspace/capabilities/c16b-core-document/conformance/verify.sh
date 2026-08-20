@@ -35,13 +35,25 @@ fi
 test "$(python3 --version)" = "Python 3.11.14"
 test "$(node --version)" = "v20.19.2"
 test "$(npm --version)" = "10.8.2"
+test "$(npx --version)" = "10.8.2"
 test "$(npm config get ignore-scripts)" = "true"
 test "$(pyright --version)" = "pyright 1.1.413"
 test "$(typescript-language-server --version)" = "5.1.3"
-test "$(tsc --version)" = "Version 7.0.2"
+test "$(ts-node --version)" = "v10.9.2"
+test "$(tsc --version)" = "Version 5.9.3"
+test "$(uv --version)" = "uv 0.9.26"
 chromium --version | grep -F 'Chromium 151.0.7922.137' >/dev/null
 libreoffice --version | grep -F 'LibreOffice 25.2.3.2' >/dev/null
-pandoc --version | head -1 | grep -F 'pandoc 3.1.11.1' >/dev/null
+pandoc --version | grep -F 'pandoc 3.1.11.1' >/dev/null
+git lfs version | grep -F 'git-lfs/3.6.1' >/dev/null
+file --version | grep -F 'file-5.46' >/dev/null
+wget --version | grep -F 'GNU Wget 1.25.0' >/dev/null
+ssh -V 2>&1 | grep -F 'OpenSSH_10.0p1' >/dev/null
+test "$(command -v scp)" = "/usr/bin/scp"
+7z i | grep -F '7-Zip 25.01' >/dev/null
+unzip -v | grep -F 'UnZip 6.00' >/dev/null
+zip -v | grep -F 'Zip 3.0' >/dev/null
+test "$(printf '%s\n' '{"value":42}' | yq -r '.value')" = "42"
 
 while IFS= read -r expected; do
   package="${expected%%=*}"
@@ -92,9 +104,13 @@ test "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["summary
 printf '%s\n' \
   'const add = (left: number, right: number): number => left + right;' \
   'const result: number = add(20, 22);' \
-  'if (result !== 42) throw new Error("unexpected result");' > "${code_probe}/typed-probe.ts"
+  'if (result !== 42) throw new Error("unexpected result");' \
+  'console.log(result);' > "${code_probe}/typed-probe.ts"
 tsc --noEmit --strict --skipLibCheck "${code_probe}/typed-probe.ts" \
   > "${output_root}/typescript-receipt.log" 2>&1
+npx --no-install ts-node "${code_probe}/typed-probe.ts" \
+  > "${output_root}/typescript-execution-receipt.log" 2>&1
+test "$(cat "${output_root}/typescript-execution-receipt.log")" = "42"
 
 python3 "${pack_root}/conformance/artifact_conformance.py" "${output_root}"
 

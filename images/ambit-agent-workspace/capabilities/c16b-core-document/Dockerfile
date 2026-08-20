@@ -36,7 +36,8 @@ COPY requirements.in requirements.lock /opt/ambit/runtime-pack/core-document/
 RUN set -eux; \
     /usr/local/bin/python3 -m venv /opt/ambit/runtime-pack/core-document/python; \
     /opt/ambit/runtime-pack/core-document/python/bin/python -m pip install --require-hashes --no-cache-dir -r /opt/ambit/runtime-pack/core-document/requirements.lock; \
-    /opt/ambit/runtime-pack/core-document/python/bin/python -m pip check
+    /opt/ambit/runtime-pack/core-document/python/bin/python -m pip check; \
+    rm -rf /usr/local/nvm /usr/local/lib/python3.11/site-packages
 
 COPY package.json package-lock.json /opt/ambit/runtime-pack/core-document/node/
 COPY --from=node_dependencies --chown=root:root /pack/node_modules /opt/ambit/runtime-pack/core-document/node/node_modules
@@ -52,6 +53,7 @@ RUN set -eux; \
     printf '%s\n' 'ignore-scripts=true' 'audit=false' 'fund=false' > /etc/npmrc; \
     install -d -m 0755 -o root -g root /opt/ambit/runtime-pack/core-document/node/bin; \
     ln -s ../npm/bin/npm-cli.js /opt/ambit/runtime-pack/core-document/node/bin/npm; \
+    ln -s ../npm/bin/npx-cli.js /opt/ambit/runtime-pack/core-document/node/bin/npx; \
     find /opt/ambit/runtime-pack/core-document -type d -exec chmod 0555 {} +; \
     find /opt/ambit/runtime-pack/core-document -type f -exec chmod a-w,go+r {} +; \
     chmod 0555 /opt/ambit/runtime-pack/core-document/conformance/verify.sh; \
@@ -65,18 +67,22 @@ LABEL org.opencontainers.image.title="ambit-c16b-core-document" \
       io.ambit.runtime-pack="ambit.runtime-pack/core-document@1" \
       io.ambit.build-input-sha256="${BUILD_SOURCE_INPUT_SHA256}"
 
-ENV PATH=/opt/ambit/runtime-pack/core-document/python/bin:/opt/ambit/runtime-pack/core-document/node/bin:/opt/ambit/runtime-pack/core-document/node/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+ENV PATH=/opt/ambit/runtime-pack/core-document/python/bin:/opt/ambit/runtime-pack/core-document/node/bin:/opt/ambit/runtime-pack/core-document/node/node_modules/.bin:/usr/sbin:/usr/bin:/sbin:/bin \
     NODE_PATH=/opt/ambit/runtime-pack/core-document/node/node_modules \
     NPM_CONFIG_IGNORE_SCRIPTS=true \
+    NPM_CONFIG_OFFLINE=true \
     PIP_CONFIG_FILE=/etc/pip.conf \
     PIP_NO_INDEX=1 \
     PIP_ONLY_BINARY=:all: \
     PIP_REQUIRE_HASHES=1 \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    UV_OFFLINE=true \
+    UV_NO_CACHE=true \
     TZ=UTC \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
-    NODE_VERSION=20.19.2
+    NODE_VERSION=20.19.2 \
+    NVM_DIR=
 
 USER daytona
 WORKDIR /workspace
