@@ -6,14 +6,13 @@ import json
 import os
 import pty
 import select
-import shutil
 import stat
 import struct
 import subprocess
 import sys
-import threading
 import time
 import tty
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -188,6 +187,7 @@ def invoke(
     output_prefix: bytes = b"",
     reattach: bool = False,
     inspect_after_bytes: int | None = None,
+    after_end: Callable[[Session], None] | None = None,
 ) -> FramedResult:
     session = Session(output_prefix=output_prefix)
     header = frame_header(
@@ -243,6 +243,14 @@ def invoke(
     raw_digest = bytes.fromhex(declared_sha.removeprefix("sha256:"))
     end = MAGICS["end"] + struct.pack(">Q", len(payload) if expected_bytes is None else expected_bytes) + raw_digest
     session.write(end + trailing)
+    if after_end is not None:
+        try:
+            after_end(session)
+        except BaseException:
+            session.process.kill()
+            session.process.wait(timeout=5)
+            session.close()
+            raise
     return session.response_from_magic(session.read_exact(8))
 
 
@@ -388,105 +396,88 @@ assert outside_final.read_bytes() == b"outside-sentinel"
 assert not (outside_root / "escape.bin").exists()
 cases.extend(["parent_and_final_symlink_denial", "hardlink_denial"])
 
+def wait_for_open_inode(session: Session, expected: os.stat_result) -> None:
+    deadline = time.monotonic() + 10
+    process_fd_root = Path(f"/proc/{session.process.pid}/fd")
+    while time.monotonic() < deadline:
+        try:
+            descriptors = list(process_fd_root.iterdir())
+        except FileNotFoundError:
+            break
+        for descriptor in descriptors:
+            try:
+                observed = descriptor.stat()
+            except (FileNotFoundError, PermissionError):
+                continue
+            if observed.st_dev == expected.st_dev and observed.st_ino == expected.st_ino:
+                return
+        time.sleep(0.0001)
+    raise AssertionError(
+        f"helper did not pin expected inode {expected.st_dev}:{expected.st_ino} before response"
+    )
+
+
 race_path = "parent-race/artifact.bin"
-race_payload = b"parent-race-content"
+race_marker = b"AMBIT_PARENT_RACE_PINNED_DIRFD_0123456789"
+race_payload = race_marker + b"R" * (MAXIMUM_BYTES - len(race_marker))
 race_created = invoke(race_path, race_payload)
 assert_success(race_created, relative_path=race_path, payload=race_payload, mode=0o444, operation="create_or_verify", outcome="created")
 race_entry = WORKSPACE / "parent-race"
 race_saved = WORKSPACE / "parent-race-saved"
 race_outside = outside_root / "parent-race"
 race_outside.mkdir()
-stop_parent_race = threading.Event()
 
 
-def swap_parent() -> None:
-    while not stop_parent_race.is_set():
-        try:
-            if race_entry.exists() and not race_entry.is_symlink():
-                race_entry.rename(race_saved)
-            if not race_entry.exists() and not race_entry.is_symlink():
-                race_entry.symlink_to(race_outside, target_is_directory=True)
-            if race_entry.is_symlink():
-                race_entry.unlink()
-            if race_saved.exists() and not race_entry.exists():
-                race_saved.rename(race_entry)
-        except (FileExistsError, FileNotFoundError):
-            pass
-        except OSError as error:
-            if error.errno in (errno.EEXIST, errno.ENOTEMPTY):
-                return
-            raise
+def move_parent_after_pin(session: Session) -> None:
+    wait_for_open_inode(session, race_entry.stat())
+    race_entry.rename(race_saved)
+    race_entry.symlink_to(race_outside, target_is_directory=True)
 
 
-parent_thread = threading.Thread(target=swap_parent, daemon=True)
-parent_thread.start()
-parent_race_statuses: list[int] = []
-for index in range(20):
-    operation = "verify_only" if index % 2 else "create_or_verify"
-    result = invoke(race_path, race_payload, operation=operation)
-    assert result.returncode in (0, 4), (result.returncode, result.stderr)
-    parent_race_statuses.append(result.returncode)
-    if result.returncode == 0:
-        observed_outcome = json.loads(result.stdout)["outcome"]
-        if operation == "verify_only":
-            assert observed_outcome == "already_identical"
-        else:
-            assert observed_outcome in ("already_identical", "created")
-        assert_success(result, relative_path=race_path, payload=race_payload, mode=0o444, operation=operation, outcome=observed_outcome)
-    else:
-        assert assert_failure(result, 4)["code"] in ("existing_mismatch", "path_race", "unsafe_path")
-stop_parent_race.set()
-parent_thread.join(timeout=5)
-if race_entry.is_symlink():
-    race_entry.unlink()
-if race_saved.exists():
-    if race_entry.exists():
-        assert (race_entry / "artifact.bin").read_bytes() == race_payload
-        assert (race_saved / "artifact.bin").read_bytes() == race_payload
-        shutil.rmtree(race_saved)
-    else:
-        race_saved.rename(race_entry)
-reconciled_parent_race = invoke(race_path, race_payload)
-reconciled_outcome = json.loads(reconciled_parent_race.stdout)["outcome"]
-assert_success(reconciled_parent_race, relative_path=race_path, payload=race_payload, mode=0o444, operation="create_or_verify", outcome=reconciled_outcome)
+parent_race_result = invoke(
+    race_path,
+    race_payload,
+    operation="verify_only",
+    after_end=move_parent_after_pin,
+)
+assert assert_failure(parent_race_result, 4)["code"] in ("path_race", "unsafe_path")
+assert race_entry.is_symlink()
+assert (race_saved / "artifact.bin").read_bytes() == race_payload
+race_entry.unlink()
+race_saved.rename(race_entry)
+reconciled_parent_race = invoke(race_path, race_payload, operation="verify_only")
+assert_success(reconciled_parent_race, relative_path=race_path, payload=race_payload, mode=0o444, operation="verify_only", outcome="already_identical")
 ensure_file(race_path, race_payload, 0o444)
 assert not any(race_outside.iterdir())
-assert 4 in parent_race_statuses
-cases.append("concurrent_parent_move_symlink_reproof")
+cases.append("concurrent_parent_move_after_dirfd_pin_reproof")
 
-final_race_parent = WORKSPACE / "final-race"
-final_race_parent.mkdir()
-final_race_leaf = final_race_parent / "artifact.bin"
-stop_final_race = threading.Event()
+race_leaf = WORKSPACE / race_path
+race_leaf_saved = race_entry / "artifact-saved.bin"
 
 
-def swap_final() -> None:
-    while not stop_final_race.is_set():
-        try:
-            final_race_leaf.symlink_to(outside_final)
-        except FileExistsError:
-            if final_race_leaf.is_symlink():
-                final_race_leaf.unlink()
-            else:
-                return
+def move_final_after_pin(session: Session) -> None:
+    wait_for_open_inode(session, race_leaf.stat())
+    race_leaf.rename(race_leaf_saved)
+    race_leaf.symlink_to(outside_final)
 
 
-final_thread = threading.Thread(target=swap_final, daemon=True)
-final_thread.start()
-final_race_payload = b"final-race-content"
-final_race_result = invoke("final-race/artifact.bin", final_race_payload)
-assert final_race_result.returncode in (0, 4), (final_race_result.returncode, final_race_result.stderr)
-stop_final_race.set()
-final_thread.join(timeout=5)
-if final_race_leaf.is_symlink():
-    final_race_leaf.unlink()
-if final_race_result.returncode == 0:
-    assert_success(final_race_result, relative_path="final-race/artifact.bin", payload=final_race_payload, mode=0o444, operation="create_or_verify", outcome="created")
-    ensure_file("final-race/artifact.bin", final_race_payload, 0o444)
-else:
-    assert assert_failure(final_race_result, 4)["code"] in ("path_race", "unsafe_path")
+final_race_result = invoke(
+    race_path,
+    race_payload,
+    operation="verify_only",
+    after_end=move_final_after_pin,
+)
+assert assert_failure(final_race_result, 4)["code"] in ("path_race", "unsafe_path")
+assert race_leaf.is_symlink()
+assert race_leaf_saved.read_bytes() == race_payload
+race_leaf.unlink()
+race_leaf_saved.rename(race_leaf)
+reconciled_final_race = invoke(race_path, race_payload, operation="verify_only")
+assert_success(reconciled_final_race, relative_path=race_path, payload=race_payload, mode=0o444, operation="verify_only", outcome="already_identical")
+ensure_file(race_path, race_payload, 0o444)
 assert outside_final.read_bytes() == b"outside-sentinel"
-cases.append("concurrent_final_symlink_swap_no_escape")
+assert not any(race_outside.iterdir())
+cases.append("concurrent_final_symlink_swap_after_file_pin_reproof")
 
 split_payload = b"S"
 split_path = "framing/every-header-split.bin"
