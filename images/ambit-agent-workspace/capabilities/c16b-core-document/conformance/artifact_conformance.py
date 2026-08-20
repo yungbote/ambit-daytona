@@ -143,9 +143,9 @@ def validate_pdf(path: Path, expected_text: tuple[str, ...]) -> Path:
     info = run("pdfinfo", str(path)).stdout
     pages = re.search(r"^Pages:\s+(\d+)$", info, flags=re.MULTILINE)
     assert pages and int(pages.group(1)) >= 1
-    extracted = run("pdftotext", str(path), "-").stdout
+    extracted = " ".join(run("pdftotext", str(path), "-").stdout.split())
     for value in expected_text:
-        assert value in extracted
+        assert " ".join(value.split()) in extracted
     raster_base = path.with_suffix("")
     run("pdftoppm", "-f", "1", "-singlefile", "-png", str(path), str(raster_base))
     png = raster_base.with_suffix(".png")
