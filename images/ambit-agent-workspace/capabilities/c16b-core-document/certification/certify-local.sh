@@ -376,10 +376,12 @@ build_arguments=()
 while IFS=$'\t' read -r key value; do
   build_arguments+=(--build-arg "${key#build-arg:}=${value}")
 done < <(jq -r 'to_entries[] | [.key,.value] | @tsv' "${expected_build_args}")
-docker buildx build --builder "${builder_name}" --network host --platform linux/amd64 --push \
+docker buildx build --builder "${builder_name}" --network host --platform linux/amd64 --no-cache \
   --provenance=mode=max --attest="type=sbom,generator=${sbom_generator}" \
   --build-context "materializer_source=${helper_source_dir}" \
-  "${build_arguments[@]}" --tag "${candidate_ref}" "${archived_pack_dir}"
+  "${build_arguments[@]}" \
+  --output "type=image,name=${candidate_ref},push=true,rewrite-timestamp=true" \
+  "${archived_pack_dir}"
 
 registry_url=http://${registry_host}/v2/${repository}
 curl -fsS -H 'Accept: application/vnd.oci.image.index.v1+json' \
@@ -408,23 +410,76 @@ curl -fsS -o "${artifact_root}/oci/provenance.intoto.json" "${registry_url}/blob
 jq '.predicate' "${artifact_root}/oci/sbom.intoto.json" > "${artifact_root}/oci/sbom.spdx.json"
 
 reproduction_ref=${registry_host}/${repository}:reproduction-${source_short}
-docker buildx build --builder "${builder_name}" --network host --platform linux/amd64 --push \
+docker buildx build --builder "${builder_name}" --network host --platform linux/amd64 \
   --no-cache --provenance=false \
   --build-context "materializer_source=${helper_source_dir}" \
-  "${build_arguments[@]}" --tag "${reproduction_ref}" "${archived_pack_dir}"
-curl -fsS -H 'Accept: application/vnd.oci.image.index.v1+json' \
-  -o "${artifact_root}/oci/reproduction-index.json" \
+  "${build_arguments[@]}" \
+  --output "type=image,name=${reproduction_ref},push=true,rewrite-timestamp=true" \
+  "${archived_pack_dir}"
+curl -fsS \
+  -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json' \
+  -o "${artifact_root}/oci/reproduction-reference.json" \
   "${registry_url}/manifests/reproduction-${source_short}"
-reproduction_manifest=$(jq -er \
-  '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")] | if length == 1 then .[0].digest else error("expected one reproduced linux/amd64 runtime manifest") end' \
-  "${artifact_root}/oci/reproduction-index.json")
+reproduction_media_type=$(jq -er '.mediaType' "${artifact_root}/oci/reproduction-reference.json")
+case "${reproduction_media_type}" in
+  application/vnd.oci.image.index.v1+json)
+    jq -e '
+      .schemaVersion == 2 and
+      (.manifests | type == "array" and length == 1) and
+      .manifests[0].mediaType == "application/vnd.oci.image.manifest.v1+json" and
+      .manifests[0].platform == {architecture:"amd64",os:"linux"} and
+      (.manifests[0].digest | test("^sha256:[0-9a-f]{64}$"))
+    ' "${artifact_root}/oci/reproduction-reference.json" >/dev/null
+    reproduction_manifest=$(jq -er '.manifests[0].digest' "${artifact_root}/oci/reproduction-reference.json")
+    curl -fsS -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
+      -o "${artifact_root}/oci/reproduction-manifest.json" \
+      "${registry_url}/manifests/${reproduction_manifest}"
+    ;;
+  application/vnd.oci.image.manifest.v1+json)
+    cp -- "${artifact_root}/oci/reproduction-reference.json" \
+      "${artifact_root}/oci/reproduction-manifest.json"
+    reproduction_manifest=sha256:$(sha256_file "${artifact_root}/oci/reproduction-manifest.json")
+    ;;
+  *)
+    echo "reproduction reference has unsupported media type: ${reproduction_media_type}" >&2
+    exit 68
+    ;;
+esac
+jq -e '
+  .schemaVersion == 2 and
+  .mediaType == "application/vnd.oci.image.manifest.v1+json" and
+  (.config.mediaType == "application/vnd.oci.image.config.v1+json") and
+  (.config.digest | test("^sha256:[0-9a-f]{64}$")) and
+  (.layers | type == "array" and length > 0) and
+  all(.layers[];
+    .mediaType == "application/vnd.oci.image.layer.v1.tar+gzip" and
+    (.digest | test("^sha256:[0-9a-f]{64}$")) and
+    (.size | type == "number" and . > 0)
+  )
+' "${artifact_root}/oci/reproduction-manifest.json" >/dev/null
+[[ "sha256:$(sha256_file "${artifact_root}/oci/reproduction-manifest.json")" == "${reproduction_manifest}" ]] || {
+  echo "reproduction manifest bytes differ from their selected digest" >&2
+  exit 68
+}
+reproduction_config=$(jq -er '.config.digest' "${artifact_root}/oci/reproduction-manifest.json")
+curl -fsS -o "${artifact_root}/oci/reproduction-config.json" \
+  "${registry_url}/blobs/${reproduction_config}"
+[[ "sha256:$(sha256_file "${artifact_root}/oci/reproduction-config.json")" == "${reproduction_config}" ]] || {
+  echo "reproduction config bytes differ from their selected digest" >&2
+  exit 68
+}
+jq -e '.architecture == "amd64" and .os == "linux"' \
+  "${artifact_root}/oci/reproduction-config.json" >/dev/null
 [[ ${reproduction_manifest} == "${runtime_manifest}" ]] || {
   echo "no-cache rebuild produced a different runtime manifest" >&2
   exit 68
 }
 jq -n -S --arg source "${source_revision}" --arg runtime "${runtime_manifest}" \
-  --arg first "${index_digest}" --arg second "sha256:$(sha256_file "${artifact_root}/oci/reproduction-index.json")" \
-  '{schema:"ambit.runtime-pack-reproducibility/v1",outcome:"passed",sourceRevision:$source,runtimeManifestDigest:$runtime,attestedIndexDigest:$first,reproductionIndexDigest:$second,reproductionBuild:"no-cache-without-attestation"}' \
+  --arg first "${index_digest}" \
+  --arg reproduction_reference "sha256:$(sha256_file "${artifact_root}/oci/reproduction-reference.json")" \
+  --arg reproduction_media "${reproduction_media_type}" \
+  --arg reproduction_config "${reproduction_config}" \
+  '{schema:"ambit.runtime-pack-reproducibility/v2",outcome:"passed",sourceRevision:$source,runtimeManifestDigest:$runtime,attestedIndexDigest:$first,reproductionReferenceDigest:$reproduction_reference,reproductionReferenceMediaType:$reproduction_media,reproductionConfigDigest:$reproduction_config,builds:{attested:"no-cache-rewrite-timestamp",reproduction:"no-cache-rewrite-timestamp-without-attestation"}}' \
   > "${artifact_root}/reproducibility-receipt.json"
 
 python3 "${archived_cert_dir}/verify_attestations.py" "${artifact_root}/oci" \
