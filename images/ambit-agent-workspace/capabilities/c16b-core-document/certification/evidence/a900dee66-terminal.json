@@ -1,0 +1,152 @@
+{
+  "schema": "ambit.runtime-pack-terminal-evidence-index/v1",
+  "classification": "candidate_policy_passed_not_promoted",
+  "packRef": "ambit.runtime-pack/core-document@3",
+  "platform": "linux/amd64",
+  "source": {
+    "repository": "https://github.com/yungbote/ambit-daytona",
+    "revision": "a900dee66b978264b3b9b34e1840ecb4c2e8b281",
+    "tree": "5a7c5d4d9d5c58805efb8530a9e74f407e9ed32c",
+    "packTree": "f9ee628a9e42361ceaca78fa6c8db84f6ded6f85",
+    "archiveSha256": "7126331d8e3eb3e32066810e72f9bc53ce6922db51acb35c18df6fa0979600a0"
+  },
+  "artifactPacket": {
+    "absolutePath": "/home/bote/m/.artifacts/c16b-core-document-pack-20260820/final-a900dee66b",
+    "evidenceManifestEntries": 170,
+    "evidenceManifestSha256": "0d2feaa564c5755c16b4ded5009a40e4f1ec42b184190dd3a1fd0fd69797222d",
+    "evidenceManifestVerification": "passed"
+  },
+  "ociIdentity": {
+    "providerPullIndexDigest": "sha256:2f83db61b3a73aba3ffe3532be796f0922661f3a2643fc0142484ffa37861d99",
+    "runtimeCapabilityPackRevisionArtifactDigest": "sha256:bd39bc5360df9db86839b76b1dde05a97fe70f24671ca1bc1ac5008aa8523ca4",
+    "runtimeConfigDigest": "sha256:ab8e2f70539c2b8266e98b84b4d8d885f1da546299ac5d6ede4684ea8dae0e96",
+    "attestationManifestDigest": "sha256:de9da6cbffd22cf21e5eab2b27941e9c3b43646b521a8fbe132e9b15421012b6",
+    "sbomLayerDigest": "sha256:7d6de5333a3942e97e4698002b63e01082f258337b1722ba0e2ed2f8eba47e1c",
+    "provenanceLayerDigest": "sha256:cfe168908e37f329762cd5de4c28af3283bb4dcf8fdf2c558fb25b0810747d94"
+  },
+  "completeOciLayout": {
+    "outcome": "passed",
+    "blobCount": 24,
+    "blobBytes": 45281098,
+    "inheritedDeclaredBaseLayers": 11,
+    "packOwnedRuntimeLayers": 7,
+    "layoutTreeSha256": "ee4bc1142666f28590584f560973ae2133ddd5cd0f4d999497f0ac8f214cd01a",
+    "receiptSha256": "32efa4c59fabade48fdc18c07b1333f2c2fbfabf10d16f90c5393f58a5d0854e",
+    "verificationSha256": "589accb0ffd3de84e200aa30bd017bc9c02372beb57bd68cdeb95cff2f0c53b6",
+    "declaredBaseManifestDigest": "sha256:df3f0bac868b88029d6071734ea42cd3073d6d99aa840671cbf30af609aadc5d",
+    "recursiveDigestSizeAndReachabilityVerification": "passed",
+    "unreachableOrMissingBlobCount": 0
+  },
+  "reproducibility": {
+    "outcome": "passed",
+    "twoNoCacheBuildsSameRuntimeManifest": true,
+    "receiptSha256": "174f7825cd844cd136deedac211df33350d00fff6c0eb75f680d486012382667"
+  },
+  "helper": {
+    "backendRevision": "03fd4463d84c5236bab9d5d9141af7537a51afe9",
+    "backendTree": "4e2dead7bd994f3783cf8b54428374e26367b21a",
+    "sourceArchiveSha256": "700f38a8f0b6ea02b9761e8dd1547bdf93fd2a7e1420e2a482f7b89ce8a0425b",
+    "binarySha256": "sha256:09e0d936c23d7625af9f67c09b703ed41135b185c3822a98f1f62cd401ded3ed",
+    "protocolSha256": "sha256:1274e0bb27dfb15d9d7564d71fc02a7117631b405de73d84f39defb415a5f7ad",
+    "license": "LicenseRef-Ambit-Proprietary",
+    "providerImplementationOnly": true,
+    "advertisedRuntimeCapability": false
+  },
+  "conformance": {
+    "outcome": "passed",
+    "receiptSha256": "0f4848d9aeeae125d762499c8055c514e6e1a3c17fecaf0321c4e8ac9331924a",
+    "materializerReceiptSha256": "7648f54d7b2e4181f3d4feb6229aba983b459b17425561c1abff2b2b27da6899",
+    "artifactReceiptSha256": "0386b60eaf89dc4ce94dd1900082703ee8c15d83006b3843159d3c2ae11376b7",
+    "pythonRuntimeReceiptSha256": "d4d1bd540586abc1b7af3e381ba6f7c9c1b415bf4325ab1650a75174bcf5fbe4",
+    "network": "none",
+    "privilege": "non_root",
+    "linuxCapabilities": "none",
+    "noNewPrivileges": true,
+    "packRoot": "read_only",
+    "full32MiBFramedChannel": "passed",
+    "all256ByteValues": "passed",
+    "deterministicParentAndFinalPinnedInodeRaceReproof": "passed",
+    "lostResponseNewVerifyOnlyReconciliation": "passed",
+    "derivedHtmlPreview": "diagnostic_non_layout_authoritative"
+  },
+  "providerTransport": {
+    "daytonaPtyReceiptSha256": "5f531405e63dd8f21b16ba5845cea6e506fa49d9b1544e211e4ab019f6ae6a36",
+    "backendProviderRevision": "dfb17776f58c853b5cab7edd5dde2076ceb279b7",
+    "backendProviderTree": "1516b6cf416924ea7ff785f6fbf9eae8053babf2",
+    "providerAdapterReceiptRef": "provider-adapter-execution-receipt:sha256:e656ad24af37c5ff0f31420206c46bdc328934202ac8416f540edbf38ab7191a",
+    "providerAdapterReceiptSha256": "b011bec138328b72ec79f712f3c689b7886cd4e7b91e3fcef443d24d4c2dba2a",
+    "providerAdapterVerificationSha256": "88b3c3965d8273f4f36ec343c8007335c41c167c6ad29e7cf7298a8b74e81498",
+    "testSuites": 7,
+    "tests": 145,
+    "outcome": "passed"
+  },
+  "supplyChainPolicy": {
+    "outcome": "passed",
+    "policyReceiptSha256": "e699b0a75d7d5b65c6558da76aae055bd09890f7d3f5d454bb880f2860972a96",
+    "sbomSha256": "9a073373cb5fd0e4077842d288b4ae4e16dd5451465bfb1ba8ca05ee8981a60b",
+    "sbomPackages": 55,
+    "rawLicenseNoAssertion": 4,
+    "reviewedLicenseResolutions": 3,
+    "aggregateExclusions": 1,
+    "effectiveUnknownLicenses": 0,
+    "deniedLicenses": 0,
+    "rawVulnerabilities": {
+      "Critical": 2,
+      "High": 8,
+      "Medium": 6
+    },
+    "verifiedVexDispositions": {
+      "fixed": 8,
+      "not_affected": 2
+    },
+    "effectiveVulnerabilities": {
+      "Critical": 0,
+      "High": 0,
+      "Medium": 6,
+      "Unknown": 0
+    },
+    "vulnerabilityReportSha256": "29933d6155cefd267fc3930710b292704c74a4b8a24d5ee59ce82aa77beea284",
+    "vexEvidenceVerificationSha256": "42620769e410c29cd85d9272b2b10ff9f30ad494992399b4a1be6c031a3d3c4c",
+    "grypeDatabaseReceiptSha256": "b0e51e61b470df52c6ad5eb897598e3ad8ee0893071feec0aaf8a694ffa5a208",
+    "imageLayerSecretScanSha256": "44ee0422a2305d179a33d06a5251a8c9e09dd1f547392ffa4f69d2ded056871e",
+    "imageLayerSecretFindings": 0
+  },
+  "negativeGates": {
+    "rootRuntimeReceiptSha256": "d53a05a64330b00c78804caa10ab0f29e9d57075dae40812952b119ab9a39e04",
+    "hostSocketReceiptSha256": "0c6214cd34d62589435f5ef070c6e4f699672d81dd10365784b1bed8df3309a1",
+    "secretEnvironmentReceiptSha256": "1c128b8c4569be9db209331b653e87cc05b4ba8a7d8e7eec67d95a15e3623f1f",
+    "installerScriptReceiptSha256": "b43c6eed0319ab0463ad4d7defa44cbf3cf2223fb47b76458c61367abebf09a9",
+    "outcome": "passed"
+  },
+  "signature": {
+    "algorithm": "Ed25519",
+    "meaning": "ephemeral local evidence content binding only; not a production publisher identity",
+    "bindingSha256": "e99a7b5bb163c9f16ac71a4a0810597fd63142c568d4797397cd456c546ab155",
+    "signatureSha256": "892012121f8b593e262a2eab90f75988c31934de4c27659ec46c58395647b8ee",
+    "verificationReceiptSha256": "340291f362db155b7a21c64c5620d3c776b4c918968ff39b032d1535a8422e0b",
+    "publicKeyPemSha256": "94be374e1bb7723e0be8fde248af13a05b5383d2d04c3e0b56be43d502474e5e",
+    "publicKeyDerSha256": "ae54d24f98fb9d924c05b247c6da1a20a4b056e331fb39e49bdf77d6b44c937e",
+    "verification": "passed",
+    "privateKeyPersisted": false
+  },
+  "releaseDisposition": {
+    "promotionPerformed": false,
+    "mutableTagPublished": false,
+    "certifiedDocumentProfileActive": false,
+    "documentSkillV1Active": false,
+    "documentRenderV1Available": false,
+    "candidateCoreAndStructuralDocxQualification": "passed"
+  },
+  "limitations": [
+    "document.render@1 remains unavailable until C19 supplies and composes a paginated renderer with page, font, pagination and layout inspection",
+    "CertifiedDocumentProfile and Document Skill v1 remain inactive",
+    "derived HTML is diagnostic and non-layout-authoritative",
+    "native Microsoft Office fidelity and macro preservation are not certified",
+    "specialist spreadsheet, presentation, PDF, browser, data, research, media and language-intelligence packs remain C18-owned",
+    "load, cache and checkpoint SLOs remain unmeasured"
+  ],
+  "rejectedPredecessor": {
+    "sourceRevision": "d7d851691bb42c1c85d07d6ed7608353ce2772f0",
+    "reason": "terminal packet omitted exact compressed inherited OCI blobs; it is preserved as historical negative evidence and is not activation authority"
+  }
+}
