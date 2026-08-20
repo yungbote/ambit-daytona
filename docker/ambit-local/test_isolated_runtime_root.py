@@ -74,6 +74,17 @@ class IsolatedRuntimeRootTest(unittest.TestCase):
                 with self.assertRaises(MODULE.RuntimeRootError):
                     MODULE.verify_runtime_root(path, identity)
 
+    def test_optional_runtime_socket_symlink_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/tmp") as temporary:
+            parent = Path(temporary)
+            path = self.runtime_path(parent)
+            pattern = __import__("re").compile(r".*/ambit-c16b-docker-[0-9a-f]{12}$")
+            with mock.patch.object(MODULE, "RUNTIME_ROOT_RE", pattern):
+                identity = MODULE.create_runtime_root(path)
+                (path / "containerd.sock.ttrpc").symlink_to(parent, target_is_directory=True)
+                with self.assertRaises(MODULE.RuntimeRootError):
+                    MODULE.verify_runtime_root(path, identity)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -43,6 +43,7 @@ def _verify_children(fd: int) -> None:
     allowed = set(CHILD_DIRECTORIES) | {
         "containerd-temp",
         "containerd.sock",
+        "containerd.sock.ttrpc",
         "docker.pid",
         "docker.sock",
     }
@@ -55,6 +56,7 @@ def _verify_children(fd: int) -> None:
     expected_optional_types = {
         "containerd-temp": stat.S_ISDIR,
         "containerd.sock": stat.S_ISSOCK,
+        "containerd.sock.ttrpc": stat.S_ISSOCK,
         "docker.pid": stat.S_ISREG,
         "docker.sock": stat.S_ISSOCK,
     }
