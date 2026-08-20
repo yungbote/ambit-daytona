@@ -46,6 +46,7 @@ ALLOWED_TAGS = frozenset(
 VOID_TAGS = frozenset({"br"})
 ACTIVE_CONTAINERS = frozenset({"iframe", "math", "object", "script", "style", "svg"})
 DROPPED_VOID_ELEMENTS = frozenset({"embed", "img", "input", "link", "meta", "source"})
+MAMMOTH_STYLE_MAP = "p[style-name='Title'] => h1:fresh"
 
 
 class SemanticHTMLSanitizer(HTMLParser):
@@ -58,6 +59,7 @@ class SemanticHTMLSanitizer(HTMLParser):
         self.active_depth = 0
         self.table_row_counts: list[int] = []
         self.row_header_stack: list[bool] = []
+        self.heading_count = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         normalized = tag.lower()
@@ -97,6 +99,9 @@ class SemanticHTMLSanitizer(HTMLParser):
                 self.rejected_attributes += 1
         if output_tag == "th" and not any(name == "scope" for name, _ in admitted):
             admitted.append(("scope", "col"))
+        if output_tag == "h1" and self.heading_count == 0:
+            admitted.append(("id", "document-title"))
+            self.heading_count += 1
         rendered_attributes = "".join(
             f' {name}="{html.escape(value, quote=True)}"' for name, value in sorted(admitted)
         )
@@ -356,10 +361,10 @@ def revise_document(source: Path) -> tuple[Path, dict[str, int]]:
 
 def derive_html_preview(source: Path, revision: str, expected_text: tuple[str, ...]) -> tuple[Path, dict[str, object]]:
     with source.open("rb") as stream:
-        converted = mammoth.convert_to_html(stream)
+        converted = mammoth.convert_to_html(stream, style_map=MAMMOTH_STYLE_MAP)
     sanitized, rejected_elements, rejected_attributes = sanitize_html(converted.value)
     with source.open("rb") as stream:
-        repeated = mammoth.convert_to_html(stream)
+        repeated = mammoth.convert_to_html(stream, style_map=MAMMOTH_STYLE_MAP)
     repeated_sanitized, repeated_elements, repeated_attributes = sanitize_html(repeated.value)
     assert repeated_sanitized == sanitized
     assert repeated_elements == rejected_elements
@@ -367,6 +372,7 @@ def derive_html_preview(source: Path, revision: str, expected_text: tuple[str, .
     assert [str(message) for message in repeated.messages] == [str(message) for message in converted.messages]
     assert rejected_elements == 0
     assert rejected_attributes == 0
+    assert sanitized.startswith('<h1 id="document-title">Ambit Project Brief</h1>')
     normalized_text = " ".join(re.sub(r"<[^>]+>", " ", sanitized).split())
     for value in expected_text:
         assert " ".join(value.split()) in normalized_text
@@ -377,7 +383,7 @@ def derive_html_preview(source: Path, revision: str, expected_text: tuple[str, .
         '<html lang="en"><head><meta charset="utf-8">'
         '<meta name="ambit-preview" content="derived-non-layout-authoritative">'
         f'<title>Ambit Project Brief {revision}</title></head><body>'
-        f'<main aria-label="Derived document preview">{sanitized}</main>'
+        f'<main aria-labelledby="document-title">{sanitized}</main>'
         "</body></html>\n"
     )
     return preview, {

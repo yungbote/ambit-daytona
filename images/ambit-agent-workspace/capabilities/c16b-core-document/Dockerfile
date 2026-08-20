@@ -68,10 +68,7 @@ RUN set -eux; \
     done < /tmp/ambit-c16b-apk-direct-packages.lock; \
     addgroup -g 1000 daytona; \
     adduser -D -u 1000 -G daytona -s /bin/bash daytona; \
-    install -d -m 0755 -o root -g root \
-      /opt/ambit/runtime-pack/core-document/bin \
-      /opt/ambit/runtime-pack/core-document/conformance \
-      /opt/ambit/runtime-pack/core-document/policy; \
+    install -d -m 0755 -o root -g root /opt/ambit/runtime-pack/core-document/bin; \
     install -d -m 0755 -o daytona -g daytona /workspace; \
     rm -rf /var/cache/apk/* /usr/lib/python3.14/ensurepip /usr/bin/pip /usr/bin/pip3 /usr/bin/pip3.14 /usr/bin/apk
 
