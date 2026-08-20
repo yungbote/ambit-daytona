@@ -346,11 +346,19 @@ python3 "${archived_cert_dir}/verify_provider_adapter_receipt.py" \
   --toolchain-manifest "${archived_pack_dir}/toolchain-manifest.json" \
   --output "${artifact_root}/transport/provider-adapter-verification.json"
 
-docker run -d --name "${registry_name}" -p 127.0.0.1::5000 \
+registry_port=$(python3 - <<'PY'
+import socket
+
+with socket.socket() as listener:
+    listener.bind(("127.0.0.1", 0))
+    print(listener.getsockname()[1])
+PY
+)
+[[ ${registry_port} =~ ^[0-9]+$ ]] || { echo "could not select task-local registry port" >&2; exit 67; }
+registry_host=127.0.0.1:${registry_port}
+docker run -d --name "${registry_name}" --network host \
+  -e "REGISTRY_HTTP_ADDR=${registry_host}" \
   -v "${artifact_root}/registry-data:/var/lib/registry" "${registry}" >/dev/null
-registry_host=$(docker port "${registry_name}" 5000/tcp | sed -n '1s/^127\.0\.0\.1://p')
-[[ ${registry_host} =~ ^[0-9]+$ ]] || { echo "could not resolve task-local registry port" >&2; exit 67; }
-registry_host=127.0.0.1:${registry_host}
 for _ in $(seq 1 100); do
   curl -fsS "http://${registry_host}/v2/" >/dev/null 2>&1 && break
   sleep 0.1
