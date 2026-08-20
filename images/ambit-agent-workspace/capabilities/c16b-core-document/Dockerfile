@@ -13,10 +13,11 @@ FROM ${MATERIALIZER_BUILDER_IMAGE} AS materializer_builder
 WORKDIR /src
 COPY materializer/go.mod materializer/go.sum ./
 RUN GOWORK=off GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org go mod download
-COPY materializer/main.go materializer/source.sha256 ./
+COPY materializer/main.go materializer/main_test.go materializer/source.sha256 ./
 COPY materializer/binary.sha256 /tmp/ambit-atomic-materialize.sha256
 RUN --network=none set -eux; \
     sha256sum -c source.sha256; \
+    GOWORK=off go test ./...; \
     GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
       go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' \
       -o /out/ambit-atomic-materialize .; \
@@ -89,7 +90,7 @@ LABEL org.opencontainers.image.title="ambit-c16b-core-document" \
       org.opencontainers.image.version="2.0.0-candidate" \
       org.opencontainers.image.revision="${BUILD_SOURCE_REVISION}" \
       io.ambit.runtime-pack="ambit.runtime-pack/core-document@2" \
-      io.ambit.atomic-materializer-sha256="sha256:3dcf066df09b5f0d2fdeecc52bde579d296ef57fff048b007e7dafc50abfd28c" \
+      io.ambit.atomic-materializer-sha256="sha256:4c263284756a93bad58a5f7cc3f04ff8e22325a135ed1f71a6cce0df52b8c87f" \
       io.ambit.atomic-materializer-protocol="sha256:1274e0bb27dfb15d9d7564d71fc02a7117631b405de73d84f39defb415a5f7ad" \
       io.ambit.build-input-sha256="${BUILD_SOURCE_INPUT_SHA256}"
 

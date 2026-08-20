@@ -406,11 +406,11 @@ func materialize(config materializationConfiguration, payload []byte) (string, *
 	if config.operation == "verify_only" {
 		existingStat, verifyErr := verifyExisting(parentFD, leaf, payload, config.mode)
 		if verifyErr != nil {
-			failure := operationError{code: publicConflictCode(verifyErr), exitCode: exitUnsafe, relativePath: &relativePath}
+			failure := verificationFailure(verifyErr, &relativePath)
 			return "", &failure
 		}
-		if verifyReachableArtifact(config.components[:len(config.components)-1], directoryIdentities, leaf, payload, config.mode, existingStat) != nil {
-			failure := operationError{code: "path_race", exitCode: exitUnsafe, relativePath: &relativePath}
+		if reachErr := verifyReachableArtifact(config.components[:len(config.components)-1], directoryIdentities, leaf, payload, config.mode, existingStat); reachErr != nil {
+			failure := reachabilityFailure(reachErr, &relativePath)
 			return "", &failure
 		}
 		return "already_identical", nil
@@ -418,14 +418,14 @@ func materialize(config materializationConfiguration, payload []byte) (string, *
 
 	existingStat, existingErr := verifyExisting(parentFD, leaf, payload, config.mode)
 	if existingErr == nil {
-		if verifyReachableArtifact(config.components[:len(config.components)-1], directoryIdentities, leaf, payload, config.mode, existingStat) != nil {
-			failure := operationError{code: "path_race", exitCode: exitUnsafe, relativePath: &relativePath}
+		if reachErr := verifyReachableArtifact(config.components[:len(config.components)-1], directoryIdentities, leaf, payload, config.mode, existingStat); reachErr != nil {
+			failure := reachabilityFailure(reachErr, &relativePath)
 			return "", &failure
 		}
 		return "already_identical", nil
 	}
 	if !errors.Is(existingErr, syscall.ENOENT) {
-		failure := operationError{code: publicConflictCode(existingErr), exitCode: exitUnsafe, relativePath: &relativePath}
+		failure := verificationFailure(existingErr, &relativePath)
 		return "", &failure
 	}
 
@@ -463,14 +463,15 @@ func materialize(config materializationConfiguration, payload []byte) (string, *
 	if linkErr != nil {
 		if errors.Is(linkErr, syscall.EEXIST) {
 			existingStat, verifyErr := verifyExisting(parentFD, leaf, payload, config.mode)
-			if verifyErr == nil && verifyReachableArtifact(config.components[:len(config.components)-1], directoryIdentities, leaf, payload, config.mode, existingStat) == nil {
-				return "already_identical", nil
+			if verifyErr == nil {
+				reachErr := verifyReachableArtifact(config.components[:len(config.components)-1], directoryIdentities, leaf, payload, config.mode, existingStat)
+				if reachErr == nil {
+					return "already_identical", nil
+				}
+				failure := reachabilityFailure(reachErr, &relativePath)
+				return "", &failure
 			}
-			code := "path_race"
-			if verifyErr != nil {
-				code = publicConflictCode(verifyErr)
-			}
-			failure := operationError{code: code, exitCode: exitUnsafe, relativePath: &relativePath}
+			failure := verificationFailure(verifyErr, &relativePath)
 			return "", &failure
 		}
 		if errors.Is(linkErr, syscall.ENOENT) || errors.Is(linkErr, syscall.ELOOP) || errors.Is(linkErr, syscall.ENOTDIR) || errors.Is(linkErr, syscall.ESTALE) || errors.Is(linkErr, syscall.EBUSY) {
@@ -481,17 +482,22 @@ func materialize(config materializationConfiguration, payload []byte) (string, *
 		return "", &failure
 	}
 
-	if verifyReachableArtifact(config.components[:len(config.components)-1], directoryIdentities, leaf, payload, config.mode, temporaryStat) != nil {
-		removePublished(parentFD, leaf)
-		failure := operationError{code: "path_race", exitCode: exitUnsafe, relativePath: &relativePath}
+	if reachErr := verifyReachableArtifact(config.components[:len(config.components)-1], directoryIdentities, leaf, payload, config.mode, temporaryStat); reachErr != nil {
+		removePublishedIfIdentityMatches(parentFD, leaf, temporaryStat)
+		failure := reachabilityFailure(reachErr, &relativePath)
 		return "", &failure
 	}
 	for index := len(directoryFDs) - 1; index >= 0; index-- {
 		if err := syscall.Fsync(directoryFDs[index]); err != nil {
-			removePublished(parentFD, leaf)
+			removePublishedIfIdentityMatches(parentFD, leaf, temporaryStat)
 			failure := operationError{code: "directory_durability_failure", exitCode: exitIO, relativePath: &relativePath}
 			return "", &failure
 		}
+	}
+	if reachErr := verifyReachableArtifact(config.components[:len(config.components)-1], directoryIdentities, leaf, payload, config.mode, temporaryStat); reachErr != nil {
+		removePublishedIfIdentityMatches(parentFD, leaf, temporaryStat)
+		failure := reachabilityFailure(reachErr, &relativePath)
+		return "", &failure
 	}
 	return "created", nil
 }
@@ -633,7 +639,10 @@ func verifyReachableArtifact(components []string, expectedDirectories []director
 		closeDescriptors(descriptors)
 	}()
 	identity, err := descriptorIdentity(rootFD)
-	if err != nil || identity != expectedDirectories[0] {
+	if err != nil {
+		return err
+	}
+	if identity != expectedDirectories[0] {
 		return pathRace
 	}
 	for index, component := range components {
@@ -643,20 +652,41 @@ func verifyReachableArtifact(components []string, expectedDirectories []director
 		}
 		descriptors = append(descriptors, fd)
 		identity, identityErr := descriptorIdentity(fd)
-		if identityErr != nil || identity != expectedDirectories[index+1] {
+		if identityErr != nil {
+			return identityErr
+		}
+		if identity != expectedDirectories[index+1] {
 			return pathRace
 		}
 	}
 	actualArtifact, err := verifyExisting(descriptors[len(descriptors)-1], leaf, payload, mode)
-	if err != nil || actualArtifact.Dev != expectedArtifact.Dev || actualArtifact.Ino != expectedArtifact.Ino {
+	if err != nil {
+		return err
+	}
+	if actualArtifact.Dev != expectedArtifact.Dev || actualArtifact.Ino != expectedArtifact.Ino {
 		return pathRace
 	}
 	return nil
 }
 
-func removePublished(parentFD int, leaf string) {
-	_ = syscall.Unlinkat(parentFD, leaf)
-	_ = syscall.Fsync(parentFD)
+func removePublishedIfIdentityMatches(parentFD int, leaf string, expected syscall.Stat_t) bool {
+	fd, err := syscall.Openat(parentFD, leaf, syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return false
+	}
+	defer syscall.Close(fd)
+	var before syscall.Stat_t
+	if err := syscall.Fstat(fd, &before); err != nil || before.Dev != expected.Dev || before.Ino != expected.Ino {
+		return false
+	}
+	if err := syscall.Unlinkat(parentFD, leaf); err != nil {
+		return false
+	}
+	var after syscall.Stat_t
+	if err := syscall.Fstat(fd, &after); err != nil || after.Dev != expected.Dev || after.Ino != expected.Ino || after.Nlink != 0 {
+		return false
+	}
+	return syscall.Fsync(parentFD) == nil
 }
 
 func queuedInput(fd int) (bool, error) {
@@ -949,19 +979,37 @@ func pathFailure(code string, err error, relativePath *string) operationError {
 	return operationError{code: code, exitCode: exitIO, relativePath: relativePath}
 }
 
-func publicConflictCode(err error) string {
+func publicConflictCode(err error) (string, bool) {
 	switch {
 	case errors.Is(err, linkCountInvalid):
-		return "link_count_invalid"
+		return "link_count_invalid", true
 	case errors.Is(err, nonRegularFile):
-		return "non_regular_file"
+		return "non_regular_file", true
+	case errors.Is(err, existingMismatch):
+		return "existing_mismatch", true
 	case errors.Is(err, pathRace):
-		return "path_race"
-	case errors.Is(err, syscall.ELOOP), errors.Is(err, syscall.ENOTDIR), errors.Is(err, syscall.ENOENT):
-		return "unsafe_path"
+		return "path_race", true
+	case errors.Is(err, syscall.ELOOP), errors.Is(err, syscall.ENOTDIR):
+		return "unsafe_path", true
+	case errors.Is(err, syscall.ENOENT), errors.Is(err, syscall.ESTALE), errors.Is(err, syscall.EBUSY):
+		return "path_race", true
 	default:
-		return "existing_mismatch"
+		return "", false
 	}
+}
+
+func verificationFailure(err error, relativePath *string) operationError {
+	if code, terminal := publicConflictCode(err); terminal {
+		return operationError{code: code, exitCode: exitUnsafe, relativePath: relativePath}
+	}
+	return operationError{code: "artifact_verification_io_failure", exitCode: exitIO, relativePath: relativePath}
+}
+
+func reachabilityFailure(err error, relativePath *string) operationError {
+	if code, terminal := publicConflictCode(err); terminal {
+		return operationError{code: code, exitCode: exitUnsafe, relativePath: relativePath}
+	}
+	return operationError{code: "path_verification_io_failure", exitCode: exitIO, relativePath: relativePath}
 }
 
 func closeDescriptors(descriptors []int) {
