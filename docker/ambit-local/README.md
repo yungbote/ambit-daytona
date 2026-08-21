@@ -90,15 +90,33 @@ requires its backing device to be the qualified state-root filesystem and at
 least 60 GiB currently free there, records allocated bytes, and retains an
 explicit ENOSPC failure mode if later host writes consume that headroom.
 `prepare-runner-storage.sh` is idempotent after success and can reattach the
-receipt-bound filesystem after reboot. Its failure trap is installed before
-the first capacity mutation and removes only an image created by that failed
-attempt. A process kill or power loss may leave an exact image without a final
-receipt; `remove-runner-storage.sh` deliberately accepts that one incomplete
-state after re-proving path, owner, mode, size, loop, mount, and nesting.
-After stopping the provider stack, the remove script performs the complete
-rollback: it refuses foreign or nested mounts and changed receipt identity,
-unmounts only the exact target, detaches only the image-associated loop device,
-and removes only the image and receipt. It creates no boot-time residue.
+receipt-bound filesystem after reboot. The prepare and remove lifecycles hold
+one exclusive lock on the descriptor-pinned state-root inode, so two task
+invocations cannot interleave image, loop, mount, receipt, or cleanup state.
+New image creation keeps its original descriptor open continuously through
+truncate, ownership transfer, formatting, and loop attachment; it never
+reopens a replaceable pathname before a privileged mutation. Its failure trap
+is installed before the first capacity mutation and removes only that pinned
+image when its current path still names the same device and inode. A process
+kill or power loss may leave an exact image without a final receipt;
+`remove-runner-storage.sh` deliberately accepts that one incomplete state after
+re-proving path, owner, mode, size, loop, mount, and nesting. After stopping the
+provider stack, the remove script performs the complete rollback: it refuses
+foreign or nested mounts and changed receipt identity, enumerates every global
+mount with the loop block device's exact major/minor identity, unmounts only
+the exact target after the shared identity collector proves there is no second
+mount, detaches only the image-associated loop device, and removes only the
+image and receipt. It creates no boot-time residue.
+
+The runner-storage receipt is an identity observation, not a readiness lease.
+Ordinary sandbox use can reduce its inner free space below 40 GiB or its sparse
+backing filesystem below 60 GiB without changing which image, XFS filesystem,
+quota mount, or target the lifecycle owns. Recovery and teardown therefore
+validate nonnegative current observations but apply no free-space threshold.
+Only `verify-host-capacity.sh` applies the current 40 GiB inner aggregate and
+60 GiB backing-headroom thresholds. This keeps recovery and rollback available
+at zero free bytes while preventing a near-full filesystem from receiving a
+new host-readiness receipt.
 
 The rendered Compose environment is a closed per-service key roster. Every
 network endpoint used by the API, proxy, or runner is pinned to loopback or an
