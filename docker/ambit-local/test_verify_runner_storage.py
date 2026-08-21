@@ -277,6 +277,8 @@ printf 'continued\\n'
                 self.assertNotIn(forbidden, wrapper)
         self.assertIn("os.unlink(IMAGE_NAME, dir_fd=prefix.capacity_fd)", helper)
         self.assertIn("os.rmdir(CAPACITY_NAME, dir_fd=prefix.state_root_fd)", helper)
+        self.assertIn("*_incomplete_prepublication", remove)
+        self.assertIn("receipt_present} == false", remove)
 
     def test_wrappers_pin_and_execute_only_the_exact_helper_bytes(self) -> None:
         helper_sha256 = hashlib.sha256(LIFECYCLE_HELPER_SCRIPT.read_bytes()).hexdigest()

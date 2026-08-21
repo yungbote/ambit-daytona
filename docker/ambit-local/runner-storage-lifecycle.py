@@ -129,12 +129,16 @@ def classify_image(
         "runner storage image is on a foreign backing filesystem",
     )
     require(plain_int(node.inode) and node.inode > 0, "runner storage image inode is invalid")
-    require(node.size == image_bytes, "runner storage image logical size differs")
+    require(
+        plain_int(node.size) and 0 <= node.size <= image_bytes,
+        "runner storage image logical size is invalid",
+    )
+    size_state = "exact" if node.size == image_bytes else "incomplete_prepublication"
     identity = (node.owner_uid, node.owner_gid, node.mode)
     if identity == (caller_uid, caller_gid, 0o600):
-        return "caller_0600"
+        return f"caller_0600_{size_state}"
     if identity == (0, 0, 0o600):
-        return "root_0600"
+        return f"root_0600_{size_state}"
     raise RunnerStorageLifecycleError("runner storage image ownership or mode differs")
 
 
@@ -173,14 +177,14 @@ def reduce_prefix_state(
         "runner storage image exists without its capacity root",
     )
     require(
-        capacity_state != "root_0711" or image_state != "caller_0600",
+        capacity_state != "root_0711" or not image_state.startswith("caller_0600_"),
         "runner storage image has impossible ownership below a published capacity root",
     )
 
     if operation == "prepare":
         if image_state == "absent":
             disposition: Disposition = "create_new"
-        elif capacity_state == "root_0711" and image_state == "root_0600":
+        elif capacity_state == "root_0711" and image_state == "root_0600_exact":
             disposition = "existing_published_candidate"
         else:
             disposition = "teardown_required"

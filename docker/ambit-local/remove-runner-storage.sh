@@ -18,7 +18,7 @@ state_root=$1
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 lifecycle_helper=${script_dir}/runner-storage-lifecycle.py
-lifecycle_helper_sha256=0b18e42c2a456390bd1b1bbceccb713288fb27cc054e8d7359fb4f21ef354506
+lifecycle_helper_sha256=acf8dfaaad850d3da0b690d8b2d8c8c801d846fec50388108b6d0863c5b9d9fd
 target=${state_root}/runner-docker
 image=${state_root}/capacity/runner-docker.xfs
 evidence_root=${state_root}/evidence
@@ -136,6 +136,7 @@ trap 'exit 143' TERM
 inspection=$(inspect_state)
 require_inspection "${inspection}"
 disposition=$(jq -er '.disposition' <<<"${inspection}")
+image_state=$(jq -er '.imageState' <<<"${inspection}")
 expected_device=$(jq -r '.imageIdentity.device // "none"' <<<"${inspection}")
 expected_inode=$(jq -r '.imageIdentity.inode // "none"' <<<"${inspection}")
 receipt_present=false
@@ -152,6 +153,12 @@ case ${disposition} in
     }
     ;;
   remove_image_and_capacity)
+    if [[ ${image_state} == *_incomplete_prepublication ]]; then
+      [[ ${receipt_present} == false ]] || {
+        echo 'runner storage incomplete prepublication image unexpectedly has a receipt' >&2
+        exit 66
+      }
+    fi
     if [[ ${receipt_present} == true ]]; then
       [[ $(jq -er '.image.path' "${receipt}") == "${image}" ]] || { echo 'runner storage receipt image path differs' >&2; exit 66; }
       [[ $(jq -er '.image.device' "${receipt}") == "${expected_device}" ]] || { echo 'runner storage receipt image device differs' >&2; exit 66; }

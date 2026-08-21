@@ -61,7 +61,7 @@ def capacity(state: str):
 def image(state: str):
     values = {
         "absent": MODULE.absent_node(),
-        "caller_0600": MODULE.NodeFacts(
+        "caller_0600_exact": MODULE.NodeFacts(
             kind="regular",
             owner_uid=CALLER_UID,
             owner_gid=CALLER_GID,
@@ -70,7 +70,7 @@ def image(state: str):
             inode=13,
             size=IMAGE_BYTES,
         ),
-        "root_0600": MODULE.NodeFacts(
+        "root_0600_exact": MODULE.NodeFacts(
             kind="regular",
             owner_uid=0,
             owner_gid=0,
@@ -78,6 +78,24 @@ def image(state: str):
             device=DEVICE,
             inode=13,
             size=IMAGE_BYTES,
+        ),
+        "caller_0600_incomplete_prepublication": MODULE.NodeFacts(
+            kind="regular",
+            owner_uid=CALLER_UID,
+            owner_gid=CALLER_GID,
+            mode=0o600,
+            device=DEVICE,
+            inode=13,
+            size=0,
+        ),
+        "root_0600_incomplete_prepublication": MODULE.NodeFacts(
+            kind="regular",
+            owner_uid=0,
+            owner_gid=0,
+            mode=0o600,
+            device=DEVICE,
+            inode=13,
+            size=0,
         ),
     }
     return values[state]
@@ -106,13 +124,18 @@ class RunnerStorageLifecycleReducerTest(unittest.TestCase):
     valid_prefixes = {
         ("absent", "absent"),
         ("caller_0700", "absent"),
-        ("caller_0700", "caller_0600"),
-        ("caller_0700", "root_0600"),
+        ("caller_0700", "caller_0600_exact"),
+        ("caller_0700", "root_0600_exact"),
+        ("caller_0700", "caller_0600_incomplete_prepublication"),
+        ("caller_0700", "root_0600_incomplete_prepublication"),
         ("root_0700", "absent"),
-        ("root_0700", "caller_0600"),
-        ("root_0700", "root_0600"),
+        ("root_0700", "caller_0600_exact"),
+        ("root_0700", "root_0600_exact"),
+        ("root_0700", "caller_0600_incomplete_prepublication"),
+        ("root_0700", "root_0600_incomplete_prepublication"),
         ("root_0711", "absent"),
-        ("root_0711", "root_0600"),
+        ("root_0711", "root_0600_exact"),
+        ("root_0711", "root_0600_incomplete_prepublication"),
     }
 
     def test_every_valid_prefix_has_total_prepare_and_remove_dispositions(self) -> None:
@@ -122,7 +145,10 @@ class RunnerStorageLifecycleReducerTest(unittest.TestCase):
                 remove = reduce(capacity_state, image_state, "remove")
                 if image_state == "absent":
                     self.assertEqual(prepare.disposition, "create_new")
-                elif (capacity_state, image_state) == ("root_0711", "root_0600"):
+                elif (capacity_state, image_state) == (
+                    "root_0711",
+                    "root_0600_exact",
+                ):
                     self.assertEqual(
                         prepare.disposition, "existing_published_candidate"
                     )
@@ -137,7 +163,13 @@ class RunnerStorageLifecycleReducerTest(unittest.TestCase):
 
     def test_every_presence_and_owner_prefix_is_admitted_or_rejected_explicitly(self) -> None:
         capacity_states = ("absent", "caller_0700", "root_0700", "root_0711")
-        image_states = ("absent", "caller_0600", "root_0600")
+        image_states = (
+            "absent",
+            "caller_0600_exact",
+            "root_0600_exact",
+            "caller_0600_incomplete_prepublication",
+            "root_0600_incomplete_prepublication",
+        )
         for prefix in itertools.product(capacity_states, image_states):
             with self.subTest(prefix=prefix):
                 if prefix in self.valid_prefixes:
@@ -155,7 +187,7 @@ class RunnerStorageLifecycleReducerTest(unittest.TestCase):
             ("caller_0700", "absent"),
             ("root_0700", "absent"),
             ("root_0711", "absent"),
-            ("root_0711", "root_0600"),
+            ("root_0711", "root_0600_exact"),
         }
         for prefix in crash_prefixes:
             with self.subTest(prefix=prefix):
@@ -164,6 +196,44 @@ class RunnerStorageLifecycleReducerTest(unittest.TestCase):
                     reduce(*prefix, "remove").disposition,
                     "remove_image_and_capacity",
                 )
+
+    def test_every_pretruncate_cutpoint_is_teardown_only_and_removable(self) -> None:
+        for owner_state, capacity_state in (
+            ("caller_0600_incomplete_prepublication", "caller_0700"),
+            ("root_0600_incomplete_prepublication", "root_0700"),
+            ("root_0600_incomplete_prepublication", "root_0711"),
+        ):
+            for size in (0, 1, IMAGE_BYTES - 1):
+                with self.subTest(owner=owner_state, capacity=capacity_state, size=size):
+                    candidate_image = MODULE.NodeFacts(
+                        **{**image(owner_state).__dict__, "size": size}
+                    )
+                    prefix = MODULE.CapacityPrefixFacts(
+                        state_root_device=DEVICE,
+                        capacity=capacity(capacity_state),
+                        image=candidate_image,
+                    )
+                    prepare = MODULE.reduce_prefix_state(
+                        prefix,
+                        operation="prepare",
+                        caller_uid=CALLER_UID,
+                        caller_gid=CALLER_GID,
+                        image_bytes=IMAGE_BYTES,
+                    )
+                    remove = MODULE.reduce_prefix_state(
+                        prefix,
+                        operation="remove",
+                        caller_uid=CALLER_UID,
+                        caller_gid=CALLER_GID,
+                        image_bytes=IMAGE_BYTES,
+                    )
+                    self.assertEqual(prepare.disposition, "teardown_required")
+                    self.assertEqual(remove.disposition, "remove_image_and_capacity")
+
+        helper = SCRIPT.read_text()
+        create = helper.index("prefix.image_fd = os.open(")
+        truncate = helper.index("os.ftruncate(prefix.image_fd", create)
+        self.assertLess(create, truncate)
 
     def test_unlink_before_rmdir_crash_prefix_is_recoverable(self) -> None:
         decision = reduce("root_0711", "absent", "remove")
@@ -176,7 +246,7 @@ class RunnerStorageLifecycleReducerTest(unittest.TestCase):
                     MODULE.reduce_prefix_state(
                         facts(
                             "root_0711",
-                            "root_0600",
+                            "root_0600_exact",
                             foreign_entries=("foreign",),
                         ),
                         operation=operation,
@@ -214,7 +284,7 @@ class RunnerStorageLifecycleReducerTest(unittest.TestCase):
                     )
 
     def test_image_identity_mutations_fail_closed(self) -> None:
-        base = image("root_0600")
+        base = image("root_0600_exact")
         mutations = {
             "kind": "symlink",
             "owner_uid": 7,
@@ -222,7 +292,7 @@ class RunnerStorageLifecycleReducerTest(unittest.TestCase):
             "mode": 0o666,
             "device": DEVICE + 1,
             "inode": 0,
-            "size": IMAGE_BYTES - 1,
+            "size": IMAGE_BYTES + 1,
         }
         for field, value in mutations.items():
             with self.subTest(field=field):
@@ -241,6 +311,20 @@ class RunnerStorageLifecycleReducerTest(unittest.TestCase):
                         caller_gid=CALLER_GID,
                         image_bytes=IMAGE_BYTES,
                     )
+
+        negative = MODULE.NodeFacts(**{**base.__dict__, "size": -1})
+        with self.assertRaises(MODULE.RunnerStorageLifecycleError):
+            MODULE.reduce_prefix_state(
+                MODULE.CapacityPrefixFacts(
+                    state_root_device=DEVICE,
+                    capacity=capacity("root_0700"),
+                    image=negative,
+                ),
+                operation="remove",
+                caller_uid=CALLER_UID,
+                caller_gid=CALLER_GID,
+                image_bytes=IMAGE_BYTES,
+            )
 
     def test_mountinfo_escape_decoding_is_exact(self) -> None:
         self.assertEqual(
