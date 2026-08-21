@@ -40,6 +40,7 @@ config=${state_root}/config/outer-docker.json
 containerd_config=${state_root}/config/outer-containerd.toml
 expected_data_root=${state_root}/outer-docker
 expected_containerd_root=${state_root}/outer-containerd
+runner_storage_receipt=${state_root}/evidence/runner-docker-storage.json
 [[ ${DOCKER_HOST:-} == "${expected_docker_host}" ]] || {
   echo "DOCKER_HOST must name the task-owned socket: ${expected_docker_host}" >&2
   exit 66
@@ -99,6 +100,16 @@ jq -e \
   }
 [[ ${docker_root} == "${expected_data_root}" ]] || { echo 'live Docker data root differs' >&2; exit 66; }
 runner_storage=$(python3 "${runner_storage_tool}" "${state_root}")
+[[ -f ${runner_storage_receipt} && ! -L ${runner_storage_receipt} ]] || {
+  echo 'runner storage persisted receipt is absent or unsafe' >&2
+  exit 66
+}
+runner_storage_filter='{schema,stateRoot,mountTarget,image:{path:.image.path,logicalBytes:.image.logicalBytes,device:.image.device,inode:.image.inode,ownerUid:.image.ownerUid,mode:.image.mode},filesystem:{type:.filesystem.type,uuid:.filesystem.uuid,mountOptions:.filesystem.mountOptions,totalBytes:.filesystem.totalBytes,features:.filesystem.features},backingFilesystem:{device:.backingFilesystem.device,totalBytes:.backingFilesystem.totalBytes,allocationDisposition:.backingFilesystem.allocationDisposition,minimumFreeBytes:.backingFilesystem.minimumFreeBytes},sandboxDiskPolicy}'
+[[ $(jq -S -c "${runner_storage_filter}" "${runner_storage_receipt}") == $(jq -S -c "${runner_storage_filter}" <<<"${runner_storage}") ]] || {
+  echo 'runner storage persisted receipt differs from live stable identity' >&2
+  exit 66
+}
+runner_storage_receipt_sha256=$(sha256sum "${runner_storage_receipt}" | cut -d' ' -f1)
 
 cpu_count=$(nproc)
 memory_available_kib=$(awk '$1 == "MemAvailable:" { print $2 }' /proc/meminfo)
@@ -136,6 +147,7 @@ jq -n -S \
   --arg isolatedReceiptSha256 "$(sha256sum "${isolated_receipt}" | cut -d' ' -f1)" \
   --arg configSha256 "${config_sha256}" \
   --arg containerdConfigSha256 "${containerd_config_sha256}" \
+  --arg runnerStorageReceiptSha256 "${runner_storage_receipt_sha256}" \
   --argjson cpu "${cpu_count}" \
   --argjson memory "${memory_available_bytes}" \
   --argjson storage "${storage_available_bytes}" \
@@ -154,9 +166,10 @@ jq -n -S \
       requiredHeadroom:{cpuCores:2,memoryBytes:4294967296,diskBytes:21474836480,gpuCount:0},
       minimumObserved:{cpuCores:6,memoryBytes:12884901888,diskBytes:64424509440,gpuCount:0}
     },
-    providerOuterCeiling:{cpuCores:5.8,memoryBytes:12616466432,diskReservationBytes:64424509440},
+    providerOuterCeiling:{cpuCores:5.8,memoryBytes:12616466432,runnerStorageLogicalBytes:64424509440,minimumRunnerBackingFreeBytes:64424509440,diskCapacityDisposition:"sparse_current_headroom_not_preallocated"},
     isolatedDaemon:{dockerHost:$dockerHost,dockerRoot:$dockerRoot,serverId:$dockerServerId,startupReceiptSha256:$isolatedReceiptSha256,configSha256:$configSha256,containerdConfigSha256:$containerdConfigSha256,processes:{dockerd:$dockerProcessIdentity,containerd:$containerdProcessIdentity}},
     runnerStorage:$runnerStorage,
+    runnerStorageReceiptSha256:$runnerStorageReceiptSha256,
     observed:{cpuCores:$cpu,memoryAvailableBytes:$memory,storageAvailableBytes:$storage,storageFilesystem:$storageFilesystem,stateRoot:$stateRoot},
     reasons:$reasons
   }' > "${output}"

@@ -85,6 +85,10 @@ loop device, and mounts it only at the already-declared
 configuration, systemd unit, or shared-daemon setting. `verify-host-capacity.sh`
 requires the exact image inode, loop backing, XFS UUID/features, `pquota`, and
 at least 40 GiB usable/free capacity before a host-headroom receipt can pass.
+The sparse file is not advertised as preallocated storage: readiness also
+requires its backing device to be the qualified state-root filesystem and at
+least 60 GiB currently free there, records allocated bytes, and retains an
+explicit ENOSPC failure mode if later host writes consume that headroom.
 `prepare-runner-storage.sh` is idempotent after success and can reattach the
 receipt-bound filesystem after reboot. Its failure trap is installed before
 the first capacity mutation and removes only an image created by that failed

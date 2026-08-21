@@ -40,6 +40,8 @@ done
   echo 'runner storage target must be empty below its mount' >&2
   exit 66
 }
+target_device=$(stat -c '%d' -- "${target}")
+target_inode=$(stat -c '%i' -- "${target}")
 
 loop_device=
 mounted=false
@@ -48,20 +50,31 @@ capacity_created=false
 temporary=
 cleanup_failed_prepare() {
   set +e
+  local cleanup_safe=true
   if [[ -n ${temporary} && -e ${temporary} ]]; then
     unlink -- "${temporary}"
   fi
-  if [[ ${mounted} == true ]] && mountpoint -q -- "${target}"; then
-    sudo -n umount -- "${target}"
+  if [[ ${mounted} == true && -n ${loop_device} ]] &&
+    [[ -n $(findmnt -rn -S "${loop_device}" -o TARGET 2>/dev/null) ]]; then
+    sudo -n umount -- "${loop_device}" || cleanup_safe=false
   fi
   if [[ -n ${loop_device} ]]; then
-    sudo -n losetup --detach "${loop_device}" >/dev/null 2>&1
+    if [[ -z $(findmnt -rn -S "${loop_device}" -o TARGET 2>/dev/null) ]]; then
+      sudo -n losetup --detach "${loop_device}" >/dev/null 2>&1 || cleanup_safe=false
+    else
+      cleanup_safe=false
+    fi
   fi
-  if [[ ${image_created} == true && -f ${image} && ! -L ${image} ]]; then
-    unlink -- "${image}"
+  # A published receipt makes the exact image/UUID recoverable after INT,
+  # TERM, or reboot. Never turn that state into receipt-without-image.
+  if [[ -f ${receipt} && ! -L ${receipt} ]]; then
+    cleanup_safe=false
   fi
-  if [[ ${capacity_created} == true && -d ${capacity_root} && ! -L ${capacity_root} ]]; then
-    rmdir --ignore-fail-on-non-empty -- "${capacity_root}"
+  if [[ ${cleanup_safe} == true && ${image_created} == true && -f ${image} && ! -L ${image} ]]; then
+    sudo -n unlink -- "${image}" || cleanup_safe=false
+  fi
+  if [[ ${cleanup_safe} == true && ${capacity_created} == true && -d ${capacity_root} && ! -L ${capacity_root} ]]; then
+    sudo -n rmdir --ignore-fail-on-non-empty -- "${capacity_root}"
   fi
 }
 trap cleanup_failed_prepare EXIT INT TERM
@@ -90,21 +103,21 @@ if [[ -e ${image} || -e ${receipt} ]]; then
   }
   [[ $(stat -c '%s' -- "${image}") == "${image_bytes}" ]] || { echo 'runner storage image size differs' >&2; exit 66; }
   [[ $(stat -c '%a' -- "${image}") == 600 ]] || { echo 'runner storage image mode differs' >&2; exit 66; }
-  [[ $(stat -c '%u' -- "${image}") == "$(id -u)" ]] || { echo 'runner storage image owner differs' >&2; exit 66; }
+  [[ $(stat -c '%u' -- "${image}") == 0 ]] || { echo 'runner storage image owner differs' >&2; exit 66; }
   [[ $(jq -er '.image.path' "${receipt}") == "${image}" ]] || { echo 'runner storage receipt image path differs' >&2; exit 66; }
   [[ $(jq -er '.image.device' "${receipt}") == "$(stat -c '%d' -- "${image}")" ]] || { echo 'runner storage receipt image device differs' >&2; exit 66; }
   [[ $(jq -er '.image.inode' "${receipt}") == "$(stat -c '%i' -- "${image}")" ]] || { echo 'runner storage receipt image inode differs' >&2; exit 66; }
   if mountpoint -q -- "${target}"; then
-    current=$(python3 "${verifier}" "${state_root}")
-    [[ $(jq -S -c . "${receipt}") == $(jq -S -c . <<<"${current}") ]] || {
-      echo 'runner storage live mount differs from its receipt' >&2
-      exit 66
-    }
+    write_current_receipt
     trap - EXIT INT TERM
     printf '%s\n' "${receipt}"
     exit 0
   fi
-  mapfile -t associated < <(sudo -n losetup --noheadings --output NAME --associated "${image}" | sed '/^$/d')
+  associated_output=$(sudo -n losetup --noheadings --output NAME --associated "${image}")
+  associated=()
+  if [[ -n ${associated_output} ]]; then
+    mapfile -t associated < <(sed '/^$/d' <<<"${associated_output}")
+  fi
   [[ ${#associated[@]} -le 1 ]] || { echo 'runner storage image has multiple loop devices' >&2; exit 66; }
   if [[ ${#associated[@]} -eq 1 ]]; then
     loop_device=${associated[0]//[[:space:]]/}
@@ -121,7 +134,13 @@ if [[ -e ${image} || -e ${receipt} ]]; then
     echo 'runner storage filesystem UUID differs from its receipt' >&2
     exit 66
   }
-  sudo -n mount -t xfs -o pquota,nosuid,nodev -- "${loop_device}" "${target}"
+  exec {target_fd}<"${target}"
+  target_handle=/proc/$$/fd/${target_fd}
+  [[ $(stat -c '%d:%i' -- "${target_handle}") == "${target_device}:${target_inode}" ]] || {
+    echo 'runner storage target changed before mount' >&2
+    exit 66
+  }
+  sudo -n mount -t xfs -o pquota,nosuid,nodev -- "${loop_device}" "${target_handle}"
   mounted=true
   write_current_receipt
   trap - EXIT INT TERM
@@ -155,10 +174,32 @@ image_created=true
 [[ $(stat -c '%s' -- "${image}") == "${image_bytes}" ]] || { echo 'runner storage image size differs' >&2; exit 66; }
 [[ $(stat -c '%a' -- "${image}") == 600 ]] || { echo 'runner storage image mode differs' >&2; exit 66; }
 
-sudo -n mkfs.xfs -q -m crc=1,finobt=1 -n ftype=1 -- "${image}"
-loop_device=$(sudo -n losetup --find --show --nooverlap "${image}")
+exec {capacity_fd}<"${capacity_root}"
+exec {image_fd}<>"${image}"
+capacity_handle=/proc/$$/fd/${capacity_fd}
+image_handle=/proc/$$/fd/${image_fd}
+[[ $(stat -c '%d:%i' -- "${capacity_handle}") == "$(stat -c '%d:%i' -- "${capacity_root}")" ]] || {
+  echo 'runner capacity root changed before ownership transfer' >&2
+  exit 66
+}
+[[ $(stat -c '%d:%i' -- "${image_handle}") == "$(stat -c '%d:%i' -- "${image}")" ]] || {
+  echo 'runner storage image changed before ownership transfer' >&2
+  exit 66
+}
+sudo -n chown root:root -- "${capacity_handle}" "${image_handle}"
+sudo -n chmod 0711 -- "${capacity_handle}"
+sudo -n chmod 0600 -- "${image_handle}"
+
+sudo -n mkfs.xfs -q -m crc=1,finobt=1 -n ftype=1 -- "${image_handle}"
+loop_device=$(sudo -n losetup --find --show --nooverlap "${image_handle}")
 [[ ${loop_device} =~ ^/dev/loop[0-9]+$ ]] || { echo 'runner storage loop device is invalid' >&2; exit 66; }
-sudo -n mount -t xfs -o pquota,nosuid,nodev -- "${loop_device}" "${target}"
+exec {target_fd}<"${target}"
+target_handle=/proc/$$/fd/${target_fd}
+[[ $(stat -c '%d:%i' -- "${target_handle}") == "${target_device}:${target_inode}" ]] || {
+  echo 'runner storage target changed before mount' >&2
+  exit 66
+}
+sudo -n mount -t xfs -o pquota,nosuid,nodev -- "${loop_device}" "${target_handle}"
 mounted=true
 write_current_receipt
 image_created=false

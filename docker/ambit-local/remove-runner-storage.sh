@@ -34,7 +34,7 @@ for directory in "${target}" "${capacity_root}" "${evidence_root}"; do
 done
 [[ $(stat -c '%s' -- "${image}") == "${image_bytes}" ]] || { echo 'runner storage image size differs' >&2; exit 66; }
 [[ $(stat -c '%a' -- "${image}") == 600 ]] || { echo 'runner storage image mode differs' >&2; exit 66; }
-[[ $(stat -c '%u' -- "${image}") == "$(id -u)" ]] || { echo 'runner storage image owner differs' >&2; exit 66; }
+[[ $(stat -c '%u' -- "${image}") == 0 ]] || { echo 'runner storage image owner differs' >&2; exit 66; }
 if [[ -e ${receipt} ]]; then
   [[ -f ${receipt} && ! -L ${receipt} ]] || { echo 'runner storage receipt is invalid' >&2; exit 66; }
   [[ $(jq -er '.image.path' "${receipt}") == "${image}" ]] || { echo 'runner storage receipt image path differs' >&2; exit 66; }
@@ -42,7 +42,11 @@ if [[ -e ${receipt} ]]; then
   [[ $(jq -er '.image.inode' "${receipt}") == "$(stat -c '%i' -- "${image}")" ]] || { echo 'runner storage receipt image inode differs' >&2; exit 66; }
 fi
 
-mapfile -t associated < <(sudo -n losetup --noheadings --output NAME --associated "${image}" | sed '/^$/d')
+associated_output=$(sudo -n losetup --noheadings --output NAME --associated "${image}")
+associated=()
+if [[ -n ${associated_output} ]]; then
+  mapfile -t associated < <(sed '/^$/d' <<<"${associated_output}")
+fi
 [[ ${#associated[@]} -le 1 ]] || { echo 'runner storage image has multiple loop devices' >&2; exit 66; }
 loop_device=
 if [[ ${#associated[@]} -eq 1 ]]; then
@@ -53,8 +57,9 @@ if mountpoint -q -- "${target}"; then
   [[ -n ${loop_device} ]] || { echo 'runner storage mount lacks its loop device' >&2; exit 66; }
   current=$(python3 "${verifier}" "${state_root}")
   if [[ -f ${receipt} ]]; then
-    [[ $(jq -S -c . "${receipt}") == $(jq -S -c . <<<"${current}") ]] || {
-      echo 'runner storage receipt differs from the live mount' >&2
+    stable_filter='{schema,stateRoot,mountTarget,image:{path:.image.path,logicalBytes:.image.logicalBytes,device:.image.device,inode:.image.inode,ownerUid:.image.ownerUid,mode:.image.mode},filesystem:{type:.filesystem.type,uuid:.filesystem.uuid,mountOptions:.filesystem.mountOptions,totalBytes:.filesystem.totalBytes,features:.filesystem.features},backingFilesystem:{device:.backingFilesystem.device,totalBytes:.backingFilesystem.totalBytes,allocationDisposition:.backingFilesystem.allocationDisposition,minimumFreeBytes:.backingFilesystem.minimumFreeBytes},sandboxDiskPolicy}'
+    [[ $(jq -S -c "${stable_filter}" "${receipt}") == $(jq -S -c "${stable_filter}" <<<"${current}") ]] || {
+      echo 'runner storage stable receipt identity differs from the live mount' >&2
       exit 66
     }
   fi
@@ -63,7 +68,7 @@ if mountpoint -q -- "${target}"; then
     echo 'runner storage has nested or foreign mounts' >&2
     exit 66
   }
-  sudo -n umount -- "${target}"
+  sudo -n umount -- "${loop_device}"
 fi
 
 if [[ -n ${loop_device} ]]; then
@@ -82,10 +87,11 @@ if [[ -n ${loop_device} ]]; then
 fi
 
 ! mountpoint -q -- "${target}" || { echo 'runner storage target remained mounted' >&2; exit 66; }
-[[ -z $(sudo -n losetup --associated "${image}") ]] || { echo 'runner storage loop remained attached' >&2; exit 66; }
+remaining_loops=$(sudo -n losetup --associated "${image}")
+[[ -z ${remaining_loops} ]] || { echo 'runner storage loop remained attached' >&2; exit 66; }
 if [[ -f ${receipt} && ! -L ${receipt} ]]; then
   unlink -- "${receipt}"
 fi
-unlink -- "${image}"
-rmdir --ignore-fail-on-non-empty -- "${capacity_root}"
+sudo -n unlink -- "${image}"
+sudo -n rmdir --ignore-fail-on-non-empty -- "${capacity_root}"
 printf '%s\n' "removed ${target} mount, ${loop_device:-no-loop}, ${image}, and ${receipt}"

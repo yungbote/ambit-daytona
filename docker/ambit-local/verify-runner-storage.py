@@ -32,11 +32,14 @@ def require(condition: bool, message: str) -> None:
 def validate_storage_observation(value: dict[str, Any]) -> dict[str, Any]:
     expected_keys = {
         "backingFile",
+        "backingFilesystemFreeBytes",
+        "backingFilesystemTotalBytes",
         "filesystemFreeBytes",
         "filesystemTotalBytes",
         "filesystemType",
         "filesystemUuid",
         "imageDevice",
+        "imageAllocatedBytes",
         "imageInode",
         "imageLogicalBytes",
         "imageMode",
@@ -46,6 +49,7 @@ def validate_storage_observation(value: dict[str, Any]) -> dict[str, Any]:
         "mountOptions",
         "mountTarget",
         "stateRoot",
+        "stateRootDevice",
         "xfsFeatures",
     }
     require(set(value) == expected_keys, "runner storage observation shape differs")
@@ -71,11 +75,15 @@ def validate_storage_observation(value: dict[str, Any]) -> dict[str, Any]:
         "pquota" in options or "prjquota" in options,
         "runner storage project quotas are not enabled",
     )
+    require(
+        "rw" in options and "ro" not in options,
+        "runner storage filesystem is not writable",
+    )
     require("nodev" in options and "nosuid" in options, "runner storage mount hardening differs")
     require(value["imageLogicalBytes"] == IMAGE_BYTES, "runner storage image size differs")
     require(value["imageMode"] == 0o600, "runner storage image mode differs")
     require(
-        value["imageOwnerUid"] == os.getuid(),
+        value["imageOwnerUid"] == 0,
         "runner storage image owner differs",
     )
     require(
@@ -84,6 +92,25 @@ def validate_storage_observation(value: dict[str, Any]) -> dict[str, Any]:
         and isinstance(value["imageInode"], int)
         and value["imageInode"] > 0,
         "runner storage image identity is invalid",
+    )
+    require(
+        value["imageDevice"] == value["stateRootDevice"],
+        "runner storage image is on a different backing filesystem",
+    )
+    require(
+        isinstance(value["imageAllocatedBytes"], int)
+        and 0 <= value["imageAllocatedBytes"] <= IMAGE_BYTES,
+        "runner storage allocated-byte observation is invalid",
+    )
+    require(
+        isinstance(value["backingFilesystemTotalBytes"], int)
+        and value["backingFilesystemTotalBytes"] >= IMAGE_BYTES,
+        "runner storage backing filesystem is too small",
+    )
+    require(
+        isinstance(value["backingFilesystemFreeBytes"], int)
+        and value["backingFilesystemFreeBytes"] >= IMAGE_BYTES,
+        "runner storage backing filesystem lacks current headroom",
     )
     require(
         isinstance(value["filesystemTotalBytes"], int)
@@ -115,6 +142,7 @@ def validate_storage_observation(value: dict[str, Any]) -> dict[str, Any]:
         "image": {
             "path": str(expected_image),
             "logicalBytes": IMAGE_BYTES,
+            "allocatedBytes": value["imageAllocatedBytes"],
             "device": value["imageDevice"],
             "inode": value["imageInode"],
             "ownerUid": value["imageOwnerUid"],
@@ -129,11 +157,19 @@ def validate_storage_observation(value: dict[str, Any]) -> dict[str, Any]:
             "freeBytes": value["filesystemFreeBytes"],
             "features": sorted(set(features)),
         },
+        "backingFilesystem": {
+            "device": value["stateRootDevice"],
+            "totalBytes": value["backingFilesystemTotalBytes"],
+            "freeBytes": value["backingFilesystemFreeBytes"],
+            "allocationDisposition": "sparse_current_headroom_not_preallocated",
+            "minimumFreeBytes": IMAGE_BYTES,
+        },
         "sandboxDiskPolicy": {
             "perSandboxBytes": 20 * 1024**3,
             "maximumSandboxes": 2,
             "aggregateBytes": 40 * 1024**3,
             "enforcement": "xfs_project_quota_required",
+            "backingCapacity": "current_headroom_with_visible_enospc_failure",
         },
     }
 
@@ -178,6 +214,8 @@ def collect_storage_observation(state_root: Path) -> dict[str, Any]:
     xfs_info = run(["xfs_info", str(target)])
     features = sorted(set(re.findall(r"(?:crc|finobt|ftype|projid32bit)=[01]", xfs_info)))
     filesystem = os.statvfs(target)
+    backing_filesystem = os.statvfs(state_root)
+    state_root_stat = os.stat(state_root)
     return {
         "stateRoot": str(state_root),
         "mountTarget": mount.get("target"),
@@ -187,12 +225,18 @@ def collect_storage_observation(state_root: Path) -> dict[str, Any]:
         "filesystemType": mount.get("fstype"),
         "mountOptions": str(mount.get("options", "")).split(","),
         "imageLogicalBytes": image_stat.st_size,
+        "imageAllocatedBytes": image_stat.st_blocks * 512,
         "imageMode": stat.S_IMODE(image_stat.st_mode),
         "imageOwnerUid": image_stat.st_uid,
         "imageDevice": image_stat.st_dev,
         "imageInode": image_stat.st_ino,
+        "stateRootDevice": state_root_stat.st_dev,
         "filesystemTotalBytes": filesystem.f_blocks * filesystem.f_frsize,
         "filesystemFreeBytes": filesystem.f_bavail * filesystem.f_frsize,
+        "backingFilesystemTotalBytes": backing_filesystem.f_blocks
+        * backing_filesystem.f_frsize,
+        "backingFilesystemFreeBytes": backing_filesystem.f_bavail
+        * backing_filesystem.f_frsize,
         "filesystemUuid": filesystem_uuid,
         "xfsFeatures": features,
     }

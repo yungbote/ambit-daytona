@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 import importlib.util
-import os
 import unittest
 from pathlib import Path
 
@@ -25,13 +24,17 @@ class VerifyRunnerStorageTest(unittest.TestCase):
             "imagePath": image,
             "loopDevice": "/dev/loop7",
             "backingFile": image,
+            "backingFilesystemFreeBytes": 700 * 1024**3,
+            "backingFilesystemTotalBytes": 1024 * 1024**3,
             "filesystemType": "xfs",
             "mountOptions": ["rw", "pquota", "nodev", "nosuid"],
             "imageLogicalBytes": 60 * 1024**3,
+            "imageAllocatedBytes": 512 * 1024**2,
             "imageMode": 0o600,
-            "imageOwnerUid": os.getuid(),
+            "imageOwnerUid": 0,
             "imageDevice": 47,
             "imageInode": 89,
+            "stateRootDevice": 47,
             "filesystemTotalBytes": 59 * 1024**3,
             "filesystemFreeBytes": 58 * 1024**3,
             "filesystemUuid": "12345678-1234-1234-1234-123456789abc",
@@ -58,12 +61,18 @@ class VerifyRunnerStorageTest(unittest.TestCase):
         candidate["mountOptions"] = ["rw", "nodev", "nosuid"]
         with self.assertRaises(MODULE.RunnerStorageError):
             MODULE.validate_storage_observation(candidate)
+        candidate = self.observation()
+        candidate["mountOptions"] = ["ro", "pquota", "nodev", "nosuid"]
+        with self.assertRaises(MODULE.RunnerStorageError):
+            MODULE.validate_storage_observation(candidate)
 
     def test_capacity_identity_and_features_fail_closed(self) -> None:
         mutations = (
             ("imageLogicalBytes", 40 * 1024**3),
             ("imageMode", 0o644),
             ("filesystemFreeBytes", 39 * 1024**3),
+            ("backingFilesystemFreeBytes", 59 * 1024**3),
+            ("stateRootDevice", 48),
             ("filesystemUuid", "not-a-uuid"),
         )
         for field, value in mutations:
