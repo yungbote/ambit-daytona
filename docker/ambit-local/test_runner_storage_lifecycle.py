@@ -320,6 +320,26 @@ time.sleep(30)
         self.assertIsNone(result["receipt"])
         teardown.assert_called_once_with(context, "/dev/loop7", "4:4026533000")
 
+    def test_deactivate_treats_precreation_authority_absence_as_exact_noop(self) -> None:
+        args = argparse_namespace(
+            state_root=Path("/home/example/state"),
+            caller_uid=1000,
+            caller_gid=1000,
+            namespace_device=4,
+            namespace_inode=4026533000,
+        )
+        with mock.patch.object(
+            MODULE, "require_private_namespace", return_value="4:4026533000"
+        ), mock.patch.object(
+            MODULE,
+            "open_authority",
+            side_effect=MODULE.AuthorityAbsentError("absent"),
+        ), mock.patch.object(MODULE, "target_occurrences", return_value=()):
+            result = MODULE.deactivate_private(args)
+        self.assertEqual(result["outcome"], "deactivated")
+        self.assertIsNone(result["receipt"])
+        self.assertIsNone(result["authorityReceiptSha256"])
+
     def test_receipt_atomic_write_fsyncs_file_before_rename_and_parent(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="runner-receipt-", dir=temporary_parent()

@@ -77,6 +77,10 @@ class RunnerStorageLifecycleError(RuntimeError):
     pass
 
 
+class AuthorityAbsentError(RunnerStorageLifecycleError):
+    pass
+
+
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise RunnerStorageLifecycleError(message)
@@ -246,7 +250,8 @@ def open_authority(*, create: bool, exclusive: bool) -> AuthorityContext:
         fcntl.flock(home_fd, fcntl.LOCK_EX)
         authority_stat = lstat_at(home_fd, AUTHORITY_NAME)
         if authority_stat is None:
-            require(create, "runner storage authority is absent")
+            if not create:
+                raise AuthorityAbsentError("runner storage authority is absent")
             os.mkdir(AUTHORITY_NAME, mode=0o700, dir_fd=home_fd)
             os.fsync(home_fd)
             authority_stat = os.stat(
@@ -1034,7 +1039,15 @@ def deactivate_private(args: argparse.Namespace) -> dict[str, Any]:
     expected_namespace = require_private_namespace(
         args.namespace_device, args.namespace_inode
     )
-    with open_authority(create=False, exclusive=True) as context:
+    try:
+        authority = open_authority(create=False, exclusive=True)
+    except AuthorityAbsentError:
+        require(
+            not target_occurrences(),
+            "absent authority still has an observable target mount",
+        )
+        return operation_result("deactivated", expected_namespace, None, None)
+    with authority as context:
         require(context.root_fd is not None, "storage authority is absent")
         stored = read_json_at(context.root_fd, RECEIPT_NAME)
         if stored is None:
@@ -1108,11 +1121,9 @@ def observe_private(args: argparse.Namespace) -> dict[str, Any]:
 def remove_authority(args: argparse.Namespace) -> dict[str, Any]:
     try:
         context = open_authority(create=False, exclusive=True)
-    except RunnerStorageLifecycleError as error:
-        if str(error) == "runner storage authority is absent":
-            remove_user_projection(args.state_root, args.caller_uid, args.caller_gid)
-            return operation_result("removed", None, None, None)
-        raise
+    except AuthorityAbsentError:
+        remove_user_projection(args.state_root, args.caller_uid, args.caller_gid)
+        return operation_result("removed", None, None, None)
     with context:
         require(
             not target_occurrences(),
