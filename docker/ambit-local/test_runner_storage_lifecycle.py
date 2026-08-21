@@ -268,7 +268,7 @@ time.sleep(30)
         ), mock.patch.object(
             MODULE,
             "publish_receipt",
-            return_value=("sha256:" + "1" * 64, {}),
+            return_value=("1" * 64, {}),
         ) as publish, mock.patch.object(MODULE, "unmount_and_detach") as teardown:
             result = MODULE.deactivate_private(args)
         self.assertEqual(result["outcome"], "deactivated")

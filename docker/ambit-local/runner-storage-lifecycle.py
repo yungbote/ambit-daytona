@@ -95,12 +95,8 @@ def plain_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def strict_sha256(value: object) -> bool:
-    return isinstance(value, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", value) is not None
-
-
 def sha256_bytes(value: bytes) -> str:
-    return f"sha256:{hashlib.sha256(value).hexdigest()}"
+    return hashlib.sha256(value).hexdigest()
 
 
 def configure_secure_umask() -> None:
