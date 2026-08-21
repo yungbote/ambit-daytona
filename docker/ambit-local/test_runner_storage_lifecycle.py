@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import fcntl
 import importlib.util
-import itertools
 import os
+import signal
+import stat
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -18,523 +22,257 @@ MODULE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
-CALLER_UID = 1000
-CALLER_GID = 100
-DEVICE = 47
-IMAGE_BYTES = 60 * 1024**3
+
+def temporary_parent() -> str | None:
+    candidate = Path(f"/run/user/{os.getuid()}")
+    return str(candidate) if candidate.is_dir() and os.access(candidate, os.W_OK) else None
 
 
-def capacity(state: str):
-    values = {
-        "absent": MODULE.absent_node(),
-        "caller_0700": MODULE.NodeFacts(
-            kind="directory",
-            owner_uid=CALLER_UID,
-            owner_gid=CALLER_GID,
-            mode=0o700,
-            device=DEVICE,
-            inode=11,
-            size=0,
-        ),
-        "root_0700": MODULE.NodeFacts(
-            kind="directory",
-            owner_uid=0,
-            owner_gid=0,
-            mode=0o700,
-            device=DEVICE,
-            inode=11,
-            size=0,
-        ),
-        "root_0711": MODULE.NodeFacts(
-            kind="directory",
-            owner_uid=0,
-            owner_gid=0,
-            mode=0o711,
-            device=DEVICE,
-            inode=11,
-            size=0,
-        ),
-    }
-    return values[state]
-
-
-def image(state: str):
-    values = {
-        "absent": MODULE.absent_node(),
-        "caller_0600_exact": MODULE.NodeFacts(
-            kind="regular",
-            owner_uid=CALLER_UID,
-            owner_gid=CALLER_GID,
-            mode=0o600,
-            device=DEVICE,
-            inode=13,
-            size=IMAGE_BYTES,
-        ),
-        "root_0600_exact": MODULE.NodeFacts(
-            kind="regular",
-            owner_uid=0,
-            owner_gid=0,
-            mode=0o600,
-            device=DEVICE,
-            inode=13,
-            size=IMAGE_BYTES,
-        ),
-        "caller_0600_incomplete_prepublication": MODULE.NodeFacts(
-            kind="regular",
-            owner_uid=CALLER_UID,
-            owner_gid=CALLER_GID,
-            mode=0o600,
-            device=DEVICE,
-            inode=13,
-            size=0,
-        ),
-        "root_0600_incomplete_prepublication": MODULE.NodeFacts(
-            kind="regular",
-            owner_uid=0,
-            owner_gid=0,
-            mode=0o600,
-            device=DEVICE,
-            inode=13,
-            size=0,
-        ),
-    }
-    return values[state]
-
-
-def facts(capacity_state: str, image_state: str, *, foreign_entries=()):
-    return MODULE.CapacityPrefixFacts(
-        state_root_device=DEVICE,
-        capacity=capacity(capacity_state),
-        image=image(image_state),
-        foreign_entries=tuple(foreign_entries),
+def image_facts(size: int):
+    return MODULE.NodeFacts(
+        kind="regular",
+        owner_uid=0,
+        owner_gid=0,
+        mode=0o600,
+        device=47,
+        inode=73,
+        size=size,
     )
 
 
-def reduce(capacity_state: str, image_state: str, operation: str):
-    return MODULE.reduce_prefix_state(
-        facts(capacity_state, image_state),
-        operation=operation,
-        caller_uid=CALLER_UID,
-        caller_gid=CALLER_GID,
-        image_bytes=IMAGE_BYTES,
-    )
-
-
-class RunnerStorageLifecycleReducerTest(unittest.TestCase):
-    valid_prefixes = {
-        ("absent", "absent"),
-        ("caller_0700", "absent"),
-        ("caller_0700", "caller_0600_exact"),
-        ("caller_0700", "root_0600_exact"),
-        ("caller_0700", "caller_0600_incomplete_prepublication"),
-        ("caller_0700", "root_0600_incomplete_prepublication"),
-        ("root_0700", "absent"),
-        ("root_0700", "caller_0600_exact"),
-        ("root_0700", "root_0600_exact"),
-        ("root_0700", "caller_0600_incomplete_prepublication"),
-        ("root_0700", "root_0600_incomplete_prepublication"),
-        ("root_0711", "absent"),
-        ("root_0711", "root_0600_exact"),
-        ("root_0711", "root_0600_incomplete_prepublication"),
-    }
-
-    def test_every_valid_prefix_has_total_prepare_and_remove_dispositions(self) -> None:
-        for capacity_state, image_state in self.valid_prefixes:
-            with self.subTest(capacity=capacity_state, image=image_state):
-                prepare = reduce(capacity_state, image_state, "prepare")
-                remove = reduce(capacity_state, image_state, "remove")
-                if image_state == "absent":
-                    self.assertEqual(prepare.disposition, "create_new")
-                elif (capacity_state, image_state) == (
-                    "root_0711",
-                    "root_0600_exact",
-                ):
-                    self.assertEqual(
-                        prepare.disposition, "existing_published_candidate"
-                    )
-                else:
-                    self.assertEqual(prepare.disposition, "teardown_required")
-                if capacity_state == "absent":
-                    self.assertEqual(remove.disposition, "already_absent")
-                elif image_state == "absent":
-                    self.assertEqual(remove.disposition, "remove_empty_capacity")
-                else:
-                    self.assertEqual(remove.disposition, "remove_image_and_capacity")
-
-    def test_every_presence_and_owner_prefix_is_admitted_or_rejected_explicitly(self) -> None:
-        capacity_states = ("absent", "caller_0700", "root_0700", "root_0711")
-        image_states = (
-            "absent",
-            "caller_0600_exact",
-            "root_0600_exact",
-            "caller_0600_incomplete_prepublication",
-            "root_0600_incomplete_prepublication",
-        )
-        for prefix in itertools.product(capacity_states, image_states):
-            with self.subTest(prefix=prefix):
-                if prefix in self.valid_prefixes:
-                    self.assertIsNotNone(reduce(*prefix, "prepare"))
-                    self.assertIsNotNone(reduce(*prefix, "remove"))
-                else:
-                    with self.assertRaises(MODULE.RunnerStorageLifecycleError):
-                        reduce(*prefix, "prepare")
-                    with self.assertRaises(MODULE.RunnerStorageLifecycleError):
-                        reduce(*prefix, "remove")
-
-    def test_create_crash_prefixes_never_become_published_authority(self) -> None:
-        crash_prefixes = self.valid_prefixes - {
-            ("absent", "absent"),
-            ("caller_0700", "absent"),
-            ("root_0700", "absent"),
-            ("root_0711", "absent"),
-            ("root_0711", "root_0600_exact"),
-        }
-        for prefix in crash_prefixes:
-            with self.subTest(prefix=prefix):
-                self.assertEqual(reduce(*prefix, "prepare").disposition, "teardown_required")
-                self.assertEqual(
-                    reduce(*prefix, "remove").disposition,
-                    "remove_image_and_capacity",
-                )
-
-    def test_every_pretruncate_cutpoint_is_teardown_only_and_removable(self) -> None:
-        for owner_state, capacity_state in (
-            ("caller_0600_incomplete_prepublication", "caller_0700"),
-            ("root_0600_incomplete_prepublication", "root_0700"),
-            ("root_0600_incomplete_prepublication", "root_0711"),
-        ):
-            for size in (0, 1, IMAGE_BYTES - 1):
-                with self.subTest(owner=owner_state, capacity=capacity_state, size=size):
-                    candidate_image = MODULE.NodeFacts(
-                        **{**image(owner_state).__dict__, "size": size}
-                    )
-                    prefix = MODULE.CapacityPrefixFacts(
-                        state_root_device=DEVICE,
-                        capacity=capacity(capacity_state),
-                        image=candidate_image,
-                    )
-                    prepare = MODULE.reduce_prefix_state(
-                        prefix,
-                        operation="prepare",
-                        caller_uid=CALLER_UID,
-                        caller_gid=CALLER_GID,
-                        image_bytes=IMAGE_BYTES,
-                    )
-                    remove = MODULE.reduce_prefix_state(
-                        prefix,
-                        operation="remove",
-                        caller_uid=CALLER_UID,
-                        caller_gid=CALLER_GID,
-                        image_bytes=IMAGE_BYTES,
-                    )
-                    self.assertEqual(prepare.disposition, "teardown_required")
-                    self.assertEqual(remove.disposition, "remove_image_and_capacity")
-
-        helper = SCRIPT.read_text()
-        create = helper.index("prefix.image_fd = os.open(")
-        truncate = helper.index("os.ftruncate(prefix.image_fd", create)
-        self.assertLess(create, truncate)
-
-    def test_unlink_before_rmdir_crash_prefix_is_recoverable(self) -> None:
-        decision = reduce("root_0711", "absent", "remove")
-        self.assertEqual(decision.disposition, "remove_empty_capacity")
-
-    def test_foreign_capacity_children_always_fail_without_a_disposition(self) -> None:
-        for operation in ("prepare", "remove"):
-            with self.subTest(operation=operation):
-                with self.assertRaises(MODULE.RunnerStorageLifecycleError):
-                    MODULE.reduce_prefix_state(
-                        facts(
-                            "root_0711",
-                            "root_0600_exact",
-                            foreign_entries=("foreign",),
-                        ),
-                        operation=operation,
-                        caller_uid=CALLER_UID,
-                        caller_gid=CALLER_GID,
-                        image_bytes=IMAGE_BYTES,
-                    )
-
-    def test_capacity_identity_mutations_fail_closed(self) -> None:
-        base = capacity("root_0711")
-        mutations = {
-            "kind": "symlink",
-            "owner_uid": 7,
-            "owner_gid": 7,
-            "mode": 0o777,
-            "device": DEVICE + 1,
-            "inode": 0,
-        }
-        for field, value in mutations.items():
-            with self.subTest(field=field):
-                candidate = MODULE.NodeFacts(
-                    **{**base.__dict__, field: value}
-                )
-                with self.assertRaises(MODULE.RunnerStorageLifecycleError):
-                    MODULE.reduce_prefix_state(
-                        MODULE.CapacityPrefixFacts(
-                            state_root_device=DEVICE,
-                            capacity=candidate,
-                            image=MODULE.absent_node(),
-                        ),
-                        operation="remove",
-                        caller_uid=CALLER_UID,
-                        caller_gid=CALLER_GID,
-                        image_bytes=IMAGE_BYTES,
-                    )
-
-    def test_image_identity_mutations_fail_closed(self) -> None:
-        base = image("root_0600_exact")
-        mutations = {
-            "kind": "symlink",
-            "owner_uid": 7,
-            "owner_gid": 7,
-            "mode": 0o666,
-            "device": DEVICE + 1,
-            "inode": 0,
-            "size": IMAGE_BYTES + 1,
-        }
-        for field, value in mutations.items():
-            with self.subTest(field=field):
-                candidate = MODULE.NodeFacts(
-                    **{**base.__dict__, field: value}
-                )
-                with self.assertRaises(MODULE.RunnerStorageLifecycleError):
-                    MODULE.reduce_prefix_state(
-                        MODULE.CapacityPrefixFacts(
-                            state_root_device=DEVICE,
-                            capacity=capacity("root_0711"),
-                            image=candidate,
-                        ),
-                        operation="remove",
-                        caller_uid=CALLER_UID,
-                        caller_gid=CALLER_GID,
-                        image_bytes=IMAGE_BYTES,
-                    )
-
-        negative = MODULE.NodeFacts(**{**base.__dict__, "size": -1})
-        with self.assertRaises(MODULE.RunnerStorageLifecycleError):
-            MODULE.reduce_prefix_state(
-                MODULE.CapacityPrefixFacts(
-                    state_root_device=DEVICE,
-                    capacity=capacity("root_0700"),
-                    image=negative,
-                ),
-                operation="remove",
-                caller_uid=CALLER_UID,
-                caller_gid=CALLER_GID,
-                image_bytes=IMAGE_BYTES,
-            )
-
-    def test_mountinfo_escape_decoding_is_exact(self) -> None:
+class RunnerStorageLifecycleTest(unittest.TestCase):
+    def test_authority_coordinate_is_root_owned_and_state_root_independent(self) -> None:
         self.assertEqual(
-            MODULE.decode_mount_path(r"/home/a\040b\011c\012d\134e"),
-            "/home/a b\tc\nd\\e",
+            MODULE.AUTHORITY_ROOT,
+            Path("/home/.ambit-c16b-runner-storage"),
         )
-
-    def test_state_root_authority_rejects_owner_group_mode_and_inode_drift(self) -> None:
-        base = {
-            "descriptor_device": DEVICE,
-            "descriptor_inode": 67,
-            "path_device": DEVICE,
-            "path_inode": 67,
-            "path_owner_uid": CALLER_UID,
-            "path_owner_gid": CALLER_GID,
-            "path_mode": 0o700,
-            "caller_uid": CALLER_UID,
-            "caller_gid": CALLER_GID,
-        }
-        MODULE.validate_state_root_authority(**base)
-        for field, value in (
-            ("path_device", DEVICE + 1),
-            ("path_inode", 68),
-            ("path_owner_uid", CALLER_UID + 1),
-            ("path_owner_gid", CALLER_GID + 1),
-            ("path_mode", 0o770),
-        ):
-            with self.subTest(field=field):
-                with self.assertRaises(MODULE.RunnerStorageLifecycleError):
-                    MODULE.validate_state_root_authority(
-                        **{**base, field: value}
-                    )
-
-    def test_absent_nodes_cannot_smuggle_identity_fields(self) -> None:
-        smuggled = MODULE.NodeFacts(kind="absent", owner_uid=0)
-        for operation in ("prepare", "remove"):
-            with self.subTest(operation=operation):
-                with self.assertRaises(MODULE.RunnerStorageLifecycleError):
-                    MODULE.reduce_prefix_state(
-                        MODULE.CapacityPrefixFacts(
-                            state_root_device=DEVICE,
-                            capacity=smuggled,
-                            image=MODULE.absent_node(),
-                        ),
-                        operation=operation,
-                        caller_uid=CALLER_UID,
-                        caller_gid=CALLER_GID,
-                        image_bytes=IMAGE_BYTES,
-                    )
-
-    def test_descriptor_relative_remove_closes_unlink_then_rmdir_prefixes(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="runner-lifecycle-test-") as directory:
-            state_root = Path(directory)
-            capacity_root = state_root / "capacity"
-            capacity_root.mkdir(mode=0o700)
-            image_path = capacity_root / "runner-docker.xfs"
-            image_path.write_bytes(b"test")
-            image_stat = image_path.stat()
-            state_root_fd = os.open(state_root, os.O_RDONLY | os.O_DIRECTORY)
-            capacity_fd = os.open(
-                "capacity",
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                dir_fd=state_root_fd,
-            )
-            image_fd = os.open(
-                "runner-docker.xfs",
-                os.O_RDWR | os.O_NOFOLLOW,
-                dir_fd=capacity_fd,
-            )
-            prefix = MODULE.OpenPrefix(
-                state_root_fd=state_root_fd,
-                state_root_path=state_root,
-                capacity_fd=capacity_fd,
-                image_fd=image_fd,
-                facts=MODULE.CapacityPrefixFacts(
-                    state_root_device=image_stat.st_dev,
-                    capacity=MODULE.facts_from_stat(capacity_root.stat()),
-                    image=MODULE.facts_from_stat(image_stat),
-                ),
-            )
-            with mock.patch.object(MODULE, "mounts_at_or_below", return_value=()), mock.patch.object(
-                MODULE, "associated_loops", return_value=()
-            ):
-                MODULE.remove_objects(
-                    prefix,
-                    expected_device=image_stat.st_dev,
-                    expected_inode=image_stat.st_ino,
-                )
-            self.assertFalse(capacity_root.exists())
-            prefix.close()
-
-    def test_foreign_observable_namespace_blocks_teardown_before_mutation(self) -> None:
-        with tempfile.TemporaryDirectory(
-            prefix="runner-lifecycle-mount-test-"
-        ) as directory:
-            state_root = Path(directory)
-            image_path = state_root / "image"
-            image_path.write_bytes(b"test")
-            image_stat = image_path.stat()
-            state_root_fd = os.open(state_root, os.O_RDONLY | os.O_DIRECTORY)
-            image_fd = os.open(image_path, os.O_RDWR | os.O_NOFOLLOW)
-            prefix = MODULE.OpenPrefix(
-                state_root_fd=state_root_fd,
-                state_root_path=state_root,
-                image_fd=image_fd,
-                facts=MODULE.CapacityPrefixFacts(
-                    state_root_device=image_stat.st_dev,
-                    capacity=MODULE.absent_node(),
-                    image=MODULE.facts_from_stat(image_stat),
-                ),
-            )
-            target = str(state_root / "runner-docker")
-            foreign_mount = MODULE.NamespaceMountOccurrence(
-                namespace_id="47:9001",
-                representative_pid=1234,
-                target=target,
-            )
-            with mock.patch.object(
-                MODULE, "associated_loops", return_value=("/dev/loop7",)
-            ), mock.patch.object(
-                MODULE,
-                "observable_mounts_for_loop",
-                return_value=(foreign_mount,),
-            ), mock.patch.object(
-                MODULE, "mounts_at_or_below", return_value=()
-            ), mock.patch.object(
-                MODULE, "mount_namespace_id", return_value="47:8001"
-            ), mock.patch.object(MODULE, "run_tool") as run_tool:
-                with self.assertRaises(MODULE.RunnerStorageLifecycleError):
-                    MODULE.teardown_runtime(
-                        prefix,
-                        expected_device=image_stat.st_dev,
-                        expected_inode=image_stat.st_ino,
-                    )
-                run_tool.assert_not_called()
-            prefix.close()
-
-    def test_unreadable_mount_namespace_roster_fails_closed(self) -> None:
-        with mock.patch.object(
-            MODULE.os, "listdir", side_effect=PermissionError("denied")
-        ):
-            with self.assertRaisesRegex(
-                MODULE.RunnerStorageLifecycleError,
-                "namespace roster is unreadable",
-            ):
-                MODULE.read_observable_mount_namespaces()
-
-    def test_mount_namespace_unshare_during_scan_fails_closed(self) -> None:
-        with mock.patch.object(MODULE.os, "listdir", return_value=["123"]), mock.patch.object(
-            MODULE,
-            "mount_namespace_id",
-            side_effect=("1:1", "2:2", "3:3"),
-        ), mock.patch.object(
-            MODULE,
-            "read_mount_records",
-            side_effect=((), ()),
-        ):
-            with self.assertRaisesRegex(
-                MODULE.RunnerStorageLifecycleError,
-                "changed while reading pid 123",
-            ):
-                MODULE.read_observable_mount_namespaces_once()
-
-    def test_namespace_and_loop_roster_churn_fail_between_proof_passes(self) -> None:
-        namespace_a_empty = MODULE.MountNamespaceObservation(
-            namespace_id="1:1",
-            representative_pid=1,
-            records=(),
+        self.assertEqual(
+            MODULE.AUTHORITY_ROOT / MODULE.TARGET_NAME,
+            Path("/home/.ambit-c16b-runner-storage/runner-docker"),
         )
-        namespace_b_empty = MODULE.MountNamespaceObservation(
-            namespace_id="2:2",
-            representative_pid=2,
-            records=(),
+        helper = SCRIPT.read_text()
+        self.assertNotIn('state_root / "capacity"', helper)
+        self.assertNotIn('state_root / "runner-docker"', helper)
+
+    def test_image_cutpoints_are_total_and_only_exact_size_can_recover(self) -> None:
+        for size in (0, 1, MODULE.IMAGE_BYTES - 1):
+            with self.subTest(size=size):
+                state = MODULE.classify_image(image_facts(size), authority_device=47)
+                self.assertEqual(state, "root_0600_incomplete_prepublication")
+                self.assertEqual(MODULE.prepare_disposition(state, False), "teardown_required")
+                self.assertEqual(MODULE.remove_disposition(state, False), "remove_image_authority")
+        exact = MODULE.classify_image(
+            image_facts(MODULE.IMAGE_BYTES), authority_device=47
         )
+        self.assertEqual(exact, "root_0600_exact")
+        self.assertEqual(MODULE.prepare_disposition(exact, True), "recover")
+        for size in (-1, MODULE.IMAGE_BYTES + 1):
+            with self.subTest(invalid_size=size):
+                with self.assertRaises(MODULE.RunnerStorageLifecycleError):
+                    MODULE.classify_image(image_facts(size), authority_device=47)
+
+    def test_old_or_incomplete_receipt_is_never_reinterpreted(self) -> None:
+        with self.assertRaises(MODULE.RunnerStorageLifecycleError):
+            MODULE.remove_disposition(
+                "root_0600_incomplete_prepublication",
+                True,
+            )
+        context = mock.Mock()
+        context.root_fd = 3
+        context.image_fd = 4
         with self.assertRaisesRegex(
             MODULE.RunnerStorageLifecycleError,
-            "namespace roster changed",
+            "version is unsupported",
         ):
-            MODULE.require_stable_namespace_set(
-                (namespace_a_empty,),
-                (namespace_a_empty, namespace_b_empty),
+            MODULE.validate_receipt(
+                {"schema": "ambit.local-daytona-runner-storage/v1"},
+                context,
+                Path("/home/example/state"),
             )
 
-        mounted = MODULE.MountNamespaceObservation(
-            namespace_id="1:1",
-            representative_pid=1,
-            records=(MODULE.MountRecord(device_number="7:7", target="/runner"),),
+    def test_secure_umask_precedes_create_cutpoints(self) -> None:
+        old = os.umask(0o777)
+        try:
+            MODULE.configure_secure_umask()
+            with tempfile.TemporaryDirectory(
+                prefix="runner-umask-", dir=temporary_parent()
+            ) as directory:
+                root = Path(directory)
+                child = root / "authority"
+                child.mkdir(mode=0o700)
+                image = child / "image"
+                descriptor = os.open(
+                    image,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                )
+                os.close(descriptor)
+                self.assertEqual(stat.S_IMODE(child.stat().st_mode), 0o700)
+                self.assertEqual(stat.S_IMODE(image.stat().st_mode), 0o600)
+        finally:
+            os.umask(old)
+        helper = SCRIPT.read_text()
+        self.assertLess(
+            helper.index("configure_secure_umask()", helper.index("def main")),
+            helper.index("parser().parse_args()", helper.index("def main")),
         )
+
+    def test_mutating_child_inherits_exact_lifecycle_lock_fd(self) -> None:
+        context = mock.Mock()
+        context.exclusive = True
+        context.lock_fd = 11
+        self.assertEqual(MODULE.mutation_pass_fds(context, (7, 11)), (7, 11))
+        context.exclusive = False
+        with self.assertRaises(MODULE.RunnerStorageLifecycleError):
+            MODULE.mutation_pass_fds(context, ())
+
+    def test_killed_guardian_keeps_lock_until_mutating_child_exits(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="runner-lock-", dir=temporary_parent()
+        ) as directory:
+            lock_path = Path(directory) / "lock"
+            lock_path.touch(mode=0o600)
+            program = """
+import fcntl, os, subprocess, sys, time
+fd = os.open(sys.argv[1], os.O_RDWR)
+fcntl.flock(fd, fcntl.LOCK_EX)
+child = subprocess.Popen(
+    [sys.executable, "-c", "import time; time.sleep(30)"],
+    pass_fds=(fd,),
+)
+print(child.pid, flush=True)
+time.sleep(30)
+"""
+            guardian = subprocess.Popen(
+                [sys.executable, "-c", program, str(lock_path)],
+                stdout=subprocess.PIPE,
+                text=True,
+            )
+            assert guardian.stdout is not None
+            child_pid = int(guardian.stdout.readline().strip())
+            guardian.stdout.close()
+            os.kill(guardian.pid, signal.SIGKILL)
+            guardian.wait(timeout=5)
+            contender = os.open(lock_path, os.O_RDWR)
+            try:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                os.kill(child_pid, signal.SIGKILL)
+                for _ in range(100):
+                    try:
+                        fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        time.sleep(0.01)
+                else:
+                    self.fail("lock remained after mutating child exited")
+            finally:
+                os.close(contender)
+
+    def test_private_propagation_is_a_precondition(self) -> None:
+        private = MODULE.MountRecord("8:1", "/home", ())
+        MODULE.require_private_mount_record(private)
+        for optional in (("shared:1",), ("master:1",), ("propagate_from:2",)):
+            with self.subTest(optional=optional):
+                with self.assertRaises(MODULE.RunnerStorageLifecycleError):
+                    MODULE.require_private_mount_record(
+                        MODULE.MountRecord("8:1", "/home", optional)
+                    )
+
+    def test_namespace_and_occurrence_churn_fail_closed(self) -> None:
+        first = MODULE.NamespaceObservation("1:1", 1, ())
+        second = MODULE.NamespaceObservation("2:2", 2, ())
         with mock.patch.object(
-            MODULE, "loop_device_number", return_value="7:7"
-        ), mock.patch.object(
             MODULE,
-            "read_observable_mount_namespaces_once",
-            side_effect=((mounted,), (namespace_a_empty,)),
+            "read_namespace_roster_once",
+            side_effect=((first,), (first, second)),
         ):
             with self.assertRaisesRegex(
                 MODULE.RunnerStorageLifecycleError,
-                "loop mount roster changed",
+                "namespace roster changed",
             ):
-                MODULE.observable_mounts_for_loop("/dev/loop7")
+                MODULE.stable_namespace_pair()
+        mounted = MODULE.NamespaceObservation(
+            "1:1",
+            1,
+            (MODULE.MountRecord("7:7", str(MODULE.AUTHORITY_ROOT / "runner-docker"), ()),),
+        )
+        with mock.patch.object(
+            MODULE,
+            "read_namespace_roster_once",
+            side_effect=((mounted,), (first,)),
+        ):
+            with self.assertRaisesRegex(
+                MODULE.RunnerStorageLifecycleError,
+                "occurrence roster changed",
+            ):
+                MODULE.target_occurrences()
 
-    def test_caller_owned_empty_capacity_is_sealed_before_image_creation(self) -> None:
-        helper = SCRIPT.read_text()
-        function_start = helper.index("def create_capacity_and_image(")
-        seal = helper.index("os.fchown(prefix.capacity_fd, 0, 0)", function_start)
-        closed_roster = helper.index("children = os.listdir(prefix.capacity_fd)", seal)
-        image_create = helper.index("prefix.image_fd = os.open(", closed_roster)
-        self.assertLess(seal, closed_roster)
-        self.assertLess(closed_roster, image_create)
-        self.assertIn("os.fchown(prefix.capacity_fd, caller_uid, caller_gid)", helper)
+    def test_foreign_target_blocks_image_absent_remove(self) -> None:
+        foreign = MODULE.NamespaceOccurrence(
+            namespace_id="2:2",
+            representative_pid=22,
+            device_number="8:1",
+            target=str(MODULE.AUTHORITY_ROOT / MODULE.TARGET_NAME),
+        )
+        context = mock.MagicMock()
+        context.__enter__.return_value = context
+        context.__exit__.return_value = None
+        context.root_fd = 10
+        with mock.patch.object(MODULE, "open_authority", return_value=context), mock.patch.object(
+            MODULE, "target_occurrences", return_value=(foreign,)
+        ):
+            with self.assertRaises(MODULE.RunnerStorageLifecycleError):
+                MODULE.remove_authority(
+                    argparse_namespace(
+                        state_root=Path("/home/example/state"),
+                        caller_uid=1000,
+                        caller_gid=1000,
+                    )
+                )
+
+    def test_receipt_atomic_write_fsyncs_file_before_rename_and_parent(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="runner-receipt-", dir=temporary_parent()
+        ) as directory:
+            directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+            events: list[str] = []
+            real_fsync = os.fsync
+            real_replace = os.replace
+
+            def observed_fsync(descriptor: int) -> None:
+                events.append("parent-fsync" if descriptor == directory_fd else "file-fsync")
+                real_fsync(descriptor)
+
+            def observed_replace(*args: object, **kwargs: object) -> None:
+                events.append("rename")
+                real_replace(*args, **kwargs)
+
+            try:
+                with mock.patch.object(MODULE.os, "fsync", side_effect=observed_fsync), mock.patch.object(
+                    MODULE.os, "replace", side_effect=observed_replace
+                ):
+                    MODULE.write_bytes_atomic(
+                        directory_fd,
+                        "receipt.json",
+                        b"{}\n",
+                        owner_uid=os.getuid(),
+                        owner_gid=os.getgid(),
+                    )
+                self.assertEqual(events, ["file-fsync", "rename", "parent-fsync"])
+            finally:
+                os.close(directory_fd)
+
+
+def argparse_namespace(**values: object):
+    class Namespace:
+        pass
+
+    result = Namespace()
+    for key, value in values.items():
+        setattr(result, key, value)
+    return result
+
 
 if __name__ == "__main__":
     unittest.main()

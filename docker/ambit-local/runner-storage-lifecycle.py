@@ -2,21 +2,36 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
+import hashlib
+import hmac
 import json
 import os
 import re
+import secrets
 import stat
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, NoReturn
+from typing import Any, Literal, NoReturn
 
 
-SCHEMA = "ambit.local-daytona-runner-storage-lifecycle/v1"
-CAPACITY_NAME = "capacity"
+OPERATION_SCHEMA = "ambit.local-daytona-runner-storage-operation/v2"
+RECEIPT_SCHEMA = "ambit.local-daytona-runner-storage/v2"
+PROJECTION_SCHEMA = "ambit.local-daytona-runner-storage-projection/v1"
+AUTHORITY_ROOT = Path("/home/.ambit-c16b-runner-storage")
+AUTHORITY_NAME = AUTHORITY_ROOT.name
+HOME_ROOT = Path("/home")
+LOCK_NAME = "lifecycle.lock"
 IMAGE_NAME = "runner-docker.xfs"
 TARGET_NAME = "runner-docker"
+RECEIPT_NAME = "storage-receipt.json"
+USER_PROJECTION_NAME = "runner-docker-storage.json"
+IDENTITY_VERIFIER_NAME = "verify-runner-storage.py"
+IDENTITY_VERIFIER_SHA256 = "ff1d034329ada6f8c1596876779a990dbe7e1a0ada41f57442a899115c90579b"
+IMAGE_BYTES = 60 * 1024**3
+MAX_DOCUMENT_BYTES = 1024 * 1024
 LOOP_DEVICE = re.compile(r"^/dev/loop[0-9]+$")
 FILESYSTEM_UUID = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
@@ -30,14 +45,10 @@ TRUSTED_TOOLS = {
 }
 
 NodeKind = Literal["absent", "directory", "regular", "symlink", "other"]
-Operation = Literal["prepare", "remove"]
-Disposition = Literal[
-    "create_new",
-    "existing_published_candidate",
-    "teardown_required",
-    "already_absent",
-    "remove_empty_capacity",
-    "remove_image_and_capacity",
+ImageState = Literal[
+    "absent",
+    "root_0600_incomplete_prepublication",
+    "root_0600_exact",
 ]
 
 
@@ -59,28 +70,33 @@ def plain_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def validate_state_root_authority(
-    *,
-    descriptor_device: int,
-    descriptor_inode: int,
-    path_device: int,
-    path_inode: int,
-    path_owner_uid: int,
-    path_owner_gid: int,
-    path_mode: int,
-    caller_uid: int,
-    caller_gid: int,
-) -> None:
-    require(
-        (descriptor_device, descriptor_inode) == (path_device, path_inode),
-        "runner storage state root differs from its pinned descriptor",
-    )
-    require(
-        path_owner_uid == caller_uid
-        and path_owner_gid == caller_gid
-        and path_mode == 0o700,
-        "runner storage state root owner, group, or mode differs",
-    )
+def strict_sha256(value: object) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", value) is not None
+
+
+def sha256_bytes(value: bytes) -> str:
+    return f"sha256:{hashlib.sha256(value).hexdigest()}"
+
+
+def configure_secure_umask() -> None:
+    os.umask(0o077)
+
+
+def mutation_pass_fds(
+    context: AuthorityContext, pass_fds: tuple[int, ...]
+) -> tuple[int, ...]:
+    require(context.exclusive and context.lock_fd is not None, "mutation lock is absent")
+    return tuple(sorted({*pass_fds, context.lock_fd}))
+
+
+def node_kind(mode: int) -> NodeKind:
+    if stat.S_ISDIR(mode):
+        return "directory"
+    if stat.S_ISREG(mode):
+        return "regular"
+    if stat.S_ISLNK(mode):
+        return "symlink"
+    return "other"
 
 
 @dataclass(frozen=True)
@@ -94,147 +110,8 @@ class NodeFacts:
     size: int | None = None
 
 
-@dataclass(frozen=True)
-class CapacityPrefixFacts:
-    state_root_device: int
-    capacity: NodeFacts
-    image: NodeFacts
-    foreign_entries: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class PrefixDecision:
-    operation: Operation
-    disposition: Disposition
-    capacity_state: str
-    image_state: str
-
-
 def absent_node() -> NodeFacts:
     return NodeFacts(kind="absent")
-
-
-def classify_capacity(
-    node: NodeFacts, *, caller_uid: int, caller_gid: int, state_root_device: int
-) -> str:
-    if node.kind == "absent":
-        require(node == absent_node(), "absent runner capacity root carries identity fields")
-        return "absent"
-    require(node.kind == "directory", "runner capacity root is not a directory")
-    require(
-        node.device == state_root_device,
-        "runner capacity root is on a foreign backing filesystem",
-    )
-    require(plain_int(node.inode) and node.inode > 0, "runner capacity root inode is invalid")
-    identity = (node.owner_uid, node.owner_gid, node.mode)
-    if identity == (caller_uid, caller_gid, 0o700):
-        return "caller_0700"
-    if identity == (0, 0, 0o700):
-        return "root_0700"
-    if identity == (0, 0, 0o711):
-        return "root_0711"
-    raise RunnerStorageLifecycleError("runner capacity root ownership or mode differs")
-
-
-def classify_image(
-    node: NodeFacts,
-    *,
-    caller_uid: int,
-    caller_gid: int,
-    state_root_device: int,
-    image_bytes: int,
-) -> str:
-    if node.kind == "absent":
-        require(node == absent_node(), "absent runner storage image carries identity fields")
-        return "absent"
-    require(node.kind == "regular", "runner storage image is not a regular file")
-    require(
-        node.device == state_root_device,
-        "runner storage image is on a foreign backing filesystem",
-    )
-    require(plain_int(node.inode) and node.inode > 0, "runner storage image inode is invalid")
-    require(
-        plain_int(node.size) and 0 <= node.size <= image_bytes,
-        "runner storage image logical size is invalid",
-    )
-    size_state = "exact" if node.size == image_bytes else "incomplete_prepublication"
-    identity = (node.owner_uid, node.owner_gid, node.mode)
-    if identity == (caller_uid, caller_gid, 0o600):
-        return f"caller_0600_{size_state}"
-    if identity == (0, 0, 0o600):
-        return f"root_0600_{size_state}"
-    raise RunnerStorageLifecycleError("runner storage image ownership or mode differs")
-
-
-def reduce_prefix_state(
-    facts: CapacityPrefixFacts,
-    *,
-    operation: Operation,
-    caller_uid: int,
-    caller_gid: int,
-    image_bytes: int,
-) -> PrefixDecision:
-    require(operation in ("prepare", "remove"), "runner storage operation is invalid")
-    require(plain_int(caller_uid) and caller_uid > 0, "runner storage caller UID is invalid")
-    require(plain_int(caller_gid) and caller_gid >= 0, "runner storage caller GID is invalid")
-    require(plain_int(image_bytes) and image_bytes > 0, "runner storage image size is invalid")
-    require(
-        plain_int(facts.state_root_device) and facts.state_root_device >= 0,
-        "runner storage state-root device is invalid",
-    )
-    require(not facts.foreign_entries, "runner capacity root contains a foreign entry")
-    capacity_state = classify_capacity(
-        facts.capacity,
-        caller_uid=caller_uid,
-        caller_gid=caller_gid,
-        state_root_device=facts.state_root_device,
-    )
-    image_state = classify_image(
-        facts.image,
-        caller_uid=caller_uid,
-        caller_gid=caller_gid,
-        state_root_device=facts.state_root_device,
-        image_bytes=image_bytes,
-    )
-    require(
-        capacity_state != "absent" or image_state == "absent",
-        "runner storage image exists without its capacity root",
-    )
-    require(
-        capacity_state != "root_0711" or not image_state.startswith("caller_0600_"),
-        "runner storage image has impossible ownership below a published capacity root",
-    )
-
-    if operation == "prepare":
-        if image_state == "absent":
-            disposition: Disposition = "create_new"
-        elif capacity_state == "root_0711" and image_state == "root_0600_exact":
-            disposition = "existing_published_candidate"
-        else:
-            disposition = "teardown_required"
-    else:
-        if capacity_state == "absent":
-            disposition = "already_absent"
-        elif image_state == "absent":
-            disposition = "remove_empty_capacity"
-        else:
-            disposition = "remove_image_and_capacity"
-    return PrefixDecision(
-        operation=operation,
-        disposition=disposition,
-        capacity_state=capacity_state,
-        image_state=image_state,
-    )
-
-
-def node_kind(mode: int) -> NodeKind:
-    if stat.S_ISDIR(mode):
-        return "directory"
-    if stat.S_ISREG(mode):
-        return "regular"
-    if stat.S_ISLNK(mode):
-        return "symlink"
-    return "other"
 
 
 def facts_from_stat(value: os.stat_result) -> NodeFacts:
@@ -249,7 +126,45 @@ def facts_from_stat(value: os.stat_result) -> NodeFacts:
     )
 
 
-def lstat_at(name: str, directory_fd: int) -> os.stat_result | None:
+def classify_image(node: NodeFacts, *, authority_device: int) -> ImageState:
+    if node.kind == "absent":
+        require(node == absent_node(), "absent runner image carries identity fields")
+        return "absent"
+    require(node.kind == "regular", "runner image is not a regular file")
+    require(node.owner_uid == 0 and node.owner_gid == 0, "runner image owner differs")
+    require(node.mode == 0o600, "runner image mode differs")
+    require(node.device == authority_device, "runner image is on a foreign filesystem")
+    require(plain_int(node.inode) and node.inode > 0, "runner image inode is invalid")
+    require(
+        plain_int(node.size) and 0 <= node.size <= IMAGE_BYTES,
+        "runner image size is invalid",
+    )
+    if node.size == IMAGE_BYTES:
+        return "root_0600_exact"
+    return "root_0600_incomplete_prepublication"
+
+
+def prepare_disposition(image_state: ImageState, receipt_present: bool) -> str:
+    if image_state == "absent" and not receipt_present:
+        return "create"
+    if image_state == "root_0600_exact" and receipt_present:
+        return "recover"
+    return "teardown_required"
+
+
+def remove_disposition(image_state: ImageState, receipt_present: bool) -> str:
+    if image_state == "absent" and not receipt_present:
+        return "remove_empty_authority"
+    if image_state.startswith("root_0600_"):
+        if image_state == "root_0600_incomplete_prepublication" and receipt_present:
+            raise RunnerStorageLifecycleError(
+                "incomplete prepublication image unexpectedly has a receipt"
+            )
+        return "remove_image_authority"
+    raise RunnerStorageLifecycleError("runner authority removal state is invalid")
+
+
+def lstat_at(directory_fd: int, name: str) -> os.stat_result | None:
     try:
         return os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
     except FileNotFoundError:
@@ -262,170 +177,168 @@ def require_descriptor_entry(directory_fd: int, name: str, descriptor: int) -> N
     require(
         (path_stat.st_dev, path_stat.st_ino)
         == (descriptor_stat.st_dev, descriptor_stat.st_ino),
-        f"runner storage entry changed before descriptor-relative mutation: {name}",
+        f"runner authority entry changed: {name}",
     )
 
 
+def require_root_directory(value: os.stat_result, mode: int, label: str) -> None:
+    require(stat.S_ISDIR(value.st_mode), f"{label} is not a directory")
+    require(value.st_uid == 0 and value.st_gid == 0, f"{label} owner differs")
+    require(stat.S_IMODE(value.st_mode) == mode, f"{label} mode differs")
+
+
 @dataclass
-class OpenPrefix:
-    state_root_fd: int
-    state_root_path: Path
-    facts: CapacityPrefixFacts
-    capacity_fd: int | None = None
-    image_fd: int | None = None
+class AuthorityContext:
+    home_fd: int
+    root_fd: int | None
+    lock_fd: int | None
+    target_fd: int | None
+    image_fd: int | None
+    authority_device: int
+    image_state: ImageState
+    roster: tuple[str, ...]
+    exclusive: bool
 
     def close(self) -> None:
-        if self.image_fd is not None:
-            os.close(self.image_fd)
-            self.image_fd = None
-        if self.capacity_fd is not None:
-            os.close(self.capacity_fd)
-            self.capacity_fd = None
-        os.close(self.state_root_fd)
+        for name in ("image_fd", "target_fd", "lock_fd", "root_fd", "home_fd"):
+            descriptor = getattr(self, name)
+            if descriptor is not None:
+                os.close(descriptor)
+                setattr(self, name, None)
 
-    def __enter__(self) -> OpenPrefix:
+    def __enter__(self) -> AuthorityContext:
         return self
 
     def __exit__(self, *_: object) -> None:
         self.close()
 
 
-def open_state_root(
-    state_root_handle: str,
-    state_root_path: Path,
-    caller_uid: int,
-    caller_gid: int,
-) -> tuple[int, os.stat_result]:
-    require(state_root_path.is_absolute(), "runner storage state root is not absolute")
-    require(str(state_root_path).startswith("/home/"), "runner storage state root is outside /home")
-    require(
-        state_root_path.resolve(strict=True) == state_root_path,
-        "runner storage state root is not canonical",
-    )
-    state_root_fd = os.open(state_root_handle, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        descriptor_stat = os.fstat(state_root_fd)
-        path_stat = os.stat(state_root_path, follow_symlinks=False)
-        require(stat.S_ISDIR(path_stat.st_mode), "runner storage state root is not a directory")
-        validate_state_root_authority(
-            descriptor_device=descriptor_stat.st_dev,
-            descriptor_inode=descriptor_stat.st_ino,
-            path_device=path_stat.st_dev,
-            path_inode=path_stat.st_ino,
-            path_owner_uid=path_stat.st_uid,
-            path_owner_gid=path_stat.st_gid,
-            path_mode=stat.S_IMODE(path_stat.st_mode),
-            caller_uid=caller_uid,
-            caller_gid=caller_gid,
-        )
-        return state_root_fd, descriptor_stat
-    except BaseException:
-        os.close(state_root_fd)
-        raise
-
-
-def inspect_prefix(
-    *,
-    state_root_handle: str,
-    state_root_path: Path,
-    caller_uid: int,
-    caller_gid: int,
-) -> OpenPrefix:
-    state_root_fd, state_root_stat = open_state_root(
-        state_root_handle, state_root_path, caller_uid, caller_gid
-    )
-    capacity_fd: int | None = None
+def open_authority(*, create: bool, exclusive: bool) -> AuthorityContext:
+    home_fd = os.open(HOME_ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    root_fd: int | None = None
+    lock_fd: int | None = None
+    target_fd: int | None = None
     image_fd: int | None = None
     try:
-        capacity_stat = lstat_at(CAPACITY_NAME, state_root_fd)
-        if capacity_stat is None:
-            return OpenPrefix(
-                state_root_fd=state_root_fd,
-                state_root_path=state_root_path,
-                facts=CapacityPrefixFacts(
-                    state_root_device=state_root_stat.st_dev,
-                    capacity=absent_node(),
-                    image=absent_node(),
-                ),
+        home_stat = os.fstat(home_fd)
+        require_root_directory(home_stat, 0o755, "/home authority parent")
+        fcntl.flock(home_fd, fcntl.LOCK_EX)
+        authority_stat = lstat_at(home_fd, AUTHORITY_NAME)
+        if authority_stat is None:
+            require(create, "runner storage authority is absent")
+            os.mkdir(AUTHORITY_NAME, mode=0o700, dir_fd=home_fd)
+            os.fsync(home_fd)
+            authority_stat = os.stat(
+                AUTHORITY_NAME, dir_fd=home_fd, follow_symlinks=False
             )
-        capacity_facts = facts_from_stat(capacity_stat)
-        require(capacity_facts.kind == "directory", "runner capacity root is not a directory")
-        capacity_fd = os.open(
-            CAPACITY_NAME,
-            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-            dir_fd=state_root_fd,
-        )
-        opened_capacity_stat = os.fstat(capacity_fd)
+        require_root_directory(authority_stat, 0o700, "runner storage authority root")
         require(
-            (opened_capacity_stat.st_dev, opened_capacity_stat.st_ino)
-            == (capacity_stat.st_dev, capacity_stat.st_ino),
-            "runner capacity root changed while opening its descriptor",
+            authority_stat.st_dev == home_stat.st_dev,
+            "runner storage authority is on a foreign filesystem",
         )
-        children = tuple(sorted(os.listdir(capacity_fd)))
-        foreign_entries = tuple(name for name in children if name != IMAGE_NAME)
-        image_stat = lstat_at(IMAGE_NAME, capacity_fd)
+        root_fd = os.open(
+            AUTHORITY_NAME,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=home_fd,
+        )
+        require_descriptor_entry(home_fd, AUTHORITY_NAME, root_fd)
+        lock_stat = lstat_at(root_fd, LOCK_NAME)
+        if lock_stat is None:
+            require(create, "runner storage lifecycle lock is absent")
+            created_lock = os.open(
+                LOCK_NAME,
+                os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=root_fd,
+            )
+            os.fchown(created_lock, 0, 0)
+            os.fchmod(created_lock, 0o600)
+            os.fsync(created_lock)
+            os.close(created_lock)
+            os.fsync(root_fd)
+            lock_stat = os.stat(LOCK_NAME, dir_fd=root_fd, follow_symlinks=False)
+        require(
+            stat.S_ISREG(lock_stat.st_mode)
+            and lock_stat.st_uid == 0
+            and lock_stat.st_gid == 0
+            and stat.S_IMODE(lock_stat.st_mode) == 0o600,
+            "runner storage lifecycle lock identity differs",
+        )
+        lock_fd = os.open(LOCK_NAME, os.O_RDWR | os.O_NOFOLLOW, dir_fd=root_fd)
+        require_descriptor_entry(root_fd, LOCK_NAME, lock_fd)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+
+        if create and lstat_at(root_fd, TARGET_NAME) is None:
+            os.mkdir(TARGET_NAME, mode=0o700, dir_fd=root_fd)
+            os.fsync(root_fd)
+        target_stat = lstat_at(root_fd, TARGET_NAME)
+        if target_stat is not None:
+            require_root_directory(target_stat, 0o700, "runner storage mount target")
+            target_fd = os.open(
+                TARGET_NAME,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=root_fd,
+            )
+            require_descriptor_entry(root_fd, TARGET_NAME, target_fd)
+        elif create:
+            raise RunnerStorageLifecycleError("runner storage target creation failed")
+
+        image_stat = lstat_at(root_fd, IMAGE_NAME)
         if image_stat is None:
             image_facts = absent_node()
         else:
-            image_facts = facts_from_stat(image_stat)
-            require(image_facts.kind == "regular", "runner storage image is not a regular file")
-            image_fd = os.open(
-                IMAGE_NAME,
-                os.O_RDWR | os.O_NOFOLLOW,
-                dir_fd=capacity_fd,
-            )
-            opened_image_stat = os.fstat(image_fd)
-            require(
-                (opened_image_stat.st_dev, opened_image_stat.st_ino)
-                == (image_stat.st_dev, image_stat.st_ino),
-                "runner storage image changed while opening its descriptor",
-            )
-        return OpenPrefix(
-            state_root_fd=state_root_fd,
-            state_root_path=state_root_path,
-            capacity_fd=capacity_fd,
+            require(node_kind(image_stat.st_mode) == "regular", "runner image is not regular")
+            image_fd = os.open(IMAGE_NAME, os.O_RDWR | os.O_NOFOLLOW, dir_fd=root_fd)
+            require_descriptor_entry(root_fd, IMAGE_NAME, image_fd)
+            image_facts = facts_from_stat(os.fstat(image_fd))
+        roster = tuple(sorted(os.listdir(root_fd)))
+        allowed = {LOCK_NAME, TARGET_NAME, IMAGE_NAME, RECEIPT_NAME}
+        foreign = tuple(name for name in roster if name not in allowed)
+        require(not foreign, "runner storage authority contains a foreign entry")
+        image_state = classify_image(image_facts, authority_device=home_stat.st_dev)
+        return AuthorityContext(
+            home_fd=home_fd,
+            root_fd=root_fd,
+            lock_fd=lock_fd,
+            target_fd=target_fd,
             image_fd=image_fd,
-            facts=CapacityPrefixFacts(
-                state_root_device=state_root_stat.st_dev,
-                capacity=capacity_facts,
-                image=image_facts,
-                foreign_entries=foreign_entries,
-            ),
+            authority_device=home_stat.st_dev,
+            image_state=image_state,
+            roster=roster,
+            exclusive=exclusive,
         )
     except BaseException:
-        if image_fd is not None:
-            os.close(image_fd)
-        if capacity_fd is not None:
-            os.close(capacity_fd)
-        os.close(state_root_fd)
+        for descriptor in (image_fd, target_fd, lock_fd, root_fd, home_fd):
+            if descriptor is not None:
+                os.close(descriptor)
         raise
-
-
-def require_root_invocation(caller_uid: int, caller_gid: int) -> None:
-    require(os.geteuid() == 0, "runner storage lifecycle helper is not privileged")
-    sudo_uid = os.environ.get("SUDO_UID")
-    sudo_gid = os.environ.get("SUDO_GID")
-    require(sudo_uid is not None and sudo_gid is not None, "runner storage sudo identity is absent")
-    require(int(sudo_uid) == caller_uid, "runner storage sudo caller UID differs")
-    require(int(sudo_gid) == caller_gid, "runner storage sudo caller GID differs")
 
 
 def trusted_tool(name: str) -> str:
     path = TRUSTED_TOOLS[name]
     value = os.stat(path, follow_symlinks=False)
-    require(stat.S_ISREG(value.st_mode), f"trusted runner storage tool is not regular: {name}")
-    require(value.st_uid == 0 and value.st_gid == 0, f"trusted runner storage tool owner differs: {name}")
-    require(stat.S_IMODE(value.st_mode) & 0o022 == 0, f"trusted runner storage tool is writable: {name}")
+    require(stat.S_ISREG(value.st_mode), f"trusted tool is not regular: {name}")
+    require(value.st_uid == 0 and value.st_gid == 0, f"trusted tool owner differs: {name}")
+    require(stat.S_IMODE(value.st_mode) & 0o022 == 0, f"trusted tool is writable: {name}")
     return str(path)
 
 
-def run_tool(name: str, *args: str, pass_fds: tuple[int, ...] = ()) -> str:
+def run_tool(
+    context: AuthorityContext,
+    name: str,
+    *args: str,
+    mutation: bool = False,
+    pass_fds: tuple[int, ...] = (),
+) -> str:
+    retained = set(pass_fds)
+    if mutation:
+        retained = set(mutation_pass_fds(context, pass_fds))
     result = subprocess.run(
         [trusted_tool(name), *args],
         check=True,
         capture_output=True,
         text=True,
-        pass_fds=pass_fds,
+        pass_fds=tuple(sorted(retained)),
         timeout=120,
     )
     return result.stdout.strip()
@@ -444,428 +357,260 @@ def decode_mount_path(value: str) -> str:
 class MountRecord:
     device_number: str
     target: str
+    optional_fields: tuple[str, ...]
 
 
 @dataclass(frozen=True)
-class MountNamespaceObservation:
+class NamespaceObservation:
     namespace_id: str
     representative_pid: int
     records: tuple[MountRecord, ...]
 
 
 @dataclass(frozen=True)
-class NamespaceMountOccurrence:
+class NamespaceOccurrence:
     namespace_id: str
     representative_pid: int
+    device_number: str
     target: str
 
 
 def read_mount_records(path: str = "/proc/self/mountinfo") -> tuple[MountRecord, ...]:
     records: list[MountRecord] = []
-    with open(path, encoding="utf-8") as mountinfo:
-        for raw_line in mountinfo:
-            fields = raw_line.rstrip("\n").split(" ")
-            require(len(fields) >= 10 and "-" in fields, "mountinfo record is invalid")
+    with open(path, encoding="utf-8") as source:
+        for raw in source:
+            fields = raw.rstrip("\n").split(" ")
+            require("-" in fields and len(fields) >= 10, "mountinfo record is invalid")
+            separator = fields.index("-")
             records.append(
                 MountRecord(
                     device_number=fields[2],
                     target=decode_mount_path(fields[4]),
+                    optional_fields=tuple(fields[6:separator]),
                 )
             )
     return tuple(records)
 
 
-def mount_namespace_id(path: str) -> str:
+def namespace_id(path: str = "/proc/self/ns/mnt") -> str:
     value = os.stat(path)
     return f"{value.st_dev}:{value.st_ino}"
 
 
-def read_observable_mount_namespaces_once() -> tuple[MountNamespaceObservation, ...]:
-    try:
-        own_namespace = mount_namespace_id("/proc/self/ns/mnt")
-        own_records = read_mount_records()
-    except (PermissionError, OSError) as error:
-        raise RunnerStorageLifecycleError(
-            "helper mount namespace is unreadable"
-        ) from error
-    observations: dict[str, MountNamespaceObservation] = {
-        own_namespace: MountNamespaceObservation(
-            namespace_id=own_namespace,
-            representative_pid=os.getpid(),
-            records=own_records,
-        )
+def require_private_mount_record(record: MountRecord) -> None:
+    propagation = tuple(
+        field
+        for field in record.optional_fields
+        if field.startswith(("shared:", "master:", "propagate_from:"))
+    )
+    require(not propagation, "mount authority is not private")
+
+
+def require_private_namespace(expected_device: int, expected_inode: int) -> str:
+    expected = f"{expected_device}:{expected_inode}"
+    observed = namespace_id()
+    require(observed == expected, "helper mount namespace identity differs")
+    home_candidates = [
+        record
+        for record in read_mount_records()
+        if str(HOME_ROOT) == record.target or str(HOME_ROOT).startswith(f"{record.target}/")
+    ]
+    require(home_candidates, "/home mount authority is absent")
+    authority = max(home_candidates, key=lambda value: len(value.target))
+    require_private_mount_record(authority)
+    return observed
+
+
+def read_namespace_roster_once() -> tuple[NamespaceObservation, ...]:
+    own = namespace_id()
+    observations: dict[str, NamespaceObservation] = {
+        own: NamespaceObservation(own, os.getpid(), read_mount_records())
     }
     try:
-        process_entries = tuple(sorted(os.listdir("/proc")))
+        entries = tuple(sorted(os.listdir("/proc")))
     except OSError as error:
-        raise RunnerStorageLifecycleError("observable mount namespace roster is unreadable") from error
-    for entry in process_entries:
+        raise RunnerStorageLifecycleError("mount namespace roster is unreadable") from error
+    for entry in entries:
         if not entry.isdigit():
             continue
         pid = int(entry)
-        namespace_path = f"/proc/{pid}/ns/mnt"
-        mountinfo_path = f"/proc/{pid}/mountinfo"
+        ns_path = f"/proc/{pid}/ns/mnt"
+        mount_path = f"/proc/{pid}/mountinfo"
         try:
-            before = mount_namespace_id(namespace_path)
+            before = namespace_id(ns_path)
         except (FileNotFoundError, ProcessLookupError):
             continue
-        except (PermissionError, OSError) as error:
-            raise RunnerStorageLifecycleError(
-                f"mount namespace identity is unreadable for pid {pid}"
-            ) from error
+        except OSError as error:
+            raise RunnerStorageLifecycleError(f"namespace unreadable for pid {pid}") from error
         if before in observations:
             try:
-                after = mount_namespace_id(namespace_path)
-            except (FileNotFoundError, ProcessLookupError) as error:
+                after = namespace_id(ns_path)
+            except OSError as error:
                 raise RunnerStorageLifecycleError(
-                    f"observed mount namespace disappeared for pid {pid}"
+                    f"observed namespace disappeared for pid {pid}"
                 ) from error
-            except (PermissionError, OSError) as error:
-                raise RunnerStorageLifecycleError(
-                    f"mount namespace identity is unreadable for pid {pid}"
-                ) from error
-            require(
-                before == after,
-                f"observed mount namespace changed while reading pid {pid}",
-            )
+            require(before == after, f"namespace changed for pid {pid}")
             continue
         try:
-            records = read_mount_records(mountinfo_path)
-            after = mount_namespace_id(namespace_path)
-        except (FileNotFoundError, ProcessLookupError) as error:
+            records = read_mount_records(mount_path)
+            after = namespace_id(ns_path)
+        except OSError as error:
             raise RunnerStorageLifecycleError(
-                f"observed mount namespace disappeared for pid {pid}"
+                f"observed namespace disappeared for pid {pid}"
             ) from error
-        except (PermissionError, OSError) as error:
-            raise RunnerStorageLifecycleError(
-                f"mount namespace contents are unreadable for pid {pid}"
-            ) from error
-        require(
-            before == after,
-            f"observed mount namespace changed while reading pid {pid}",
-        )
-        observations[before] = MountNamespaceObservation(
-            namespace_id=before,
-            representative_pid=pid,
-            records=records,
-        )
+        require(before == after, f"namespace changed for pid {pid}")
+        observations[before] = NamespaceObservation(before, pid, records)
     return tuple(observations[key] for key in sorted(observations))
 
 
-def require_stable_namespace_set(
-    first: tuple[MountNamespaceObservation, ...],
-    second: tuple[MountNamespaceObservation, ...],
-) -> None:
+def stable_namespace_pair() -> tuple[
+    tuple[NamespaceObservation, ...], tuple[NamespaceObservation, ...]
+]:
+    first = read_namespace_roster_once()
+    second = read_namespace_roster_once()
     require(
-        tuple(value.namespace_id for value in first)
-        == tuple(value.namespace_id for value in second),
-        "observable mount namespace roster changed across proof passes",
+        tuple(item.namespace_id for item in first)
+        == tuple(item.namespace_id for item in second),
+        "mount namespace roster changed across proof passes",
     )
+    return first, second
 
 
-def read_observable_mount_namespaces() -> tuple[MountNamespaceObservation, ...]:
-    first = read_observable_mount_namespaces_once()
-    second = read_observable_mount_namespaces_once()
-    require_stable_namespace_set(first, second)
-    return second
+def stable_occurrences(
+    predicate: Any,
+) -> tuple[NamespaceOccurrence, ...]:
+    first, second = stable_namespace_pair()
 
-
-def loop_device_number(loop_device: str) -> str:
-    require(LOOP_DEVICE.fullmatch(loop_device) is not None, "runner storage loop device is invalid")
-    value = os.stat(loop_device)
-    require(stat.S_ISBLK(value.st_mode), "runner storage loop device is not a block device")
-    return f"{os.major(value.st_rdev)}:{os.minor(value.st_rdev)}"
-
-
-def observable_mounts_for_loop(
-    loop_device: str,
-) -> tuple[NamespaceMountOccurrence, ...]:
-    device_number = loop_device_number(loop_device)
-    first = read_observable_mount_namespaces_once()
-    second = read_observable_mount_namespaces_once()
-    require_stable_namespace_set(first, second)
-
-    def occurrences(
-        observations: tuple[MountNamespaceObservation, ...],
-    ) -> tuple[NamespaceMountOccurrence, ...]:
-        values = [
-            NamespaceMountOccurrence(
+    def project(values: tuple[NamespaceObservation, ...]) -> tuple[NamespaceOccurrence, ...]:
+        result = [
+            NamespaceOccurrence(
                 namespace_id=namespace.namespace_id,
                 representative_pid=namespace.representative_pid,
+                device_number=record.device_number,
                 target=record.target,
             )
-            for namespace in observations
+            for namespace in values
             for record in namespace.records
-            if record.device_number == device_number
+            if predicate(record)
         ]
         return tuple(
             sorted(
-                values,
-                key=lambda value: (
-                    value.namespace_id,
-                    value.target,
-                ),
+                result,
+                key=lambda item: (item.namespace_id, item.device_number, item.target),
             )
         )
 
-    first_occurrences = occurrences(first)
-    second_occurrences = occurrences(second)
+    first_result = project(first)
+    second_result = project(second)
     require(
-        tuple((value.namespace_id, value.target) for value in first_occurrences)
-        == tuple((value.namespace_id, value.target) for value in second_occurrences),
-        "observable loop mount roster changed across proof passes",
+        tuple((item.namespace_id, item.device_number, item.target) for item in first_result)
+        == tuple((item.namespace_id, item.device_number, item.target) for item in second_result),
+        "mount occurrence roster changed across proof passes",
     )
-    return second_occurrences
+    return second_result
 
 
-def mounts_at_or_below(target: Path) -> tuple[MountRecord, ...]:
+def target_occurrences() -> tuple[NamespaceOccurrence, ...]:
+    target = str(AUTHORITY_ROOT / TARGET_NAME)
     prefix = f"{target}/"
-    return tuple(
-        record
-        for record in read_mount_records()
-        if record.target == str(target) or record.target.startswith(prefix)
+    return stable_occurrences(
+        lambda record: record.target == target or record.target.startswith(prefix)
     )
 
 
-def associated_loops(image_fd: int) -> tuple[str, ...]:
-    handle = f"/proc/self/fd/{image_fd}"
+def loop_device_number(loop_device: str) -> str:
+    require(LOOP_DEVICE.fullmatch(loop_device) is not None, "loop device is invalid")
+    value = os.stat(loop_device)
+    require(stat.S_ISBLK(value.st_mode), "loop device is not a block device")
+    return f"{os.major(value.st_rdev)}:{os.minor(value.st_rdev)}"
+
+
+def loop_occurrences(loop_device: str) -> tuple[NamespaceOccurrence, ...]:
+    device = loop_device_number(loop_device)
+    return stable_occurrences(lambda record: record.device_number == device)
+
+
+def associated_loops(context: AuthorityContext) -> tuple[str, ...]:
+    require(context.image_fd is not None, "image descriptor is absent")
+    handle = f"/proc/self/fd/{context.image_fd}"
     output = run_tool(
+        context,
         "losetup",
         "--json",
         "--output",
         "NAME,BACK-FILE",
         "--associated",
         handle,
-        pass_fds=(image_fd,),
+        pass_fds=(context.image_fd,),
     )
     parsed = json.loads(output or '{"loopdevices":[]}')
     devices = parsed.get("loopdevices")
-    require(isinstance(devices, list), "runner storage loop observation is invalid")
+    require(isinstance(devices, list), "loop observation is invalid")
+    image_stat = os.fstat(context.image_fd)
     loops: list[str] = []
-    image_stat = os.fstat(image_fd)
-    for device in devices:
-        require(isinstance(device, dict), "runner storage loop record is invalid")
-        name = device.get("name")
-        backing_file = device.get("back-file")
-        require(isinstance(name, str), "runner storage loop name is invalid")
-        require(isinstance(backing_file, str), "runner storage loop backing is invalid")
-        require(LOOP_DEVICE.fullmatch(name) is not None, "runner storage loop name is invalid")
-        backing_stat = os.stat(backing_file)
+    for item in devices:
+        require(isinstance(item, dict), "loop record is invalid")
+        name = item.get("name")
+        backing = item.get("back-file")
+        require(isinstance(name, str) and LOOP_DEVICE.fullmatch(name), "loop name is invalid")
+        require(isinstance(backing, str), "loop backing is invalid")
+        backing_stat = os.stat(backing)
         require(
             (backing_stat.st_dev, backing_stat.st_ino)
             == (image_stat.st_dev, image_stat.st_ino),
-            "runner storage loop backing differs from its image descriptor",
+            "loop backing differs from image descriptor",
         )
         loops.append(name)
-    require(len(set(loops)) == len(loops), "runner storage loop observation is duplicated")
+    require(len(set(loops)) == len(loops), "loop observation is duplicated")
     return tuple(sorted(loops))
 
 
-def attach_image(image_fd: int) -> str:
-    loops = associated_loops(image_fd)
-    require(len(loops) <= 1, "runner storage image has multiple loop devices")
+def attach_image(context: AuthorityContext) -> str:
+    loops = associated_loops(context)
+    require(len(loops) <= 1, "image has multiple loop devices")
     if loops:
         return loops[0]
-    handle = f"/proc/self/fd/{image_fd}"
-    loop_device = run_tool(
+    require(context.image_fd is not None, "image descriptor is absent")
+    handle = f"/proc/self/fd/{context.image_fd}"
+    loop = run_tool(
+        context,
         "losetup",
         "--find",
         "--show",
         "--nooverlap",
         handle,
-        pass_fds=(image_fd,),
+        mutation=True,
+        pass_fds=(context.image_fd,),
     )
-    require(LOOP_DEVICE.fullmatch(loop_device) is not None, "runner storage loop device is invalid")
-    loops = associated_loops(image_fd)
-    require(loops == (loop_device,), "runner storage loop attachment is ambiguous")
-    return loop_device
+    require(LOOP_DEVICE.fullmatch(loop) is not None, "loop attachment is invalid")
+    require(associated_loops(context) == (loop,), "loop attachment is ambiguous")
+    return loop
 
 
-def read_filesystem_identity(loop_device: str) -> tuple[str, str]:
-    filesystem_type = run_tool("blkid", "-s", "TYPE", "-o", "value", loop_device)
-    filesystem_uuid = run_tool("blkid", "-s", "UUID", "-o", "value", loop_device)
-    require(filesystem_type == "xfs", "runner storage image is not XFS")
-    require(
-        FILESYSTEM_UUID.fullmatch(filesystem_uuid) is not None,
-        "runner storage filesystem UUID is invalid",
-    )
-    return filesystem_type, filesystem_uuid
+def filesystem_uuid(context: AuthorityContext, loop_device: str) -> str:
+    filesystem_type = run_tool(context, "blkid", "-s", "TYPE", "-o", "value", loop_device)
+    value = run_tool(context, "blkid", "-s", "UUID", "-o", "value", loop_device)
+    require(filesystem_type == "xfs", "runner image is not XFS")
+    require(FILESYSTEM_UUID.fullmatch(value) is not None, "XFS UUID is invalid")
+    return value
 
 
-def open_target(state_root_fd: int, state_root_path: Path) -> tuple[int, Path]:
-    target = state_root_path / TARGET_NAME
-    target_fd = os.open(
-        TARGET_NAME,
-        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-        dir_fd=state_root_fd,
-    )
-    target_stat = os.fstat(target_fd)
-    require(stat.S_ISDIR(target_stat.st_mode), "runner storage target is not a directory")
-    return target_fd, target
-
-
-def mount_loop(state_root_fd: int, state_root_path: Path, loop_device: str) -> None:
-    require(
-        not observable_mounts_for_loop(loop_device),
-        "runner storage loop is already mounted in an observable namespace",
-    )
-    target_fd, target = open_target(state_root_fd, state_root_path)
-    try:
-        require(not mounts_at_or_below(target), "runner storage target is already mounted")
-        require(not os.listdir(target_fd), "runner storage target is not empty below its mount")
-        handle = f"/proc/self/fd/{target_fd}"
-        run_tool(
-            "mount",
-            "-t",
-            "xfs",
-            "-o",
-            "pquota,nosuid,nodev",
-            "--",
-            loop_device,
-            handle,
-            pass_fds=(target_fd,),
-        )
-        own_namespace = mount_namespace_id("/proc/self/ns/mnt")
-        observable_mounts = observable_mounts_for_loop(loop_device)
-        require(
-            len(observable_mounts) == 1
-            and observable_mounts[0].namespace_id == own_namespace
-            and observable_mounts[0].target == str(target),
-            "runner storage mount target or namespace differs after mount",
-        )
-    finally:
-        os.close(target_fd)
-
-
-def require_target_ready(state_root_fd: int, state_root_path: Path) -> None:
-    target_fd, target = open_target(state_root_fd, state_root_path)
-    try:
-        require(not mounts_at_or_below(target), "runner storage target is already mounted")
-        require(not os.listdir(target_fd), "runner storage target is not empty below its mount")
-    finally:
-        os.close(target_fd)
-
-
-def detach_loop(loop_device: str) -> None:
-    require(
-        not observable_mounts_for_loop(loop_device),
-        "runner storage loop remains mounted in an observable namespace",
-    )
-    run_tool("losetup", "--detach", loop_device)
-
-
-def teardown_runtime(prefix: OpenPrefix, expected_device: int | None, expected_inode: int | None) -> None:
-    target = prefix.state_root_path / TARGET_NAME
-    if prefix.image_fd is None:
-        require(not mounts_at_or_below(target), "runner storage target is mounted without its image")
-        return
-    image_stat = os.fstat(prefix.image_fd)
-    require(
-        expected_device is not None and expected_inode is not None,
-        "runner storage expected image identity is absent before runtime teardown",
-    )
-    require(
-        (image_stat.st_dev, image_stat.st_ino) == (expected_device, expected_inode),
-        "runner storage image identity differs before runtime teardown",
-    )
-    loops = associated_loops(prefix.image_fd)
-    require(len(loops) <= 1, "runner storage image has multiple loop devices")
-    if not loops:
-        require(not mounts_at_or_below(target), "runner storage target has a foreign mount")
-        return
-    loop_device = loops[0]
-    observable_mounts = observable_mounts_for_loop(loop_device)
-    target_tree = mounts_at_or_below(target)
-    if observable_mounts:
-        own_namespace = mount_namespace_id("/proc/self/ns/mnt")
-        require(
-            len(observable_mounts) == 1
-            and observable_mounts[0].namespace_id == own_namespace
-            and observable_mounts[0].target == str(target),
-            "runner storage loop has a mount in another observable namespace or target",
-        )
-        require(
-            len(target_tree) == 1
-            and target_tree[0].target == str(target)
-            and target_tree[0].device_number == loop_device_number(loop_device),
-            "runner storage target has a nested or foreign mount",
-        )
-        # Device-target unmount is unambiguous only after the complete global
-        # major:minor roster above proves this exact target is the sole mount.
-        # It also avoids holding an open file on the filesystem being unmounted.
-        run_tool("umount", "--", loop_device)
-        require(not mounts_at_or_below(target), "runner storage target remained mounted")
-        require(
-            not observable_mounts_for_loop(loop_device),
-            "runner storage loop remained mounted in an observable namespace",
-        )
-    else:
-        require(not target_tree, "runner storage target has a foreign mount")
-    detach_loop(loop_device)
-    require(not associated_loops(prefix.image_fd), "runner storage image loop remained attached")
-
-
-def create_capacity_and_image(
-    prefix: OpenPrefix, image_bytes: int, caller_uid: int, caller_gid: int
-) -> None:
-    require(prefix.image_fd is None, "runner storage image already exists")
-    if prefix.capacity_fd is None:
-        os.mkdir(CAPACITY_NAME, mode=0o700, dir_fd=prefix.state_root_fd)
-        prefix.capacity_fd = os.open(
-            CAPACITY_NAME,
-            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-            dir_fd=prefix.state_root_fd,
-        )
-    require_descriptor_entry(
-        prefix.state_root_fd, CAPACITY_NAME, prefix.capacity_fd
-    )
-    original_capacity = prefix.facts.capacity
-    was_caller_owned = (
-        original_capacity.kind == "directory"
-        and original_capacity.owner_uid == caller_uid
-        and original_capacity.owner_gid == caller_gid
-        and original_capacity.mode == 0o700
-    )
-    os.fchown(prefix.capacity_fd, 0, 0)
-    os.fchmod(prefix.capacity_fd, 0o700)
-    children = os.listdir(prefix.capacity_fd)
-    if children:
-        if was_caller_owned:
-            os.fchown(prefix.capacity_fd, caller_uid, caller_gid)
-            os.fchmod(prefix.capacity_fd, 0o700)
-        raise RunnerStorageLifecycleError("runner capacity root changed before image creation")
-    try:
-        require_descriptor_entry(
-            prefix.state_root_fd, CAPACITY_NAME, prefix.capacity_fd
-        )
-    except BaseException:
-        if was_caller_owned:
-            os.fchown(prefix.capacity_fd, caller_uid, caller_gid)
-            os.fchmod(prefix.capacity_fd, 0o700)
-        raise
-    prefix.image_fd = os.open(
+def create_image(context: AuthorityContext) -> None:
+    require(context.root_fd is not None and context.image_fd is None, "image already exists")
+    context.image_fd = os.open(
         IMAGE_NAME,
         os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
         0o600,
-        dir_fd=prefix.capacity_fd,
+        dir_fd=context.root_fd,
     )
-    os.ftruncate(prefix.image_fd, image_bytes)
-    os.fsync(prefix.image_fd)
-    os.fchown(prefix.image_fd, 0, 0)
-    os.fchmod(prefix.image_fd, 0o600)
-    os.fchmod(prefix.capacity_fd, 0o711)
-    require_descriptor_entry(prefix.capacity_fd, IMAGE_NAME, prefix.image_fd)
-    require_descriptor_entry(
-        prefix.state_root_fd, CAPACITY_NAME, prefix.capacity_fd
-    )
-    os.fsync(prefix.capacity_fd)
-    os.fsync(prefix.state_root_fd)
-
-
-def format_attach_and_mount(prefix: OpenPrefix) -> tuple[str, str]:
-    require(prefix.image_fd is not None, "runner storage image descriptor is absent")
-    image_handle = f"/proc/self/fd/{prefix.image_fd}"
+    os.fchown(context.image_fd, 0, 0)
+    os.fchmod(context.image_fd, 0o600)
+    os.ftruncate(context.image_fd, IMAGE_BYTES)
+    os.fsync(context.image_fd)
+    require_descriptor_entry(context.root_fd, IMAGE_NAME, context.image_fd)
+    handle = f"/proc/self/fd/{context.image_fd}"
     run_tool(
+        context,
         "mkfs.xfs",
         "-q",
         "-m",
@@ -873,217 +618,520 @@ def format_attach_and_mount(prefix: OpenPrefix) -> tuple[str, str]:
         "-n",
         "ftype=1",
         "--",
-        image_handle,
-        pass_fds=(prefix.image_fd,),
+        handle,
+        mutation=True,
+        pass_fds=(context.image_fd,),
     )
-    loop_device = attach_image(prefix.image_fd)
-    _, filesystem_uuid = read_filesystem_identity(loop_device)
-    mount_loop(prefix.state_root_fd, prefix.state_root_path, loop_device)
-    return loop_device, filesystem_uuid
+    os.fsync(context.root_fd)
+    context.image_state = "root_0600_exact"
 
 
-def require_image_identity(prefix: OpenPrefix, expected_device: int, expected_inode: int) -> None:
-    require(prefix.image_fd is not None, "runner storage image descriptor is absent")
-    image_stat = os.fstat(prefix.image_fd)
+def mount_image(context: AuthorityContext, loop_device: str, expected_namespace: str) -> None:
+    require(context.target_fd is not None, "mount target descriptor is absent")
+    require(not target_occurrences(), "runner target is already mounted")
+    require(not loop_occurrences(loop_device), "runner loop is already mounted")
+    require(not os.listdir(context.target_fd), "underlying mount target is not empty")
+    handle = f"/proc/self/fd/{context.target_fd}"
+    run_tool(
+        context,
+        "mount",
+        "-t",
+        "xfs",
+        "-o",
+        "rw,pquota,nosuid,nodev",
+        "--",
+        loop_device,
+        handle,
+        mutation=True,
+        pass_fds=(context.target_fd,),
+    )
+    os.chown(AUTHORITY_ROOT / TARGET_NAME, 0, 0, follow_symlinks=False)
+    os.chmod(AUTHORITY_ROOT / TARGET_NAME, 0o700, follow_symlinks=False)
+    loop_mounts = loop_occurrences(loop_device)
+    target_mounts = target_occurrences()
     require(
-        (image_stat.st_dev, image_stat.st_ino) == (expected_device, expected_inode),
-        "runner storage image identity differs",
+        len(loop_mounts) == 1
+        and loop_mounts[0].namespace_id == expected_namespace
+        and loop_mounts[0].target == str(AUTHORITY_ROOT / TARGET_NAME),
+        "loop mounted outside the private authority namespace",
+    )
+    require(
+        len(target_mounts) == 1
+        and target_mounts[0].namespace_id == expected_namespace
+        and target_mounts[0].device_number == loop_device_number(loop_device),
+        "target mount differs from loop authority",
     )
 
 
-def recover_attach_and_mount(
-    prefix: OpenPrefix,
-    *,
-    expected_device: int,
-    expected_inode: int,
-    expected_uuid: str,
-) -> tuple[str, str]:
-    require_image_identity(prefix, expected_device, expected_inode)
-    require(FILESYSTEM_UUID.fullmatch(expected_uuid) is not None, "expected filesystem UUID is invalid")
-    require(prefix.image_fd is not None, "runner storage image descriptor is absent")
-    loop_device = attach_image(prefix.image_fd)
-    _, filesystem_uuid = read_filesystem_identity(loop_device)
-    if filesystem_uuid != expected_uuid:
-        if not observable_mounts_for_loop(loop_device):
-            detach_loop(loop_device)
-            require(
-                not associated_loops(prefix.image_fd),
-                "runner storage loop remained attached after UUID rejection",
-            )
-        raise RunnerStorageLifecycleError("runner storage filesystem UUID differs from its receipt")
-    mount_loop(prefix.state_root_fd, prefix.state_root_path, loop_device)
-    return loop_device, filesystem_uuid
-
-
-def remove_objects(
-    prefix: OpenPrefix,
-    *,
-    expected_device: int | None,
-    expected_inode: int | None,
-) -> None:
-    target = prefix.state_root_path / TARGET_NAME
-    require(not mounts_at_or_below(target), "runner storage target remains mounted")
-    if prefix.image_fd is not None:
+def unmount_and_detach(context: AuthorityContext, loop_device: str, expected_namespace: str) -> None:
+    loop_mounts = loop_occurrences(loop_device)
+    target_mounts = target_occurrences()
+    if loop_mounts:
         require(
-            expected_device is not None and expected_inode is not None,
-            "runner storage expected image identity is absent",
+            len(loop_mounts) == 1
+            and loop_mounts[0].namespace_id == expected_namespace
+            and loop_mounts[0].target == str(AUTHORITY_ROOT / TARGET_NAME),
+            "loop has a foreign namespace mount",
         )
-        require_image_identity(prefix, expected_device, expected_inode)
-        require(not associated_loops(prefix.image_fd), "runner storage image loop remains attached")
-        require(prefix.capacity_fd is not None, "runner capacity descriptor is absent")
-        require_descriptor_entry(prefix.capacity_fd, IMAGE_NAME, prefix.image_fd)
-        os.unlink(IMAGE_NAME, dir_fd=prefix.capacity_fd)
-        os.fsync(prefix.capacity_fd)
-        os.close(prefix.image_fd)
-        prefix.image_fd = None
-    if prefix.capacity_fd is not None:
-        require(not os.listdir(prefix.capacity_fd), "runner capacity root is not empty")
-        require_descriptor_entry(
-            prefix.state_root_fd, CAPACITY_NAME, prefix.capacity_fd
+        require(
+            len(target_mounts) == 1
+            and target_mounts[0].namespace_id == expected_namespace
+            and target_mounts[0].device_number == loop_device_number(loop_device),
+            "target has a nested or foreign mount",
         )
-        os.rmdir(CAPACITY_NAME, dir_fd=prefix.state_root_fd)
-        os.fsync(prefix.state_root_fd)
-        os.close(prefix.capacity_fd)
-        prefix.capacity_fd = None
+        if context.target_fd is not None:
+            os.close(context.target_fd)
+            context.target_fd = None
+        run_tool(context, "umount", "--", loop_device, mutation=True)
+        require(not loop_occurrences(loop_device), "loop remained mounted")
+        require(not target_occurrences(), "target remained mounted")
+    else:
+        require(not target_mounts, "target has a foreign mount")
+    require(not loop_occurrences(loop_device), "loop remains mounted before detach")
+    run_tool(context, "losetup", "--detach", loop_device, mutation=True)
+    require(not associated_loops(context), "loop remained attached")
 
 
-def decision_json(prefix: OpenPrefix, decision: PrefixDecision) -> dict[str, object]:
-    state_root = os.fstat(prefix.state_root_fd)
-    capacity = prefix.facts.capacity
-    image = prefix.facts.image
-    return {
-        "schema": SCHEMA,
-        "operation": decision.operation,
-        "disposition": decision.disposition,
-        "stateRoot": str(prefix.state_root_path),
-        "stateRootIdentity": {
-            "device": state_root.st_dev,
-            "inode": state_root.st_ino,
-            "ownerUid": state_root.st_uid,
-            "ownerGid": state_root.st_gid,
-            "mode": stat.S_IMODE(state_root.st_mode),
-        },
-        "capacityState": decision.capacity_state,
-        "capacityIdentity": (
-            None
-            if capacity.kind == "absent"
-            else {
-                "device": capacity.device,
-                "inode": capacity.inode,
-                "ownerUid": capacity.owner_uid,
-                "ownerGid": capacity.owner_gid,
-                "mode": capacity.mode,
-            }
-        ),
-        "imageState": decision.image_state,
-        "imageIdentity": (
-            None
-            if image.kind == "absent"
-            else {"device": image.device, "inode": image.inode, "logicalBytes": image.size}
-        ),
+def read_exact_file(path: Path, expected_sha256: str) -> bytes:
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        identity = os.fstat(descriptor)
+        require(stat.S_ISREG(identity.st_mode), f"verified source is not regular: {path.name}")
+        require(0 < identity.st_size <= MAX_DOCUMENT_BYTES, "verified source size is invalid")
+        chunks: list[bytes] = []
+        while True:
+            block = os.read(descriptor, 1024 * 1024)
+            if not block:
+                break
+            chunks.append(block)
+    finally:
+        os.close(descriptor)
+    value = b"".join(chunks)
+    require(
+        hmac.compare_digest(hashlib.sha256(value).hexdigest(), expected_sha256),
+        f"verified source digest differs: {path.name}",
+    )
+    return value
+
+
+def load_identity_verifier() -> dict[str, Any]:
+    path = Path(__file__).with_name(IDENTITY_VERIFIER_NAME)
+    source = read_exact_file(path, IDENTITY_VERIFIER_SHA256)
+    namespace: dict[str, Any] = {
+        "__name__": "ambit_runner_storage_identity_verifier",
+        "__file__": str(path),
+        "__package__": None,
     }
+    exec(compile(source, str(path), "exec"), namespace, namespace)
+    return namespace
+
+
+def current_receipt(
+    state_root: Path,
+    caller_uid: int,
+    caller_gid: int,
+    lifecycle_state: str,
+) -> dict[str, Any]:
+    verifier = load_identity_verifier()
+    observation = verifier["collect_storage_observation"](
+        state_root,
+        authority_root=AUTHORITY_ROOT,
+        observer_uid=caller_uid,
+        observer_gid=caller_gid,
+    )
+    receipt = verifier["validate_storage_identity_observation"](observation)
+    receipt["lifecycleState"] = lifecycle_state
+    return receipt
+
+
+def read_json_at(directory_fd: int, name: str) -> dict[str, Any] | None:
+    value = lstat_at(directory_fd, name)
+    if value is None:
+        return None
+    require(
+        stat.S_ISREG(value.st_mode)
+        and value.st_uid == 0
+        and value.st_gid == 0
+        and stat.S_IMODE(value.st_mode) == 0o600,
+        f"authority JSON identity differs: {name}",
+    )
+    descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+    try:
+        require_descriptor_entry(directory_fd, name, descriptor)
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            block = os.read(descriptor, 64 * 1024)
+            if not block:
+                break
+            total += len(block)
+            require(total <= MAX_DOCUMENT_BYTES, f"authority JSON is too large: {name}")
+            chunks.append(block)
+    finally:
+        os.close(descriptor)
+    parsed = json.loads(b"".join(chunks))
+    require(isinstance(parsed, dict), f"authority JSON is not an object: {name}")
+    return parsed
+
+
+def write_bytes_atomic(
+    directory_fd: int,
+    final_name: str,
+    value: bytes,
+    *,
+    owner_uid: int,
+    owner_gid: int,
+) -> None:
+    require(len(value) <= MAX_DOCUMENT_BYTES, "receipt output is too large")
+    temporary = f".{final_name}.{os.getpid()}.{secrets.token_hex(8)}"
+    descriptor = os.open(
+        temporary,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o600,
+        dir_fd=directory_fd,
+    )
+    try:
+        os.fchown(descriptor, owner_uid, owner_gid)
+        os.fchmod(descriptor, 0o600)
+        offset = 0
+        while offset < len(value):
+            offset += os.write(descriptor, value[offset:])
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    try:
+        os.replace(
+            temporary,
+            final_name,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+        )
+        os.fsync(directory_fd)
+    except BaseException:
+        try:
+            os.unlink(temporary, dir_fd=directory_fd)
+            os.fsync(directory_fd)
+        except OSError:
+            pass
+        raise
+
+
+def canonical_json_bytes(value: dict[str, Any]) -> bytes:
+    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def open_user_evidence(state_root: Path, caller_uid: int, caller_gid: int) -> int:
+    state = os.stat(state_root, follow_symlinks=False)
+    require(
+        stat.S_ISDIR(state.st_mode)
+        and state.st_uid == caller_uid
+        and state.st_gid == caller_gid
+        and stat.S_IMODE(state.st_mode) == 0o700,
+        "user state root authority differs",
+    )
+    evidence = state_root / "evidence"
+    value = os.stat(evidence, follow_symlinks=False)
+    require(
+        stat.S_ISDIR(value.st_mode)
+        and value.st_uid == caller_uid
+        and value.st_gid == caller_gid
+        and stat.S_IMODE(value.st_mode) == 0o700,
+        "user evidence directory authority differs",
+    )
+    return os.open(evidence, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+
+
+def publish_receipt(
+    context: AuthorityContext,
+    state_root: Path,
+    caller_uid: int,
+    caller_gid: int,
+    receipt: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    require(context.root_fd is not None, "authority descriptor is absent")
+    receipt_bytes = canonical_json_bytes(receipt)
+    write_bytes_atomic(context.root_fd, RECEIPT_NAME, receipt_bytes, owner_uid=0, owner_gid=0)
+    digest = sha256_bytes(receipt_bytes)
+    projection = {
+        "schema": PROJECTION_SCHEMA,
+        "authorityReceiptSha256": digest,
+        "receipt": receipt,
+    }
+    evidence_fd = open_user_evidence(state_root, caller_uid, caller_gid)
+    try:
+        write_bytes_atomic(
+            evidence_fd,
+            USER_PROJECTION_NAME,
+            canonical_json_bytes(projection),
+            owner_uid=caller_uid,
+            owner_gid=caller_gid,
+        )
+    finally:
+        os.close(evidence_fd)
+    return digest, projection
+
+
+def remove_user_projection(state_root: Path, caller_uid: int, caller_gid: int) -> None:
+    evidence_fd = open_user_evidence(state_root, caller_uid, caller_gid)
+    try:
+        value = lstat_at(evidence_fd, USER_PROJECTION_NAME)
+        if value is not None:
+            require(
+                stat.S_ISREG(value.st_mode)
+                and value.st_uid == caller_uid
+                and value.st_gid == caller_gid
+                and stat.S_IMODE(value.st_mode) == 0o600,
+                "user storage projection identity differs",
+            )
+            os.unlink(USER_PROJECTION_NAME, dir_fd=evidence_fd)
+            os.fsync(evidence_fd)
+    finally:
+        os.close(evidence_fd)
+
+
+def validate_receipt(
+    receipt: dict[str, Any], context: AuthorityContext, state_root: Path
+) -> str:
+    require(receipt.get("schema") == RECEIPT_SCHEMA, "storage receipt version is unsupported")
+    require(
+        receipt.get("lifecycleState") in ("attached", "detached"),
+        "storage receipt lifecycle state is invalid",
+    )
+    require(receipt.get("stateRoot") == str(state_root), "storage receipt state root differs")
+    authority = receipt.get("authorityRoot")
+    image = receipt.get("image")
+    filesystem = receipt.get("filesystem")
+    require(isinstance(authority, dict), "storage receipt authority root is absent")
+    require(isinstance(image, dict), "storage receipt image is absent")
+    require(isinstance(filesystem, dict), "storage receipt filesystem is absent")
+    require(context.root_fd is not None and context.image_fd is not None, "storage objects are absent")
+    root_stat = os.fstat(context.root_fd)
+    image_stat = os.fstat(context.image_fd)
+    require(
+        authority.get("path") == str(AUTHORITY_ROOT)
+        and authority.get("device") == root_stat.st_dev
+        and authority.get("inode") == root_stat.st_ino,
+        "storage receipt authority identity differs",
+    )
+    require(
+        image.get("path") == str(AUTHORITY_ROOT / IMAGE_NAME)
+        and image.get("device") == image_stat.st_dev
+        and image.get("inode") == image_stat.st_ino
+        and image.get("logicalBytes") == IMAGE_BYTES,
+        "storage receipt image identity differs",
+    )
+    value = filesystem.get("uuid")
+    require(isinstance(value, str) and FILESYSTEM_UUID.fullmatch(value), "receipt UUID is invalid")
+    return value
+
+
+def operation_result(
+    outcome: str,
+    namespace: str | None,
+    digest: str | None,
+    receipt: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return {
+        "schema": OPERATION_SCHEMA,
+        "outcome": outcome,
+        "authorityRoot": str(AUTHORITY_ROOT),
+        "mountTarget": str(AUTHORITY_ROOT / TARGET_NAME),
+        "mountNamespace": namespace,
+        "authorityReceiptSha256": digest,
+        "receipt": receipt,
+    }
+
+
+def activate_private(args: argparse.Namespace) -> dict[str, Any]:
+    expected_namespace = require_private_namespace(
+        args.namespace_device, args.namespace_inode
+    )
+    with open_authority(create=True, exclusive=True) as context:
+        require(context.target_fd is not None, "storage target is absent")
+        stored = read_json_at(context.root_fd, RECEIPT_NAME) if context.root_fd else None
+        disposition = prepare_disposition(context.image_state, stored is not None)
+        if disposition == "teardown_required":
+            raise RunnerStorageLifecycleError(
+                "storage prefix requires explicit remove before activation"
+            )
+        if disposition == "create":
+            create_image(context)
+        else:
+            require(stored is not None, "storage receipt is absent")
+            expected_uuid = validate_receipt(stored, context, args.state_root)
+        loop = attach_image(context)
+        observed_uuid = filesystem_uuid(context, loop)
+        if disposition == "recover":
+            require(observed_uuid == expected_uuid, "storage UUID changed across recovery")
+        mounts = target_occurrences()
+        if mounts:
+            require(
+                len(mounts) == 1
+                and mounts[0].namespace_id == expected_namespace
+                and mounts[0].device_number == loop_device_number(loop),
+                "storage target is mounted outside expected namespace",
+            )
+        else:
+            mount_image(context, loop, expected_namespace)
+        os.chown(AUTHORITY_ROOT / TARGET_NAME, 0, 0, follow_symlinks=False)
+        os.chmod(AUTHORITY_ROOT / TARGET_NAME, 0o700, follow_symlinks=False)
+        receipt = current_receipt(
+            args.state_root, args.caller_uid, args.caller_gid, "attached"
+        )
+        digest, _ = publish_receipt(
+            context,
+            args.state_root,
+            args.caller_uid,
+            args.caller_gid,
+            receipt,
+        )
+        return operation_result("activated", expected_namespace, digest, receipt)
+
+
+def deactivate_private(args: argparse.Namespace) -> dict[str, Any]:
+    expected_namespace = require_private_namespace(
+        args.namespace_device, args.namespace_inode
+    )
+    with open_authority(create=False, exclusive=True) as context:
+        require(context.root_fd is not None and context.image_fd is not None, "storage is absent")
+        stored = read_json_at(context.root_fd, RECEIPT_NAME)
+        require(stored is not None, "storage receipt is absent")
+        expected_uuid = validate_receipt(stored, context, args.state_root)
+        loops = associated_loops(context)
+        require(len(loops) == 1, "storage loop identity is absent or ambiguous")
+        loop = loops[0]
+        require(filesystem_uuid(context, loop) == expected_uuid, "storage UUID differs")
+        unmount_and_detach(context, loop, expected_namespace)
+        detached = dict(stored)
+        detached["lifecycleState"] = "detached"
+        detached["mountNamespace"] = {
+            "device": args.namespace_device,
+            "inode": args.namespace_inode,
+        }
+        detached["loop"] = None
+        digest, _ = publish_receipt(
+            context,
+            args.state_root,
+            args.caller_uid,
+            args.caller_gid,
+            detached,
+        )
+        return operation_result("deactivated", expected_namespace, digest, detached)
+
+
+def observe_private(args: argparse.Namespace) -> dict[str, Any]:
+    expected_namespace = require_private_namespace(
+        args.namespace_device, args.namespace_inode
+    )
+    with open_authority(create=False, exclusive=False) as context:
+        require(context.root_fd is not None and context.image_fd is not None, "storage is absent")
+        stored = read_json_at(context.root_fd, RECEIPT_NAME)
+        require(stored is not None, "storage receipt is absent")
+        expected_uuid = validate_receipt(stored, context, args.state_root)
+        current = current_receipt(
+            args.state_root, args.caller_uid, args.caller_gid, "attached"
+        )
+        require(
+            current["filesystem"]["uuid"] == expected_uuid,
+            "current storage UUID differs from receipt",
+        )
+        receipt_bytes = canonical_json_bytes(stored)
+        digest = sha256_bytes(receipt_bytes)
+        return operation_result("observed", expected_namespace, digest, current)
+
+
+def remove_authority(args: argparse.Namespace) -> dict[str, Any]:
+    try:
+        context = open_authority(create=False, exclusive=True)
+    except RunnerStorageLifecycleError as error:
+        if str(error) == "runner storage authority is absent":
+            remove_user_projection(args.state_root, args.caller_uid, args.caller_gid)
+            return operation_result("removed", None, None, None)
+        raise
+    with context:
+        require(
+            not target_occurrences(),
+            "storage target remains mounted in a namespace",
+        )
+        require(context.root_fd is not None, "authority descriptor is absent")
+        if context.image_fd is not None:
+            loops = associated_loops(context)
+            require(len(loops) <= 1, "image has multiple loop devices")
+            if loops:
+                require(not loop_occurrences(loops[0]), "loop remains mounted")
+                run_tool(context, "losetup", "--detach", loops[0], mutation=True)
+                require(not associated_loops(context), "loop remained attached")
+        remove_user_projection(args.state_root, args.caller_uid, args.caller_gid)
+        receipt_stat = lstat_at(context.root_fd, RECEIPT_NAME)
+        if receipt_stat is not None:
+            require(
+                stat.S_ISREG(receipt_stat.st_mode)
+                and receipt_stat.st_uid == 0
+                and receipt_stat.st_gid == 0,
+                "authority receipt identity differs",
+            )
+            os.unlink(RECEIPT_NAME, dir_fd=context.root_fd)
+            os.fsync(context.root_fd)
+        if context.image_fd is not None:
+            require_descriptor_entry(context.root_fd, IMAGE_NAME, context.image_fd)
+            os.unlink(IMAGE_NAME, dir_fd=context.root_fd)
+            os.fsync(context.root_fd)
+            os.close(context.image_fd)
+            context.image_fd = None
+        require(not target_occurrences(), "target mount appeared during removal")
+        if context.target_fd is not None:
+            require(not os.listdir(context.target_fd), "underlying target is not empty")
+            require_descriptor_entry(context.root_fd, TARGET_NAME, context.target_fd)
+            os.rmdir(TARGET_NAME, dir_fd=context.root_fd)
+            os.fsync(context.root_fd)
+            os.close(context.target_fd)
+            context.target_fd = None
+        remaining = tuple(sorted(os.listdir(context.root_fd)))
+        require(remaining == (LOCK_NAME,), "authority root contains residual entries")
+        require(context.lock_fd is not None, "authority lock descriptor is absent")
+        require_descriptor_entry(context.root_fd, LOCK_NAME, context.lock_fd)
+        os.unlink(LOCK_NAME, dir_fd=context.root_fd)
+        os.fsync(context.root_fd)
+        os.close(context.lock_fd)
+        context.lock_fd = None
+        require_descriptor_entry(context.home_fd, AUTHORITY_NAME, context.root_fd)
+        os.rmdir(AUTHORITY_NAME, dir_fd=context.home_fd)
+        os.fsync(context.home_fd)
+        os.close(context.root_fd)
+        context.root_fd = None
+    return operation_result("removed", None, None, None)
 
 
 def parser() -> argparse.ArgumentParser:
     value = argparse.ArgumentParser()
-    subparsers = value.add_subparsers(dest="command", required=True)
-    for command in (
-        "inspect",
-        "create-and-mount",
-        "recover-and-mount",
-        "teardown-runtime",
-        "remove-objects",
-    ):
-        child = subparsers.add_parser(command)
-        child.add_argument("state_root_handle")
-        child.add_argument("state_root_path", type=Path)
+    commands = value.add_subparsers(dest="command", required=True)
+    for name in ("activate-private", "deactivate-private", "observe-private"):
+        child = commands.add_parser(name)
+        child.add_argument("state_root", type=Path)
         child.add_argument("caller_uid", type=int)
         child.add_argument("caller_gid", type=int)
-        child.add_argument("image_bytes", type=int)
-        if command in ("recover-and-mount", "teardown-runtime", "remove-objects"):
-            child.add_argument("expected_device")
-            child.add_argument("expected_inode")
-        if command == "recover-and-mount":
-            child.add_argument("expected_uuid")
-        if command == "inspect":
-            child.add_argument("--operation", choices=("prepare", "remove"), default="prepare")
+        child.add_argument("namespace_device", type=int)
+        child.add_argument("namespace_inode", type=int)
+    remove = commands.add_parser("remove-authority")
+    remove.add_argument("state_root", type=Path)
+    remove.add_argument("caller_uid", type=int)
+    remove.add_argument("caller_gid", type=int)
     return value
 
 
-def optional_identity(value: str) -> int | None:
-    if value == "none":
-        return None
-    parsed = int(value)
-    require(parsed >= 0, "runner storage expected identity is invalid")
-    return parsed
-
-
 def main() -> None:
+    configure_secure_umask()
     args = parser().parse_args()
-    require_root_invocation(args.caller_uid, args.caller_gid)
-    with inspect_prefix(
-        state_root_handle=args.state_root_handle,
-        state_root_path=args.state_root_path,
-        caller_uid=args.caller_uid,
-        caller_gid=args.caller_gid,
-    ) as prefix:
-        operation: Operation = (
-            args.operation
-            if args.command == "inspect"
-            else (
-                "prepare"
-                if args.command in ("create-and-mount", "recover-and-mount")
-                else "remove"
-            )
-        )
-        decision = reduce_prefix_state(
-            prefix.facts,
-            operation=operation,
-            caller_uid=args.caller_uid,
-            caller_gid=args.caller_gid,
-            image_bytes=args.image_bytes,
-        )
-        result = decision_json(prefix, decision)
-        if args.command == "create-and-mount":
-            require(decision.disposition == "create_new", "runner storage is not creatable")
-            require_target_ready(prefix.state_root_fd, prefix.state_root_path)
-            create_capacity_and_image(
-                prefix, args.image_bytes, args.caller_uid, args.caller_gid
-            )
-            loop_device, filesystem_uuid = format_attach_and_mount(prefix)
-            result.update(loopDevice=loop_device, filesystemUuid=filesystem_uuid)
-        elif args.command == "recover-and-mount":
-            require(
-                decision.disposition == "existing_published_candidate",
-                "runner storage is not a published recovery candidate",
-            )
-            require_target_ready(prefix.state_root_fd, prefix.state_root_path)
-            expected_device = optional_identity(args.expected_device)
-            expected_inode = optional_identity(args.expected_inode)
-            require(
-                expected_device is not None and expected_inode is not None,
-                "runner storage expected image identity is absent",
-            )
-            loop_device, filesystem_uuid = recover_attach_and_mount(
-                prefix,
-                expected_device=expected_device,
-                expected_inode=expected_inode,
-                expected_uuid=args.expected_uuid,
-            )
-            result.update(loopDevice=loop_device, filesystemUuid=filesystem_uuid)
-        elif args.command == "teardown-runtime":
-            teardown_runtime(
-                prefix,
-                optional_identity(args.expected_device),
-                optional_identity(args.expected_inode),
-            )
-        elif args.command == "remove-objects":
-            remove_objects(
-                prefix,
-                expected_device=optional_identity(args.expected_device),
-                expected_inode=optional_identity(args.expected_inode),
-            )
-        print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+    require(os.geteuid() == 0, "storage lifecycle helper is not privileged")
+    require(args.caller_uid > 0 and args.caller_gid >= 0, "caller identity is invalid")
+    handlers = {
+        "activate-private": activate_private,
+        "deactivate-private": deactivate_private,
+        "observe-private": observe_private,
+        "remove-authority": remove_authority,
+    }
+    result = handlers[args.command](args)
+    print(json.dumps(result, sort_keys=True, separators=(",", ":")))
 
 
 if __name__ == "__main__":

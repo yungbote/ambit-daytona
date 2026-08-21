@@ -15,59 +15,25 @@ state_root=$1
   echo 'STATE_ROOT must be an existing canonical non-symlink path' >&2
   exit 64
 }
+caller_uid=$(id -u)
+caller_gid=$(id -g)
+[[ $(stat -c '%u:%g:%a' -- "${state_root}") == "${caller_uid}:${caller_gid}:700" ]] || {
+  echo 'STATE_ROOT owner, group, or mode differs' >&2
+  exit 66
+}
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 lifecycle_helper=${script_dir}/runner-storage-lifecycle.py
-lifecycle_helper_sha256=864dddbea9d36b74d5f9e91795d38a87b2eaf4f05b9acc754715e6cdf4f8b54e
-target=${state_root}/runner-docker
-image=${state_root}/capacity/runner-docker.xfs
-evidence_root=${state_root}/evidence
-receipt=${evidence_root}/runner-docker-storage.json
-image_bytes=64424509440
-
-for command_name in flock id jq python3 realpath stat sudo unlink; do
-  command -v "${command_name}" >/dev/null || {
-    echo "required runner-storage command is absent: ${command_name}" >&2
-    exit 66
-  }
-done
-[[ -f ${lifecycle_helper} && ! -L ${lifecycle_helper} ]] || { echo 'runner storage lifecycle helper is absent or unsafe' >&2; exit 66; }
-for directory in "${target}" "${evidence_root}"; do
-  [[ -d ${directory} && ! -L ${directory} ]] || { echo "runner storage directory is invalid: ${directory}" >&2; exit 66; }
-  [[ $(realpath -e -- "${directory}") == "${directory}" ]] || { echo "runner storage directory is non-canonical: ${directory}" >&2; exit 66; }
-done
-
-caller_uid=$(id -u)
-caller_gid=$(id -g)
-[[ ${caller_uid} =~ ^[1-9][0-9]*$ && ${caller_gid} =~ ^[0-9]+$ ]] || {
-  echo 'runner storage caller identity is invalid' >&2
-  exit 66
-}
-[[ $(stat -c '%u:%g:%a' -- "${state_root}") == "${caller_uid}:${caller_gid}:700" ]] || {
-  echo 'runner storage state root owner, group, or mode differs' >&2
+lifecycle_helper_sha256=a77a4c0a3ac4ad05aa72e1578c3efdab57b6c1ce732e77fa1640944dd8760ba6
+[[ -f ${lifecycle_helper} && ! -L ${lifecycle_helper} ]] || {
+  echo 'runner storage lifecycle helper is absent or unsafe' >&2
   exit 66
 }
 
-exec {lifecycle_fd}<"${state_root}"
-state_root_handle=/proc/$$/fd/${lifecycle_fd}
-lifecycle_identity=$(stat -Lc '%d:%i' -- "${state_root_handle}")
-[[ $(stat -c '%d:%i' -- "${state_root}") == "${lifecycle_identity}" ]] || {
-  echo 'runner storage state root changed before lifecycle lock' >&2
-  exit 66
-}
-flock -x "${lifecycle_fd}"
-[[ $(stat -c '%d:%i' -- "${state_root}") == "${lifecycle_identity}" ]] || {
-  echo 'runner storage state root changed while acquiring lifecycle lock' >&2
-  exit 66
-}
-
-invoke_lifecycle_helper() {
-  sudo -n /usr/bin/env -i -C / \
-    PATH=/usr/bin:/bin \
-    LC_ALL=C.UTF-8 \
-    SUDO_UID="${caller_uid}" \
-    SUDO_GID="${caller_gid}" \
-    /usr/bin/python3 -I -S -B -c '
+sudo -n /usr/bin/env -i -C / \
+  PATH=/usr/bin:/bin \
+  LC_ALL=C.UTF-8 \
+  /usr/bin/python3 -I -S -B -c '
 import hashlib
 import hmac
 import os
@@ -78,10 +44,8 @@ path, expected, *arguments = sys.argv[1:]
 descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
 try:
     identity = os.fstat(descriptor)
-    if not stat.S_ISREG(identity.st_mode):
-        raise SystemExit("runner storage lifecycle helper is not regular")
-    if not 0 < identity.st_size <= 1024 * 1024:
-        raise SystemExit("runner storage lifecycle helper size is invalid")
+    if not stat.S_ISREG(identity.st_mode) or not 0 < identity.st_size <= 1024 * 1024:
+        raise SystemExit("runner storage lifecycle helper identity is invalid")
     source = bytearray()
     while True:
         block = os.read(descriptor, 1024 * 1024)
@@ -90,121 +54,11 @@ try:
         source.extend(block)
 finally:
     os.close(descriptor)
-actual = hashlib.sha256(source).hexdigest()
-if not hmac.compare_digest(actual, expected):
+if not hmac.compare_digest(hashlib.sha256(source).hexdigest(), expected):
     raise SystemExit("runner storage lifecycle helper digest differs")
 sys.argv = [path, *arguments]
 globals()["__file__"] = path
 globals()["__package__"] = None
 exec(compile(source, path, "exec"), globals(), globals())
-' "${lifecycle_helper}" "${lifecycle_helper_sha256}" "$@"
-}
-
-inspect_state() {
-  invoke_lifecycle_helper \
-    inspect \
-    "${state_root_handle}" \
-    "${state_root}" \
-    "${caller_uid}" \
-    "${caller_gid}" \
-    "${image_bytes}" \
-    --operation remove
-}
-
-invoke_state_transition() {
-  local command_name=$1
-  shift
-  invoke_lifecycle_helper \
-    "${command_name}" \
-    "${state_root_handle}" \
-    "${state_root}" \
-    "${caller_uid}" \
-    "${caller_gid}" \
-    "${image_bytes}" \
-    "$@"
-}
-
-require_inspection() {
-  jq -e \
-    --arg stateRoot "${state_root}" '
-      .schema == "ambit.local-daytona-runner-storage-lifecycle/v1" and
-      .operation == "remove" and
-      .stateRoot == $stateRoot and
-      (.stateRootIdentity | keys | sort ==
-        ["device", "inode", "mode", "ownerGid", "ownerUid"]) and
-      .stateRootIdentity.mode == 448 and
-      ((.capacityIdentity == null) or
-        (.capacityIdentity | keys | sort ==
-          ["device", "inode", "mode", "ownerGid", "ownerUid"])) and
-      (.disposition | type == "string") and
-      ((.imageIdentity == null) or
-        (.imageIdentity | keys | sort == ["device", "inode", "logicalBytes"]))
-    ' <<<"$1" >/dev/null || {
-    echo 'runner storage lifecycle inspection is invalid' >&2
-    return 66
-  }
-}
-
-trap 'exit 130' INT
-trap 'exit 143' TERM
-
-inspection=$(inspect_state)
-require_inspection "${inspection}"
-disposition=$(jq -er '.disposition' <<<"${inspection}")
-image_state=$(jq -er '.imageState' <<<"${inspection}")
-expected_device=$(jq -r '.imageIdentity.device // "none"' <<<"${inspection}")
-expected_inode=$(jq -r '.imageIdentity.inode // "none"' <<<"${inspection}")
-expected_capacity_device=$(jq -r '.capacityIdentity.device // "none"' <<<"${inspection}")
-expected_capacity_inode=$(jq -r '.capacityIdentity.inode // "none"' <<<"${inspection}")
-expected_state_root_device=$(jq -er '.stateRootIdentity.device' <<<"${inspection}")
-expected_state_root_inode=$(jq -er '.stateRootIdentity.inode' <<<"${inspection}")
-receipt_present=false
-if [[ -e ${receipt} || -L ${receipt} ]]; then
-  receipt_present=true
-  [[ -f ${receipt} && ! -L ${receipt} ]] || { echo 'runner storage receipt is invalid' >&2; exit 66; }
-fi
-
-case ${disposition} in
-  already_absent|remove_empty_capacity)
-    [[ ${receipt_present} == false ]] || {
-      echo 'runner storage receipt exists without its image' >&2
-      exit 66
-    }
-    ;;
-  remove_image_and_capacity)
-    if [[ ${image_state} == *_incomplete_prepublication ]]; then
-      [[ ${receipt_present} == false ]] || {
-        echo 'runner storage incomplete prepublication image unexpectedly has a receipt' >&2
-        exit 66
-      }
-    fi
-    if [[ ${receipt_present} == true ]]; then
-      [[ $(jq -er '.stateRootIdentity.device' "${receipt}") == "${expected_state_root_device}" ]] || { echo 'runner storage receipt state-root device differs' >&2; exit 66; }
-      [[ $(jq -er '.stateRootIdentity.inode' "${receipt}") == "${expected_state_root_inode}" ]] || { echo 'runner storage receipt state-root inode differs' >&2; exit 66; }
-      [[ $(jq -er '.capacityRoot.path' "${receipt}") == "${state_root}/capacity" ]] || { echo 'runner storage receipt capacity path differs' >&2; exit 66; }
-      [[ $(jq -er '.capacityRoot.device' "${receipt}") == "${expected_capacity_device}" ]] || { echo 'runner storage receipt capacity device differs' >&2; exit 66; }
-      [[ $(jq -er '.capacityRoot.inode' "${receipt}") == "${expected_capacity_inode}" ]] || { echo 'runner storage receipt capacity inode differs' >&2; exit 66; }
-      [[ $(jq -er '.image.path' "${receipt}") == "${image}" ]] || { echo 'runner storage receipt image path differs' >&2; exit 66; }
-      [[ $(jq -er '.image.device' "${receipt}") == "${expected_device}" ]] || { echo 'runner storage receipt image device differs' >&2; exit 66; }
-      [[ $(jq -er '.image.inode' "${receipt}") == "${expected_inode}" ]] || { echo 'runner storage receipt image inode differs' >&2; exit 66; }
-    fi
-    ;;
-  *)
-    echo 'runner storage remove disposition is invalid' >&2
-    exit 66
-    ;;
-esac
-
-invoke_state_transition teardown-runtime "${expected_device}" "${expected_inode}" >/dev/null
-if [[ ${receipt_present} == true ]]; then
-  unlink -- "${receipt}"
-fi
-invoke_state_transition remove-objects "${expected_device}" "${expected_inode}" >/dev/null
-
-final_inspection=$(inspect_state)
-require_inspection "${final_inspection}"
-[[ $(jq -er '.disposition' <<<"${final_inspection}") == already_absent ]] || {
-  echo 'runner storage objects remained after removal' >&2
-  exit 66
-}
-printf '%s\n' "removed ${target} runtime, ${image}, and ${receipt}"
+' "${lifecycle_helper}" "${lifecycle_helper_sha256}" \
+  remove-authority "${state_root}" "${caller_uid}" "${caller_gid}"
