@@ -1040,10 +1040,17 @@ def deactivate_private(args: argparse.Namespace) -> dict[str, Any]:
         require(stored is not None, "storage receipt is absent")
         expected_uuid = validate_receipt(stored, context, args.state_root)
         loops = associated_loops(context)
-        require(len(loops) == 1, "storage loop identity is absent or ambiguous")
-        loop = loops[0]
-        require(filesystem_uuid(context, loop) == expected_uuid, "storage UUID differs")
-        unmount_and_detach(context, loop, expected_namespace)
+        require(len(loops) <= 1, "storage loop identity is ambiguous")
+        targets = target_occurrences()
+        if loops:
+            loop = loops[0]
+            require(filesystem_uuid(context, loop) == expected_uuid, "storage UUID differs")
+            unmount_and_detach(context, loop, expected_namespace)
+        else:
+            require(
+                not targets,
+                "storage target remains mounted without its image loop",
+            )
         detached = dict(stored)
         detached["lifecycleState"] = "detached"
         detached["mountNamespace"] = {

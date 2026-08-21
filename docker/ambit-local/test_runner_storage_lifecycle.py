@@ -235,6 +235,63 @@ time.sleep(30)
                     )
                 )
 
+    def test_deactivate_is_idempotent_after_committed_detach_output_loss(self) -> None:
+        args = argparse_namespace(
+            state_root=Path("/home/example/state"),
+            caller_uid=1000,
+            caller_gid=1000,
+            namespace_device=4,
+            namespace_inode=4026533000,
+        )
+        context = mock.MagicMock()
+        context.__enter__.return_value = context
+        context.__exit__.return_value = None
+        context.root_fd = 10
+        context.image_fd = 11
+        stored = {
+            "schema": MODULE.RECEIPT_SCHEMA,
+            "lifecycleState": "detached",
+            "filesystem": {"uuid": "12345678-1234-1234-1234-123456789abc"},
+        }
+        with mock.patch.object(
+            MODULE, "require_private_namespace", return_value="4:4026533000"
+        ), mock.patch.object(
+            MODULE, "open_authority", return_value=context
+        ), mock.patch.object(
+            MODULE, "read_json_at", return_value=stored
+        ), mock.patch.object(
+            MODULE, "validate_receipt", return_value=stored["filesystem"]["uuid"]
+        ), mock.patch.object(
+            MODULE, "associated_loops", return_value=()
+        ), mock.patch.object(
+            MODULE, "target_occurrences", return_value=()
+        ), mock.patch.object(
+            MODULE,
+            "publish_receipt",
+            return_value=("sha256:" + "1" * 64, {}),
+        ) as publish, mock.patch.object(MODULE, "unmount_and_detach") as teardown:
+            result = MODULE.deactivate_private(args)
+        self.assertEqual(result["outcome"], "deactivated")
+        publish.assert_called_once()
+        teardown.assert_not_called()
+
+        foreign = MODULE.NamespaceOccurrence("8:8", 8, "7:7", str(MODULE.AUTHORITY_ROOT / MODULE.TARGET_NAME))
+        with mock.patch.object(
+            MODULE, "require_private_namespace", return_value="4:4026533000"
+        ), mock.patch.object(
+            MODULE, "open_authority", return_value=context
+        ), mock.patch.object(
+            MODULE, "read_json_at", return_value=stored
+        ), mock.patch.object(
+            MODULE, "validate_receipt", return_value=stored["filesystem"]["uuid"]
+        ), mock.patch.object(
+            MODULE, "associated_loops", return_value=()
+        ), mock.patch.object(
+            MODULE, "target_occurrences", return_value=(foreign,)
+        ):
+            with self.assertRaises(MODULE.RunnerStorageLifecycleError):
+                MODULE.deactivate_private(args)
+
     def test_receipt_atomic_write_fsyncs_file_before_rename_and_parent(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="runner-receipt-", dir=temporary_parent()
