@@ -85,10 +85,11 @@ loop device, and mounts it only at the already-declared
 configuration, systemd unit, or shared-daemon setting. `verify-host-capacity.sh`
 requires the exact image inode, loop backing, XFS UUID/features, `pquota`, and
 at least 40 GiB usable/free capacity before a host-headroom receipt can pass.
-Stopping the provider and isolated daemon, unmounting that exact target,
-detaching the receipt-bound loop device, and removing only the image and its
-receipt is the complete rollback; never detach or delete a loop device that
-does not re-resolve to the receipt-bound image.
+After stopping the provider stack, `remove-runner-storage.sh STATE_ROOT`
+performs the complete rollback: it requires the live mount to byte-match the
+stored receipt, refuses nested mounts or changed image identity, unmounts that
+exact target, detaches only the receipt-bound loop device, and removes only the
+image and receipt. It creates no boot-time residue.
 
 The rendered Compose environment is a closed per-service key roster. Every
 network endpoint used by the API, proxy, or runner is pinned to loopback or an

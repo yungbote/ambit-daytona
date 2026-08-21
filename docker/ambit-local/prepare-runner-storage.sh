@@ -24,7 +24,7 @@ image=${capacity_root}/runner-docker.xfs
 receipt=${state_root}/evidence/runner-docker-storage.json
 image_bytes=64424509440
 
-for command_name in blkid findmnt losetup mkfs.xfs mountpoint python3 sudo truncate xfs_info; do
+for command_name in blkid chmod find findmnt install losetup mkfs.xfs mktemp mountpoint mv python3 realpath stat sudo xfs_info; do
   command -v "${command_name}" >/dev/null || {
     echo "required runner-storage command is absent: ${command_name}" >&2
     exit 66
