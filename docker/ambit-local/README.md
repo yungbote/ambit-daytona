@@ -123,7 +123,12 @@ formatting, loop attachment, and mount. Removal re-proves the same descriptor
 identities and enumerates the loop major/minor in every mount namespace
 observable through `/proc/<pid>/ns/mnt` and its matching `mountinfo`. Any
 unreadable namespace fails closed; any second, nested, alternate-target, or
-foreign-namespace mount blocks unmount, detach, and object deletion. This
+foreign-namespace mount blocks unmount, detach, and object deletion. Each
+destructive boundary requires two consecutive observations with the identical
+namespace-ID set and identical exact-loop occurrence roster. A PID that exits
+or changes namespace while its mount table is read, a namespace appearing or
+disappearing between passes, or loop-roster churn aborts instead of being
+skipped. The same two-pass proof repeats after unmount and before detach. This
 requires the provider processes and their mount namespaces to be stopped
 before removal. Only after the sole helper-namespace target is proved does the
 helper unmount, rescan every observable namespace, detach, and unlink/rmdir
