@@ -266,9 +266,7 @@ class RunnerStorageLifecycleReducerTest(unittest.TestCase):
                     )
 
     def test_descriptor_relative_remove_closes_unlink_then_rmdir_prefixes(self) -> None:
-        with tempfile.TemporaryDirectory(
-            prefix=".runner-lifecycle-test-", dir="/home/bote/m"
-        ) as directory:
+        with tempfile.TemporaryDirectory(prefix="runner-lifecycle-test-") as directory:
             state_root = Path(directory)
             capacity_root = state_root / "capacity"
             capacity_root.mkdir(mode=0o700)
@@ -310,7 +308,7 @@ class RunnerStorageLifecycleReducerTest(unittest.TestCase):
 
     def test_second_global_mount_blocks_teardown_before_mutation(self) -> None:
         with tempfile.TemporaryDirectory(
-            prefix=".runner-lifecycle-mount-test-", dir="/home/bote/m"
+            prefix="runner-lifecycle-mount-test-"
         ) as directory:
             state_root = Path(directory)
             image_path = state_root / "image"
