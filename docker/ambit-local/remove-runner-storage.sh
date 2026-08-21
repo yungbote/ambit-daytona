@@ -18,7 +18,7 @@ state_root=$1
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 lifecycle_helper=${script_dir}/runner-storage-lifecycle.py
-lifecycle_helper_sha256=d26c21d4ec85f4b6bc40668fc83dfc780a6bccfd3a54f3e8da923264689720b9
+lifecycle_helper_sha256=864dddbea9d36b74d5f9e91795d38a87b2eaf4f05b9acc754715e6cdf4f8b54e
 target=${state_root}/runner-docker
 image=${state_root}/capacity/runner-docker.xfs
 evidence_root=${state_root}/evidence

@@ -480,7 +480,7 @@ def mount_namespace_id(path: str) -> str:
     return f"{value.st_dev}:{value.st_ino}"
 
 
-def read_observable_mount_namespaces() -> tuple[MountNamespaceObservation, ...]:
+def read_observable_mount_namespaces_once() -> tuple[MountNamespaceObservation, ...]:
     try:
         own_namespace = mount_namespace_id("/proc/self/ns/mnt")
         own_records = read_mount_records()
@@ -514,24 +514,60 @@ def read_observable_mount_namespaces() -> tuple[MountNamespaceObservation, ...]:
                 f"mount namespace identity is unreadable for pid {pid}"
             ) from error
         if before in observations:
+            try:
+                after = mount_namespace_id(namespace_path)
+            except (FileNotFoundError, ProcessLookupError) as error:
+                raise RunnerStorageLifecycleError(
+                    f"observed mount namespace disappeared for pid {pid}"
+                ) from error
+            except (PermissionError, OSError) as error:
+                raise RunnerStorageLifecycleError(
+                    f"mount namespace identity is unreadable for pid {pid}"
+                ) from error
+            require(
+                before == after,
+                f"observed mount namespace changed while reading pid {pid}",
+            )
             continue
         try:
             records = read_mount_records(mountinfo_path)
             after = mount_namespace_id(namespace_path)
-        except (FileNotFoundError, ProcessLookupError):
-            continue
+        except (FileNotFoundError, ProcessLookupError) as error:
+            raise RunnerStorageLifecycleError(
+                f"observed mount namespace disappeared for pid {pid}"
+            ) from error
         except (PermissionError, OSError) as error:
             raise RunnerStorageLifecycleError(
                 f"mount namespace contents are unreadable for pid {pid}"
             ) from error
-        if before != after:
-            continue
+        require(
+            before == after,
+            f"observed mount namespace changed while reading pid {pid}",
+        )
         observations[before] = MountNamespaceObservation(
             namespace_id=before,
             representative_pid=pid,
             records=records,
         )
     return tuple(observations[key] for key in sorted(observations))
+
+
+def require_stable_namespace_set(
+    first: tuple[MountNamespaceObservation, ...],
+    second: tuple[MountNamespaceObservation, ...],
+) -> None:
+    require(
+        tuple(value.namespace_id for value in first)
+        == tuple(value.namespace_id for value in second),
+        "observable mount namespace roster changed across proof passes",
+    )
+
+
+def read_observable_mount_namespaces() -> tuple[MountNamespaceObservation, ...]:
+    first = read_observable_mount_namespaces_once()
+    second = read_observable_mount_namespaces_once()
+    require_stable_namespace_set(first, second)
+    return second
 
 
 def loop_device_number(loop_device: str) -> str:
@@ -545,26 +581,41 @@ def observable_mounts_for_loop(
     loop_device: str,
 ) -> tuple[NamespaceMountOccurrence, ...]:
     device_number = loop_device_number(loop_device)
-    occurrences = [
-        NamespaceMountOccurrence(
-            namespace_id=namespace.namespace_id,
-            representative_pid=namespace.representative_pid,
-            target=record.target,
+    first = read_observable_mount_namespaces_once()
+    second = read_observable_mount_namespaces_once()
+    require_stable_namespace_set(first, second)
+
+    def occurrences(
+        observations: tuple[MountNamespaceObservation, ...],
+    ) -> tuple[NamespaceMountOccurrence, ...]:
+        values = [
+            NamespaceMountOccurrence(
+                namespace_id=namespace.namespace_id,
+                representative_pid=namespace.representative_pid,
+                target=record.target,
+            )
+            for namespace in observations
+            for record in namespace.records
+            if record.device_number == device_number
+        ]
+        return tuple(
+            sorted(
+                values,
+                key=lambda value: (
+                    value.namespace_id,
+                    value.target,
+                ),
+            )
         )
-        for namespace in read_observable_mount_namespaces()
-        for record in namespace.records
-        if record.device_number == device_number
-    ]
-    return tuple(
-        sorted(
-            occurrences,
-            key=lambda value: (
-                value.namespace_id,
-                value.representative_pid,
-                value.target,
-            ),
-        )
+
+    first_occurrences = occurrences(first)
+    second_occurrences = occurrences(second)
+    require(
+        tuple((value.namespace_id, value.target) for value in first_occurrences)
+        == tuple((value.namespace_id, value.target) for value in second_occurrences),
+        "observable loop mount roster changed across proof passes",
     )
+    return second_occurrences
 
 
 def mounts_at_or_below(target: Path) -> tuple[MountRecord, ...]:

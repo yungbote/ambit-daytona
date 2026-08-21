@@ -472,6 +472,60 @@ class RunnerStorageLifecycleReducerTest(unittest.TestCase):
             ):
                 MODULE.read_observable_mount_namespaces()
 
+    def test_mount_namespace_unshare_during_scan_fails_closed(self) -> None:
+        with mock.patch.object(MODULE.os, "listdir", return_value=["123"]), mock.patch.object(
+            MODULE,
+            "mount_namespace_id",
+            side_effect=("1:1", "2:2", "3:3"),
+        ), mock.patch.object(
+            MODULE,
+            "read_mount_records",
+            side_effect=((), ()),
+        ):
+            with self.assertRaisesRegex(
+                MODULE.RunnerStorageLifecycleError,
+                "changed while reading pid 123",
+            ):
+                MODULE.read_observable_mount_namespaces_once()
+
+    def test_namespace_and_loop_roster_churn_fail_between_proof_passes(self) -> None:
+        namespace_a_empty = MODULE.MountNamespaceObservation(
+            namespace_id="1:1",
+            representative_pid=1,
+            records=(),
+        )
+        namespace_b_empty = MODULE.MountNamespaceObservation(
+            namespace_id="2:2",
+            representative_pid=2,
+            records=(),
+        )
+        with self.assertRaisesRegex(
+            MODULE.RunnerStorageLifecycleError,
+            "namespace roster changed",
+        ):
+            MODULE.require_stable_namespace_set(
+                (namespace_a_empty,),
+                (namespace_a_empty, namespace_b_empty),
+            )
+
+        mounted = MODULE.MountNamespaceObservation(
+            namespace_id="1:1",
+            representative_pid=1,
+            records=(MODULE.MountRecord(device_number="7:7", target="/runner"),),
+        )
+        with mock.patch.object(
+            MODULE, "loop_device_number", return_value="7:7"
+        ), mock.patch.object(
+            MODULE,
+            "read_observable_mount_namespaces_once",
+            side_effect=((mounted,), (namespace_a_empty,)),
+        ):
+            with self.assertRaisesRegex(
+                MODULE.RunnerStorageLifecycleError,
+                "loop mount roster changed",
+            ):
+                MODULE.observable_mounts_for_loop("/dev/loop7")
+
     def test_caller_owned_empty_capacity_is_sealed_before_image_creation(self) -> None:
         helper = SCRIPT.read_text()
         function_start = helper.index("def create_capacity_and_image(")
