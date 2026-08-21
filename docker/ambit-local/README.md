@@ -93,6 +93,9 @@ explicit ENOSPC failure mode if later host writes consume that headroom.
 receipt-bound filesystem after reboot. The prepare and remove lifecycles hold
 one exclusive lock on the descriptor-pinned state-root inode, so two task
 invocations cannot interleave image, loop, mount, receipt, or cleanup state.
+The host-readiness gate holds the matching shared descriptor lock across its
+identity and headroom observation, so it cannot publish a receipt from the
+middle of prepare or remove.
 New image creation keeps its original descriptor open continuously through
 truncate, ownership transfer, formatting, and loop attachment; it never
 reopens a replaceable pathname before a privileged mutation. Its failure trap
