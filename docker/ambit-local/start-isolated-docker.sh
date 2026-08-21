@@ -19,7 +19,7 @@ state_root=$1
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 supervisor=${script_dir}/isolated_runtime_supervisor.py
 process_identity=${script_dir}/isolated_process_identity.py
-supervisor_sha256=05777e3bfb92e50976dbf93770c4d2ee53d5706cd2b12bd8395a71220b879ba2
+supervisor_sha256=0e89e566b79e968b7b37fb322e15968f8df2a4a838c6832715682b976d12daeb
 process_identity_sha256=28ea7928529c55596174496fee625066fa05bfb0d8f6a077991aed715c1c1b15
 storage_lifecycle_sha256=991c7db087d88390d67263183afa70908710be40b49e8d5d3059958a8362641e
 

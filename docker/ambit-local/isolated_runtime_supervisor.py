@@ -619,7 +619,7 @@ def read_route_networks(
     for route in value:
         require(isinstance(route, dict), "host route record is invalid")
         destination = route.get("dst")
-        if destination in (None, "default"):
+        if destination == "default":
             continue
         require(isinstance(destination, str), "host route destination is invalid")
         try:

@@ -146,6 +146,8 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         self.assertEqual(tuple(value.version for value in networks), (6, 4))
         with self.assertRaises(MODULE.SupervisorError):
             MODULE.read_route_networks(json.dumps([{"dst": "not-a-network"}]))
+        with self.assertRaises(MODULE.SupervisorError):
+            MODULE.read_route_networks(json.dumps([{}]))
 
         def overlapping(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess(
