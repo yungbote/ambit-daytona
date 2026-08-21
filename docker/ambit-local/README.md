@@ -51,108 +51,69 @@ export AMBIT_C16B_RUNTIME_OCI_REFERENCE=registry:6000/ambit/runtime-pack-core-do
   /home/bote/m/.local/ambit-daytona-c16b/state
 ```
 
-Run this stack only through an isolated Docker daemon whose `DockerRootDir` is
-under `/home`; the normal daemon currently stores data on the capacity-limited
-root filesystem and is not an admitted provider. `start-isolated-docker.sh`
-creates a task-owned Docker daemon and a dedicated containerd. Their persistent
-data roots and bounded logs live below the generated `/home` state root; only
-short-lived sockets, PID files, and exec state live under one content-derived
-`/tmp/ambit-c16b-docker-*` runtime directory to stay within Unix socket path
-limits. That root is created atomically, opened with
-`O_DIRECTORY|O_NOFOLLOW`, and re-proved by device, inode, owner, and mode
-before daemon start, capacity measurement, and cleanup. The startup receipt
-also binds each root-owned daemon's exact executable, complete argument vector,
-process start time, and proc inode; a stale PID or substring match cannot
-authorize capacity or shutdown. The daemon disables its default bridge and all
-host iptables/ip6tables, forwarding, and masquerade mutation; Compose owns the
-one internal provider bridge and the daemon uses a disjoint address pool. It
-never connects to the shared host containerd or shared Docker graph; its minimal containerd config
-also disables unused CRI and NRI plugins and imports no host configuration.
-Export the exact `DOCKER_HOST`
-line the start script prints, then run `verify-host-capacity.sh`; that gate
-requires the exact socket, live server ID, data root, dedicated-containerd
-process, startup receipt, and config hash before measuring headroom.
-`stop-isolated-docker.sh` verifies both exact processes before stopping them,
-removes only their content-derived ephemeral runtime directory, and leaves all
-persistent `/home` state in place for recovery.
+Run this stack only through `start-isolated-docker.sh`. The normal host daemon
+is not an admitted provider. The start wrapper executes one exact-byte root
+supervisor under `/usr/bin/unshare --mount --propagation private`; the
+supervisor is the sole namespace holder and direct parent of the dedicated
+containerd and dockerd. All three process identities bind exact executable,
+full argument digest, parent PID, process start/proc inode, and the same mount
+namespace device/inode. Provider containers correctly have separate child
+namespaces; their storage acceptance is the exact XFS device/UUID exposed at
+the runner's `/var/lib/docker`, not namespace-inode equality.
 
-Daytona's runner applies Docker `StorageOpt[size]` only when its private Docker
-data root is XFS. Before starting the provider stack, create the task-owned
-quota filesystem with `prepare-runner-storage.sh STATE_ROOT`. It creates one
-sparse 60 GiB image at `STATE_ROOT/capacity/runner-docker.xfs`, attaches one
-loop device, and mounts it only at the already-declared
-`STATE_ROOT/runner-docker` bind source with XFS project quotas. It adds no boot
-configuration, systemd unit, or shared-daemon setting. `verify-host-capacity.sh`
-requires the exact image inode, loop backing, XFS UUID/features, `pquota`, and
-at least 40 GiB usable/free capacity before a host-headroom receipt can pass.
-The sparse file is not advertised as preallocated storage: readiness also
-requires its backing device to be the qualified state-root filesystem and at
-least 60 GiB currently free there, records allocated bytes, and retains an
-explicit ENOSPC failure mode if later host writes consume that headroom.
-`prepare-runner-storage.sh` is idempotent after success and can reattach the
-receipt-bound filesystem after reboot. The prepare and remove lifecycles hold
-one exclusive lock on the descriptor-pinned state-root inode, so two task
-invocations cannot interleave image, loop, mount, receipt, or cleanup state.
-The host-readiness gate holds the matching shared descriptor lock across its
-identity and headroom observation, so it cannot publish a receipt from the
-middle of prepare or remove.
-The shell wrappers own only that lock, live observation, receipt comparison,
-and transition ordering. Every privileged capacity, image, filesystem, loop,
-mount, unmount, detach, unlink, and rmdir mutation is centralized in
-`runner-storage-lifecycle.py`. Before `sudo` executes it, a root launcher opens
-the regular helper with `O_NOFOLLOW`, reads it once, requires the exact reviewed
-SHA-256 embedded by both wrappers, and compiles only those verified in-memory
-bytes. It uses the exact root-owned `/usr/bin/python3` with `-I -S -B`, an empty
-environment containing only the exact task caller IDs and minimal root-owned
-tool path, and `/` as its working directory. Caller-CWD modules, `PYTHONPATH`,
-user site packages, bytecode writes, and helper pathname/in-place replacement
-therefore cannot change the code that receives privilege.
+Privileged runner storage lives only below the fixed, root-owned, caller-
+unrenameable authority `/home/.ambit-c16b-runner-storage`. Its closed roster is
+the lifecycle lock, sparse 60 GiB `runner-docker.xfs`, `runner-docker` mount
+target, and durable v2 receipt. The user-owned `STATE_ROOT` contains no runner
+mountpoint or backing-image authority; it retains only config/logs and a
+digest-bound projection. Compose binds the literal root-owned target with
+`create_host_path: false` and `rprivate`, so a missing authority fails instead
+of creating a user directory. `prepare-runner-storage.sh` deliberately refuses
+host/caller mounting: storage activation belongs to the private supervisor.
 
-The helper reduces the complete admitted prefix state instead of inferring
-success from one happy-path shape. It recognizes absent storage, empty caller-
-or root-owned `0700` capacity roots, the published root-owned `0711` root,
-zero-length, partial-length, and exact-length caller/root `0600` image prefixes
-interrupted before or during truncate and ownership transitions, and the empty
-`0711` root left by interruption between image unlink and directory removal.
-Only exact target length can proceed to formatting or published recovery;
-incomplete images are teardown-only. It rejects symlinks, wrong
-owner/group/mode/oversize/device/inode, foreign
-children, and impossible prefixes without mutation. New creation retains the
-original image descriptor continuously through truncate, ownership transfer,
-formatting, loop attachment, and mount. Removal re-proves the same descriptor
-identities and enumerates the loop major/minor in every mount namespace
-observable through `/proc/<pid>/ns/mnt` and its matching `mountinfo`. Any
-unreadable namespace fails closed; any second, nested, alternate-target, or
-foreign-namespace mount blocks unmount, detach, and object deletion. Each
-destructive boundary requires two consecutive observations with the identical
-namespace-ID set and identical exact-loop occurrence roster. A PID that exits
-or changes namespace while its mount table is read, a namespace appearing or
-disappearing between passes, or loop-roster churn aborts instead of being
-skipped. The same two-pass proof repeats after unmount and before detach. This
-requires the provider processes and their mount namespaces to be stopped
-before removal. Only after the sole helper-namespace target is proved does the
-helper unmount, rescan every observable namespace, detach, and unlink/rmdir
-relative to pinned parent descriptors. Thus a normal failure, signal, process
-kill, or power loss leaves either a completed identity or another explicitly
-admitted prefix that the same reducer can finish; it does not require a one-off
-manual pathname repair and creates no boot residue. A namespace pinned without
-any live `/proc` representative is outside this source proof and remains a live
-teardown acceptance check rather than an assumed guarantee.
+Before XFS mount, the supervisor proves its `/home` propagation boundary is
+private. It invokes exact-hash-pinned `runner-storage-lifecycle.py` and
+`verify-runner-storage.py` snapshots from its root-only `/run/ambit-c16b-*`
+runtime root. New image creation retains the exact image descriptor through
+truncate, mkfs, loop attachment, and mount. Every mutating external tool runs
+under a guardian that retains the same flock-bearing open-file description;
+if the helper is killed, another lifecycle cannot interleave until the mutator
+exits. The root receipt is file-fsynced, atomically renamed, and followed by an
+authority-directory fsync before success; its user projection receives the
+same durable ordering. Old receipt versions are never reinterpreted as v2 and
+are accepted only by the explicit remove path.
 
-The runner-storage receipt is an identity observation, not a readiness lease.
-Ordinary sandbox use can reduce its inner free space below 40 GiB or its sparse
-backing filesystem below 60 GiB without changing which image, XFS filesystem,
-quota mount, or target the lifecycle owns. Recovery and teardown therefore
-validate nonnegative current observations but apply no free-space threshold.
-Backing-filesystem total/free bytes and sparse allocated bytes remain current
-observations, not stable receipt identity; online backing resize does not force
-an identity rewrite. Stable receipt comparison does bind the exact caller-owned
-`0700` state-root device/inode/owner/group, root-owned `0711` capacity-root
-device/inode/owner/group, and root-owned `0600` image identity.
-Only `verify-host-capacity.sh` applies the current 40 GiB inner aggregate and
-60 GiB backing-headroom thresholds. This keeps recovery and rollback available
-at zero free bytes while preventing a near-full filesystem from receiving a
-new host-readiness receipt.
+The lifecycle reducer admits absent storage; zero/partial/exact root-owned
+`0600` image cutpoints; published attached state; committed detached state; and
+exact no-receipt startup-abort state. Only exact target length can format or
+recover. Startup/deactivation response loss is idempotent, without fabricating
+receipt authority. Teardown scans two stable passes of every mount namespace
+observable through `/proc`, rejecting unreadable, changing, second, nested, or
+foreign loop/target occurrences. The provider and daemon children must stop
+before private unmount/detach. A namespace pinned without a live `/proc`
+representative remains outside the source proof and is an explicit live
+acceptance limit.
+
+The supervisor publishes exact control v1 and start v4 receipts. Export the
+`DOCKER_HOST` line returned by `start-isolated-docker.sh`, then run
+`verify-host-capacity.sh`. The v4 gate re-proves supervisor/containerd/dockerd
+before and after entering the exact supervisor namespace for a v2 storage
+observation. It binds the live socket/server/data root, root receipt digest,
+namespace, image/loop/UUID/quota identity, and user projection before applying
+the 6-CPU, 12-GiB-memory, 60-GiB-backing, and 40-GiB-inner-free thresholds.
+Free/total/allocated capacity remains a current observation rather than stable
+identity, so ordinary use or online backing resize cannot strand recovery.
+
+`stop-isolated-docker.sh` pidfd-signals only the exact supervisor. The
+supervisor drains dockerd/provider children, reaps dockerd and containerd,
+removes task network-namespace mounts, deactivates storage while its private
+namespace still exists, writes the stop receipt, removes its root-only runtime
+root, and exits last. Persistent image/UUID state remains recoverable across a
+fresh private namespace after reboot. After exact stop, the separate
+`remove-runner-storage.sh` operation can durably remove the user projection,
+root receipt, image, target, lock, and empty authority root. No boot unit,
+shared daemon config, global `/home` propagation mutation, or namespace bind
+pin is installed.
 
 The rendered Compose environment is a closed per-service key roster. Every
 network endpoint used by the API, proxy, or runner is pinned to loopback or an
