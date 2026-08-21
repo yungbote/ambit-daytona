@@ -105,7 +105,14 @@ def verify_process(
         first_namespace = _mount_namespace(directory_fd)
         actual_executable = Path(os.readlink("exe", dir_fd=directory_fd)).resolve(strict=True)
         _require(actual_executable == expected_executable, "process executable differs")
-        _require(actual_executable.stat().st_uid == 0, "process executable is not root-owned")
+        executable_identity = actual_executable.stat()
+        _require(
+            stat.S_ISREG(executable_identity.st_mode)
+            and executable_identity.st_uid == 0
+            and executable_identity.st_gid == 0
+            and stat.S_IMODE(executable_identity.st_mode) & 0o022 == 0,
+            "process executable authority differs",
+        )
         raw_arguments = _read_at(directory_fd, "cmdline")
         values = raw_arguments.rstrip(b"\0").split(b"\0")
         _require(values and all(values), "process argument vector is invalid")
@@ -172,6 +179,7 @@ def signal_exact_process(
 ) -> dict[str, object]:
     """Signal the pidfd opened before proof, never a later process reusing PID."""
 
+    _require(isinstance(pid, int) and not isinstance(pid, bool) and pid > 0, "process id is invalid")
     _require(hasattr(os, "pidfd_open"), "pidfd process signalling is unavailable")
     _require(
         hasattr(signal, "pidfd_send_signal"),
@@ -264,4 +272,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (ProcessIdentityError, OSError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        raise SystemExit(66) from None
