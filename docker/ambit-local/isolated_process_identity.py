@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import signal
 import stat
 import sys
 from pathlib import Path
@@ -109,7 +110,10 @@ def verify_process(
         values = raw_arguments.rstrip(b"\0").split(b"\0")
         _require(values and all(values), "process argument vector is invalid")
         arguments = tuple(value.decode("utf-8", "strict") for value in values)
-        _require(Path(arguments[0]).name == expected_executable.name, "process argv[0] differs")
+        _require(
+            Path(arguments[0]).resolve(strict=True) == expected_executable,
+            "process argv[0] differs",
+        )
         if expected_arguments is not None:
             _require(arguments[1:] == expected_arguments, "process arguments differ")
         arguments_sha256 = hashlib.sha256(raw_arguments).hexdigest()
@@ -157,10 +161,43 @@ def _plain_int(value: Any, name: str, *, positive: bool = False) -> int:
     return value
 
 
+def signal_exact_process(
+    pid: int,
+    executable: Path,
+    *,
+    expected_uid: int,
+    expected_arguments_sha256: str,
+    expected_parent_pid: int | None = None,
+    expected_mount_namespace: dict[str, int] | None = None,
+) -> dict[str, object]:
+    """Signal the pidfd opened before proof, never a later process reusing PID."""
+
+    _require(hasattr(os, "pidfd_open"), "pidfd process signalling is unavailable")
+    _require(
+        hasattr(signal, "pidfd_send_signal"),
+        "pidfd signal delivery is unavailable",
+    )
+    pidfd = os.pidfd_open(pid, 0)
+    try:
+        identity = verify_process(
+            pid,
+            executable,
+            None,
+            expected_uid=expected_uid,
+            expected_arguments_sha256=expected_arguments_sha256,
+            expected_parent_pid=expected_parent_pid,
+            expected_mount_namespace=expected_mount_namespace,
+        )
+        signal.pidfd_send_signal(pidfd, signal.SIGTERM)
+        return identity
+    finally:
+        os.close(pidfd)
+
+
 def main() -> None:
-    if len(sys.argv) > 1 and sys.argv[1] == "verify-digest":
+    if len(sys.argv) > 1 and sys.argv[1] in ("verify-digest", "signal-exact"):
         parser = argparse.ArgumentParser()
-        parser.add_argument("operation", choices=("verify-digest",))
+        parser.add_argument("operation", choices=("verify-digest", "signal-exact"))
         parser.add_argument("pid")
         parser.add_argument("executable", type=Path)
         parser.add_argument("expected_uid")
@@ -185,15 +222,25 @@ def main() -> None:
                 "device": _plain_int(value.get("device"), "mount namespace device"),
                 "inode": _plain_int(value.get("inode"), "mount namespace inode", positive=True),
             }
-        result = verify_process(
-            int(args.pid),
-            args.executable,
-            None,
-            expected_uid=int(args.expected_uid),
-            expected_arguments_sha256=args.arguments_sha256,
-            expected_parent_pid=expected_parent_pid,
-            expected_mount_namespace=expected_mount_namespace,
-        )
+        common = {
+            "expected_uid": int(args.expected_uid),
+            "expected_arguments_sha256": args.arguments_sha256,
+            "expected_parent_pid": expected_parent_pid,
+            "expected_mount_namespace": expected_mount_namespace,
+        }
+        if args.operation == "signal-exact":
+            result = signal_exact_process(
+                int(args.pid),
+                args.executable,
+                **common,
+            )
+        else:
+            result = verify_process(
+                int(args.pid),
+                args.executable,
+                None,
+                **common,
+            )
     else:
         parser = argparse.ArgumentParser()
         parser.add_argument("pid")

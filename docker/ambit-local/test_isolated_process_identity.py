@@ -127,6 +127,64 @@ class IsolatedProcessIdentityTest(unittest.TestCase):
         self.assertEqual(receipt["parentPid"], os.getpid())
         self.assertEqual(receipt["mountNamespace"]["inode"], namespace.st_ino)
 
+    def test_root_owned_executable_symlink_is_an_exact_argv_authority(self) -> None:
+        python = Path("/usr/bin/python3")
+        child = subprocess.Popen(
+            [str(python), "-c", "import time; time.sleep(30)"],
+        )
+
+        def cleanup() -> None:
+            if child.poll() is None:
+                child.terminate()
+            child.wait(timeout=5)
+
+        self.addCleanup(cleanup)
+        for _ in range(100):
+            raw = Path(f"/proc/{child.pid}/cmdline").read_bytes()
+            if b"time.sleep" in raw:
+                break
+            time.sleep(0.001)
+        receipt = MODULE.verify_process(
+            child.pid,
+            python,
+            ("-c", "import time; time.sleep(30)"),
+            expected_uid=os.geteuid(),
+            expected_parent_pid=os.getpid(),
+        )
+        self.assertEqual(receipt["executable"], str(python.resolve(strict=True)))
+        child.terminate()
+        child.wait(timeout=5)
+
+    def test_pidfd_signal_targets_only_the_process_proven_after_pidfd_open(self) -> None:
+        child = subprocess.Popen([str(self.executable), "30"])
+
+        def cleanup() -> None:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=5)
+
+        self.addCleanup(cleanup)
+        raw_arguments = b""
+        for _ in range(100):
+            raw_arguments = Path(f"/proc/{child.pid}/cmdline").read_bytes()
+            if raw_arguments.startswith(str(self.executable).encode()) and b"30\0" in raw_arguments:
+                break
+            time.sleep(0.001)
+        namespace = os.stat("/proc/self/ns/mnt")
+        receipt = MODULE.signal_exact_process(
+            child.pid,
+            self.executable,
+            expected_uid=os.geteuid(),
+            expected_arguments_sha256=hashlib.sha256(raw_arguments).hexdigest(),
+            expected_parent_pid=os.getpid(),
+            expected_mount_namespace={
+                "device": namespace.st_dev,
+                "inode": namespace.st_ino,
+            },
+        )
+        self.assertEqual(receipt["pid"], child.pid)
+        self.assertEqual(child.wait(timeout=5), -15)
+
     def test_argument_and_executable_substitution_are_rejected(self) -> None:
         with self.assertRaises(MODULE.ProcessIdentityError):
             MODULE.verify_process(
