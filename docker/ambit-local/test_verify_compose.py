@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import os
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -141,7 +144,6 @@ class VerifyComposeTest(unittest.TestCase):
                 }
             ]
         mounts = {
-            "runner": {"/var/lib/docker": "runner-docker", "/home/daytona/runner": "runner-log"},
             "db": {"/var/lib/postgresql/data": "postgres"},
             "redis": {"/data": "redis"},
             "minio": {"/data": "minio"},
@@ -154,9 +156,30 @@ class VerifyComposeTest(unittest.TestCase):
                     "type": "bind",
                     "source": str(self.state_root / relative),
                     "target": target,
+                    **(
+                        {"read_only": True}
+                        if name == "dex" and target == "/etc/dex/config.yaml"
+                        else {}
+                    ),
                 }
                 for target, relative in roster.items()
             ]
+        services["runner"]["volumes"] = [
+            {
+                "type": "bind",
+                "source": "/home/.ambit-c16b-runner-storage/runner-docker",
+                "target": "/var/lib/docker",
+                "bind": {
+                    "create_host_path": False,
+                    "propagation": "rprivate",
+                },
+            },
+            {
+                "type": "bind",
+                "source": str(self.state_root / "runner-log"),
+                "target": "/home/daytona/runner",
+            },
+        ]
         return {
             "name": "ambit-daytona-local",
             "services": services,
@@ -172,8 +195,16 @@ class VerifyComposeTest(unittest.TestCase):
     def test_exact_local_compose_passes(self) -> None:
         receipt = MODULE.validate_compose(self.config, self.values, self.state_root)
         self.assertEqual(receipt["outcome"], "passed")
-        self.assertEqual(receipt["schema"], "ambit.local-daytona-compose-verification/v2")
+        self.assertEqual(receipt["schema"], "ambit.local-daytona-compose-verification/v3")
         self.assertEqual(receipt["providerCapacity"]["profileDigest"], MODULE.PROFILE_DIGEST)
+        self.assertEqual(
+            receipt["runnerDockerStorageAuthority"],
+            {
+                "source": "/home/.ambit-c16b-runner-storage/runner-docker",
+                "target": "/var/lib/docker",
+                "bind": {"createHostPath": False, "propagation": "rprivate"},
+            },
+        )
 
     def test_public_port_is_rejected(self) -> None:
         self.assert_rejected(
@@ -190,12 +221,100 @@ class VerifyComposeTest(unittest.TestCase):
             )
         )
 
-    def test_mount_escape_is_rejected(self) -> None:
+    def test_legacy_state_root_runner_storage_is_rejected(self) -> None:
         self.assert_rejected(
             lambda value: value["services"]["runner"]["volumes"][0].__setitem__(
-                "source", "/var/lib/docker"
+                "source", str(self.state_root / "runner-docker")
             )
         )
+
+    def test_alternate_runner_storage_roots_are_rejected(self) -> None:
+        for source in (
+            "/home/example/.ambit-c16b-runner-storage/runner-docker",
+            "/home/other/runner-docker",
+            "/run/ambit-c16b-runner-storage/runner-docker",
+            "/tmp/ambit-c16b-runner-storage/runner-docker",
+        ):
+            with self.subTest(source=source):
+                self.assert_rejected(
+                    lambda value, source=source: value["services"]["runner"]["volumes"][
+                        0
+                    ].__setitem__("source", source)
+                )
+
+    def test_runner_storage_requires_create_host_path_false(self) -> None:
+        self.assert_rejected(
+            lambda value: value["services"]["runner"]["volumes"][0]["bind"].pop(
+                "create_host_path"
+            )
+        )
+        self.assert_rejected(
+            lambda value: value["services"]["runner"]["volumes"][0]["bind"].__setitem__(
+                "create_host_path", True
+            )
+        )
+        self.assert_rejected(
+            lambda value: value["services"]["runner"]["volumes"][0]["bind"].__setitem__(
+                "create_host_path", 0
+            )
+        )
+
+    def test_runner_storage_requires_rprivate_propagation(self) -> None:
+        self.assert_rejected(
+            lambda value: value["services"]["runner"]["volumes"][0]["bind"].pop(
+                "propagation"
+            )
+        )
+        for propagation in ("private", "shared", "rshared", "slave", "rslave"):
+            with self.subTest(propagation=propagation):
+                self.assert_rejected(
+                    lambda value, propagation=propagation: value["services"]["runner"][
+                        "volumes"
+                    ][0]["bind"].__setitem__("propagation", propagation)
+                )
+
+    def test_runner_storage_rejects_extra_bind_and_mount_fields(self) -> None:
+        self.assert_rejected(
+            lambda value: value["services"]["runner"]["volumes"][0]["bind"].__setitem__(
+                "selinux", "z"
+            )
+        )
+        self.assert_rejected(
+            lambda value: value["services"]["runner"]["volumes"][0].__setitem__(
+                "read_only", True
+            )
+        )
+
+    def test_runner_storage_rejects_a_second_bind(self) -> None:
+        self.assert_rejected(
+            lambda value: value["services"]["runner"]["volumes"].append(
+                {
+                    "type": "bind",
+                    "source": "/home/.ambit-c16b-runner-storage/runner-docker",
+                    "target": "/var/lib/docker-shadow",
+                    "bind": {"create_host_path": False, "propagation": "rprivate"},
+                }
+            )
+        )
+
+    def test_all_other_mounts_remain_state_root_confined(self) -> None:
+        for service, index in (("runner", 1), ("db", 0), ("registry", 0), ("dex", 1)):
+            with self.subTest(service=service):
+                self.assert_rejected(
+                    lambda value, service=service, index=index: value["services"][service][
+                        "volumes"
+                    ][index].__setitem__(
+                        "source", "/home/.ambit-c16b-runner-storage/runner-docker"
+                    )
+                )
+
+    def test_runner_storage_authority_cannot_overlap_state_root(self) -> None:
+        with self.assertRaises(ValueError):
+            MODULE.validate_compose(
+                self.config,
+                self.values,
+                Path("/home/.ambit-c16b-runner-storage/user-state"),
+            )
 
     def test_mount_on_unlisted_service_is_rejected(self) -> None:
         self.assert_rejected(
@@ -215,6 +334,50 @@ class VerifyComposeTest(unittest.TestCase):
         self.assert_rejected(lambda value: value["services"]["api"].__setitem__("pid", "host"))
         self.assert_rejected(lambda value: value["services"]["api"].__setitem__("cpus", 2.0))
         self.assert_rejected(lambda value: value["services"]["minio-init"].pop("mem_limit"))
+
+    def test_environment_generator_has_no_runner_storage_authority(self) -> None:
+        generator = Path(__file__).with_name("generate-environment.sh")
+        image_value = image("fixture")
+        environment = os.environ.copy()
+        for key in MODULE.EXPECTED_IMAGES:
+            environment[key] = image_value
+
+        def generate(root: Path) -> Path:
+            state_root = root / "state"
+            subprocess.run(
+                [str(generator), str(root / "provider.env"), str(state_root)],
+                check=True,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            return state_root
+
+        with tempfile.TemporaryDirectory(
+            prefix="ambit-compose-generator-", dir=Path(__file__).resolve().parents[2]
+        ) as directory:
+            state_root = generate(Path(directory))
+            self.assertFalse((state_root / "runner-docker").exists())
+            self.assertTrue((state_root / "runner-log").is_dir())
+
+        with tempfile.TemporaryDirectory(
+            prefix="ambit-compose-generator-", dir=Path(__file__).resolve().parents[2]
+        ) as directory:
+            root = Path(directory)
+            runner_storage = root / "state/runner-docker"
+            runner_storage.mkdir(parents=True)
+            runner_storage.chmod(0o751)
+            generate(root)
+            self.assertEqual(runner_storage.stat().st_mode & 0o777, 0o751)
+
+    def test_compose_source_hard_codes_runner_storage_authority(self) -> None:
+        compose_lines = Path(__file__).with_name("compose.yaml").read_text().splitlines()
+        runner_storage_lines = [line.strip() for line in compose_lines if "runner-docker" in line]
+        self.assertEqual(
+            runner_storage_lines,
+            ["source: /home/.ambit-c16b-runner-storage/runner-docker"],
+        )
 
     def test_extra_service_and_privilege_are_rejected(self) -> None:
         self.assert_rejected(

@@ -205,8 +205,11 @@ services:
       SYSBOX_HEALTH_PROBES: "false"
     volumes:
       - type: bind
-        source: ${AMBIT_DAYTONA_STATE_ROOT:?set absolute state root under /home}/runner-docker
+        source: /home/.ambit-c16b-runner-storage/runner-docker
         target: /var/lib/docker
+        bind:
+          create_host_path: false
+          propagation: rprivate
       - type: bind
         source: ${AMBIT_DAYTONA_STATE_ROOT}/runner-log
         target: /home/daytona/runner
