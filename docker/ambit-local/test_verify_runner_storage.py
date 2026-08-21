@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -173,6 +174,37 @@ class VerifyRunnerStorageTest(unittest.TestCase):
             host_gate.index('flock -s "${lifecycle_fd}"'),
             host_gate.index('runner_storage=$(python3 "${runner_storage_tool}"'),
         )
+
+    def test_int_and_term_exit_then_run_cleanup_exactly_once(self) -> None:
+        prepare = PREPARE_SCRIPT.read_text()
+        self.assertIn("trap cleanup_failed_prepare EXIT", prepare)
+        self.assertIn("trap 'exit 130' INT", prepare)
+        self.assertIn("trap 'exit 143' TERM", prepare)
+        self.assertNotIn("trap cleanup_failed_prepare EXIT INT TERM", prepare)
+        for signal, expected_status in (("INT", 130), ("TERM", 143)):
+            with self.subTest(signal=signal):
+                result = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        f"""
+cleanup() {{
+  trap - EXIT INT TERM
+  printf 'cleanup\\n'
+}}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+kill -{signal} $$
+printf 'continued\\n'
+""",
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, expected_status)
+                self.assertEqual(result.stdout, "cleanup\n")
 
     def test_created_image_descriptor_remains_pinned_through_privileged_use(self) -> None:
         prepare = PREPARE_SCRIPT.read_text()

@@ -66,6 +66,7 @@ temporary=
 image_fd=
 image_handle=
 cleanup_failed_prepare() {
+  trap - EXIT INT TERM
   set +e
   local cleanup_safe=true image_handle_identity image_path_identity
   if [[ -n ${temporary} && -e ${temporary} ]]; then
@@ -105,7 +106,9 @@ cleanup_failed_prepare() {
     sudo -n rmdir --ignore-fail-on-non-empty -- "${capacity_root}"
   fi
 }
-trap cleanup_failed_prepare EXIT INT TERM
+trap cleanup_failed_prepare EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 write_current_receipt() {
   local current expected_uuid
