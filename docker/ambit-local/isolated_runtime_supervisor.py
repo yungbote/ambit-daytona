@@ -43,15 +43,6 @@ MOUNT_TARGET = AUTHORITY_ROOT / "runner-docker"
 STORAGE_IMAGE = AUTHORITY_ROOT / "runner-docker.xfs"
 RUNTIME_PARENT = Path("/run")
 RUNTIME_PREFIX = "ambit-c16b-docker-"
-RUNTIME_DIRECTORY_ENTRIES = {"containerd-state", "containerd-temp", "docker-exec"}
-RUNTIME_REGULAR_ENTRIES = {
-    "containerd.toml",
-    "docker.pid",
-    "dockerd.json",
-    "runner-storage-lifecycle.py",
-    "verify-runner-storage.py",
-}
-RUNTIME_SOCKET_ENTRIES = {"containerd.sock", "containerd.sock.ttrpc", "docker.sock"}
 STATE_ROOT_RE = re.compile(r"^/home/[^/]+/[A-Za-z0-9._/-]+$")
 RUNTIME_ROOT_RE = re.compile(r"^/run/ambit-c16b-docker-[0-9a-f]{12}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -78,6 +69,15 @@ STORAGE_IDENTITY_VERIFIER_NAME = "verify-runner-storage.py"
 STORAGE_IDENTITY_VERIFIER_SHA256 = (
     "ff1d034329ada6f8c1596876779a990dbe7e1a0ada41f57442a899115c90579b"
 )
+RUNTIME_DIRECTORY_ENTRIES = {"containerd-state", "containerd-temp", "docker-exec"}
+RUNTIME_REGULAR_ENTRIES = {
+    "containerd.toml",
+    "docker.pid",
+    "dockerd.json",
+    STORAGE_LIFECYCLE_NAME,
+    STORAGE_IDENTITY_VERIFIER_NAME,
+}
+RUNTIME_SOCKET_ENTRIES = {"containerd.sock", "containerd.sock.ttrpc", "docker.sock"}
 
 CONTROL_RECEIPT_NAME = "outer-docker-control.json"
 START_RECEIPT_NAME = "outer-docker-receipt.json"
