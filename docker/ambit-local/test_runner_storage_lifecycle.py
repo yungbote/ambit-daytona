@@ -347,5 +347,15 @@ class RunnerStorageLifecycleReducerTest(unittest.TestCase):
                 run_tool.assert_not_called()
             prefix.close()
 
+    def test_caller_owned_empty_capacity_is_sealed_before_image_creation(self) -> None:
+        helper = SCRIPT.read_text()
+        function_start = helper.index("def create_capacity_and_image(")
+        seal = helper.index("os.fchown(prefix.capacity_fd, 0, 0)", function_start)
+        closed_roster = helper.index("children = os.listdir(prefix.capacity_fd)", seal)
+        image_create = helper.index("prefix.image_fd = os.open(", closed_roster)
+        self.assertLess(seal, closed_roster)
+        self.assertLess(closed_roster, image_create)
+        self.assertIn("os.fchown(prefix.capacity_fd, caller_uid, caller_gid)", helper)
+
 if __name__ == "__main__":
     unittest.main()

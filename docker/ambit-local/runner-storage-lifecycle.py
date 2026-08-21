@@ -612,7 +612,9 @@ def teardown_runtime(prefix: OpenPrefix, expected_device: int | None, expected_i
     require(not associated_loops(prefix.image_fd), "runner storage image loop remained attached")
 
 
-def create_capacity_and_image(prefix: OpenPrefix, image_bytes: int) -> None:
+def create_capacity_and_image(
+    prefix: OpenPrefix, image_bytes: int, caller_uid: int, caller_gid: int
+) -> None:
     require(prefix.image_fd is None, "runner storage image already exists")
     if prefix.capacity_fd is None:
         os.mkdir(CAPACITY_NAME, mode=0o700, dir_fd=prefix.state_root_fd)
@@ -624,7 +626,30 @@ def create_capacity_and_image(prefix: OpenPrefix, image_bytes: int) -> None:
     require_descriptor_entry(
         prefix.state_root_fd, CAPACITY_NAME, prefix.capacity_fd
     )
-    require(not os.listdir(prefix.capacity_fd), "runner capacity root is not empty")
+    original_capacity = prefix.facts.capacity
+    was_caller_owned = (
+        original_capacity.kind == "directory"
+        and original_capacity.owner_uid == caller_uid
+        and original_capacity.owner_gid == caller_gid
+        and original_capacity.mode == 0o700
+    )
+    os.fchown(prefix.capacity_fd, 0, 0)
+    os.fchmod(prefix.capacity_fd, 0o700)
+    children = os.listdir(prefix.capacity_fd)
+    if children:
+        if was_caller_owned:
+            os.fchown(prefix.capacity_fd, caller_uid, caller_gid)
+            os.fchmod(prefix.capacity_fd, 0o700)
+        raise RunnerStorageLifecycleError("runner capacity root changed before image creation")
+    try:
+        require_descriptor_entry(
+            prefix.state_root_fd, CAPACITY_NAME, prefix.capacity_fd
+        )
+    except BaseException:
+        if was_caller_owned:
+            os.fchown(prefix.capacity_fd, caller_uid, caller_gid)
+            os.fchmod(prefix.capacity_fd, 0o700)
+        raise
     prefix.image_fd = os.open(
         IMAGE_NAME,
         os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
@@ -635,7 +660,6 @@ def create_capacity_and_image(prefix: OpenPrefix, image_bytes: int) -> None:
     os.fsync(prefix.image_fd)
     os.fchown(prefix.image_fd, 0, 0)
     os.fchmod(prefix.image_fd, 0o600)
-    os.fchown(prefix.capacity_fd, 0, 0)
     os.fchmod(prefix.capacity_fd, 0o711)
     require_descriptor_entry(prefix.capacity_fd, IMAGE_NAME, prefix.image_fd)
     require_descriptor_entry(
@@ -809,7 +833,9 @@ def main() -> None:
         if args.command == "create-and-mount":
             require(decision.disposition == "create_new", "runner storage is not creatable")
             require_target_ready(prefix.state_root_fd, prefix.state_root_path)
-            create_capacity_and_image(prefix, args.image_bytes)
+            create_capacity_and_image(
+                prefix, args.image_bytes, args.caller_uid, args.caller_gid
+            )
             loop_device, filesystem_uuid = format_attach_and_mount(prefix)
             result.update(loopDevice=loop_device, filesystemUuid=filesystem_uuid)
         elif args.command == "recover-and-mount":
