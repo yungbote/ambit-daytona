@@ -1035,9 +1035,25 @@ def deactivate_private(args: argparse.Namespace) -> dict[str, Any]:
         args.namespace_device, args.namespace_inode
     )
     with open_authority(create=False, exclusive=True) as context:
-        require(context.root_fd is not None and context.image_fd is not None, "storage is absent")
+        require(context.root_fd is not None, "storage authority is absent")
         stored = read_json_at(context.root_fd, RECEIPT_NAME)
-        require(stored is not None, "storage receipt is absent")
+        if stored is None:
+            loops = associated_loops(context) if context.image_fd is not None else ()
+            require(len(loops) <= 1, "storage loop identity is ambiguous")
+            if loops:
+                unmount_and_detach(context, loops[0], expected_namespace)
+            else:
+                require(
+                    not target_occurrences(),
+                    "unpublished storage target remains mounted without its loop",
+                )
+            return operation_result(
+                "deactivated",
+                expected_namespace,
+                None,
+                None,
+            )
+        require(context.image_fd is not None, "published storage image is absent")
         expected_uuid = validate_receipt(stored, context, args.state_root)
         loops = associated_loops(context)
         require(len(loops) <= 1, "storage loop identity is ambiguous")

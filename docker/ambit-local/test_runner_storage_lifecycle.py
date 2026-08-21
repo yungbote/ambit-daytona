@@ -292,6 +292,34 @@ time.sleep(30)
             with self.assertRaises(MODULE.RunnerStorageLifecycleError):
                 MODULE.deactivate_private(args)
 
+    def test_deactivate_releases_unpublished_startup_prefix_without_receipt(self) -> None:
+        args = argparse_namespace(
+            state_root=Path("/home/example/state"),
+            caller_uid=1000,
+            caller_gid=1000,
+            namespace_device=4,
+            namespace_inode=4026533000,
+        )
+        context = mock.MagicMock()
+        context.__enter__.return_value = context
+        context.__exit__.return_value = None
+        context.root_fd = 10
+        context.image_fd = 11
+        with mock.patch.object(
+            MODULE, "require_private_namespace", return_value="4:4026533000"
+        ), mock.patch.object(
+            MODULE, "open_authority", return_value=context
+        ), mock.patch.object(
+            MODULE, "read_json_at", return_value=None
+        ), mock.patch.object(
+            MODULE, "associated_loops", return_value=("/dev/loop7",)
+        ), mock.patch.object(MODULE, "unmount_and_detach") as teardown:
+            result = MODULE.deactivate_private(args)
+        self.assertEqual(result["outcome"], "deactivated")
+        self.assertIsNone(result["authorityReceiptSha256"])
+        self.assertIsNone(result["receipt"])
+        teardown.assert_called_once_with(context, "/dev/loop7", "4:4026533000")
+
     def test_receipt_atomic_write_fsyncs_file_before_rename_and_parent(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="runner-receipt-", dir=temporary_parent()
