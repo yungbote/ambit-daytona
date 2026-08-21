@@ -58,6 +58,7 @@ def validate_storage_identity_observation(value: dict[str, Any]) -> dict[str, An
         "mountTarget",
         "stateRoot",
         "stateRootDevice",
+        "targetMountTree",
         "xfsFeatures",
     }
     require(set(value) == expected_keys, "runner storage observation shape differs")
@@ -76,6 +77,10 @@ def validate_storage_identity_observation(value: dict[str, Any]) -> dict[str, An
     require(
         value["loopMountTargets"] == [str(expected_target)],
         "runner storage loop device has a missing or additional global mount",
+    )
+    require(
+        value["targetMountTree"] == [str(expected_target)],
+        "runner storage target has a missing, nested, or foreign mount",
     )
     require(value["filesystemType"] == "xfs", "runner storage filesystem is not XFS")
     options = value["mountOptions"]
@@ -258,6 +263,8 @@ def collect_storage_observation(state_root: Path) -> dict[str, Any]:
         "runner storage global loop mount observation is invalid",
     )
     loop_mount_targets: list[str] = []
+    target_mount_tree: list[str] = []
+    target_prefix = f"{target}/"
     for loop_mount in loop_mount_filesystems:
         require(
             isinstance(loop_mount, dict)
@@ -267,6 +274,10 @@ def collect_storage_observation(state_root: Path) -> dict[str, Any]:
         )
         if loop_mount["maj:min"] == loop_device_number:
             loop_mount_targets.append(loop_mount["target"])
+        if loop_mount["target"] == str(target) or loop_mount["target"].startswith(
+            target_prefix
+        ):
+            target_mount_tree.append(loop_mount["target"])
     filesystem_uuid = run(["sudo", "-n", "blkid", "-s", "UUID", "-o", "value", loop_device])
     xfs_info = run(["xfs_info", str(target)])
     features = sorted(set(re.findall(r"(?:crc|finobt|ftype|projid32bit)=[01]", xfs_info)))
@@ -289,6 +300,7 @@ def collect_storage_observation(state_root: Path) -> dict[str, Any]:
         "imageDevice": image_stat.st_dev,
         "imageInode": image_stat.st_ino,
         "stateRootDevice": state_root_stat.st_dev,
+        "targetMountTree": sorted(target_mount_tree),
         "filesystemTotalBytes": filesystem.f_blocks * filesystem.f_frsize,
         "filesystemFreeBytes": filesystem.f_bavail * filesystem.f_frsize,
         "backingFilesystemTotalBytes": backing_filesystem.f_blocks

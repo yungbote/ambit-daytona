@@ -17,22 +17,36 @@ state_root=$1
 }
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-verifier=${script_dir}/verify-runner-storage.py
+lifecycle_helper=${script_dir}/runner-storage-lifecycle.py
+lifecycle_helper_sha256=3e2b751aa44546ee4172d2e7ff73d7cc843261eac92c9ae1bf32075de2c221af
 target=${state_root}/runner-docker
-capacity_root=${state_root}/capacity
-image=${capacity_root}/runner-docker.xfs
+image=${state_root}/capacity/runner-docker.xfs
 evidence_root=${state_root}/evidence
 receipt=${evidence_root}/runner-docker-storage.json
 image_bytes=64424509440
-for command_name in blkid find findmnt flock id jq losetup python3 realpath rmdir stat sudo unlink; do
+
+for command_name in flock id jq python3 realpath stat sudo unlink; do
   command -v "${command_name}" >/dev/null || {
     echo "required runner-storage command is absent: ${command_name}" >&2
     exit 66
   }
 done
+[[ -f ${lifecycle_helper} && ! -L ${lifecycle_helper} ]] || { echo 'runner storage lifecycle helper is absent or unsafe' >&2; exit 66; }
+for directory in "${target}" "${evidence_root}"; do
+  [[ -d ${directory} && ! -L ${directory} ]] || { echo "runner storage directory is invalid: ${directory}" >&2; exit 66; }
+  [[ $(realpath -e -- "${directory}") == "${directory}" ]] || { echo "runner storage directory is non-canonical: ${directory}" >&2; exit 66; }
+done
+
+caller_uid=$(id -u)
+caller_gid=$(id -g)
+[[ ${caller_uid} =~ ^[1-9][0-9]*$ && ${caller_gid} =~ ^[0-9]+$ ]] || {
+  echo 'runner storage caller identity is invalid' >&2
+  exit 66
+}
+
 exec {lifecycle_fd}<"${state_root}"
-lifecycle_handle=/proc/$$/fd/${lifecycle_fd}
-lifecycle_identity=$(stat -Lc '%d:%i' -- "${lifecycle_handle}")
+state_root_handle=/proc/$$/fd/${lifecycle_fd}
+lifecycle_identity=$(stat -Lc '%d:%i' -- "${state_root_handle}")
 [[ $(stat -c '%d:%i' -- "${state_root}") == "${lifecycle_identity}" ]] || {
   echo 'runner storage state root changed before lifecycle lock' >&2
   exit 66
@@ -43,164 +57,123 @@ flock -x "${lifecycle_fd}"
   exit 66
 }
 
-[[ -f ${verifier} && -f ${image} && ! -L ${image} ]] || {
-  echo 'runner storage verifier or image is absent' >&2
-  exit 66
+invoke_lifecycle_helper() {
+  sudo -n python3 -c '
+import hashlib
+import hmac
+import os
+import stat
+import sys
+
+path, expected, *arguments = sys.argv[1:]
+descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+try:
+    identity = os.fstat(descriptor)
+    if not stat.S_ISREG(identity.st_mode):
+        raise SystemExit("runner storage lifecycle helper is not regular")
+    if not 0 < identity.st_size <= 1024 * 1024:
+        raise SystemExit("runner storage lifecycle helper size is invalid")
+    source = bytearray()
+    while True:
+        block = os.read(descriptor, 1024 * 1024)
+        if not block:
+            break
+        source.extend(block)
+finally:
+    os.close(descriptor)
+actual = hashlib.sha256(source).hexdigest()
+if not hmac.compare_digest(actual, expected):
+    raise SystemExit("runner storage lifecycle helper digest differs")
+sys.argv = [path, *arguments]
+globals()["__file__"] = path
+globals()["__package__"] = None
+exec(compile(source, path, "exec"), globals(), globals())
+' "${lifecycle_helper}" "${lifecycle_helper_sha256}" "$@"
 }
 
-for directory in "${target}" "${capacity_root}" "${evidence_root}"; do
-  [[ -d ${directory} && ! -L ${directory} ]] || { echo "runner storage directory is invalid: ${directory}" >&2; exit 66; }
-  [[ $(realpath -e -- "${directory}") == "${directory}" ]] || { echo "runner storage directory is non-canonical: ${directory}" >&2; exit 66; }
-done
-unexpected_capacity_entry=$(sudo -n find "${capacity_root}" -mindepth 1 -maxdepth 1 ! -name 'runner-docker.xfs' -print -quit) || {
-  echo 'runner storage capacity-root contents could not be observed' >&2
-  exit 66
+inspect_state() {
+  invoke_lifecycle_helper \
+    inspect \
+    "${state_root_handle}" \
+    "${state_root}" \
+    "${caller_uid}" \
+    "${caller_gid}" \
+    "${image_bytes}" \
+    --operation remove
 }
-[[ -z ${unexpected_capacity_entry} ]] || { echo 'runner storage capacity root contains a foreign entry' >&2; exit 66; }
-[[ $(stat -c '%s' -- "${image}") == "${image_bytes}" ]] || { echo 'runner storage image size differs' >&2; exit 66; }
-current_uid=$(id -u)
-capacity_owner=$(stat -c '%u' -- "${capacity_root}")
-capacity_mode=$(stat -c '%a' -- "${capacity_root}")
-image_owner=$(stat -c '%u' -- "${image}")
-image_mode=$(stat -c '%a' -- "${image}")
-state_root_device=$(stat -c '%d' -- "${state_root}")
-[[ $(stat -c '%d' -- "${capacity_root}") == "${state_root_device}" && $(stat -c '%d' -- "${image}") == "${state_root_device}" ]] || {
-  echo 'runner storage incomplete state is on a foreign backing filesystem' >&2
-  exit 66
+
+invoke_state_transition() {
+  local command_name=$1
+  shift
+  invoke_lifecycle_helper \
+    "${command_name}" \
+    "${state_root_handle}" \
+    "${state_root}" \
+    "${caller_uid}" \
+    "${caller_gid}" \
+    "${image_bytes}" \
+    "$@"
 }
-published_identity=false
-if [[ ${capacity_owner}:${capacity_mode}:${image_owner}:${image_mode} == 0:711:0:600 ]]; then
-  published_identity=true
-elif [[ ! -e ${receipt} && ! -L ${receipt} && ${capacity_mode}:${image_mode} == 700:600 ]] &&
-  [[ ${capacity_owner} == "${current_uid}" || ${capacity_owner} == 0 ]] &&
-  [[ ${image_owner} == "${current_uid}" || ${image_owner} == 0 ]]; then
-  # A kill can interrupt the two-object ownership transfer. The complete
-  # pre-publication class therefore admits either task-user or root ownership,
-  # but only with the exact 0700/0600 modes and no receipt, loop, or mount.
-  published_identity=false
-else
-  echo 'runner storage image or capacity-root ownership differs' >&2
-  exit 66
-fi
+
+require_inspection() {
+  jq -e \
+    --arg stateRoot "${state_root}" '
+      .schema == "ambit.local-daytona-runner-storage-lifecycle/v1" and
+      .operation == "remove" and
+      .stateRoot == $stateRoot and
+      (.disposition | type == "string") and
+      ((.imageIdentity == null) or
+        (.imageIdentity | keys | sort == ["device", "inode", "logicalBytes"]))
+    ' <<<"$1" >/dev/null || {
+    echo 'runner storage lifecycle inspection is invalid' >&2
+    return 66
+  }
+}
+
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+inspection=$(inspect_state)
+require_inspection "${inspection}"
+disposition=$(jq -er '.disposition' <<<"${inspection}")
+expected_device=$(jq -r '.imageIdentity.device // "none"' <<<"${inspection}")
+expected_inode=$(jq -r '.imageIdentity.inode // "none"' <<<"${inspection}")
+receipt_present=false
 if [[ -e ${receipt} || -L ${receipt} ]]; then
-  [[ ${published_identity} == true ]] || { echo 'runner storage receipt exists before identity publication' >&2; exit 66; }
+  receipt_present=true
   [[ -f ${receipt} && ! -L ${receipt} ]] || { echo 'runner storage receipt is invalid' >&2; exit 66; }
-  [[ $(jq -er '.image.path' "${receipt}") == "${image}" ]] || { echo 'runner storage receipt image path differs' >&2; exit 66; }
-  [[ $(jq -er '.image.device' "${receipt}") == "$(stat -c '%d' -- "${image}")" ]] || { echo 'runner storage receipt image device differs' >&2; exit 66; }
-  [[ $(jq -er '.image.inode' "${receipt}") == "$(stat -c '%i' -- "${image}")" ]] || { echo 'runner storage receipt image inode differs' >&2; exit 66; }
 fi
 
-associated_output=$(sudo -n losetup --noheadings --output NAME --associated "${image}")
-associated=()
-if [[ -n ${associated_output} ]]; then
-  mapfile -t associated < <(sed '/^$/d' <<<"${associated_output}")
-fi
-[[ ${#associated[@]} -le 1 ]] || { echo 'runner storage image has multiple loop devices' >&2; exit 66; }
-loop_device=
-if [[ ${#associated[@]} -eq 1 ]]; then
-  loop_device=${associated[0]//[[:space:]]/}
-  [[ ${loop_device} =~ ^/dev/loop[0-9]+$ ]] || { echo 'runner storage loop device is invalid' >&2; exit 66; }
-fi
-
-mount_table=
-loop_mount_targets=()
-target_mount_sources=()
-collect_mount_table() {
-  mount_table=$(findmnt --json --list -o SOURCE,MAJ:MIN,TARGET) || {
-    echo 'runner storage global mount observation failed' >&2
-    return 66
-  }
-  jq -e '
-    (.filesystems | type == "array") and
-    all(.filesystems[];
-      (.source | type == "string") and
-      (."maj:min" | type == "string") and
-      (.target | type == "string"))
-  ' <<<"${mount_table}" >/dev/null || {
-    echo 'runner storage global mount observation is invalid' >&2
-    return 66
-  }
-}
-
-select_loop_mount_targets() {
-  local device_number targets_json
-  loop_mount_targets=()
-  device_number=$(stat -c '%Hr:%Lr' -- "$1") || return 66
-  targets_json=$(jq -ce --arg deviceNumber "${device_number}" '
-    [.filesystems[] | select(."maj:min" == $deviceNumber) | .target]
-  ' <<<"${mount_table}") || return 66
-  mapfile -t loop_mount_targets < <(jq -r '.[]' <<<"${targets_json}")
-}
-
-select_target_mount_sources() {
-  local sources_json
-  target_mount_sources=()
-  sources_json=$(jq -ce --arg target "$1" '
-    [.filesystems[] | select(.target == $target) | .source]
-  ' <<<"${mount_table}") || return 66
-  mapfile -t target_mount_sources < <(jq -r '.[]' <<<"${sources_json}")
-}
-
-collect_mount_table
-select_target_mount_sources "${target}"
-if [[ ${published_identity} == false ]]; then
-  [[ ${#associated[@]} -eq 0 && ${#target_mount_sources[@]} -eq 0 ]] || {
-    echo 'runner storage unpublished image unexpectedly reached a loop or mount' >&2
-    exit 66
-  }
-fi
-if [[ ${#target_mount_sources[@]} -gt 0 ]]; then
-  [[ ${#target_mount_sources[@]} -eq 1 ]] || {
-    echo 'runner storage target has multiple global mounts' >&2
-    exit 66
-  }
-  [[ -n ${loop_device} ]] || { echo 'runner storage mount lacks its loop device' >&2; exit 66; }
-  current=$(python3 "${verifier}" "${state_root}")
-  if [[ -f ${receipt} ]]; then
-    stable_filter='{schema,stateRoot,mountTarget,image:{path:.image.path,logicalBytes:.image.logicalBytes,device:.image.device,inode:.image.inode,ownerUid:.image.ownerUid,mode:.image.mode},filesystem:{type:.filesystem.type,uuid:.filesystem.uuid,mountOptions:.filesystem.mountOptions,totalBytes:.filesystem.totalBytes,features:.filesystem.features},backingFilesystem:{device:.backingFilesystem.device,totalBytes:.backingFilesystem.totalBytes,allocationDisposition:.backingFilesystem.allocationDisposition,minimumFreeBytes:.backingFilesystem.minimumFreeBytes},sandboxDiskPolicy}'
-    [[ $(jq -S -c "${stable_filter}" "${receipt}") == $(jq -S -c "${stable_filter}" <<<"${current}") ]] || {
-      echo 'runner storage stable receipt identity differs from the live mount' >&2
+case ${disposition} in
+  already_absent|remove_empty_capacity)
+    [[ ${receipt_present} == false ]] || {
+      echo 'runner storage receipt exists without its image' >&2
       exit 66
     }
-  fi
-  mount_tree=$(findmnt -rn -R "${target}" -o TARGET) || {
-    echo 'runner storage mount tree observation failed' >&2
+    ;;
+  remove_image_and_capacity)
+    if [[ ${receipt_present} == true ]]; then
+      [[ $(jq -er '.image.path' "${receipt}") == "${image}" ]] || { echo 'runner storage receipt image path differs' >&2; exit 66; }
+      [[ $(jq -er '.image.device' "${receipt}") == "${expected_device}" ]] || { echo 'runner storage receipt image device differs' >&2; exit 66; }
+      [[ $(jq -er '.image.inode' "${receipt}") == "${expected_inode}" ]] || { echo 'runner storage receipt image inode differs' >&2; exit 66; }
+    fi
+    ;;
+  *)
+    echo 'runner storage remove disposition is invalid' >&2
     exit 66
-  }
-  mapfile -t mounts <<<"${mount_tree}"
-  [[ ${#mounts[@]} -eq 1 && ${mounts[0]} == "${target}" ]] || {
-    echo 'runner storage has nested or foreign mounts' >&2
-    exit 66
-  }
-  sudo -n umount -- "${target}"
-fi
+    ;;
+esac
 
-if [[ -n ${loop_device} ]]; then
-  collect_mount_table
-  select_loop_mount_targets "${loop_device}"
-  [[ ${#loop_mount_targets[@]} -eq 0 ]] || {
-    echo 'runner storage loop remains mounted at a foreign target' >&2
-    exit 66
-  }
-  if [[ -f ${receipt} ]]; then
-    filesystem_uuid=$(sudo -n blkid -s UUID -o value "${loop_device}") || { echo 'runner storage filesystem UUID could not be observed' >&2; exit 66; }
-    expected_uuid=$(jq -er '.filesystem.uuid' "${receipt}") || { echo 'runner storage receipt UUID is invalid' >&2; exit 66; }
-    [[ ${filesystem_uuid} == "${expected_uuid}" ]] || {
-      echo 'runner storage filesystem UUID differs from its receipt' >&2
-      exit 66
-    }
-  fi
-  sudo -n losetup --detach "${loop_device}"
-fi
-
-collect_mount_table
-select_target_mount_sources "${target}"
-[[ ${#target_mount_sources[@]} -eq 0 ]] || { echo 'runner storage target remained mounted' >&2; exit 66; }
-remaining_loops=$(sudo -n losetup --associated "${image}")
-[[ -z ${remaining_loops} ]] || { echo 'runner storage loop remained attached' >&2; exit 66; }
-if [[ -f ${receipt} && ! -L ${receipt} ]]; then
+invoke_state_transition teardown-runtime "${expected_device}" "${expected_inode}" >/dev/null
+if [[ ${receipt_present} == true ]]; then
   unlink -- "${receipt}"
 fi
-sudo -n unlink -- "${image}"
-sudo -n rmdir -- "${capacity_root}"
-printf '%s\n' "removed ${target} mount, ${loop_device:-no-loop}, ${image}, and ${receipt}"
+invoke_state_transition remove-objects "${expected_device}" "${expected_inode}" >/dev/null
+
+final_inspection=$(inspect_state)
+require_inspection "${final_inspection}"
+[[ $(jq -er '.disposition' <<<"${final_inspection}") == already_absent ]] || {
+  echo 'runner storage objects remained after removal' >&2
+  exit 66
+}
+printf '%s\n' "removed ${target} runtime, ${image}, and ${receipt}"

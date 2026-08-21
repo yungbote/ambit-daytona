@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib.util
 import os
+import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,6 +16,7 @@ SCRIPT = Path(__file__).with_name("verify-runner-storage.py")
 PREPARE_SCRIPT = Path(__file__).with_name("prepare-runner-storage.sh")
 REMOVE_SCRIPT = Path(__file__).with_name("remove-runner-storage.sh")
 HOST_GATE_SCRIPT = Path(__file__).with_name("verify-host-capacity.sh")
+LIFECYCLE_HELPER_SCRIPT = Path(__file__).with_name("runner-storage-lifecycle.py")
 SPEC = importlib.util.spec_from_file_location("ambit_verify_runner_storage", SCRIPT)
 if SPEC is None or SPEC.loader is None:  # pragma: no cover
     raise RuntimeError("could not load verify-runner-storage.py")
@@ -42,6 +46,7 @@ class VerifyRunnerStorageTest(unittest.TestCase):
             "imageDevice": 47,
             "imageInode": 89,
             "stateRootDevice": 47,
+            "targetMountTree": [f"{state_root}/runner-docker"],
             "filesystemTotalBytes": 59 * 1024**3,
             "filesystemFreeBytes": 58 * 1024**3,
             "filesystemUuid": "12345678-1234-1234-1234-123456789abc",
@@ -108,6 +113,15 @@ class VerifyRunnerStorageTest(unittest.TestCase):
         with self.assertRaises(MODULE.RunnerStorageError):
             MODULE.validate_storage_identity_observation(candidate)
 
+    def test_nested_or_foreign_target_mount_is_rejected(self) -> None:
+        candidate = self.observation()
+        candidate["targetMountTree"] = [
+            candidate["mountTarget"],
+            f'{candidate["mountTarget"]}/nested',
+        ]
+        with self.assertRaises(MODULE.RunnerStorageError):
+            MODULE.validate_storage_identity_observation(candidate)
+
     def test_invalid_dynamic_observation_ranges_fail_closed(self) -> None:
         for field, value in (
             ("filesystemFreeBytes", -1),
@@ -146,28 +160,26 @@ class VerifyRunnerStorageTest(unittest.TestCase):
 
     def test_mounted_recovery_precedes_underlying_target_emptiness_check(self) -> None:
         prepare = PREPARE_SCRIPT.read_text()
-        existing_state = prepare.index('if [[ -e ${image} || -L ${image}')
+        existing_state = prepare.index("existing_published_candidate)")
         mounted_observation = prepare.index(
-            'select_target_mount_sources "${target}"', existing_state
+            "mount_observation=$(target_mount_observation)", existing_state
         )
-        mounted_recovery = prepare.index(
-            'if [[ ${#target_mount_sources[@]} -gt 0 ]]; then', mounted_observation
-        )
-        unmounted_target_proof = prepare.index(
-            "  prove_unmounted_empty_target", mounted_recovery
-        )
-        self.assertLess(mounted_recovery, unmounted_target_proof)
+        mounted_branch = prepare.index("if (( mounts > 0 )); then", mounted_observation)
+        recovery = prepare.index("recover-and-mount", mounted_branch)
+        self.assertLess(mounted_branch, recovery)
+        helper = LIFECYCLE_HELPER_SCRIPT.read_text()
+        self.assertIn("require_target_ready(prefix.state_root_fd", helper)
 
     def test_lifecycle_mutation_is_serialized_on_the_state_root_descriptor(self) -> None:
         prepare = PREPARE_SCRIPT.read_text()
         remove = REMOVE_SCRIPT.read_text()
         self.assertLess(
             prepare.index('flock -x "${lifecycle_fd}"'),
-            prepare.index('if [[ -e ${image} || -L ${image}'),
+            prepare.index("inspection=$(inspect_state prepare)"),
         )
         self.assertLess(
             remove.index('flock -x "${lifecycle_fd}"'),
-            remove.index('associated_output=$(sudo -n losetup'),
+            remove.index("inspection=$(inspect_state)"),
         )
         host_gate = HOST_GATE_SCRIPT.read_text()
         self.assertLess(
@@ -207,15 +219,15 @@ printf 'continued\\n'
                 self.assertEqual(result.stdout, "cleanup\n")
 
     def test_created_image_descriptor_remains_pinned_through_privileged_use(self) -> None:
-        prepare = PREPARE_SCRIPT.read_text()
-        create = prepare.index('exec {image_fd}>"${image}"')
-        truncate = prepare.index('python3 - "${image_handle}"', create)
-        chown = prepare.index('chown root:root -- "${capacity_handle}" "${image_handle}"')
-        mkfs = prepare.index('mkfs.xfs', chown)
-        attach = prepare.index('losetup --find --show --nooverlap "${image_handle}"')
+        helper = LIFECYCLE_HELPER_SCRIPT.read_text()
+        create = helper.index("prefix.image_fd = os.open(")
+        truncate = helper.index("os.ftruncate(prefix.image_fd", create)
+        chown = helper.index("os.fchown(prefix.image_fd", truncate)
+        mkfs = helper.index('"mkfs.xfs"', chown)
+        attach = helper.index("attach_image(prefix.image_fd)", mkfs)
         lifecycle_steps = [create, truncate, chown, mkfs, attach]
         self.assertEqual(lifecycle_steps, sorted(lifecycle_steps))
-        self.assertNotIn('exec {image_fd}<>"${image}"', prepare)
+        self.assertIn('image_handle = f"/proc/self/fd/{prefix.image_fd}"', helper)
 
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "runner-docker.xfs"
@@ -229,23 +241,87 @@ printf 'continued\\n'
 
     def test_remove_proves_single_global_mount_before_exact_target_unmount(self) -> None:
         remove = REMOVE_SCRIPT.read_text()
-        live_identity = remove.index('current=$(python3 "${verifier}" "${state_root}")')
-        unmount = remove.index('sudo -n umount -- "${target}"')
-        self.assertLess(live_identity, unmount)
-        self.assertNotIn('umount -- "${loop_device}"', remove)
+        teardown = remove.index("invoke_state_transition teardown-runtime")
+        object_removal = remove.index("invoke_state_transition remove-objects")
+        self.assertLess(teardown, object_removal)
+        helper = LIFECYCLE_HELPER_SCRIPT.read_text()
+        global_proof = helper.index('require(targets == (str(target),)')
+        unmount = helper.index('run_tool("umount"', global_proof)
+        self.assertLess(global_proof, unmount)
 
     def test_remove_confines_prepublication_crash_recovery(self) -> None:
+        prepare = PREPARE_SCRIPT.read_text()
         remove = REMOVE_SCRIPT.read_text()
-        unpublished_identity = remove.index(
-            '${capacity_mode}:${image_mode} == 700:600'
+        helper = LIFECYCLE_HELPER_SCRIPT.read_text()
+        for wrapper in (prepare, remove):
+            for forbidden in (
+                "sudo -n chown",
+                "sudo -n chmod",
+                "sudo -n mkfs",
+                "sudo -n losetup",
+                "sudo -n mount",
+                "sudo -n umount",
+                'sudo -n unlink -- "${image}"',
+                "sudo -n rmdir",
+            ):
+                self.assertNotIn(forbidden, wrapper)
+        self.assertIn("os.unlink(IMAGE_NAME, dir_fd=prefix.capacity_fd)", helper)
+        self.assertIn("os.rmdir(CAPACITY_NAME, dir_fd=prefix.state_root_fd)", helper)
+
+    def test_wrappers_pin_and_execute_only_the_exact_helper_bytes(self) -> None:
+        helper_sha256 = hashlib.sha256(LIFECYCLE_HELPER_SCRIPT.read_bytes()).hexdigest()
+        launcher_pattern = re.compile(
+            r"sudo -n python3 -c '\n(?P<program>.*?)\n' \"\$\{lifecycle_helper\}",
+            re.DOTALL,
         )
-        no_loop_or_mount = remove.index(
-            'runner storage unpublished image unexpectedly reached a loop or mount'
+        launchers: list[str] = []
+        for wrapper_path in (PREPARE_SCRIPT, REMOVE_SCRIPT):
+            wrapper = wrapper_path.read_text()
+            digest_match = re.search(
+                r"^lifecycle_helper_sha256=([0-9a-f]{64})$", wrapper, re.MULTILINE
+            )
+            self.assertIsNotNone(digest_match)
+            self.assertEqual(digest_match.group(1), helper_sha256)
+            launcher_match = launcher_pattern.search(wrapper)
+            self.assertIsNotNone(launcher_match)
+            launcher = launcher_match.group("program")
+            self.assertLess(launcher.index("os.O_NOFOLLOW"), launcher.index("hashlib.sha256"))
+            self.assertLess(
+                launcher.index("hmac.compare_digest"), launcher.index("exec(compile")
+            )
+            launchers.append(launcher)
+        self.assertEqual(launchers[0], launchers[1])
+
+        accepted = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                launchers[0],
+                str(LIFECYCLE_HELPER_SCRIPT),
+                helper_sha256,
+                "--help",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
         )
-        delete = remove.index('sudo -n unlink -- "${image}"')
-        self.assertLess(unpublished_identity, no_loop_or_mount)
-        self.assertLess(no_loop_or_mount, delete)
-        self.assertNotIn("rmdir --ignore-fail-on-non-empty", remove)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertIn("create-and-mount", accepted.stdout)
+        rejected = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                launchers[0],
+                str(LIFECYCLE_HELPER_SCRIPT),
+                "0" * 64,
+                "--help",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("helper digest differs", rejected.stderr)
 
     def test_extra_observation_fields_are_rejected(self) -> None:
         candidate = copy.deepcopy(self.observation())
