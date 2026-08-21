@@ -25,7 +25,8 @@ output=$2
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 runtime_root_tool=${script_dir}/isolated_runtime_root.py
 process_identity_tool=${script_dir}/isolated_process_identity.py
-[[ -f ${runtime_root_tool} && -f ${process_identity_tool} ]] || {
+runner_storage_tool=${script_dir}/verify-runner-storage.py
+[[ -f ${runtime_root_tool} && -f ${process_identity_tool} && -f ${runner_storage_tool} ]] || {
   echo 'isolated runtime identity verifier is absent' >&2
   exit 66
 }
@@ -97,6 +98,7 @@ jq -e \
     exit 66
   }
 [[ ${docker_root} == "${expected_data_root}" ]] || { echo 'live Docker data root differs' >&2; exit 66; }
+runner_storage=$(python3 "${runner_storage_tool}" "${state_root}")
 
 cpu_count=$(nproc)
 memory_available_kib=$(awk '$1 == "MemAvailable:" { print $2 }' /proc/meminfo)
@@ -140,6 +142,7 @@ jq -n -S \
   --argjson reasons "${reasons_json}" \
   --argjson dockerProcessIdentity "${docker_process_identity}" \
   --argjson containerdProcessIdentity "${containerd_process_identity}" \
+  --argjson runnerStorage "${runner_storage}" \
   '{
     schema:"ambit.local-daytona-host-capacity-headroom/v3",
     outcome:$outcome,
@@ -153,6 +156,7 @@ jq -n -S \
     },
     providerOuterCeiling:{cpuCores:5.8,memoryBytes:12616466432,diskReservationBytes:64424509440},
     isolatedDaemon:{dockerHost:$dockerHost,dockerRoot:$dockerRoot,serverId:$dockerServerId,startupReceiptSha256:$isolatedReceiptSha256,configSha256:$configSha256,containerdConfigSha256:$containerdConfigSha256,processes:{dockerd:$dockerProcessIdentity,containerd:$containerdProcessIdentity}},
+    runnerStorage:$runnerStorage,
     observed:{cpuCores:$cpu,memoryAvailableBytes:$memory,storageAvailableBytes:$storage,storageFilesystem:$storageFilesystem,stateRoot:$stateRoot},
     reasons:$reasons
   }' > "${output}"

@@ -76,6 +76,20 @@ process, startup receipt, and config hash before measuring headroom.
 removes only their content-derived ephemeral runtime directory, and leaves all
 persistent `/home` state in place for recovery.
 
+Daytona's runner applies Docker `StorageOpt[size]` only when its private Docker
+data root is XFS. Before starting the provider stack, create the task-owned
+quota filesystem with `prepare-runner-storage.sh STATE_ROOT`. It creates one
+sparse 60 GiB image at `STATE_ROOT/capacity/runner-docker.xfs`, attaches one
+loop device, and mounts it only at the already-declared
+`STATE_ROOT/runner-docker` bind source with XFS project quotas. It adds no boot
+configuration, systemd unit, or shared-daemon setting. `verify-host-capacity.sh`
+requires the exact image inode, loop backing, XFS UUID/features, `pquota`, and
+at least 40 GiB usable/free capacity before a host-headroom receipt can pass.
+Stopping the provider and isolated daemon, unmounting that exact target,
+detaching the receipt-bound loop device, and removing only the image and its
+receipt is the complete rollback; never detach or delete a loop device that
+does not re-resolve to the receipt-bound image.
+
 The rendered Compose environment is a closed per-service key roster. Every
 network endpoint used by the API, proxy, or runner is pinned to loopback or an
 exact internal service name, and all telemetry/export targets remain empty or
