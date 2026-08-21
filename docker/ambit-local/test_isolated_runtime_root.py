@@ -16,12 +16,17 @@ MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
 
+def temporary_parent() -> str | None:
+    candidate = Path(f"/run/user/{os.getuid()}")
+    return str(candidate) if candidate.is_dir() and os.access(candidate, os.W_OK) else None
+
+
 class IsolatedRuntimeRootTest(unittest.TestCase):
     def runtime_path(self, parent: Path) -> Path:
         return parent / "ambit-c16b-docker-0123456789ab"
 
     def test_atomic_create_and_descriptor_reproof(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/tmp") as temporary:
+        with tempfile.TemporaryDirectory(dir=temporary_parent()) as temporary:
             path = self.runtime_path(Path(temporary))
             with mock.patch.object(
                 MODULE,
@@ -33,7 +38,7 @@ class IsolatedRuntimeRootTest(unittest.TestCase):
                 self.assertEqual(set(os.listdir(path)), set(MODULE.CHILD_DIRECTORIES))
 
     def test_check_to_symlink_substitution_is_rejected_without_touching_target(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/tmp") as temporary:
+        with tempfile.TemporaryDirectory(dir=temporary_parent()) as temporary:
             parent = Path(temporary)
             path = self.runtime_path(parent)
             target = parent / "outside"
@@ -52,7 +57,7 @@ class IsolatedRuntimeRootTest(unittest.TestCase):
             self.assertEqual(list(target.iterdir()), [sentinel])
 
     def test_post_create_root_and_child_substitution_fail_reproof(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/tmp") as temporary:
+        with tempfile.TemporaryDirectory(dir=temporary_parent()) as temporary:
             parent = Path(temporary)
             path = self.runtime_path(parent)
             pattern = __import__("re").compile(r".*/ambit-c16b-docker-[0-9a-f]{12}$")
@@ -75,7 +80,7 @@ class IsolatedRuntimeRootTest(unittest.TestCase):
                     MODULE.verify_runtime_root(path, identity)
 
     def test_optional_runtime_socket_symlink_is_rejected(self) -> None:
-        with tempfile.TemporaryDirectory(dir="/tmp") as temporary:
+        with tempfile.TemporaryDirectory(dir=temporary_parent()) as temporary:
             parent = Path(temporary)
             path = self.runtime_path(parent)
             pattern = __import__("re").compile(r".*/ambit-c16b-docker-[0-9a-f]{12}$")
