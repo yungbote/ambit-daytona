@@ -125,6 +125,10 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
         context.exclusive = False
         with self.assertRaises(MODULE.RunnerStorageLifecycleError):
             MODULE.mutation_pass_fds(context, ())
+        helper = SCRIPT.read_text()
+        self.assertIn("MUTATION_GUARDIAN", helper)
+        self.assertIn("os.fstat(lock_fd)", MODULE.MUTATION_GUARDIAN)
+        self.assertIn("child.communicate()", MODULE.MUTATION_GUARDIAN)
 
     def test_killed_guardian_keeps_lock_until_mutating_child_exits(self) -> None:
         with tempfile.TemporaryDirectory(

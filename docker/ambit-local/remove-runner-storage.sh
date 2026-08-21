@@ -24,7 +24,7 @@ caller_gid=$(id -g)
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 lifecycle_helper=${script_dir}/runner-storage-lifecycle.py
-lifecycle_helper_sha256=a77a4c0a3ac4ad05aa72e1578c3efdab57b6c1ce732e77fa1640944dd8760ba6
+lifecycle_helper_sha256=3d10ae809c9d2eeb03c2857add5db804a855894f7de51e800e620c8d2d2452bc
 [[ -f ${lifecycle_helper} && ! -L ${lifecycle_helper} ]] || {
   echo 'runner storage lifecycle helper is absent or unsafe' >&2
   exit 66

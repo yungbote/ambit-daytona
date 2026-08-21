@@ -41,8 +41,29 @@ TRUSTED_TOOLS = {
     "losetup": Path("/usr/bin/losetup"),
     "mkfs.xfs": Path("/usr/bin/mkfs.xfs"),
     "mount": Path("/usr/bin/mount"),
+    "python": Path("/usr/bin/python3"),
     "umount": Path("/usr/bin/umount"),
 }
+MUTATION_GUARDIAN = r"""
+import os
+import subprocess
+import sys
+
+lock_fd = int(sys.argv[1])
+inherited = tuple(int(value) for value in sys.argv[2].split(",") if value)
+command = sys.argv[3:]
+os.fstat(lock_fd)
+child = subprocess.Popen(
+    command,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    pass_fds=inherited,
+)
+stdout, stderr = child.communicate()
+sys.stdout.buffer.write(stdout)
+sys.stderr.buffer.write(stderr)
+raise SystemExit(child.returncode)
+"""
 
 NodeKind = Literal["absent", "directory", "regular", "symlink", "other"]
 ImageState = Literal[
@@ -330,17 +351,38 @@ def run_tool(
     mutation: bool = False,
     pass_fds: tuple[int, ...] = (),
 ) -> str:
+    tool_command = [trusted_tool(name), *args]
     retained = set(pass_fds)
     if mutation:
         retained = set(mutation_pass_fds(context, pass_fds))
-    result = subprocess.run(
-        [trusted_tool(name), *args],
-        check=True,
-        capture_output=True,
-        text=True,
-        pass_fds=tuple(sorted(retained)),
-        timeout=120,
-    )
+        assert context.lock_fd is not None
+        inherited_for_tool = tuple(sorted(set(pass_fds)))
+        result = subprocess.run(
+            [
+                trusted_tool("python"),
+                "-I",
+                "-S",
+                "-B",
+                "-c",
+                MUTATION_GUARDIAN,
+                str(context.lock_fd),
+                ",".join(str(value) for value in inherited_for_tool),
+                *tool_command,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            pass_fds=tuple(sorted(retained)),
+        )
+    else:
+        result = subprocess.run(
+            tool_command,
+            check=True,
+            capture_output=True,
+            text=True,
+            pass_fds=tuple(sorted(retained)),
+            timeout=120,
+        )
     return result.stdout.strip()
 
 
