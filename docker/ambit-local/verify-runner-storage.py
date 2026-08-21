@@ -13,7 +13,9 @@ from typing import Any
 
 SCHEMA = "ambit.local-daytona-runner-storage/v1"
 IMAGE_BYTES = 60 * 1024**3
-MINIMUM_USABLE_BYTES = 40 * 1024**3
+SANDBOX_BYTES = 20 * 1024**3
+MAXIMUM_SANDBOXES = 2
+AGGREGATE_SANDBOX_BYTES = SANDBOX_BYTES * MAXIMUM_SANDBOXES
 LOOP_DEVICE = re.compile(r"^/dev/loop[0-9]+$")
 FILESYSTEM_UUID = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
@@ -29,7 +31,12 @@ def require(condition: bool, message: str) -> None:
         raise RunnerStorageError(message)
 
 
-def validate_storage_observation(value: dict[str, Any]) -> dict[str, Any]:
+def is_plain_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def validate_storage_identity_observation(value: dict[str, Any]) -> dict[str, Any]:
+    """Validate owned storage identity without granting host readiness."""
     expected_keys = {
         "backingFile",
         "backingFilesystemFreeBytes",
@@ -46,6 +53,7 @@ def validate_storage_observation(value: dict[str, Any]) -> dict[str, Any]:
         "imageOwnerUid",
         "imagePath",
         "loopDevice",
+        "loopMountTargets",
         "mountOptions",
         "mountTarget",
         "stateRoot",
@@ -65,6 +73,10 @@ def validate_storage_observation(value: dict[str, Any]) -> dict[str, Any]:
         isinstance(value["loopDevice"], str) and LOOP_DEVICE.fullmatch(value["loopDevice"]) is not None,
         "runner storage loop device is invalid",
     )
+    require(
+        value["loopMountTargets"] == [str(expected_target)],
+        "runner storage loop device has a missing or additional global mount",
+    )
     require(value["filesystemType"] == "xfs", "runner storage filesystem is not XFS")
     options = value["mountOptions"]
     require(
@@ -80,47 +92,61 @@ def validate_storage_observation(value: dict[str, Any]) -> dict[str, Any]:
         "runner storage filesystem is not writable",
     )
     require("nodev" in options and "nosuid" in options, "runner storage mount hardening differs")
-    require(value["imageLogicalBytes"] == IMAGE_BYTES, "runner storage image size differs")
-    require(value["imageMode"] == 0o600, "runner storage image mode differs")
     require(
-        value["imageOwnerUid"] == 0,
+        is_plain_int(value["imageLogicalBytes"])
+        and value["imageLogicalBytes"] == IMAGE_BYTES,
+        "runner storage image size differs",
+    )
+    require(
+        is_plain_int(value["imageMode"]) and value["imageMode"] == 0o600,
+        "runner storage image mode differs",
+    )
+    require(
+        is_plain_int(value["imageOwnerUid"]) and value["imageOwnerUid"] == 0,
         "runner storage image owner differs",
     )
     require(
-        isinstance(value["imageDevice"], int)
+        is_plain_int(value["imageDevice"])
         and value["imageDevice"] >= 0
-        and isinstance(value["imageInode"], int)
+        and is_plain_int(value["imageInode"])
         and value["imageInode"] > 0,
         "runner storage image identity is invalid",
     )
     require(
-        value["imageDevice"] == value["stateRootDevice"],
+        is_plain_int(value["stateRootDevice"])
+        and value["imageDevice"] == value["stateRootDevice"],
         "runner storage image is on a different backing filesystem",
     )
     require(
-        isinstance(value["imageAllocatedBytes"], int)
-        and 0 <= value["imageAllocatedBytes"] <= IMAGE_BYTES,
+        is_plain_int(value["imageAllocatedBytes"])
+        and value["imageAllocatedBytes"] >= 0,
         "runner storage allocated-byte observation is invalid",
     )
     require(
-        isinstance(value["backingFilesystemTotalBytes"], int)
-        and value["backingFilesystemTotalBytes"] >= IMAGE_BYTES,
-        "runner storage backing filesystem is too small",
+        is_plain_int(value["backingFilesystemTotalBytes"])
+        and value["backingFilesystemTotalBytes"] > 0,
+        "runner storage backing filesystem total is invalid",
     )
     require(
-        isinstance(value["backingFilesystemFreeBytes"], int)
-        and value["backingFilesystemFreeBytes"] >= IMAGE_BYTES,
-        "runner storage backing filesystem lacks current headroom",
+        value["imageAllocatedBytes"] <= value["backingFilesystemTotalBytes"],
+        "runner storage allocated-byte observation exceeds its backing filesystem",
     )
     require(
-        isinstance(value["filesystemTotalBytes"], int)
-        and value["filesystemTotalBytes"] >= MINIMUM_USABLE_BYTES,
-        "runner storage filesystem is below aggregate capacity",
+        is_plain_int(value["backingFilesystemFreeBytes"])
+        and 0
+        <= value["backingFilesystemFreeBytes"]
+        <= value["backingFilesystemTotalBytes"],
+        "runner storage backing filesystem free space is invalid",
     )
     require(
-        isinstance(value["filesystemFreeBytes"], int)
-        and value["filesystemFreeBytes"] >= MINIMUM_USABLE_BYTES,
-        "runner storage free space is below aggregate capacity",
+        is_plain_int(value["filesystemTotalBytes"])
+        and value["filesystemTotalBytes"] > 0,
+        "runner storage filesystem total is invalid",
+    )
+    require(
+        is_plain_int(value["filesystemFreeBytes"])
+        and 0 <= value["filesystemFreeBytes"] <= value["filesystemTotalBytes"],
+        "runner storage filesystem free space is invalid",
     )
     require(
         isinstance(value["filesystemUuid"], str)
@@ -165,9 +191,9 @@ def validate_storage_observation(value: dict[str, Any]) -> dict[str, Any]:
             "minimumFreeBytes": IMAGE_BYTES,
         },
         "sandboxDiskPolicy": {
-            "perSandboxBytes": 20 * 1024**3,
-            "maximumSandboxes": 2,
-            "aggregateBytes": 40 * 1024**3,
+            "perSandboxBytes": SANDBOX_BYTES,
+            "maximumSandboxes": MAXIMUM_SANDBOXES,
+            "aggregateBytes": AGGREGATE_SANDBOX_BYTES,
             "enforcement": "xfs_project_quota_required",
             "backingCapacity": "current_headroom_with_visible_enospc_failure",
         },
@@ -210,6 +236,37 @@ def collect_storage_observation(state_root: Path) -> dict[str, Any]:
     require(isinstance(loop, dict), "runner storage loop record is invalid")
     backing_file = loop.get("back-file")
     require(isinstance(backing_file, str), "runner storage backing file is invalid")
+    loop_device_stat = os.stat(loop_device)
+    require(stat.S_ISBLK(loop_device_stat.st_mode), "runner storage loop device is not a block device")
+    loop_device_number = (
+        f"{os.major(loop_device_stat.st_rdev)}:{os.minor(loop_device_stat.st_rdev)}"
+    )
+    loop_mount_data = json.loads(
+        run(
+            [
+                "findmnt",
+                "--json",
+                "--list",
+                "-o",
+                "MAJ:MIN,TARGET",
+            ]
+        )
+    )
+    loop_mount_filesystems = loop_mount_data.get("filesystems")
+    require(
+        isinstance(loop_mount_filesystems, list),
+        "runner storage global loop mount observation is invalid",
+    )
+    loop_mount_targets: list[str] = []
+    for loop_mount in loop_mount_filesystems:
+        require(
+            isinstance(loop_mount, dict)
+            and isinstance(loop_mount.get("maj:min"), str)
+            and isinstance(loop_mount.get("target"), str),
+            "runner storage global loop mount record is invalid",
+        )
+        if loop_mount["maj:min"] == loop_device_number:
+            loop_mount_targets.append(loop_mount["target"])
     filesystem_uuid = run(["sudo", "-n", "blkid", "-s", "UUID", "-o", "value", loop_device])
     xfs_info = run(["xfs_info", str(target)])
     features = sorted(set(re.findall(r"(?:crc|finobt|ftype|projid32bit)=[01]", xfs_info)))
@@ -221,6 +278,7 @@ def collect_storage_observation(state_root: Path) -> dict[str, Any]:
         "mountTarget": mount.get("target"),
         "imagePath": str(image),
         "loopDevice": loop_device,
+        "loopMountTargets": sorted(loop_mount_targets),
         "backingFile": str(Path(backing_file).resolve(strict=True)),
         "filesystemType": mount.get("fstype"),
         "mountOptions": str(mount.get("options", "")).split(","),
@@ -245,7 +303,9 @@ def collect_storage_observation(state_root: Path) -> dict[str, Any]:
 def main() -> None:
     if len(sys.argv) != 2:
         raise RunnerStorageError("Usage: verify-runner-storage.py STATE_ROOT")
-    receipt = validate_storage_observation(collect_storage_observation(Path(sys.argv[1])))
+    receipt = validate_storage_identity_observation(
+        collect_storage_observation(Path(sys.argv[1]))
+    )
     print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
 
 

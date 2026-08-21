@@ -110,10 +110,13 @@ runner_storage_filter='{schema,stateRoot,mountTarget,image:{path:.image.path,log
   exit 66
 }
 runner_storage_receipt_sha256=$(sha256sum "${runner_storage_receipt}" | cut -d' ' -f1)
+runner_storage_filesystem_total_bytes=$(jq -er '.filesystem.totalBytes' <<<"${runner_storage}")
+runner_storage_filesystem_free_bytes=$(jq -er '.filesystem.freeBytes' <<<"${runner_storage}")
+runner_storage_backing_free_bytes=$(jq -er '.backingFilesystem.freeBytes' <<<"${runner_storage}")
 
 cpu_count=$(nproc)
 memory_available_kib=$(awk '$1 == "MemAvailable:" { print $2 }' /proc/meminfo)
-storage_available_bytes=$(df -PB1 "${state_root}" | awk 'NR == 2 { print $4 }')
+storage_available_bytes=${runner_storage_backing_free_bytes}
 storage_filesystem=$(df -P "${state_root}" | awk 'NR == 2 { print $1 }')
 required_cpu=4
 required_memory=8589934592
@@ -131,6 +134,8 @@ reasons=()
 (( cpu_count >= minimum_cpu )) || { outcome=failed; reasons+=(cpu_below_aggregate_plus_headroom); }
 (( memory_available_bytes >= minimum_memory )) || { outcome=failed; reasons+=(memory_below_aggregate_plus_headroom); }
 (( storage_available_bytes >= minimum_storage )) || { outcome=failed; reasons+=(storage_below_aggregate_plus_headroom); }
+(( runner_storage_filesystem_total_bytes >= required_storage )) || { outcome=failed; reasons+=(runner_storage_below_aggregate_capacity); }
+(( runner_storage_filesystem_free_bytes >= required_storage )) || { outcome=failed; reasons+=(runner_storage_below_aggregate_free_space); }
 [[ ${docker_root} == /home/* ]] || { outcome=failed; reasons+=(docker_root_not_under_home); }
 [[ ${docker_root} == "${state_root}"/* ]] || { outcome=failed; reasons+=(docker_root_outside_state_root); }
 

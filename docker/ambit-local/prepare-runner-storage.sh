@@ -25,41 +25,62 @@ evidence_root=${state_root}/evidence
 receipt=${evidence_root}/runner-docker-storage.json
 image_bytes=64424509440
 
-for command_name in blkid chmod find findmnt install jq losetup mkfs.xfs mktemp mountpoint mv python3 realpath stat sudo xfs_info; do
+for command_name in blkid chmod find findmnt flock install jq losetup mkfs.xfs mktemp mv python3 realpath stat sudo xfs_info; do
   command -v "${command_name}" >/dev/null || {
     echo "required runner-storage command is absent: ${command_name}" >&2
     exit 66
   }
 done
 [[ -f ${verifier} ]] || { echo 'runner storage verifier is absent' >&2; exit 66; }
+
+exec {lifecycle_fd}<"${state_root}"
+lifecycle_handle=/proc/$$/fd/${lifecycle_fd}
+lifecycle_identity=$(stat -Lc '%d:%i' -- "${lifecycle_handle}")
+[[ $(stat -c '%d:%i' -- "${state_root}") == "${lifecycle_identity}" ]] || {
+  echo 'runner storage state root changed before lifecycle lock' >&2
+  exit 66
+}
+flock -x "${lifecycle_fd}"
+[[ $(stat -c '%d:%i' -- "${state_root}") == "${lifecycle_identity}" ]] || {
+  echo 'runner storage state root changed while acquiring lifecycle lock' >&2
+  exit 66
+}
+
+require_same_object() {
+  local handle_identity path_identity
+  handle_identity=$(stat -Lc '%d:%i' -- "$1") || return 66
+  path_identity=$(stat -c '%d:%i' -- "$2") || return 66
+  [[ ${handle_identity} == "${path_identity}" ]]
+}
+
 for directory in "${target}" "${evidence_root}"; do
   [[ -d ${directory} && ! -L ${directory} ]] || { echo "runner storage directory is invalid: ${directory}" >&2; exit 66; }
   [[ $(realpath -e -- "${directory}") == "${directory}" ]] || { echo "runner storage directory is non-canonical: ${directory}" >&2; exit 66; }
 done
-[[ -z $(find "${target}" -mindepth 1 -maxdepth 1 -print -quit) ]] || {
-  echo 'runner storage target must be empty below its mount' >&2
-  exit 66
-}
-target_device=$(stat -c '%d' -- "${target}")
-target_inode=$(stat -c '%i' -- "${target}")
 
 loop_device=
 mounted=false
 image_created=false
 capacity_created=false
 temporary=
+image_fd=
+image_handle=
 cleanup_failed_prepare() {
   set +e
-  local cleanup_safe=true
+  local cleanup_safe=true image_handle_identity image_path_identity
   if [[ -n ${temporary} && -e ${temporary} ]]; then
     unlink -- "${temporary}"
   fi
-  if [[ ${mounted} == true && -n ${loop_device} ]] &&
-    [[ -n $(findmnt -rn -S "${loop_device}" -o TARGET 2>/dev/null) ]]; then
-    sudo -n umount -- "${loop_device}" || cleanup_safe=false
+  if [[ ${mounted} == true && -n ${loop_device} ]]; then
+    if collect_mount_table && select_loop_mount_targets "${loop_device}" &&
+      [[ ${#loop_mount_targets[@]} -eq 1 && ${loop_mount_targets[0]} == "${target}" ]]; then
+      sudo -n umount -- "${target}" || cleanup_safe=false
+    else
+      cleanup_safe=false
+    fi
   fi
   if [[ -n ${loop_device} ]]; then
-    if [[ -z $(findmnt -rn -S "${loop_device}" -o TARGET 2>/dev/null) ]]; then
+    if collect_mount_table && select_loop_mount_targets "${loop_device}" && [[ ${#loop_mount_targets[@]} -eq 0 ]]; then
       sudo -n losetup --detach "${loop_device}" >/dev/null 2>&1 || cleanup_safe=false
     else
       cleanup_safe=false
@@ -70,8 +91,15 @@ cleanup_failed_prepare() {
   if [[ -f ${receipt} && ! -L ${receipt} ]]; then
     cleanup_safe=false
   fi
-  if [[ ${cleanup_safe} == true && ${image_created} == true && -f ${image} && ! -L ${image} ]]; then
-    sudo -n unlink -- "${image}" || cleanup_safe=false
+  if [[ ${cleanup_safe} == true && ${image_created} == true ]]; then
+    if [[ -n ${image_handle} && -e ${image_handle} && -f ${image} && ! -L ${image} ]] &&
+      image_handle_identity=$(stat -Lc '%d:%i' -- "${image_handle}") &&
+      image_path_identity=$(stat -c '%d:%i' -- "${image}") &&
+      [[ ${image_path_identity} == "${image_handle_identity}" ]]; then
+      sudo -n unlink -- "${image}" || cleanup_safe=false
+    else
+      cleanup_safe=false
+    fi
   fi
   if [[ ${cleanup_safe} == true && ${capacity_created} == true && -d ${capacity_root} && ! -L ${capacity_root} ]]; then
     sudo -n rmdir --ignore-fail-on-non-empty -- "${capacity_root}"
@@ -96,7 +124,71 @@ write_current_receipt() {
   temporary=
 }
 
-if [[ -e ${image} || -e ${receipt} ]]; then
+mount_table=
+loop_mount_targets=()
+target_mount_sources=()
+collect_mount_table() {
+  mount_table=$(findmnt --json --list -o SOURCE,MAJ:MIN,TARGET) || {
+    echo 'runner storage global mount observation failed' >&2
+    return 66
+  }
+  jq -e '
+    (.filesystems | type == "array") and
+    all(.filesystems[];
+      (.source | type == "string") and
+      (."maj:min" | type == "string") and
+      (.target | type == "string"))
+  ' <<<"${mount_table}" >/dev/null || {
+    echo 'runner storage global mount observation is invalid' >&2
+    return 66
+  }
+}
+
+select_loop_mount_targets() {
+  local device_number targets_json
+  loop_mount_targets=()
+  device_number=$(stat -c '%Hr:%Lr' -- "$1") || return 66
+  targets_json=$(jq -ce --arg deviceNumber "${device_number}" '
+    [.filesystems[] | select(."maj:min" == $deviceNumber) | .target]
+  ' <<<"${mount_table}") || return 66
+  mapfile -t loop_mount_targets < <(jq -r '.[]' <<<"${targets_json}")
+}
+
+select_target_mount_sources() {
+  local sources_json
+  target_mount_sources=()
+  sources_json=$(jq -ce --arg target "$1" '
+    [.filesystems[] | select(.target == $target) | .source]
+  ' <<<"${mount_table}") || return 66
+  mapfile -t target_mount_sources < <(jq -r '.[]' <<<"${sources_json}")
+}
+
+target_device=
+target_inode=
+prove_unmounted_empty_target() {
+  local first_entry
+  collect_mount_table
+  select_target_mount_sources "${target}"
+  [[ ${#target_mount_sources[@]} -eq 0 ]] || {
+    echo 'runner storage target is mounted without a complete storage identity' >&2
+    return 66
+  }
+  first_entry=$(find "${target}" -mindepth 1 -maxdepth 1 -print -quit) || {
+    echo 'runner storage target contents could not be observed' >&2
+    return 66
+  }
+  [[ -z ${first_entry} ]] || {
+    echo 'runner storage target must be empty below its mount' >&2
+    return 66
+  }
+  target_device=$(stat -c '%d' -- "${target}")
+  target_inode=$(stat -c '%i' -- "${target}")
+}
+
+if [[ -e ${image} || -L ${image} || -e ${receipt} || -L ${receipt} ]]; then
+  [[ -d ${capacity_root} && ! -L ${capacity_root} ]] || { echo 'runner capacity root is invalid' >&2; exit 66; }
+  [[ $(stat -c '%u' -- "${capacity_root}") == 0 ]] || { echo 'runner capacity root owner differs' >&2; exit 66; }
+  [[ $(stat -c '%a' -- "${capacity_root}") == 711 ]] || { echo 'runner capacity root mode differs' >&2; exit 66; }
   [[ -f ${image} && ! -L ${image} && -f ${receipt} && ! -L ${receipt} ]] || {
     echo 'runner storage is incomplete; run remove-runner-storage.sh before retrying' >&2
     exit 65
@@ -107,12 +199,19 @@ if [[ -e ${image} || -e ${receipt} ]]; then
   [[ $(jq -er '.image.path' "${receipt}") == "${image}" ]] || { echo 'runner storage receipt image path differs' >&2; exit 66; }
   [[ $(jq -er '.image.device' "${receipt}") == "$(stat -c '%d' -- "${image}")" ]] || { echo 'runner storage receipt image device differs' >&2; exit 66; }
   [[ $(jq -er '.image.inode' "${receipt}") == "$(stat -c '%i' -- "${image}")" ]] || { echo 'runner storage receipt image inode differs' >&2; exit 66; }
-  if mountpoint -q -- "${target}"; then
+  collect_mount_table
+  select_target_mount_sources "${target}"
+  if [[ ${#target_mount_sources[@]} -gt 0 ]]; then
+    [[ ${#target_mount_sources[@]} -eq 1 ]] || {
+      echo 'runner storage target has multiple global mounts' >&2
+      exit 66
+    }
     write_current_receipt
     trap - EXIT INT TERM
     printf '%s\n' "${receipt}"
     exit 0
   fi
+  prove_unmounted_empty_target
   associated_output=$(sudo -n losetup --noheadings --output NAME --associated "${image}")
   associated=()
   if [[ -n ${associated_output} ]]; then
@@ -121,7 +220,9 @@ if [[ -e ${image} || -e ${receipt} ]]; then
   [[ ${#associated[@]} -le 1 ]] || { echo 'runner storage image has multiple loop devices' >&2; exit 66; }
   if [[ ${#associated[@]} -eq 1 ]]; then
     loop_device=${associated[0]//[[:space:]]/}
-    [[ -z $(findmnt -rn -S "${loop_device}" -o TARGET) ]] || {
+    collect_mount_table
+    select_loop_mount_targets "${loop_device}"
+    [[ ${#loop_mount_targets[@]} -eq 0 ]] || {
       echo 'runner storage loop is mounted at an unexpected target' >&2
       exit 66
     }
@@ -136,7 +237,7 @@ if [[ -e ${image} || -e ${receipt} ]]; then
   }
   exec {target_fd}<"${target}"
   target_handle=/proc/$$/fd/${target_fd}
-  [[ $(stat -c '%d:%i' -- "${target_handle}") == "${target_device}:${target_inode}" ]] || {
+  [[ $(stat -Lc '%d:%i' -- "${target_handle}") == "${target_device}:${target_inode}" ]] || {
     echo 'runner storage target changed before mount' >&2
     exit 66
   }
@@ -148,6 +249,8 @@ if [[ -e ${image} || -e ${receipt} ]]; then
   exit 0
 fi
 
+prove_unmounted_empty_target
+
 if [[ ! -e ${capacity_root} ]]; then
   install -d -m 0700 -- "${capacity_root}"
   capacity_created=true
@@ -155,47 +258,63 @@ fi
 [[ -d ${capacity_root} && ! -L ${capacity_root} ]] || { echo 'runner capacity root is invalid' >&2; exit 66; }
 [[ $(realpath -e -- "${capacity_root}") == "${capacity_root}" ]] || { echo 'runner capacity root is non-canonical' >&2; exit 66; }
 
+exec {capacity_fd}<"${capacity_root}"
+capacity_handle=/proc/$$/fd/${capacity_fd}
+require_same_object "${capacity_handle}" "${capacity_root}" || {
+  echo 'runner capacity root changed before image creation' >&2
+  exit 66
+}
+
 umask 077
-python3 - "${image}" "${image_bytes}" <<'PY'
+set -C
+if ! exec {image_fd}>"${image}"; then
+  set +C
+  echo 'runner storage image already exists or could not be created safely' >&2
+  exit 66
+fi
+set +C
+image_created=true
+image_handle=/proc/$$/fd/${image_fd}
+python3 - "${image_handle}" "${image_bytes}" <<'PY'
 import os
 import sys
 
 path = sys.argv[1]
 size = int(sys.argv[2])
-fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+fd = os.open(path, os.O_WRONLY)
 try:
     os.ftruncate(fd, size)
     os.fsync(fd)
 finally:
     os.close(fd)
 PY
-image_created=true
 [[ -f ${image} && ! -L ${image} ]] || { echo 'runner storage image creation failed' >&2; exit 66; }
-[[ $(stat -c '%s' -- "${image}") == "${image_bytes}" ]] || { echo 'runner storage image size differs' >&2; exit 66; }
-[[ $(stat -c '%a' -- "${image}") == 600 ]] || { echo 'runner storage image mode differs' >&2; exit 66; }
-
-exec {capacity_fd}<"${capacity_root}"
-exec {image_fd}<>"${image}"
-capacity_handle=/proc/$$/fd/${capacity_fd}
-image_handle=/proc/$$/fd/${image_fd}
-[[ $(stat -c '%d:%i' -- "${capacity_handle}") == "$(stat -c '%d:%i' -- "${capacity_root}")" ]] || {
-  echo 'runner capacity root changed before ownership transfer' >&2
+require_same_object "${image_handle}" "${image}" || {
+  echo 'runner storage image path changed after creation' >&2
   exit 66
 }
-[[ $(stat -c '%d:%i' -- "${image_handle}") == "$(stat -c '%d:%i' -- "${image}")" ]] || {
-  echo 'runner storage image changed before ownership transfer' >&2
+[[ $(stat -Lc '%s' -- "${image_handle}") == "${image_bytes}" ]] || { echo 'runner storage image size differs' >&2; exit 66; }
+[[ $(stat -Lc '%a' -- "${image_handle}") == 600 ]] || { echo 'runner storage image mode differs' >&2; exit 66; }
+require_same_object "${capacity_handle}" "${capacity_root}" || {
+  echo 'runner capacity root changed before ownership transfer' >&2
   exit 66
 }
 sudo -n chown root:root -- "${capacity_handle}" "${image_handle}"
 sudo -n chmod 0711 -- "${capacity_handle}"
 sudo -n chmod 0600 -- "${image_handle}"
+[[ $(stat -Lc '%u:%a' -- "${capacity_handle}") == 0:711 ]] || { echo 'runner capacity root ownership transfer failed' >&2; exit 66; }
+[[ $(stat -Lc '%u:%a' -- "${image_handle}") == 0:600 ]] || { echo 'runner storage image ownership transfer failed' >&2; exit 66; }
+require_same_object "${image_handle}" "${image}" || {
+  echo 'runner storage image path changed during ownership transfer' >&2
+  exit 66
+}
 
 sudo -n mkfs.xfs -q -m crc=1,finobt=1 -n ftype=1 -- "${image_handle}"
 loop_device=$(sudo -n losetup --find --show --nooverlap "${image_handle}")
 [[ ${loop_device} =~ ^/dev/loop[0-9]+$ ]] || { echo 'runner storage loop device is invalid' >&2; exit 66; }
 exec {target_fd}<"${target}"
 target_handle=/proc/$$/fd/${target_fd}
-[[ $(stat -c '%d:%i' -- "${target_handle}") == "${target_device}:${target_inode}" ]] || {
+[[ $(stat -Lc '%d:%i' -- "${target_handle}") == "${target_device}:${target_inode}" ]] || {
   echo 'runner storage target changed before mount' >&2
   exit 66
 }
