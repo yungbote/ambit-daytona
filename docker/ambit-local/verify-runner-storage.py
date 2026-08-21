@@ -41,6 +41,11 @@ def validate_storage_identity_observation(value: dict[str, Any]) -> dict[str, An
         "backingFile",
         "backingFilesystemFreeBytes",
         "backingFilesystemTotalBytes",
+        "capacityDevice",
+        "capacityInode",
+        "capacityMode",
+        "capacityOwnerGid",
+        "capacityOwnerUid",
         "filesystemFreeBytes",
         "filesystemTotalBytes",
         "filesystemType",
@@ -50,6 +55,7 @@ def validate_storage_identity_observation(value: dict[str, Any]) -> dict[str, An
         "imageInode",
         "imageLogicalBytes",
         "imageMode",
+        "imageOwnerGid",
         "imageOwnerUid",
         "imagePath",
         "loopDevice",
@@ -83,6 +89,24 @@ def validate_storage_identity_observation(value: dict[str, Any]) -> dict[str, An
         "runner storage target has a missing, nested, or foreign mount",
     )
     require(value["filesystemType"] == "xfs", "runner storage filesystem is not XFS")
+    require(
+        is_plain_int(value["capacityDevice"])
+        and value["capacityDevice"] == value["stateRootDevice"],
+        "runner capacity root is on a different backing filesystem",
+    )
+    require(
+        is_plain_int(value["capacityInode"]) and value["capacityInode"] > 0,
+        "runner capacity root inode is invalid",
+    )
+    require(
+        is_plain_int(value["capacityOwnerUid"])
+        and value["capacityOwnerUid"] == 0
+        and is_plain_int(value["capacityOwnerGid"])
+        and value["capacityOwnerGid"] == 0
+        and is_plain_int(value["capacityMode"])
+        and value["capacityMode"] == 0o711,
+        "runner capacity root ownership or mode differs",
+    )
     options = value["mountOptions"]
     require(
         isinstance(options, list) and all(isinstance(option, str) for option in options),
@@ -107,8 +131,11 @@ def validate_storage_identity_observation(value: dict[str, Any]) -> dict[str, An
         "runner storage image mode differs",
     )
     require(
-        is_plain_int(value["imageOwnerUid"]) and value["imageOwnerUid"] == 0,
-        "runner storage image owner differs",
+        is_plain_int(value["imageOwnerUid"])
+        and value["imageOwnerUid"] == 0
+        and is_plain_int(value["imageOwnerGid"])
+        and value["imageOwnerGid"] == 0,
+        "runner storage image owner or group differs",
     )
     require(
         is_plain_int(value["imageDevice"])
@@ -215,11 +242,15 @@ def collect_storage_observation(state_root: Path) -> dict[str, Any]:
     require(str(state_root).startswith("/home/"), "STATE_ROOT is outside /home")
     require(state_root.resolve(strict=True) == state_root, "STATE_ROOT is not canonical")
     target = state_root / "runner-docker"
+    capacity = state_root / "capacity"
     image = state_root / "capacity" / "runner-docker.xfs"
     target_stat = os.lstat(target)
+    capacity_stat = os.lstat(capacity)
     image_stat = os.lstat(image)
     require(stat.S_ISDIR(target_stat.st_mode), "runner storage target is not a directory")
     require(not target.is_symlink(), "runner storage target is a symlink")
+    require(stat.S_ISDIR(capacity_stat.st_mode), "runner capacity root is not a directory")
+    require(not capacity.is_symlink(), "runner capacity root is a symlink")
     require(stat.S_ISREG(image_stat.st_mode), "runner storage image is not regular")
     require(not image.is_symlink(), "runner storage image is a symlink")
 
@@ -286,6 +317,11 @@ def collect_storage_observation(state_root: Path) -> dict[str, Any]:
     state_root_stat = os.stat(state_root)
     return {
         "stateRoot": str(state_root),
+        "capacityMode": stat.S_IMODE(capacity_stat.st_mode),
+        "capacityOwnerUid": capacity_stat.st_uid,
+        "capacityOwnerGid": capacity_stat.st_gid,
+        "capacityDevice": capacity_stat.st_dev,
+        "capacityInode": capacity_stat.st_ino,
         "mountTarget": mount.get("target"),
         "imagePath": str(image),
         "loopDevice": loop_device,
@@ -297,6 +333,7 @@ def collect_storage_observation(state_root: Path) -> dict[str, Any]:
         "imageAllocatedBytes": image_stat.st_blocks * 512,
         "imageMode": stat.S_IMODE(image_stat.st_mode),
         "imageOwnerUid": image_stat.st_uid,
+        "imageOwnerGid": image_stat.st_gid,
         "imageDevice": image_stat.st_dev,
         "imageInode": image_stat.st_ino,
         "stateRootDevice": state_root_stat.st_dev,
