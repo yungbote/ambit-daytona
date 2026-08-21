@@ -598,12 +598,10 @@ def teardown_runtime(prefix: OpenPrefix, expected_device: int | None, expected_i
             and target_tree[0].device_number == loop_device_number(loop_device),
             "runner storage target has a nested or foreign mount",
         )
-        target_fd, _ = open_target(prefix.state_root_fd, prefix.state_root_path)
-        try:
-            handle = f"/proc/self/fd/{target_fd}"
-            run_tool("umount", "--", handle, pass_fds=(target_fd,))
-        finally:
-            os.close(target_fd)
+        # Device-target unmount is unambiguous only after the complete global
+        # major:minor roster above proves this exact target is the sole mount.
+        # It also avoids holding an open file on the filesystem being unmounted.
+        run_tool("umount", "--", loop_device)
         require(not mounts_at_or_below(target), "runner storage target remained mounted")
         require(not mount_targets_for_loop(loop_device), "runner storage loop remained mounted")
     else:
