@@ -24,7 +24,7 @@ image=${capacity_root}/runner-docker.xfs
 evidence_root=${state_root}/evidence
 receipt=${evidence_root}/runner-docker-storage.json
 image_bytes=64424509440
-for command_name in blkid findmnt flock id jq losetup python3 realpath stat sudo; do
+for command_name in blkid find findmnt flock id jq losetup python3 realpath rmdir stat sudo unlink; do
   command -v "${command_name}" >/dev/null || {
     echo "required runner-storage command is absent: ${command_name}" >&2
     exit 66
@@ -52,6 +52,11 @@ for directory in "${target}" "${capacity_root}" "${evidence_root}"; do
   [[ -d ${directory} && ! -L ${directory} ]] || { echo "runner storage directory is invalid: ${directory}" >&2; exit 66; }
   [[ $(realpath -e -- "${directory}") == "${directory}" ]] || { echo "runner storage directory is non-canonical: ${directory}" >&2; exit 66; }
 done
+unexpected_capacity_entry=$(sudo -n find "${capacity_root}" -mindepth 1 -maxdepth 1 ! -name 'runner-docker.xfs' -print -quit) || {
+  echo 'runner storage capacity-root contents could not be observed' >&2
+  exit 66
+}
+[[ -z ${unexpected_capacity_entry} ]] || { echo 'runner storage capacity root contains a foreign entry' >&2; exit 66; }
 [[ $(stat -c '%s' -- "${image}") == "${image_bytes}" ]] || { echo 'runner storage image size differs' >&2; exit 66; }
 current_uid=$(id -u)
 capacity_owner=$(stat -c '%u' -- "${capacity_root}")
@@ -94,6 +99,7 @@ fi
 loop_device=
 if [[ ${#associated[@]} -eq 1 ]]; then
   loop_device=${associated[0]//[[:space:]]/}
+  [[ ${loop_device} =~ ^/dev/loop[0-9]+$ ]] || { echo 'runner storage loop device is invalid' >&2; exit 66; }
 fi
 
 mount_table=
@@ -170,7 +176,6 @@ if [[ ${#target_mount_sources[@]} -gt 0 ]]; then
 fi
 
 if [[ -n ${loop_device} ]]; then
-  [[ ${loop_device} =~ ^/dev/loop[0-9]+$ ]] || { echo 'runner storage loop device is invalid' >&2; exit 66; }
   collect_mount_table
   select_loop_mount_targets "${loop_device}"
   [[ ${#loop_mount_targets[@]} -eq 0 ]] || {
@@ -178,7 +183,9 @@ if [[ -n ${loop_device} ]]; then
     exit 66
   }
   if [[ -f ${receipt} ]]; then
-    [[ $(sudo -n blkid -s UUID -o value "${loop_device}") == "$(jq -er '.filesystem.uuid' "${receipt}")" ]] || {
+    filesystem_uuid=$(sudo -n blkid -s UUID -o value "${loop_device}") || { echo 'runner storage filesystem UUID could not be observed' >&2; exit 66; }
+    expected_uuid=$(jq -er '.filesystem.uuid' "${receipt}") || { echo 'runner storage receipt UUID is invalid' >&2; exit 66; }
+    [[ ${filesystem_uuid} == "${expected_uuid}" ]] || {
       echo 'runner storage filesystem UUID differs from its receipt' >&2
       exit 66
     }
@@ -195,5 +202,5 @@ if [[ -f ${receipt} && ! -L ${receipt} ]]; then
   unlink -- "${receipt}"
 fi
 sudo -n unlink -- "${image}"
-sudo -n rmdir --ignore-fail-on-non-empty -- "${capacity_root}"
+sudo -n rmdir -- "${capacity_root}"
 printf '%s\n' "removed ${target} mount, ${loop_device:-no-loop}, ${image}, and ${receipt}"

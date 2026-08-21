@@ -220,6 +220,7 @@ if [[ -e ${image} || -L ${image} || -e ${receipt} || -L ${receipt} ]]; then
   [[ ${#associated[@]} -le 1 ]] || { echo 'runner storage image has multiple loop devices' >&2; exit 66; }
   if [[ ${#associated[@]} -eq 1 ]]; then
     loop_device=${associated[0]//[[:space:]]/}
+    [[ ${loop_device} =~ ^/dev/loop[0-9]+$ ]] || { echo 'runner storage loop device is invalid' >&2; exit 66; }
     collect_mount_table
     select_loop_mount_targets "${loop_device}"
     [[ ${#loop_mount_targets[@]} -eq 0 ]] || {
@@ -230,8 +231,11 @@ if [[ -e ${image} || -L ${image} || -e ${receipt} || -L ${receipt} ]]; then
     loop_device=$(sudo -n losetup --find --show --nooverlap "${image}")
   fi
   [[ ${loop_device} =~ ^/dev/loop[0-9]+$ ]] || { echo 'runner storage loop device is invalid' >&2; exit 66; }
-  [[ $(sudo -n blkid -s TYPE -o value "${loop_device}") == xfs ]] || { echo 'runner storage image is not XFS' >&2; exit 66; }
-  [[ $(sudo -n blkid -s UUID -o value "${loop_device}") == "$(jq -er '.filesystem.uuid' "${receipt}")" ]] || {
+  filesystem_type=$(sudo -n blkid -s TYPE -o value "${loop_device}") || { echo 'runner storage filesystem type could not be observed' >&2; exit 66; }
+  [[ ${filesystem_type} == xfs ]] || { echo 'runner storage image is not XFS' >&2; exit 66; }
+  filesystem_uuid=$(sudo -n blkid -s UUID -o value "${loop_device}") || { echo 'runner storage filesystem UUID could not be observed' >&2; exit 66; }
+  expected_uuid=$(jq -er '.filesystem.uuid' "${receipt}") || { echo 'runner storage receipt UUID is invalid' >&2; exit 66; }
+  [[ ${filesystem_uuid} == "${expected_uuid}" ]] || {
     echo 'runner storage filesystem UUID differs from its receipt' >&2
     exit 66
   }

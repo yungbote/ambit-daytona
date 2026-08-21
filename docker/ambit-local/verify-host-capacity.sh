@@ -21,6 +21,20 @@ output=$2
   exit 64
 }
 [[ ${output} = /* && ! -e ${output} ]] || { echo 'OUTPUT_RECEIPT must be an unused absolute path' >&2; exit 64; }
+command -v flock >/dev/null || { echo 'required host-capacity command is absent: flock' >&2; exit 66; }
+
+exec {lifecycle_fd}<"${state_root}"
+lifecycle_handle=/proc/$$/fd/${lifecycle_fd}
+lifecycle_identity=$(stat -Lc '%d:%i' -- "${lifecycle_handle}")
+[[ $(stat -c '%d:%i' -- "${state_root}") == "${lifecycle_identity}" ]] || {
+  echo 'runner storage state root changed before readiness lock' >&2
+  exit 66
+}
+flock -s "${lifecycle_fd}"
+[[ $(stat -c '%d:%i' -- "${state_root}") == "${lifecycle_identity}" ]] || {
+  echo 'runner storage state root changed while acquiring readiness lock' >&2
+  exit 66
+}
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 runtime_root_tool=${script_dir}/isolated_runtime_root.py

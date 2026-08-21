@@ -168,6 +168,11 @@ class VerifyRunnerStorageTest(unittest.TestCase):
             remove.index('flock -x "${lifecycle_fd}"'),
             remove.index('associated_output=$(sudo -n losetup'),
         )
+        host_gate = HOST_GATE_SCRIPT.read_text()
+        self.assertLess(
+            host_gate.index('flock -s "${lifecycle_fd}"'),
+            host_gate.index('runner_storage=$(python3 "${runner_storage_tool}"'),
+        )
 
     def test_created_image_descriptor_remains_pinned_through_privileged_use(self) -> None:
         prepare = PREPARE_SCRIPT.read_text()
@@ -208,6 +213,7 @@ class VerifyRunnerStorageTest(unittest.TestCase):
         delete = remove.index('sudo -n unlink -- "${image}"')
         self.assertLess(unpublished_identity, no_loop_or_mount)
         self.assertLess(no_loop_or_mount, delete)
+        self.assertNotIn("rmdir --ignore-fail-on-non-empty", remove)
 
     def test_extra_observation_fields_are_rejected(self) -> None:
         candidate = copy.deepcopy(self.observation())
