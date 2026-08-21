@@ -151,6 +151,13 @@ FORBIDDEN_SERVICE_KEYS = frozenset(
 )
 PROFILE_REF = "ambit.workspace-provider-capacity/local-daytona@1"
 PROFILE_DIGEST = "sha256:9326b853b19bb4c1e0704f676751fec9269832be45fe3610b61f8644256e6cfe"
+RUNNER_DOCKER_STORAGE_ROOT = Path("/home/.ambit-c16b-runner-storage")
+RUNNER_DOCKER_STORAGE_SOURCE = RUNNER_DOCKER_STORAGE_ROOT / "runner-docker"
+RUNNER_DOCKER_STORAGE_TARGET = "/var/lib/docker"
+RUNNER_DOCKER_BIND_OPTIONS = {
+    "create_host_path": False,
+    "propagation": "rprivate",
+}
 
 
 def require(condition: bool, message: str) -> None:
@@ -249,7 +256,26 @@ def exact_environment(service: dict[str, Any], expected: dict[str, str], name: s
         require(environment.get(key) == value, f"{name} environment differs: {key}")
 
 
+def paths_overlap(first: Path, second: Path) -> bool:
+    return first == second or first in second.parents or second in first.parents
+
+
+def ordinary_bind(source: Path, target: str, *, read_only: bool = False) -> dict[str, Any]:
+    mount: dict[str, Any] = {
+        "type": "bind",
+        "source": str(source),
+        "target": target,
+    }
+    if read_only:
+        mount["read_only"] = True
+    return mount
+
+
 def validate_compose(config: dict[str, Any], values: dict[str, str], state_root: Path) -> dict[str, Any]:
+    require(
+        not paths_overlap(state_root, RUNNER_DOCKER_STORAGE_ROOT),
+        "state root overlaps the root-owned runner storage authority",
+    )
     require(config.get("name") == "ambit-daytona-local", "compose project name is invalid")
     services = config.get("services")
     require(isinstance(services, dict) and set(services) == EXPECTED_SERVICES, "service roster differs")
@@ -306,28 +332,71 @@ def validate_compose(config: dict[str, Any], values: dict[str, str], state_root:
             f"published port is not exact loopback: {name}",
         )
 
-    expected_mounts = {
-        "runner": {"/var/lib/docker": "runner-docker", "/home/daytona/runner": "runner-log"},
-        "db": {"/var/lib/postgresql/data": "postgres"},
-        "redis": {"/data": "redis"},
-        "minio": {"/data": "minio"},
-        "registry": {"/var/lib/registry": "registry"},
-        "dex": {"/etc/dex/config.yaml": "config/dex.yaml", "/var/dex": "dex"},
+    expected_mounts: dict[str, dict[str, dict[str, Any]]] = {
+        "runner": {
+            RUNNER_DOCKER_STORAGE_TARGET: {
+                "type": "bind",
+                "source": str(RUNNER_DOCKER_STORAGE_SOURCE),
+                "target": RUNNER_DOCKER_STORAGE_TARGET,
+                "bind": RUNNER_DOCKER_BIND_OPTIONS,
+            },
+            "/home/daytona/runner": ordinary_bind(
+                state_root / "runner-log", "/home/daytona/runner"
+            ),
+        },
+        "db": {
+            "/var/lib/postgresql/data": ordinary_bind(
+                state_root / "postgres", "/var/lib/postgresql/data"
+            )
+        },
+        "redis": {"/data": ordinary_bind(state_root / "redis", "/data")},
+        "minio": {"/data": ordinary_bind(state_root / "minio", "/data")},
+        "registry": {
+            "/var/lib/registry": ordinary_bind(
+                state_root / "registry", "/var/lib/registry"
+            )
+        },
+        "dex": {
+            "/etc/dex/config.yaml": ordinary_bind(
+                state_root / "config/dex.yaml", "/etc/dex/config.yaml", read_only=True
+            ),
+            "/var/dex": ordinary_bind(state_root / "dex", "/var/dex"),
+        },
     }
     for name, service in services.items():
         expected = expected_mounts.get(name, {})
         mounts = service.get("volumes", [])
         require(isinstance(mounts, list) and len(mounts) == len(expected), f"mount roster differs: {name}")
-        observed: dict[str, str] = {}
+        observed_targets: set[str] = set()
         for mount in mounts:
             require(isinstance(mount, dict) and mount.get("type") == "bind", f"non-bind mount: {name}")
             source = Path(str(mount.get("source", "")))
             target = str(mount.get("target", ""))
             require(source.is_absolute(), f"relative mount source: {name}")
-            require(source.resolve() == source, f"symlinked/non-canonical mount source: {name}")
-            require(os.path.commonpath([state_root, source]) == str(state_root), f"mount escapes state root: {name}")
-            observed[target] = str(source.relative_to(state_root))
-        require(observed == expected, f"mount targets differ: {name}")
+            require(target not in observed_targets, f"duplicate mount target: {name}: {target}")
+            expected_mount = expected.get(target)
+            require(expected_mount is not None, f"mount target differs: {name}: {target}")
+            require(mount == expected_mount, f"mount contract differs: {name}: {target}")
+            if target == RUNNER_DOCKER_STORAGE_TARGET:
+                bind = mount.get("bind")
+                require(
+                    isinstance(bind, dict)
+                    and set(bind) == set(RUNNER_DOCKER_BIND_OPTIONS)
+                    and bind.get("create_host_path") is False
+                    and bind.get("propagation") == "rprivate",
+                    "runner Docker bind options differ",
+                )
+            else:
+                require(
+                    source == state_root or state_root in source.parents,
+                    f"mount escapes state root: {name}: {target}",
+                )
+                require(
+                    source.resolve() == source,
+                    f"symlinked/non-canonical mount source: {name}: {target}",
+                )
+            observed_targets.add(target)
+        require(observed_targets == set(expected), f"mount targets differ: {name}")
 
     api_expected = {
         "DEFAULT_SNAPSHOT": values["AMBIT_C16B_RUNTIME_OCI_REFERENCE"],
@@ -422,7 +491,7 @@ def validate_compose(config: dict[str, Any], values: dict[str, str], state_root:
     require("phc_bYtEsdMDr" not in rendered, "telemetry credential leaked")
 
     return {
-        "schema": "ambit.local-daytona-compose-verification/v2",
+        "schema": "ambit.local-daytona-compose-verification/v3",
         "outcome": "passed",
         "provider": "daytona",
         "deployment": "self_hosted_local",
@@ -440,6 +509,14 @@ def validate_compose(config: dict[str, Any], values: dict[str, str], state_root:
         },
         "network": {"name": "provider", "driver": "bridge", "internal": True},
         "stateRoot": str(state_root),
+        "runnerDockerStorageAuthority": {
+            "source": str(RUNNER_DOCKER_STORAGE_SOURCE),
+            "target": RUNNER_DOCKER_STORAGE_TARGET,
+            "bind": {
+                "createHostPath": False,
+                "propagation": RUNNER_DOCKER_BIND_OPTIONS["propagation"],
+            },
+        },
         "resourceLimitsDisabled": False,
         "interSandboxNetworkEnabled": False,
         "outerResourceCeilings": {
