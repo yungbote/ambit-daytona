@@ -102,8 +102,11 @@ mount, unmount, detach, unlink, and rmdir mutation is centralized in
 `runner-storage-lifecycle.py`. Before `sudo` executes it, a root launcher opens
 the regular helper with `O_NOFOLLOW`, reads it once, requires the exact reviewed
 SHA-256 embedded by both wrappers, and compiles only those verified in-memory
-bytes. A same-UID pathname or in-place replacement therefore cannot change the
-code that receives privilege.
+bytes. It uses the exact root-owned `/usr/bin/python3` with `-I -S -B`, an empty
+environment containing only the exact task caller IDs and minimal root-owned
+tool path, and `/` as its working directory. Caller-CWD modules, `PYTHONPATH`,
+user site packages, bytecode writes, and helper pathname/in-place replacement
+therefore cannot change the code that receives privilege.
 
 The helper reduces the complete admitted prefix state instead of inferring
 success from one happy-path shape. It recognizes absent storage, empty caller-
@@ -117,18 +120,30 @@ owner/group/mode/oversize/device/inode, foreign
 children, and impossible prefixes without mutation. New creation retains the
 original image descriptor continuously through truncate, ownership transfer,
 formatting, loop attachment, and mount. Removal re-proves the same descriptor
-identities, enumerates every global mount by exact loop major/minor, refuses
-second, nested, or foreign mounts, unmounts and detaches through the helper,
-then unlinks and rmdirs relative to pinned parent descriptors. Thus a normal
-failure, signal, process kill, or power loss leaves either a completed identity
-or another explicitly admitted prefix that the same reducer can finish; it
-does not require a one-off manual pathname repair and creates no boot residue.
+identities and enumerates the loop major/minor in every mount namespace
+observable through `/proc/<pid>/ns/mnt` and its matching `mountinfo`. Any
+unreadable namespace fails closed; any second, nested, alternate-target, or
+foreign-namespace mount blocks unmount, detach, and object deletion. This
+requires the provider processes and their mount namespaces to be stopped
+before removal. Only after the sole helper-namespace target is proved does the
+helper unmount, rescan every observable namespace, detach, and unlink/rmdir
+relative to pinned parent descriptors. Thus a normal failure, signal, process
+kill, or power loss leaves either a completed identity or another explicitly
+admitted prefix that the same reducer can finish; it does not require a one-off
+manual pathname repair and creates no boot residue. A namespace pinned without
+any live `/proc` representative is outside this source proof and remains a live
+teardown acceptance check rather than an assumed guarantee.
 
 The runner-storage receipt is an identity observation, not a readiness lease.
 Ordinary sandbox use can reduce its inner free space below 40 GiB or its sparse
 backing filesystem below 60 GiB without changing which image, XFS filesystem,
 quota mount, or target the lifecycle owns. Recovery and teardown therefore
 validate nonnegative current observations but apply no free-space threshold.
+Backing-filesystem total/free bytes and sparse allocated bytes remain current
+observations, not stable receipt identity; online backing resize does not force
+an identity rewrite. Stable receipt comparison does bind the exact caller-owned
+`0700` state-root device/inode/owner/group, root-owned `0711` capacity-root
+device/inode/owner/group, and root-owned `0600` image identity.
 Only `verify-host-capacity.sh` applies the current 40 GiB inner aggregate and
 60 GiB backing-headroom thresholds. This keeps recovery and rollback available
 at zero free bytes while preventing a near-full filesystem from receiving a
