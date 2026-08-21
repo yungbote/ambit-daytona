@@ -107,10 +107,13 @@ code that receives privilege.
 
 The helper reduces the complete admitted prefix state instead of inferring
 success from one happy-path shape. It recognizes absent storage, empty caller-
-or root-owned `0700` capacity roots, the published root-owned `0711` root, exact
-caller/root `0600` image prefixes interrupted at any ownership boundary, and
-the empty `0711` root left by interruption between image unlink and directory
-removal. It rejects symlinks, wrong owner/group/mode/size/device/inode, foreign
+or root-owned `0700` capacity roots, the published root-owned `0711` root,
+zero-length, partial-length, and exact-length caller/root `0600` image prefixes
+interrupted before or during truncate and ownership transitions, and the empty
+`0711` root left by interruption between image unlink and directory removal.
+Only exact target length can proceed to formatting or published recovery;
+incomplete images are teardown-only. It rejects symlinks, wrong
+owner/group/mode/oversize/device/inode, foreign
 children, and impossible prefixes without mutation. New creation retains the
 original image descriptor continuously through truncate, ownership transfer,
 formatting, loop attachment, and mount. Removal re-proves the same descriptor
