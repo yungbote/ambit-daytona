@@ -96,20 +96,30 @@ invocations cannot interleave image, loop, mount, receipt, or cleanup state.
 The host-readiness gate holds the matching shared descriptor lock across its
 identity and headroom observation, so it cannot publish a receipt from the
 middle of prepare or remove.
-New image creation keeps its original descriptor open continuously through
-truncate, ownership transfer, formatting, and loop attachment; it never
-reopens a replaceable pathname before a privileged mutation. Its failure trap
-is installed before the first capacity mutation and removes only that pinned
-image when its current path still names the same device and inode. A process
-kill or power loss may leave an exact image without a final receipt;
-`remove-runner-storage.sh` deliberately accepts that one incomplete state after
-re-proving path, owner, mode, size, loop, mount, and nesting. After stopping the
-provider stack, the remove script performs the complete rollback: it refuses
-foreign or nested mounts and changed receipt identity, enumerates every global
-mount with the loop block device's exact major/minor identity, unmounts only
-the exact target after the shared identity collector proves there is no second
-mount, detaches only the image-associated loop device, and removes only the
-image and receipt. It creates no boot-time residue.
+The shell wrappers own only that lock, live observation, receipt comparison,
+and transition ordering. Every privileged capacity, image, filesystem, loop,
+mount, unmount, detach, unlink, and rmdir mutation is centralized in
+`runner-storage-lifecycle.py`. Before `sudo` executes it, a root launcher opens
+the regular helper with `O_NOFOLLOW`, reads it once, requires the exact reviewed
+SHA-256 embedded by both wrappers, and compiles only those verified in-memory
+bytes. A same-UID pathname or in-place replacement therefore cannot change the
+code that receives privilege.
+
+The helper reduces the complete admitted prefix state instead of inferring
+success from one happy-path shape. It recognizes absent storage, empty caller-
+or root-owned `0700` capacity roots, the published root-owned `0711` root, exact
+caller/root `0600` image prefixes interrupted at any ownership boundary, and
+the empty `0711` root left by interruption between image unlink and directory
+removal. It rejects symlinks, wrong owner/group/mode/size/device/inode, foreign
+children, and impossible prefixes without mutation. New creation retains the
+original image descriptor continuously through truncate, ownership transfer,
+formatting, loop attachment, and mount. Removal re-proves the same descriptor
+identities, enumerates every global mount by exact loop major/minor, refuses
+second, nested, or foreign mounts, unmounts and detaches through the helper,
+then unlinks and rmdirs relative to pinned parent descriptors. Thus a normal
+failure, signal, process kill, or power loss leaves either a completed identity
+or another explicitly admitted prefix that the same reducer can finish; it
+does not require a one-off manual pathname repair and creates no boot residue.
 
 The runner-storage receipt is an identity observation, not a readiness lease.
 Ordinary sandbox use can reduce its inner free space below 40 GiB or its sparse
