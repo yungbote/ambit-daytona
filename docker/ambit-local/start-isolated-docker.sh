@@ -11,271 +11,313 @@ state_root=$1
   echo 'STATE_ROOT must be a specific absolute path below /home' >&2
   exit 64
 }
-[[ $(realpath -e -- "${state_root}") == "${state_root}" ]] || {
+[[ $(/usr/bin/realpath -e -- "${state_root}") == "${state_root}" ]] || {
   echo 'STATE_ROOT must be an existing canonical non-symlink path' >&2
   exit 64
 }
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-runtime_root_tool=${script_dir}/isolated_runtime_root.py
-process_identity_tool=${script_dir}/isolated_process_identity.py
-[[ -f ${runtime_root_tool} && -f ${process_identity_tool} ]] || {
-  echo 'isolated runtime identity verifier is absent' >&2
-  exit 66
-}
+supervisor=${script_dir}/isolated_runtime_supervisor.py
+process_identity=${script_dir}/isolated_process_identity.py
+supervisor_sha256=6b0b073e19304632803b5d729480a788756fc3de669230839bbbcdbfdf8f0c16
+process_identity_sha256=683b9e03db64fc0eaed797ee80de20af59963a075345243cc31bc8dc84a28f77
+storage_lifecycle_sha256=22c515fd204eba0006b807409d24be7a344fd8b9af14ee1b3507f9fdbcf7d01e
 
-runtime_id=$(printf '%s' "${state_root}" | sha256sum | cut -c1-12)
-runtime_root=/tmp/ambit-c16b-docker-${runtime_id}
-data_root=${state_root}/outer-docker
-containerd_root=${state_root}/outer-containerd
-exec_root=${runtime_root}/docker-exec
-socket=${runtime_root}/docker.sock
-pidfile=${runtime_root}/docker.pid
-containerd_state=${runtime_root}/containerd-state
-containerd_socket=${runtime_root}/containerd.sock
-containerd_pidfile=${state_root}/config/outer-containerd.pid
-containerd_config=${state_root}/config/outer-containerd.toml
-docker_log=${state_root}/evidence/outer-docker.log
-containerd_log=${state_root}/evidence/outer-containerd.log
-config=${state_root}/config/outer-docker.json
+read -r -d '' pinned_loader <<'PY' || true
+import hashlib
+import hmac
+import os
+import stat
+import sys
 
-for directory in "${data_root}" "${containerd_root}" "${state_root}/config" "${state_root}/evidence"; do
-  [[ -d ${directory} && ! -L ${directory} ]] || {
-    echo "isolated runtime directory is invalid: ${directory}" >&2
+path, expected, *arguments = sys.argv[1:]
+descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+try:
+    identity = os.fstat(descriptor)
+    if not stat.S_ISREG(identity.st_mode):
+        raise SystemExit("pinned Python source is not regular")
+    if not 0 < identity.st_size <= 2 * 1024 * 1024:
+        raise SystemExit("pinned Python source size is invalid")
+    source = bytearray()
+    while True:
+        block = os.read(descriptor, 1024 * 1024)
+        if not block:
+            break
+        source.extend(block)
+finally:
+    os.close(descriptor)
+actual = hashlib.sha256(source).hexdigest()
+if not hmac.compare_digest(actual, expected):
+    raise SystemExit("pinned Python source digest differs")
+sys.argv = [path, *arguments]
+globals()["__file__"] = path
+globals()["__package__"] = None
+exec(compile(source, path, "exec"), globals(), globals())
+PY
+
+for path in "${supervisor}" "${process_identity}"; do
+  [[ -f ${path} && ! -L ${path} ]] || {
+    echo "isolated runtime source is absent or unsafe: ${path}" >&2
     exit 66
   }
 done
-[[ ! -e ${runtime_root} ]] || { echo "isolated runtime root already exists: ${runtime_root}" >&2; exit 65; }
-[[ ! -e ${containerd_pidfile} && ! -e ${containerd_config} && ! -e ${config} ]] || {
-  echo 'isolated daemon pid/config already exists' >&2
-  exit 65
+[[ $(/usr/bin/sha256sum "${supervisor}" | /usr/bin/cut -d' ' -f1) == "${supervisor_sha256}" ]] || {
+  echo 'isolated runtime supervisor source digest differs' >&2
+  exit 66
 }
-[[ ! -e ${docker_log} && ! -e ${containerd_log} ]] || {
-  echo 'isolated daemon log already exists' >&2
-  exit 65
+[[ $(/usr/bin/sha256sum "${process_identity}" | /usr/bin/cut -d' ' -f1) == "${process_identity_sha256}" ]] || {
+  echo 'isolated process identity source digest differs' >&2
+  exit 66
 }
-command -v containerd >/dev/null
-command -v dockerd >/dev/null
-sudo -n true
 
-python3 - <<'PY'
-import ipaddress
-import json
-import subprocess
-
-reserved = ipaddress.ip_network("172.30.0.0/16")
-routes = json.loads(subprocess.check_output(["ip", "-j", "route", "show"], text=True))
-for route in routes:
-    destination = route.get("dst")
-    if not destination or destination == "default":
-        continue
-    try:
-        observed = ipaddress.ip_network(destination, strict=False)
-    except ValueError:
-        continue
-    if observed.overlaps(reserved):
-        raise SystemExit(f"isolated Docker address pool overlaps host route {observed}")
-PY
-
-umask 077
-runtime_identity=$(python3 "${runtime_root_tool}" create "${runtime_root}")
-runtime_started=false
-prestart_cleanup() {
-  if [[ ${runtime_started} != true ]] &&
-    python3 "${runtime_root_tool}" verify "${runtime_root}" --expected "${runtime_identity}" >/dev/null 2>&1; then
-    rmdir -- "${exec_root}" "${containerd_state}" "${runtime_root}" >/dev/null 2>&1 || true
-  fi
-  for path in "${config}" "${containerd_config}" "${containerd_pidfile}" "${docker_log}" "${containerd_log}"; do
-    unlink -- "${path}" >/dev/null 2>&1 || true
-  done
+trusted_root_executable() {
+  local path=$1 owner_group mode
+  [[ -e ${path} ]] || { echo "required root executable is absent: ${path}" >&2; return 1; }
+  owner_group=$(/usr/bin/stat -Lc '%u:%g' -- "${path}")
+  mode=$(/usr/bin/stat -Lc '%a' -- "${path}")
+  [[ ${owner_group} == 0:0 ]] || { echo "root executable owner differs: ${path}" >&2; return 1; }
+  (( (8#${mode} & 8#022) == 0 )) || { echo "root executable is writable: ${path}" >&2; return 1; }
+  [[ $(/usr/bin/stat -Lc '%F' -- "${path}") == 'regular file' ]] || {
+    echo "root executable is not regular: ${path}" >&2
+    return 1
+  }
 }
-trap prestart_cleanup EXIT INT TERM
-
-cat > "${config}" <<EOF
-{
-  "data-root": "${data_root}",
-  "exec-root": "${exec_root}",
-  "pidfile": "${pidfile}",
-  "hosts": ["unix://${socket}"],
-  "group": "docker",
-  "containerd": "${containerd_socket}",
-  "containerd-namespace": "ambit-c16b",
-  "containerd-plugins-namespace": "ambit-c16b-plugins",
-  "bridge": "none",
-  "default-address-pools": [
-    {"base": "172.30.0.0/16", "size": 24}
-  ],
-  "iptables": false,
-  "ip6tables": false,
-  "ip-forward": false,
-  "ip-masq": false,
-  "userland-proxy": true,
-  "live-restore": false,
-  "storage-driver": "overlay2",
-  "log-driver": "local",
-  "log-opts": {"max-size": "50m", "max-file": "3"}
-}
-EOF
-chmod 0600 "${config}"
-cat > "${containerd_config}" <<EOF
-version = 3
-root = '${containerd_root}'
-state = '${containerd_state}'
-temp = '${runtime_root}/containerd-temp'
-disabled_plugins = [
-  'io.containerd.cri.v1.images',
-  'io.containerd.cri.v1.runtime',
-  'io.containerd.nri.v1.nri',
-]
-required_plugins = []
-imports = []
-
-[grpc]
-  address = '${containerd_socket}'
-  uid = 0
-  gid = 0
-EOF
-chmod 0600 "${containerd_config}"
-
-containerd_pid=
-docker_pid=
-safe_process() {
-  local pid=$1
-  local executable=$2
-  local required=$3
-  local executable_path
-  executable_path=$(readlink -e -- "$(command -v "${executable}")") || return 1
-  sudo -n python3 "${process_identity_tool}" "${pid}" "${executable_path}" "${required}" >/dev/null
-}
-terminate_exact() {
-  local pid=$1
-  local executable=$2
-  local required=$3
-  safe_process "${pid}" "${executable}" "${required}" || return 1
-  sudo -n kill -TERM "${pid}" >/dev/null 2>&1 || return 1
-  for _ in $(seq 1 80); do
-    [[ ! -e /proc/${pid} ]] && return 0
-    sleep 0.25
-  done
-  return 1
-}
-unmount_task_netns() {
-  local netns_root=${exec_root}/netns
-  [[ -d ${netns_root} ]] || return 0
-  local -a targets=()
-  mapfile -t targets < <(findmnt -R -n -o TARGET "${netns_root}" 2>/dev/null | sort -r)
-  local target filesystem
-  for target in "${targets[@]}"; do
-    [[ ${target} =~ ^${netns_root}/[A-Za-z0-9._-]+$ ]] || return 1
-    [[ $(findmnt -T "${target}" -n -o TARGET) == "${target}" ]] || return 1
-    filesystem=$(findmnt -T "${target}" -n -o FSTYPE)
-    [[ ${filesystem} == nsfs ]] || return 1
-    sudo -n umount -- "${target}" || return 1
-  done
-}
-startup_cleanup() {
-  local cleanup_allowed=true
-  if [[ -n ${docker_pid} ]]; then
-    terminate_exact "${docker_pid}" dockerd "${config}" || cleanup_allowed=false
-  elif [[ -f ${pidfile} ]]; then
-    terminate_exact "$(<"${pidfile}")" dockerd "${config}" || cleanup_allowed=false
-  fi
-  if [[ -n ${containerd_pid} ]]; then
-    terminate_exact "${containerd_pid}" containerd "${containerd_config}" || cleanup_allowed=false
-  elif [[ -f ${containerd_pidfile} ]]; then
-    terminate_exact "$(<"${containerd_pidfile}")" containerd "${containerd_config}" || cleanup_allowed=false
-  fi
-  if [[ ${cleanup_allowed} == true ]]; then
-    unmount_task_netns || cleanup_allowed=false
-  fi
-  if [[ ${cleanup_allowed} == true ]] &&
-    python3 "${runtime_root_tool}" verify "${runtime_root}" --expected "${runtime_identity}" >/dev/null 2>&1; then
-    sudo -n find "${runtime_root}" -depth -delete >/dev/null 2>&1 || true
-  fi
-  if [[ ${cleanup_allowed} == true ]]; then
-    unlink "${containerd_pidfile}" >/dev/null 2>&1 || true
-  fi
-}
-trap 'if [[ ${runtime_started} != true ]]; then startup_cleanup; fi' EXIT INT TERM
-
-python3 "${runtime_root_tool}" verify "${runtime_root}" --expected "${runtime_identity}" >/dev/null
-containerd_executable=$(readlink -e -- "$(command -v containerd)")
-sudo -n -b sh -c 'umask 022; printf "%s\n" "$$" > "$1"; exec "$2" --config "$3" --log-level info' \
-  sh "${containerd_pidfile}" "${containerd_executable}" "${containerd_config}" > "${containerd_log}" 2>&1 &
-for _ in $(seq 1 120); do
-  if [[ -f ${containerd_pidfile} ]]; then
-    containerd_pid=$(<"${containerd_pidfile}")
-    if [[ -S ${containerd_socket} ]] && safe_process "${containerd_pid}" containerd "${containerd_config}"; then
-      break
-    fi
-  fi
-  sleep 0.25
+for command_path in /usr/bin/env /usr/bin/python3 /usr/bin/sudo /usr/bin/unshare; do
+  trusted_root_executable "${command_path}"
 done
-[[ -S ${containerd_socket} ]] && safe_process "${containerd_pid}" containerd "${containerd_config}" || {
-  echo 'dedicated containerd did not establish its exact process/socket identity' >&2
-  exit 68
+
+caller_uid=$(/usr/bin/id -u)
+caller_gid=$(/usr/bin/id -g)
+[[ ${caller_uid} =~ ^[1-9][0-9]*$ && ${caller_gid} =~ ^[0-9]+$ ]] || {
+  echo 'isolated runtime caller identity is invalid' >&2
+  exit 66
+}
+[[ $(/usr/bin/stat -c '%u:%g:%a:%F' -- "${state_root}") == "${caller_uid}:${caller_gid}:700:directory" ]] || {
+  echo 'isolated runtime state root owner, group, mode, or type differs' >&2
+  exit 66
+}
+evidence_root=${state_root}/evidence
+[[ -d ${evidence_root} && ! -L ${evidence_root} ]] || {
+  echo 'isolated runtime evidence root is absent or unsafe' >&2
+  exit 66
+}
+[[ $(/usr/bin/realpath -e -- "${evidence_root}") == "${evidence_root}" ]] || {
+  echo 'isolated runtime evidence root is not canonical' >&2
+  exit 66
+}
+[[ $(/usr/bin/stat -c '%u:%g:%a:%F' -- "${evidence_root}") == "${caller_uid}:${caller_gid}:700:directory" ]] || {
+  echo 'isolated runtime evidence root owner, group, mode, or type differs' >&2
+  exit 66
 }
 
-sudo -n -b dockerd --config-file "${config}" > "${docker_log}" 2>&1
-for _ in $(seq 1 240); do
-  if [[ -f ${pidfile} ]]; then
-    docker_pid=$(<"${pidfile}")
-    if [[ -S ${socket} ]] &&
-      DOCKER_HOST="unix://${socket}" docker info >/dev/null 2>&1 &&
-      safe_process "${docker_pid}" dockerd "${config}"; then
-      break
-    fi
+runtime_id=$(printf '%s' "${state_root}" | /usr/bin/sha256sum | /usr/bin/cut -c1-12)
+runtime_root=/run/ambit-c16b-docker-${runtime_id}
+socket=${runtime_root}/docker.sock
+control_receipt=${evidence_root}/outer-docker-control.json
+start_receipt=${evidence_root}/outer-docker-receipt.json
+supervisor_log=${evidence_root}/outer-supervisor.log
+boot_id=$(/usr/bin/tr -d '\n' </proc/sys/kernel/random/boot_id)
+[[ ${boot_id} =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || {
+  echo 'kernel boot identity is invalid' >&2
+  exit 66
+}
+python_executable=$(/usr/bin/readlink -e -- /usr/bin/python3)
+
+supervisor_arguments_sha256=$(
+  printf '%s\0' /usr/bin/python3 -I -S -B -c "${pinned_loader}" \
+    "${supervisor}" "${supervisor_sha256}" supervise "${state_root}" \
+    "${caller_uid}" "${caller_gid}" |
+    /usr/bin/sha256sum | /usr/bin/cut -d' ' -f1
+)
+
+require_regular_receipt() {
+  local path=$1
+  [[ -f ${path} && ! -L ${path} ]] || {
+    echo "isolated runtime receipt is not a regular file: ${path}" >&2
+    return 1
+  }
+  [[ $(/usr/bin/stat -c '%u:%g:%a:%F' -- "${path}") == "${caller_uid}:${caller_gid}:600:regular file" ]] || {
+    echo "isolated runtime receipt owner, group, mode, or type differs: ${path}" >&2
+    return 1
+  }
+}
+
+validate_control_shape() {
+  require_regular_receipt "${control_receipt}"
+  /usr/bin/jq -e \
+    --arg bootId "${boot_id}" --arg stateRoot "${state_root}" \
+    --arg runtimeRoot "${runtime_root}" --arg supervisorSha "${supervisor_sha256}" \
+    --arg identitySha "${process_identity_sha256}" --arg storageSha "${storage_lifecycle_sha256}" \
+    --arg argumentsSha "${supervisor_arguments_sha256}" --arg executable "${python_executable}" \
+    --argjson callerUid "${caller_uid}" --argjson callerGid "${caller_gid}" '
+      (keys | sort) == [
+        "bootId", "caller", "mountNamespace", "observedAt", "outcome",
+        "processIdentitySourceSha256", "runtimeRoot", "runtimeRootIdentity", "schema",
+        "stateRoot", "storageLifecycleSourceSha256", "supervisorProcessIdentity",
+        "supervisorSourceSha256"
+      ] and
+      .schema == "ambit.local-daytona-isolated-docker-control/v1" and
+      .outcome == "active" and .bootId == $bootId and .stateRoot == $stateRoot and
+      .caller == {uid:$callerUid,gid:$callerGid} and
+      .supervisorSourceSha256 == $supervisorSha and
+      .processIdentitySourceSha256 == $identitySha and
+      .storageLifecycleSourceSha256 == $storageSha and .runtimeRoot == $runtimeRoot and
+      (.runtimeRootIdentity | keys | sort) == ["device","inode","mode","uid"] and
+      .runtimeRootIdentity.uid == 0 and .runtimeRootIdentity.mode == 448 and
+      (.mountNamespace | keys | sort) == ["device","inode"] and
+      (.supervisorProcessIdentity | keys | sort) == [
+        "argumentsSha256","executable","mountNamespace","parentPid","pid",
+        "procInode","startTimeTicks"
+      ] and
+      .supervisorProcessIdentity.executable == $executable and
+      .supervisorProcessIdentity.argumentsSha256 == $argumentsSha and
+      .supervisorProcessIdentity.mountNamespace == .mountNamespace and
+      (.supervisorProcessIdentity.parentPid | type) == "number" and
+      .supervisorProcessIdentity.parentPid > 0 and
+      (.supervisorProcessIdentity.pid | type) == "number" and
+      .supervisorProcessIdentity.pid > 0
+    ' "${control_receipt}" >/dev/null
+}
+
+invoke_process_identity() {
+  local operation=$1 pid namespace parent_pid
+  pid=$(/usr/bin/jq -r '.supervisorProcessIdentity.pid' "${control_receipt}")
+  namespace=$(/usr/bin/jq -cS '.mountNamespace' "${control_receipt}")
+  parent_pid=$(/usr/bin/jq -r '.supervisorProcessIdentity.parentPid' "${control_receipt}")
+  /usr/bin/sudo -n /usr/bin/env -i -C / PATH=/usr/bin:/bin LC_ALL=C.UTF-8 \
+    /usr/bin/python3 -I -S -B -c "${pinned_loader}" \
+    "${process_identity}" "${process_identity_sha256}" "${operation}" \
+    "${pid}" /usr/bin/python3 0 "${supervisor_arguments_sha256}" \
+    --parent-pid "${parent_pid}" --mount-namespace "${namespace}"
+}
+
+verify_live_supervisor() {
+  validate_control_shape
+  local expected observed
+  expected=$(/usr/bin/jq -cS '.supervisorProcessIdentity' "${control_receipt}")
+  observed=$(invoke_process_identity verify-digest)
+  [[ ${observed} == "${expected}" ]] || {
+    echo 'isolated runtime supervisor identity changed' >&2
+    return 1
+  }
+}
+
+validate_start_receipt() {
+  require_regular_receipt "${start_receipt}"
+  local expected_supervisor expected_namespace
+  expected_supervisor=$(/usr/bin/jq -cS '.supervisorProcessIdentity' "${control_receipt}")
+  expected_namespace=$(/usr/bin/jq -cS '.mountNamespace' "${control_receipt}")
+  /usr/bin/jq -e \
+    --arg bootId "${boot_id}" --arg stateRoot "${state_root}" \
+    --arg runtimeRoot "${runtime_root}" --arg socket "${socket}" \
+    --arg dataRoot '/home/.ambit-c16b-runner-storage/runner-docker/outer-docker' \
+    --arg supervisorSha "${supervisor_sha256}" --arg identitySha "${process_identity_sha256}" \
+    --arg storageSha "${storage_lifecycle_sha256}" --argjson supervisor "${expected_supervisor}" \
+    --argjson namespace "${expected_namespace}" '
+      .schema == "ambit.local-daytona-isolated-docker/v4" and .outcome == "passed" and
+      .bootId == $bootId and .stateRoot == $stateRoot and .runtimeRoot == $runtimeRoot and
+      .socket == $socket and .dataRoot == $dataRoot and
+      .supervisorSourceSha256 == $supervisorSha and
+      .processIdentitySourceSha256 == $identitySha and
+      .storageLifecycleSourceSha256 == $storageSha and
+      .supervisorProcessIdentity == $supervisor and .mountNamespace == $namespace and
+      .storage.lifecycleSchema == "ambit.local-daytona-runner-storage-operation/v2" and
+      .storage.receiptSchema == "ambit.local-daytona-runner-storage/v2" and
+      (.storage.projectionDigest | test("^[0-9a-f]{64}$")) and
+      .storage.authorityRoot == "/home/.ambit-c16b-runner-storage" and
+      .storage.target == "/home/.ambit-c16b-runner-storage/runner-docker" and
+      .storage.mountNamespace == $namespace
+    ' "${start_receipt}" >/dev/null
+}
+
+recover_previous_boot_receipts() {
+  require_regular_receipt "${control_receipt}"
+  local receipt_boot receipt_state receipt_runtime receipt_schema
+  receipt_schema=$(/usr/bin/jq -er '.schema' "${control_receipt}")
+  receipt_boot=$(/usr/bin/jq -er '.bootId' "${control_receipt}")
+  receipt_state=$(/usr/bin/jq -er '.stateRoot' "${control_receipt}")
+  receipt_runtime=$(/usr/bin/jq -er '.runtimeRoot' "${control_receipt}")
+  [[ ${receipt_boot} =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 1
+  [[ ${receipt_schema} == ambit.local-daytona-isolated-docker-control/v1 ]] || return 1
+  [[ ${receipt_boot} != "${boot_id}" && ${receipt_state} == "${state_root}" && ${receipt_runtime} == "${runtime_root}" ]] || return 1
+  [[ ! -e ${runtime_root} ]] || { echo 'previous-boot runtime root unexpectedly remains' >&2; return 1; }
+  if [[ -e ${start_receipt} ]]; then
+    require_regular_receipt "${start_receipt}"
+    [[ $(/usr/bin/jq -er '.schema' "${start_receipt}") == ambit.local-daytona-isolated-docker/v4 ]] || return 1
+    /usr/bin/unlink -- "${start_receipt}"
   fi
-  sleep 0.25
+  /usr/bin/unlink -- "${control_receipt}"
+}
+
+if [[ -e ${control_receipt} ]]; then
+  receipt_boot=$(/usr/bin/jq -er '.bootId' "${control_receipt}" 2>/dev/null || true)
+  if [[ -n ${receipt_boot} && ${receipt_boot} != "${boot_id}" ]]; then
+    recover_previous_boot_receipts || {
+      echo 'previous-boot isolated runtime state could not be safely reduced' >&2
+      exit 65
+    }
+  else
+    verify_live_supervisor || {
+      echo 'isolated runtime control exists without its exact live supervisor' >&2
+      exit 65
+    }
+    [[ -e ${start_receipt} ]] || {
+      echo 'isolated runtime supervisor is active but startup is not complete' >&2
+      exit 75
+    }
+    validate_start_receipt || { echo 'isolated runtime start receipt is invalid' >&2; exit 65; }
+    printf 'export DOCKER_HOST=unix://%s\n' "${socket}"
+    exit 0
+  fi
+fi
+
+[[ ! -e ${start_receipt} ]] || { echo 'start receipt exists without control receipt' >&2; exit 65; }
+[[ ! -e ${runtime_root} ]] || { echo 'runtime root exists without control receipt' >&2; exit 65; }
+
+if [[ -e ${supervisor_log} ]]; then
+  require_regular_receipt "${supervisor_log}"
+else
+  ( set -o noclobber; umask 077; : >"${supervisor_log}" ) || {
+    echo 'isolated runtime supervisor log could not be created exclusively' >&2
+    exit 66
+  }
+  /usr/bin/chmod 0600 "${supervisor_log}"
+fi
+
+exec {supervisor_log_fd}>>"${supervisor_log}"
+/usr/bin/sudo -n /usr/bin/env -i -C / \
+  PATH=/usr/bin:/bin LC_ALL=C.UTF-8 HOME=/root \
+  SUDO_UID="${caller_uid}" SUDO_GID="${caller_gid}" \
+  AMBIT_SUPERVISOR_ARGUMENTS_SHA256="${supervisor_arguments_sha256}" \
+  AMBIT_SUPERVISOR_SOURCE_SHA256="${supervisor_sha256}" \
+  /usr/bin/unshare --mount --propagation private \
+  /usr/bin/python3 -I -S -B -c "${pinned_loader}" \
+  "${supervisor}" "${supervisor_sha256}" supervise \
+  "${state_root}" "${caller_uid}" "${caller_gid}" \
+  </dev/null >&${supervisor_log_fd} 2>&1 &
+launcher_pid=$!
+
+for _ in $(/usr/bin/seq 1 900); do
+  if [[ -e ${start_receipt} ]]; then
+    verify_live_supervisor && validate_start_receipt || {
+      echo 'isolated runtime published an invalid startup authority' >&2
+      exit 68
+    }
+    disown "${launcher_pid}" 2>/dev/null || true
+    exec {supervisor_log_fd}>&-
+    printf 'export DOCKER_HOST=unix://%s\n' "${socket}"
+    exit 0
+  fi
+  if [[ ! -e /proc/${launcher_pid} ]]; then
+    set +e
+    wait "${launcher_pid}"
+    status=$?
+    set -e
+    echo "isolated runtime supervisor exited before readiness (status ${status})" >&2
+    exit 68
+  fi
+  /usr/bin/sleep 0.1
 done
-[[ -S ${socket} && -f ${pidfile} ]] || { echo 'isolated Docker socket/pidfile was not created' >&2; exit 68; }
-docker_pid=$(<"${pidfile}")
-safe_process "${docker_pid}" dockerd "${config}" || { echo 'Docker pidfile does not identify this daemon' >&2; exit 68; }
-python3 "${runtime_root_tool}" verify "${runtime_root}" --expected "${runtime_identity}" >/dev/null
-containerd_process_identity=$(sudo -n python3 "${process_identity_tool}" "${containerd_pid}" "${containerd_executable}" "${containerd_config}")
-docker_executable=$(readlink -e -- "$(command -v dockerd)")
-docker_process_identity=$(sudo -n python3 "${process_identity_tool}" "${docker_pid}" "${docker_executable}" "${config}")
-docker_root=$(DOCKER_HOST="unix://${socket}" docker info --format '{{.DockerRootDir}}')
-[[ ${docker_root} == "${data_root}" ]] || { echo 'isolated Docker reported the wrong data root' >&2; exit 68; }
-docker_server_id=$(DOCKER_HOST="unix://${socket}" docker info --format '{{.ID}}')
-[[ ${docker_server_id} =~ ^[0-9a-f-]{36}$ ]] || { echo 'isolated Docker server ID is invalid' >&2; exit 68; }
 
-jq -n -S \
-  --arg observedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  --arg runtimeRoot "${runtime_root}" \
-  --argjson runtimeRootIdentity "${runtime_identity}" \
-  --argjson containerdProcessIdentity "${containerd_process_identity}" \
-  --argjson dockerProcessIdentity "${docker_process_identity}" \
-  --arg socket "${socket}" \
-  --arg dataRoot "${data_root}" \
-  --arg execRoot "${exec_root}" \
-  --arg containerdAddress "${containerd_socket}" \
-  --arg containerdRoot "${containerd_root}" \
-  --arg containerdVersion "$(containerd --version)" \
-  --arg containerdConfigSha256 "$(sha256sum "${containerd_config}" | cut -d' ' -f1)" \
-  --arg serverId "${docker_server_id}" \
-  --arg serverVersion "$(DOCKER_HOST="unix://${socket}" docker version --format '{{.Server.Version}}')" \
-  --arg configSha256 "$(sha256sum "${config}" | cut -d' ' -f1)" \
-  --argjson dockerPid "${docker_pid}" \
-  --argjson containerdPid "${containerd_pid}" \
-  '{
-    schema:"ambit.local-daytona-isolated-docker/v3",
-    outcome:"passed",
-    observedAt:$observedAt,
-    runtimeRoot:$runtimeRoot,
-    runtimeRootIdentity:$runtimeRootIdentity,
-    socket:$socket,
-    dataRoot:$dataRoot,
-    execRoot:$execRoot,
-    containerd:{address:$containerdAddress,root:$containerdRoot,version:$containerdVersion,pid:$containerdPid,configSha256:$containerdConfigSha256,processIdentity:$containerdProcessIdentity},
-    network:{defaultBridge:"disabled",addressPool:"172.30.0.0/16",hostFirewallMutation:false},
-    serverId:$serverId,
-    serverVersion:$serverVersion,
-    dockerPid:$dockerPid,
-    dockerProcessIdentity:$dockerProcessIdentity,
-    configSha256:$configSha256
-  }' > "${state_root}/evidence/outer-docker-receipt.json"
-
-runtime_started=true
-trap - EXIT INT TERM
-printf 'export DOCKER_HOST=unix://%s\n' "${socket}"
+echo 'isolated runtime supervisor did not publish readiness within 90 seconds' >&2
+exit 68

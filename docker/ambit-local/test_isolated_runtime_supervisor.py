@@ -4,6 +4,8 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -55,7 +57,7 @@ def storage_operation(outcome: str = "activated") -> dict[str, object]:
             },
             "mountTarget": {
                 "path": str(MODULE.MOUNT_TARGET),
-                "device": 9,
+                "device": os.makedev(7, 7),
                 "inode": 12,
                 "ownerUid": 0,
                 "ownerGid": 0,
@@ -104,6 +106,26 @@ def storage_operation(outcome: str = "activated") -> dict[str, object]:
 
 
 class RuntimeSupervisorPureContractTest(unittest.TestCase):
+    def test_dockerd_managed_0710_data_root_is_the_stable_recovery_mode(self) -> None:
+        before = os.stat_result((stat.S_IFDIR | 0o700, 2, 3, 1, 0, 0, 0, 0, 0, 0))
+        after = os.stat_result((stat.S_IFDIR | 0o710, 2, 3, 1, 0, 0, 0, 0, 0, 0))
+        with (
+            mock.patch.object(MODULE.os, "mkdir", side_effect=FileExistsError),
+            mock.patch.object(MODULE.os, "open", return_value=41),
+            mock.patch.object(MODULE.os, "fstat", side_effect=(before, after)),
+            mock.patch.object(MODULE.os, "fchmod") as fchmod,
+            mock.patch.object(MODULE.os, "fsync"),
+            mock.patch.object(MODULE.os, "close"),
+        ):
+            path = MODULE.ensure_storage_directory(
+                40,
+                "outer-docker",
+                required_mode=0o710,
+                recoverable_modes={0o700, 0o710},
+            )
+        self.assertEqual(path, MODULE.MOUNT_TARGET / "outer-docker")
+        fchmod.assert_called_once_with(41, 0o710)
+
     def test_private_mountinfo_accepts_only_nonpropagating_records(self) -> None:
         private = (
             "36 25 0:31 / / rw,relatime - ext4 /dev/root rw\n"
@@ -116,6 +138,25 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
                     MODULE.mountinfo_is_private(
                         f"36 25 0:31 / / rw,relatime {optional} - ext4 /dev/root rw\n"
                     )
+
+    def test_address_pool_proof_is_dual_stack_and_fails_on_ambiguous_routes(self) -> None:
+        networks = MODULE.read_route_networks(
+            json.dumps([{"dst": "2001:db8::/32"}, {"dst": "10.0.0.0/8"}])
+        )
+        self.assertEqual(tuple(value.version for value in networks), (6, 4))
+        with self.assertRaises(MODULE.SupervisorError):
+            MODULE.read_route_networks(json.dumps([{"dst": "not-a-network"}]))
+
+        def overlapping(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout=json.dumps([{"dst": "172.30.42.0/24"}]),
+                stderr="",
+            )
+
+        with self.assertRaises(MODULE.SupervisorError):
+            MODULE.require_address_pool_available(overlapping)
 
     def test_storage_projection_is_strict_and_provider_neutral(self) -> None:
         normalized = MODULE.normalize_storage_operation(
@@ -151,6 +192,29 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
             expected_namespace=NAMESPACE,
         )
         self.assertIsNone(detached["loop"])
+        unpublished = storage_operation("deactivated")
+        unpublished["receipt"] = None
+        unpublished["authorityReceiptSha256"] = None
+        with self.assertRaises(MODULE.SupervisorError):
+            MODULE.normalize_storage_operation(
+                unpublished,
+                expected_outcome="deactivated",
+                state_root=STATE_ROOT,
+                caller_uid=1000,
+                caller_gid=1000,
+                expected_namespace=NAMESPACE,
+            )
+        aborted = MODULE.normalize_storage_operation(
+            unpublished,
+            expected_outcome="deactivated",
+            state_root=STATE_ROOT,
+            caller_uid=1000,
+            caller_gid=1000,
+            expected_namespace=NAMESPACE,
+            allow_unpublished=True,
+        )
+        self.assertIsNone(aborted["projectionDigest"])
+        self.assertIsNone(aborted["receiptSchema"])
 
     def test_storage_projection_rejects_each_authority_substitution(self) -> None:
         mutations = {
@@ -202,6 +266,15 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         ):
             with self.assertRaises(MODULE.SupervisorError):
                 MODULE.task_netns_mounts(runtime_root, candidate)
+        other = runtime_root / "containerd-state/residual"
+        mixed = (
+            f"42 36 0:35 / {target} rw - nsfs nsfs rw\n"
+            f"43 36 0:36 / {other} rw - tmpfs tmpfs rw\n"
+        )
+        self.assertEqual(
+            MODULE.mount_targets_below(runtime_root, mixed),
+            (target, other),
+        )
 
     def test_pinned_loader_ignores_hostile_cwd_and_pythonpath(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -261,6 +334,7 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
         value.state = FakeState()
         value.namespace = NAMESPACE
         value.storage = {"projectionDigest": DIGEST}
+        value.storage_activation_attempted = True
         value.supervisor_identity = {"pid": 44}
         value.runtime_identity = MODULE.RuntimeIdentity(
             Path("/run/ambit-c16b-docker-0123456789ab"), 1, 2, 0, 0o700
@@ -270,23 +344,38 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
     def test_shutdown_order_keeps_storage_until_daemons_and_netns_are_gone(self) -> None:
         supervisor = self.supervisor()
         events: list[str] = []
+        supervisor.write_control_receipt = lambda outcome="active": events.append(
+            f"control-{outcome}"
+        )
         supervisor.terminate_daemon = lambda name, process: events.append(name)
         supervisor.cleanup_task_netns = lambda: events.append("netns")
-        supervisor.invoke_storage = lambda command, outcome: (
+        supervisor.invoke_storage = lambda command, outcome, **kwargs: (
             events.append(command)
             or {
                 "projectionDigest": DIGEST,
             }
         )
         with (
-            mock.patch.object(MODULE, "require_exact_children", lambda expected: events.append("reaped")),
+            mock.patch.object(
+                MODULE,
+                "wait_for_adopted_children",
+                lambda expected: events.append("reaped"),
+            ),
             mock.patch.object(MODULE, "remove_runtime_root", lambda identity: events.append("runtime")),
             mock.patch.object(MODULE, "current_boot_id", return_value="12345678-1234-1234-1234-123456789abc"),
         ):
             self.assertTrue(supervisor.try_shutdown("operator_request"))
         self.assertEqual(
             events,
-            ["dockerd", "containerd", "reaped", "netns", "deactivate-private", "runtime"],
+            [
+                "control-stopping",
+                "dockerd",
+                "containerd",
+                "reaped",
+                "netns",
+                "deactivate-private",
+                "runtime",
+            ],
         )
         self.assertEqual(
             supervisor.state.events,
@@ -301,13 +390,16 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
         supervisor = self.supervisor()
         supervisor.terminate_daemon = lambda name, process: None
         supervisor.cleanup_task_netns = lambda: None
+        supervisor.write_control_receipt = lambda outcome="active": None
 
-        def fail_deactivation(command: str, outcome: str) -> dict[str, object]:
+        def fail_deactivation(
+            command: str, outcome: str, **kwargs: object
+        ) -> dict[str, object]:
             raise MODULE.SupervisorError("mount still busy")
 
         supervisor.invoke_storage = fail_deactivation
         with (
-            mock.patch.object(MODULE, "require_exact_children"),
+            mock.patch.object(MODULE, "wait_for_adopted_children"),
             mock.patch.object(MODULE, "current_boot_id", return_value="12345678-1234-1234-1234-123456789abc"),
         ):
             self.assertFalse(supervisor.try_shutdown("operator_request"))
@@ -317,6 +409,87 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
             ("write", (MODULE.STOP_RECEIPT_NAME, "retry_required")),
             supervisor.state.events,
         )
+
+    def test_adopted_mutator_guardian_is_waited_and_reaped_without_a_signal(self) -> None:
+        with (
+            mock.patch.object(
+                MODULE,
+                "direct_children",
+                side_effect=((41, 99), (41,)),
+            ),
+            mock.patch.object(MODULE.os, "waitpid", return_value=(99, 0)) as waitpid,
+            mock.patch.object(MODULE.time, "sleep") as sleep,
+            mock.patch.object(MODULE.os, "kill") as kill,
+        ):
+            MODULE.wait_for_adopted_children({41})
+        waitpid.assert_called_once_with(99, os.WNOHANG)
+        sleep.assert_not_called()
+        kill.assert_not_called()
+
+    def test_retry_after_later_cleanup_failure_does_not_repeat_deactivation(self) -> None:
+        supervisor = self.supervisor()
+        supervisor.terminate_daemon = lambda name, process: None
+        supervisor.cleanup_task_netns = lambda: None
+        supervisor.write_control_receipt = lambda outcome="active": None
+        storage_calls: list[str] = []
+        supervisor.invoke_storage = lambda command, outcome, **kwargs: (
+            storage_calls.append(command) or {"projectionDigest": "b" * 64}
+        )
+        remove_calls = 0
+
+        def remove_runtime(identity: object) -> None:
+            nonlocal remove_calls
+            remove_calls += 1
+            if remove_calls == 1:
+                raise MODULE.SupervisorError("runtime busy")
+
+        with (
+            mock.patch.object(MODULE, "wait_for_adopted_children"),
+            mock.patch.object(MODULE, "remove_runtime_root", remove_runtime),
+            mock.patch.object(
+                MODULE,
+                "current_boot_id",
+                return_value="12345678-1234-1234-1234-123456789abc",
+            ),
+        ):
+            self.assertFalse(supervisor.try_shutdown("operator_request"))
+            self.assertTrue(supervisor.try_shutdown("operator_request"))
+        self.assertEqual(storage_calls, ["deactivate-private"])
+        self.assertEqual(remove_calls, 2)
+
+    def test_pre_activation_failure_cleans_runtime_without_inventing_storage(self) -> None:
+        supervisor = self.supervisor()
+        supervisor.storage = None
+        supervisor.storage_activation_attempted = False
+        events: list[str] = []
+        supervisor.write_control_receipt = lambda outcome="active": events.append(
+            f"control-{outcome}"
+        )
+        supervisor.terminate_daemon = lambda name, process: events.append(name)
+        supervisor.cleanup_task_netns = lambda: events.append("netns")
+        supervisor.invoke_storage = lambda *args, **kwargs: self.fail(
+            "pre-activation cleanup invoked storage"
+        )
+        with (
+            mock.patch.object(MODULE, "wait_for_adopted_children"),
+            mock.patch.object(MODULE, "remove_runtime_root", lambda identity: events.append("runtime")),
+            mock.patch.object(
+                MODULE,
+                "current_boot_id",
+                return_value="12345678-1234-1234-1234-123456789abc",
+            ),
+        ):
+            self.assertTrue(supervisor.try_shutdown("startup_failure"))
+        self.assertEqual(
+            events,
+            ["control-stopping", "dockerd", "containerd", "netns", "runtime"],
+        )
+        stop_values = [
+            value
+            for event, value in supervisor.state.events
+            if event == "write" and value[0] == MODULE.STOP_RECEIPT_NAME
+        ]
+        self.assertEqual(stop_values, [(MODULE.STOP_RECEIPT_NAME, "passed")])
 
 
 class RuntimeSupervisorSourceBoundaryTest(unittest.TestCase):
@@ -338,8 +511,59 @@ class RuntimeSupervisorSourceBoundaryTest(unittest.TestCase):
         )
         self.assertLess(
             source.index("self.cleanup_task_netns()", shutdown),
-            source.index('self.invoke_storage("deactivate-private"', shutdown),
+            source.index('"deactivate-private"', shutdown),
         )
+
+    def test_launchers_share_the_exact_isolated_loader_and_stop_only_the_supervisor(self) -> None:
+        start = SCRIPT.with_name("start-isolated-docker.sh").read_text(encoding="utf-8")
+        stop = SCRIPT.with_name("stop-isolated-docker.sh").read_text(encoding="utf-8")
+
+        def loader(source: str) -> str:
+            prefix = "read -r -d '' pinned_loader <<'PY' || true\n"
+            return source.split(prefix, 1)[1].split("\nPY\n", 1)[0]
+
+        self.assertEqual(loader(start), MODULE.PINNED_EXEC_LOADER)
+        self.assertEqual(loader(stop), MODULE.PINNED_EXEC_LOADER)
+        self.assertIn("/usr/bin/unshare --mount --propagation private", start)
+        self.assertIn("/usr/bin/python3 -I -S -B -c", start)
+        self.assertIn("/usr/bin/env -i -C /", start)
+        self.assertNotIn("sudo -b", start)
+        self.assertIn("signal-exact", stop)
+        self.assertNotIn("kill -TERM", stop)
+        self.assertNotIn("dockerd --", stop)
+        self.assertNotIn("containerd --", stop)
+        pinned_supervisor = re.search(
+            r"^supervisor_sha256=([0-9a-f]{64})$",
+            start,
+            re.MULTILINE,
+        )
+        self.assertIsNotNone(pinned_supervisor)
+        assert pinned_supervisor is not None
+        self.assertEqual(
+            pinned_supervisor.group(1),
+            hashlib.sha256(SCRIPT.read_bytes()).hexdigest(),
+        )
+        self.assertNotIn("REPLACE_", start)
+        self.assertNotIn("REPLACE_", stop)
+
+    def test_pinned_support_sources_match_the_frozen_storage_base(self) -> None:
+        identity = SCRIPT.with_name(MODULE.PROCESS_IDENTITY_NAME)
+        storage = SCRIPT.with_name(MODULE.STORAGE_LIFECYCLE_NAME)
+        storage_verifier = SCRIPT.with_name(MODULE.STORAGE_IDENTITY_VERIFIER_NAME)
+        self.assertEqual(hashlib.sha256(identity.read_bytes()).hexdigest(), MODULE.PROCESS_IDENTITY_SHA256)
+        self.assertEqual(hashlib.sha256(storage.read_bytes()).hexdigest(), MODULE.STORAGE_LIFECYCLE_SHA256)
+        self.assertEqual(
+            hashlib.sha256(storage_verifier.read_bytes()).hexdigest(),
+            MODULE.STORAGE_IDENTITY_VERIFIER_SHA256,
+        )
+
+    def test_storage_sources_are_snapshotted_before_the_first_private_mutation(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        setup = source.index("def setup")
+        snapshot = source.index("self.snapshot_storage_sources()", setup)
+        activate = source.index('self.invoke_storage("activate-private"', setup)
+        self.assertLess(snapshot, activate)
+        self.assertIn("mode=0o400", source[source.index("def snapshot_storage_sources") :])
 
 
 if __name__ == "__main__":
