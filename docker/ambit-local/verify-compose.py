@@ -152,7 +152,9 @@ FORBIDDEN_SERVICE_KEYS = frozenset(
 PROFILE_REF = "ambit.workspace-provider-capacity/local-daytona@1"
 PROFILE_DIGEST = "sha256:9326b853b19bb4c1e0704f676751fec9269832be45fe3610b61f8644256e6cfe"
 RUNNER_DOCKER_STORAGE_ROOT = Path("/home/.ambit-c16b-runner-storage")
-RUNNER_DOCKER_STORAGE_SOURCE = RUNNER_DOCKER_STORAGE_ROOT / "runner-docker"
+RUNNER_DOCKER_STORAGE_SOURCE = (
+    RUNNER_DOCKER_STORAGE_ROOT / "runner-docker" / "inner-runner"
+)
 RUNNER_DOCKER_STORAGE_TARGET = "/var/lib/docker"
 RUNNER_DOCKER_BIND_OPTIONS = {
     "create_host_path": False,

@@ -205,7 +205,7 @@ services:
       SYSBOX_HEALTH_PROBES: "false"
     volumes:
       - type: bind
-        source: /home/.ambit-c16b-runner-storage/runner-docker
+        source: /home/.ambit-c16b-runner-storage/runner-docker/inner-runner
         target: /var/lib/docker
         bind:
           create_host_path: false

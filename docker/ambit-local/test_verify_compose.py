@@ -167,7 +167,7 @@ class VerifyComposeTest(unittest.TestCase):
         services["runner"]["volumes"] = [
             {
                 "type": "bind",
-                "source": "/home/.ambit-c16b-runner-storage/runner-docker",
+                "source": "/home/.ambit-c16b-runner-storage/runner-docker/inner-runner",
                 "target": "/var/lib/docker",
                 "bind": {
                     "create_host_path": False,
@@ -200,7 +200,7 @@ class VerifyComposeTest(unittest.TestCase):
         self.assertEqual(
             receipt["runnerDockerStorageAuthority"],
             {
-                "source": "/home/.ambit-c16b-runner-storage/runner-docker",
+                "source": "/home/.ambit-c16b-runner-storage/runner-docker/inner-runner",
                 "target": "/var/lib/docker",
                 "bind": {"createHostPath": False, "propagation": "rprivate"},
             },
@@ -234,6 +234,19 @@ class VerifyComposeTest(unittest.TestCase):
             "/home/other/runner-docker",
             "/run/ambit-c16b-runner-storage/runner-docker",
             "/tmp/ambit-c16b-runner-storage/runner-docker",
+        ):
+            with self.subTest(source=source):
+                self.assert_rejected(
+                    lambda value, source=source: value["services"]["runner"]["volumes"][
+                        0
+                    ].__setitem__("source", source)
+                )
+
+    def test_runner_bind_excludes_authority_parent_and_outer_daemon_roots(self) -> None:
+        for source in (
+            "/home/.ambit-c16b-runner-storage/runner-docker",
+            "/home/.ambit-c16b-runner-storage/outer-docker",
+            "/home/.ambit-c16b-runner-storage/outer-containerd",
         ):
             with self.subTest(source=source):
                 self.assert_rejected(
@@ -290,7 +303,7 @@ class VerifyComposeTest(unittest.TestCase):
             lambda value: value["services"]["runner"]["volumes"].append(
                 {
                     "type": "bind",
-                    "source": "/home/.ambit-c16b-runner-storage/runner-docker",
+                    "source": "/home/.ambit-c16b-runner-storage/runner-docker/inner-runner",
                     "target": "/var/lib/docker-shadow",
                     "bind": {"create_host_path": False, "propagation": "rprivate"},
                 }
@@ -359,24 +372,35 @@ class VerifyComposeTest(unittest.TestCase):
         ) as directory:
             state_root = generate(Path(directory))
             self.assertFalse((state_root / "runner-docker").exists())
+            self.assertFalse((state_root / "outer-docker").exists())
+            self.assertFalse((state_root / "outer-containerd").exists())
             self.assertTrue((state_root / "runner-log").is_dir())
 
         with tempfile.TemporaryDirectory(
             prefix="ambit-compose-generator-", dir=Path(__file__).resolve().parents[2]
         ) as directory:
             root = Path(directory)
-            runner_storage = root / "state/runner-docker"
-            runner_storage.mkdir(parents=True)
-            runner_storage.chmod(0o751)
+            state_root = root / "state"
+            stale_directories = {
+                "runner-docker": 0o751,
+                "outer-docker": 0o752,
+                "outer-containerd": 0o753,
+            }
+            for name, mode in stale_directories.items():
+                stale = state_root / name
+                stale.mkdir(parents=True)
+                stale.chmod(mode)
             generate(root)
-            self.assertEqual(runner_storage.stat().st_mode & 0o777, 0o751)
+            for name, mode in stale_directories.items():
+                with self.subTest(name=name):
+                    self.assertEqual((state_root / name).stat().st_mode & 0o777, mode)
 
     def test_compose_source_hard_codes_runner_storage_authority(self) -> None:
         compose_lines = Path(__file__).with_name("compose.yaml").read_text().splitlines()
         runner_storage_lines = [line.strip() for line in compose_lines if "runner-docker" in line]
         self.assertEqual(
             runner_storage_lines,
-            ["source: /home/.ambit-c16b-runner-storage/runner-docker"],
+            ["source: /home/.ambit-c16b-runner-storage/runner-docker/inner-runner"],
         )
 
     def test_extra_service_and_privilege_are_rejected(self) -> None:
