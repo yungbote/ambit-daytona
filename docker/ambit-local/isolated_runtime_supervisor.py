@@ -43,6 +43,15 @@ MOUNT_TARGET = AUTHORITY_ROOT / "runner-docker"
 STORAGE_IMAGE = AUTHORITY_ROOT / "runner-docker.xfs"
 RUNTIME_PARENT = Path("/run")
 RUNTIME_PREFIX = "ambit-c16b-docker-"
+RUNTIME_DIRECTORY_ENTRIES = {"containerd-state", "containerd-temp", "docker-exec"}
+RUNTIME_REGULAR_ENTRIES = {
+    "containerd.toml",
+    "docker.pid",
+    "dockerd.json",
+    "runner-storage-lifecycle.py",
+    "verify-runner-storage.py",
+}
+RUNTIME_SOCKET_ENTRIES = {"containerd.sock", "containerd.sock.ttrpc", "docker.sock"}
 STATE_ROOT_RE = re.compile(r"^/home/[^/]+/[A-Za-z0-9._/-]+$")
 RUNTIME_ROOT_RE = re.compile(r"^/run/ambit-c16b-docker-[0-9a-f]{12}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -50,6 +59,9 @@ UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 )
 LOOP_DEVICE_RE = re.compile(r"^/dev/loop[0-9]+$")
+IMAGE_BYTES = 60 * 1024**3
+SANDBOX_BYTES = 20 * 1024**3
+MAXIMUM_SANDBOXES = 2
 
 PYTHON = Path("/usr/bin/python3")
 CONTAINERD = Path("/usr/bin/containerd")
@@ -59,9 +71,13 @@ IP = Path("/usr/bin/ip")
 UMOUNT = Path("/usr/bin/umount")
 
 PROCESS_IDENTITY_NAME = "isolated_process_identity.py"
-PROCESS_IDENTITY_SHA256 = "34f6d286d62a422f8759b19f7989e5fcad4e4bc4086dab6a5aafb09aad0c14ee"
+PROCESS_IDENTITY_SHA256 = "683b9e03db64fc0eaed797ee80de20af59963a075345243cc31bc8dc84a28f77"
 STORAGE_LIFECYCLE_NAME = "runner-storage-lifecycle.py"
-STORAGE_LIFECYCLE_SHA256 = "a77a4c0a3ac4ad05aa72e1578c3efdab57b6c1ce732e77fa1640944dd8760ba6"
+STORAGE_LIFECYCLE_SHA256 = "22c515fd204eba0006b807409d24be7a344fd8b9af14ee1b3507f9fdbcf7d01e"
+STORAGE_IDENTITY_VERIFIER_NAME = "verify-runner-storage.py"
+STORAGE_IDENTITY_VERIFIER_SHA256 = (
+    "ff1d034329ada6f8c1596876779a990dbe7e1a0ada41f57442a899115c90579b"
+)
 
 CONTROL_RECEIPT_NAME = "outer-docker-control.json"
 START_RECEIPT_NAME = "outer-docker-receipt.json"
@@ -264,6 +280,30 @@ def require_exact_children(expected: set[int]) -> None:
     require(set(direct_children()) == expected, "supervisor direct child roster differs")
 
 
+def wait_for_adopted_children(expected: set[int]) -> None:
+    """Wait and reap descendants adopted through the supervisor subreaper.
+
+    A killed lifecycle helper is allowed to leave its foreground mutation
+    guardian running with the storage lock OFD.  Starting a second helper while
+    that child is alive would deadlock on the same lock and would blur mutation
+    ownership, so the supervisor waits without signalling it and reaps it
+    before permitting another lifecycle transition.
+    """
+
+    while True:
+        observed = set(direct_children())
+        require(expected <= observed, "expected daemon child disappeared")
+        adopted = observed - expected
+        for pid in adopted:
+            try:
+                os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                pass
+        if set(direct_children()) == expected:
+            return
+        time.sleep(0.1)
+
+
 def process_arguments_sha256() -> str:
     raw = Path("/proc/self/cmdline").read_bytes()
     require(raw.endswith(b"\0") and raw.count(b"\0") >= 2, "supervisor argument vector is invalid")
@@ -434,7 +474,10 @@ def create_runtime_root(path: Path) -> RuntimeIdentity:
 
 
 def verify_runtime_root(identity: RuntimeIdentity) -> int:
-    require(RUNTIME_ROOT_RE.fullmatch(str(identity.path)) is not None, "runtime root path is invalid")
+    require(
+        RUNTIME_ROOT_RE.fullmatch(str(identity.path)) is not None,
+        "runtime root path is invalid",
+    )
     descriptor = os.open(identity.path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     observed = os.fstat(descriptor)
     require(
@@ -450,16 +493,53 @@ def verify_runtime_root(identity: RuntimeIdentity) -> int:
     return descriptor
 
 
+def verify_runtime_entries(descriptor: int) -> None:
+    observed_names = set(os.listdir(descriptor))
+    allowed = RUNTIME_DIRECTORY_ENTRIES | RUNTIME_REGULAR_ENTRIES | RUNTIME_SOCKET_ENTRIES
+    require(observed_names <= allowed, "runtime root contains a foreign entry")
+    for name in observed_names:
+        observed = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+        if name in RUNTIME_DIRECTORY_ENTRIES:
+            expected_type = stat.S_ISDIR
+        elif name in RUNTIME_REGULAR_ENTRIES:
+            expected_type = stat.S_ISREG
+        else:
+            expected_type = stat.S_ISSOCK
+        require(expected_type(observed.st_mode), f"runtime entry type differs: {name}")
+        require(
+            observed.st_uid == 0
+            and (name in RUNTIME_SOCKET_ENTRIES or observed.st_gid == 0),
+            f"runtime entry owner differs: {name}",
+        )
+
+
 def remove_runtime_root(identity: RuntimeIdentity) -> None:
     descriptor = verify_runtime_root(identity)
-    os.close(descriptor)
+    try:
+        verify_runtime_entries(descriptor)
+    finally:
+        os.close(descriptor)
+    require(
+        not mount_targets_below(
+            identity.path,
+            Path("/proc/self/mountinfo").read_text(encoding="utf-8"),
+        ),
+        "runtime root retains a mount",
+    )
     shutil.rmtree(identity.path)
     require(not identity.path.exists(), "runtime root remained after cleanup")
 
 
-def ensure_storage_directory(parent_fd: int, name: str) -> Path:
+def ensure_storage_directory(
+    parent_fd: int,
+    name: str,
+    *,
+    required_mode: int,
+    recoverable_modes: set[int],
+) -> Path:
+    require(required_mode in recoverable_modes, "storage directory mode policy is invalid")
     try:
-        os.mkdir(name, 0o700, dir_fd=parent_fd)
+        os.mkdir(name, required_mode, dir_fd=parent_fd)
     except FileExistsError:
         pass
     descriptor = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
@@ -469,46 +549,73 @@ def ensure_storage_directory(parent_fd: int, name: str) -> Path:
             stat.S_ISDIR(observed.st_mode)
             and observed.st_uid == 0
             and observed.st_gid == 0
-            and stat.S_IMODE(observed.st_mode) == 0o700,
+            and stat.S_IMODE(observed.st_mode) in recoverable_modes,
             f"persistent runtime directory authority differs: {name}",
+        )
+        os.fchmod(descriptor, required_mode)
+        os.fsync(descriptor)
+        require(
+            stat.S_IMODE(os.fstat(descriptor).st_mode) == required_mode,
+            f"persistent runtime directory mode did not settle: {name}",
         )
     finally:
         os.close(descriptor)
     return MOUNT_TARGET / name
 
 
-def write_runtime_file(runtime_fd: int, name: str, content: str) -> tuple[Path, str]:
+def write_runtime_bytes(
+    runtime_fd: int,
+    name: str,
+    content: bytes,
+    *,
+    mode: int,
+) -> tuple[Path, str]:
     require("/" not in name and name not in ("", ".", ".."), "runtime file name is invalid")
+    require(mode in (0o400, 0o600), "runtime file mode is invalid")
     descriptor = os.open(
         name,
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-        0o600,
+        mode,
         dir_fd=runtime_fd,
     )
-    encoded = content.encode("utf-8")
     try:
         offset = 0
-        while offset < len(encoded):
-            offset += os.write(descriptor, encoded[offset:])
+        while offset < len(content):
+            offset += os.write(descriptor, content[offset:])
+        os.fchmod(descriptor, mode)
         os.fsync(descriptor)
         observed = os.fstat(descriptor)
         require(
             observed.st_uid == 0
             and observed.st_gid == 0
-            and stat.S_IMODE(observed.st_mode) == 0o600,
-            "runtime configuration owner or mode differs",
+            and stat.S_IMODE(observed.st_mode) == mode,
+            "runtime file owner or mode differs",
         )
     finally:
         os.close(descriptor)
     runtime_path = Path(os.readlink(f"/proc/self/fd/{runtime_fd}"))
-    require(RUNTIME_ROOT_RE.fullmatch(str(runtime_path)) is not None, "runtime root descriptor path differs")
-    return runtime_path / name, hashlib.sha256(encoded).hexdigest()
+    require(
+        RUNTIME_ROOT_RE.fullmatch(str(runtime_path)) is not None,
+        "runtime root descriptor path differs",
+    )
+    return runtime_path / name, hashlib.sha256(content).hexdigest()
 
 
-def read_route_networks(raw: str) -> tuple[ipaddress._BaseNetwork, ...]:
+def write_runtime_file(runtime_fd: int, name: str, content: str) -> tuple[Path, str]:
+    return write_runtime_bytes(
+        runtime_fd,
+        name,
+        content.encode("utf-8"),
+        mode=0o600,
+    )
+
+
+def read_route_networks(
+    raw: str,
+) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
     value = json.loads(raw)
     require(isinstance(value, list), "host route observation is not an array")
-    networks: list[ipaddress._BaseNetwork] = []
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
     for route in value:
         require(isinstance(route, dict), "host route record is invalid")
         destination = route.get("dst")
@@ -517,8 +624,8 @@ def read_route_networks(raw: str) -> tuple[ipaddress._BaseNetwork, ...]:
         require(isinstance(destination, str), "host route destination is invalid")
         try:
             networks.append(ipaddress.ip_network(destination, strict=False))
-        except ValueError:
-            continue
+        except ValueError as error:
+            raise SupervisorError("host route destination is unparseable") from error
     return tuple(networks)
 
 
@@ -532,7 +639,11 @@ def require_address_pool_available(run: Callable[..., subprocess.CompletedProces
         timeout=30,
     )
     for observed in read_route_networks(result.stdout):
-        require(not observed.overlaps(reserved), f"isolated Docker address pool overlaps {observed}")
+        if observed.version == reserved.version:
+            require(
+                not observed.overlaps(reserved),
+                f"isolated Docker address pool overlaps {observed}",
+            )
 
 
 def normalize_storage_operation(
@@ -543,7 +654,19 @@ def normalize_storage_operation(
     caller_uid: int,
     caller_gid: int,
     expected_namespace: dict[str, int],
+    allow_unpublished: bool = False,
 ) -> dict[str, object]:
+    require(
+        expected_outcome in ("activated", "observed", "deactivated"),
+        "runner storage expected outcome is invalid",
+    )
+    plain_int(caller_uid, "runner storage caller UID", positive=True)
+    plain_int(caller_gid, "runner storage caller GID")
+    expected_namespace = validate_namespace(
+        expected_namespace,
+        "expected runner storage namespace",
+    )
+    require(isinstance(allow_unpublished, bool), "unpublished teardown policy is invalid")
     operation = exact_keys(
         value,
         {
@@ -557,9 +680,15 @@ def normalize_storage_operation(
         },
         "runner storage operation",
     )
-    require(operation["schema"] == STORAGE_OPERATION_SCHEMA, "runner storage operation schema differs")
+    require(
+        operation["schema"] == STORAGE_OPERATION_SCHEMA,
+        "runner storage operation schema differs",
+    )
     require(operation["outcome"] == expected_outcome, "runner storage operation outcome differs")
-    require(operation["authorityRoot"] == str(AUTHORITY_ROOT), "runner storage authority root differs")
+    require(
+        operation["authorityRoot"] == str(AUTHORITY_ROOT),
+        "runner storage authority root differs",
+    )
     require(operation["mountTarget"] == str(MOUNT_TARGET), "runner storage mount target differs")
     require(
         operation["mountNamespace"]
@@ -567,7 +696,28 @@ def normalize_storage_operation(
         "runner storage operation namespace differs",
     )
     digest = operation["authorityReceiptSha256"]
-    require(isinstance(digest, str) and SHA256_RE.fullmatch(digest) is not None, "runner storage projection digest is invalid")
+    if operation["receipt"] is None:
+        require(
+            expected_outcome == "deactivated"
+            and allow_unpublished
+            and digest is None,
+            "unpublished runner storage teardown is not authorized",
+        )
+        return {
+            "lifecycleSchema": STORAGE_OPERATION_SCHEMA,
+            "receiptSchema": None,
+            "projectionDigest": None,
+            "authorityRoot": str(AUTHORITY_ROOT),
+            "target": str(MOUNT_TARGET),
+            "image": None,
+            "loop": None,
+            "filesystem": None,
+            "mountNamespace": expected_namespace,
+        }
+    require(
+        isinstance(digest, str) and SHA256_RE.fullmatch(digest) is not None,
+        "runner storage projection digest is invalid",
+    )
 
     receipt = exact_keys(
         operation["receipt"],
@@ -599,7 +749,7 @@ def normalize_storage_operation(
         {"device", "inode", "ownerUid", "ownerGid", "mode"},
         "runner storage state identity",
     )
-    plain_int(state_identity["device"], "runner storage state device")
+    state_device = plain_int(state_identity["device"], "runner storage state device")
     plain_int(state_identity["inode"], "runner storage state inode", positive=True)
     require(
         (
@@ -616,8 +766,11 @@ def normalize_storage_operation(
         {"path", "device", "inode", "ownerUid", "ownerGid", "mode"},
         "runner storage authority identity",
     )
-    require(authority["path"] == str(AUTHORITY_ROOT), "runner storage authority identity path differs")
-    require(plain_int(authority["device"], "runner storage authority device") >= 0, "invalid")
+    require(
+        authority["path"] == str(AUTHORITY_ROOT),
+        "runner storage authority identity path differs",
+    )
+    authority_device = plain_int(authority["device"], "runner storage authority device")
     plain_int(authority["inode"], "runner storage authority inode", positive=True)
     require(
         (
@@ -627,6 +780,10 @@ def normalize_storage_operation(
         )
         == (0, 0, "0700"),
         "runner storage authority owner, group, or mode differs",
+    )
+    require(
+        authority_device == state_device,
+        "runner storage authority backing differs from the user state root",
     )
 
     target = exact_keys(
@@ -674,10 +831,25 @@ def normalize_storage_operation(
     safe_image = {
         "device": plain_int(image["device"], "runner storage image device"),
         "inode": plain_int(image["inode"], "runner storage image inode", positive=True),
-        "logicalBytes": plain_int(image["logicalBytes"], "runner storage image bytes", positive=True),
+        "logicalBytes": plain_int(
+            image["logicalBytes"],
+            "runner storage image bytes",
+            positive=True,
+        ),
     }
+    require(
+        safe_image["device"] == authority_device,
+        "runner storage image backing differs",
+    )
+    require(
+        safe_image["logicalBytes"] == IMAGE_BYTES,
+        "runner storage image size differs",
+    )
     allocated_bytes = plain_int(image["allocatedBytes"], "runner storage image allocation")
-    require(allocated_bytes <= safe_image["logicalBytes"], "runner storage image allocation is invalid")
+    require(
+        allocated_bytes <= safe_image["logicalBytes"],
+        "runner storage image allocation is invalid",
+    )
 
     if expected_outcome == "deactivated":
         require(receipt["loop"] is None, "detached runner storage retains a loop")
@@ -688,12 +860,21 @@ def normalize_storage_operation(
             {"device", "major", "minor"},
             "runner storage loop identity",
         )
-        require(isinstance(loop["device"], str) and LOOP_DEVICE_RE.fullmatch(loop["device"]) is not None, "runner storage loop device is invalid")
+        require(
+            isinstance(loop["device"], str)
+            and LOOP_DEVICE_RE.fullmatch(loop["device"]) is not None,
+            "runner storage loop device is invalid",
+        )
         safe_loop = {
             "device": loop["device"],
             "major": plain_int(loop["major"], "runner storage loop major", positive=True),
             "minor": plain_int(loop["minor"], "runner storage loop minor"),
         }
+        require(
+            (os.major(target["device"]), os.minor(target["device"]))
+            == (safe_loop["major"], safe_loop["minor"]),
+            "runner storage target device differs from its loop",
+        )
 
     filesystem = exact_keys(
         receipt["filesystem"],
@@ -723,7 +904,10 @@ def normalize_storage_operation(
         and all(isinstance(item, str) for item in filesystem["features"]),
         "runner storage filesystem features are invalid",
     )
-    receipt_namespace = validate_namespace(receipt["mountNamespace"], "runner storage receipt namespace")
+    receipt_namespace = validate_namespace(
+        receipt["mountNamespace"],
+        "runner storage receipt namespace",
+    )
     require(receipt_namespace == expected_namespace, "runner storage receipt namespace differs")
 
     backing = exact_keys(
@@ -737,8 +921,16 @@ def normalize_storage_operation(
         },
         "runner storage backing filesystem",
     )
-    plain_int(backing["device"], "runner storage backing device")
-    backing_total = plain_int(backing["totalBytes"], "runner storage backing total bytes", positive=True)
+    backing_device = plain_int(backing["device"], "runner storage backing device")
+    require(
+        backing_device == authority_device,
+        "runner storage backing filesystem identity differs",
+    )
+    backing_total = plain_int(
+        backing["totalBytes"],
+        "runner storage backing total bytes",
+        positive=True,
+    )
     backing_free = plain_int(backing["freeBytes"], "runner storage backing free bytes")
     require(backing_free <= backing_total, "runner storage backing free bytes are invalid")
     require(
@@ -747,7 +939,7 @@ def normalize_storage_operation(
     )
     require(
         plain_int(backing["minimumFreeBytes"], "runner storage minimum free bytes", positive=True)
-        == safe_image["logicalBytes"],
+        == IMAGE_BYTES,
         "runner storage minimum free bytes differ",
     )
     policy = exact_keys(
@@ -768,7 +960,14 @@ def normalize_storage_operation(
         == per_sandbox * maximum,
         "sandbox disk aggregate differs",
     )
-    require(policy["enforcement"] == "xfs_project_quota_required", "sandbox disk enforcement differs")
+    require(
+        per_sandbox == SANDBOX_BYTES and maximum == MAXIMUM_SANDBOXES,
+        "sandbox disk policy limits differ",
+    )
+    require(
+        policy["enforcement"] == "xfs_project_quota_required",
+        "sandbox disk enforcement differs",
+    )
     require(
         policy["backingCapacity"] == "current_headroom_with_visible_enospc_failure",
         "sandbox backing capacity disposition differs",
@@ -789,7 +988,7 @@ def normalize_storage_operation(
 
 def invoke_storage_helper(
     *,
-    script_directory: Path,
+    helper: Path,
     command: str,
     state_root: Path,
     caller_uid: int,
@@ -797,9 +996,19 @@ def invoke_storage_helper(
     namespace: dict[str, int],
     expected_outcome: str,
     expected_children: set[int],
+    allow_unpublished: bool = False,
 ) -> dict[str, object]:
-    require(command in ("activate-private", "observe-private", "deactivate-private"), "storage helper command is invalid")
-    helper = script_directory / STORAGE_LIFECYCLE_NAME
+    outcomes = {
+        "activate-private": "activated",
+        "observe-private": "observed",
+        "deactivate-private": "deactivated",
+    }
+    require(command in outcomes, "storage helper command is invalid")
+    require(outcomes[command] == expected_outcome, "storage helper outcome authority differs")
+    require(
+        not allow_unpublished or command == "deactivate-private",
+        "unpublished storage policy is invalid for this operation",
+    )
     environment = {
         "PATH": "/usr/bin:/bin",
         "LC_ALL": "C.UTF-8",
@@ -832,7 +1041,7 @@ def invoke_storage_helper(
         close_fds=True,
     )
     try:
-        stdout, stderr = process.communicate(timeout=180)
+        stdout, stderr = process.communicate(timeout=600)
     except subprocess.TimeoutExpired:
         process.terminate()
         try:
@@ -840,9 +1049,10 @@ def invoke_storage_helper(
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=10)
+        wait_for_adopted_children(expected_children)
         raise SupervisorError(f"runner storage {command} timed out")
+    wait_for_adopted_children(expected_children)
     require(process.returncode == 0, f"runner storage {command} failed: {stderr.strip()}")
-    require_exact_children(expected_children)
     try:
         value = json.loads(stdout)
     except json.JSONDecodeError as error:
@@ -854,6 +1064,7 @@ def invoke_storage_helper(
         caller_uid=caller_uid,
         caller_gid=caller_gid,
         expected_namespace=namespace,
+        allow_unpublished=allow_unpublished,
     )
 
 
@@ -957,6 +1168,21 @@ def task_netns_mounts(runtime_root: Path, raw_mountinfo: str) -> tuple[Path, ...
     return tuple(sorted(found, key=lambda item: len(item.parts), reverse=True))
 
 
+def mount_targets_below(root: Path, raw_mountinfo: str) -> tuple[Path, ...]:
+    found: list[Path] = []
+    for line in raw_mountinfo.splitlines():
+        fields = line.split()
+        require("-" in fields and len(fields) >= 10, "mountinfo record is invalid")
+        target = Path(decode_mount_path(fields[4]))
+        try:
+            target.relative_to(root)
+        except ValueError:
+            continue
+        found.append(target)
+    require(len(found) == len(set(found)), "runtime mount target is duplicated")
+    return tuple(sorted(found, key=lambda item: len(item.parts), reverse=True))
+
+
 class RuntimeSupervisor:
     def __init__(self, state_root: Path, caller_uid: int, caller_gid: int) -> None:
         self.state_root = state_root
@@ -967,6 +1193,9 @@ class RuntimeSupervisor:
         self.runtime_identity: RuntimeIdentity | None = None
         self.state: StateAuthority | None = None
         self.storage: dict[str, object] | None = None
+        self.deactivated_storage: dict[str, object] | None = None
+        self.runtime_removed = False
+        self.storage_activation_attempted = False
         self.containerd_process: subprocess.Popen[bytes] | None = None
         self.docker_process: subprocess.Popen[bytes] | None = None
         self.containerd_identity: dict[str, object] | None = None
@@ -974,7 +1203,9 @@ class RuntimeSupervisor:
         self.supervisor_identity: dict[str, object] | None = None
         self.stop_requested = False
         self.shutdown_reason = "operator_request"
+        self.shutdown_started = False
         self.process_verifier: Callable[..., dict[str, object]] | None = None
+        self.storage_helper_path: Path | None = None
         self.socket: Path | None = None
         self.containerd_socket: Path | None = None
         self.docker_config_path: Path | None = None
@@ -986,7 +1217,6 @@ class RuntimeSupervisor:
         self.server_id: str | None = None
         self.server_version: str | None = None
         self.containerd_version: str | None = None
-        self.started_at: str | None = None
 
     def expected_child_pids(self) -> set[int]:
         result: set[int] = set()
@@ -998,6 +1228,9 @@ class RuntimeSupervisor:
     def request_stop(self, signum: int, _: object) -> None:
         if signum == signal.SIGTERM:
             self.stop_requested = True
+
+    def reject_interrupted_startup(self) -> None:
+        require(not self.stop_requested, "supervisor startup was stopped by the operator")
 
     def verify_own_identity(self) -> dict[str, object]:
         require(self.process_verifier is not None, "process verifier is absent")
@@ -1021,10 +1254,17 @@ class RuntimeSupervisor:
         )
         return identity
 
-    def invoke_storage(self, command: str, outcome: str) -> dict[str, object]:
+    def invoke_storage(
+        self,
+        command: str,
+        outcome: str,
+        *,
+        allow_unpublished: bool = False,
+    ) -> dict[str, object]:
         require(self.namespace is not None, "supervisor namespace is absent")
+        require(self.storage_helper_path is not None, "storage helper snapshot is absent")
         return invoke_storage_helper(
-            script_directory=self.script_directory,
+            helper=self.storage_helper_path,
             command=command,
             state_root=self.state_root,
             caller_uid=self.caller_uid,
@@ -1032,16 +1272,18 @@ class RuntimeSupervisor:
             namespace=self.namespace,
             expected_outcome=outcome,
             expected_children=self.expected_child_pids(),
+            allow_unpublished=allow_unpublished,
         )
 
-    def write_control_receipt(self) -> None:
+    def write_control_receipt(self, outcome: str = "active") -> None:
+        require(outcome in ("active", "stopping"), "control outcome is invalid")
         require(self.state is not None, "state authority is absent")
         require(self.runtime_identity is not None, "runtime identity is absent")
         require(self.supervisor_identity is not None, "supervisor identity is absent")
         require(self.namespace is not None, "supervisor namespace is absent")
         value: dict[str, object] = {
             "schema": CONTROL_SCHEMA,
-            "outcome": "active",
+            "outcome": outcome,
             "observedAt": utc_now(),
             "bootId": current_boot_id(),
             "stateRoot": str(self.state_root),
@@ -1070,28 +1312,78 @@ class RuntimeSupervisor:
         signal.signal(signal.SIGTERM, self.request_stop)
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        signal.signal(signal.SIGQUIT, signal.SIG_IGN)
         self.namespace = prove_private_namespace(os.getppid())
         self.process_verifier = load_process_verifier(self.script_directory)
         self.supervisor_identity = self.verify_own_identity()
-        self.started_at = utc_now()
         self.state = StateAuthority.open(self.state_root, self.caller_uid, self.caller_gid)
         require(
             not self.state.exists(CONTROL_RECEIPT_NAME)
             and not self.state.exists(START_RECEIPT_NAME),
             "isolated runtime receipt already exists",
         )
+        require_address_pool_available(subprocess.run)
+        require_exact_children(set())
+        if self.state.exists(STOP_RECEIPT_NAME):
+            self.state.unlink_regular(STOP_RECEIPT_NAME)
         self.runtime_identity = create_runtime_root(runtime_root_for(self.state_root))
+        self.snapshot_storage_sources()
         self.write_control_receipt()
+        self.reject_interrupted_startup()
+        self.storage_activation_attempted = True
         self.storage = self.invoke_storage("activate-private", "activated")
+        self.reject_interrupted_startup()
         self.prepare_daemon_configuration()
+        self.reject_interrupted_startup()
         self.start_daemons()
+        self.reject_interrupted_startup()
         observed_storage = self.invoke_storage("observe-private", "observed")
         require(
             canonical_json(observed_storage) == canonical_json(self.storage),
             "runner storage projection changed after daemon startup",
         )
-        self.supervisor_identity = self.verify_own_identity()
+        self.reject_interrupted_startup()
+        self.reprove_daemons()
+        final_supervisor_identity = self.verify_own_identity()
+        require(
+            final_supervisor_identity == self.supervisor_identity,
+            "supervisor identity changed during startup",
+        )
+        self.reject_interrupted_startup()
         self.write_start_receipt()
+
+    def snapshot_storage_sources(self) -> None:
+        require(self.runtime_identity is not None, "runtime identity is absent")
+        helper_source = read_pinned_source(
+            self.script_directory / STORAGE_LIFECYCLE_NAME,
+            STORAGE_LIFECYCLE_SHA256,
+        )
+        verifier_source = read_pinned_source(
+            self.script_directory / STORAGE_IDENTITY_VERIFIER_NAME,
+            STORAGE_IDENTITY_VERIFIER_SHA256,
+        )
+        runtime_fd = verify_runtime_root(self.runtime_identity)
+        try:
+            helper_path, helper_digest = write_runtime_bytes(
+                runtime_fd,
+                STORAGE_LIFECYCLE_NAME,
+                helper_source,
+                mode=0o400,
+            )
+            _, verifier_digest = write_runtime_bytes(
+                runtime_fd,
+                STORAGE_IDENTITY_VERIFIER_NAME,
+                verifier_source,
+                mode=0o400,
+            )
+        finally:
+            os.close(runtime_fd)
+        require(
+            helper_digest == STORAGE_LIFECYCLE_SHA256
+            and verifier_digest == STORAGE_IDENTITY_VERIFIER_SHA256,
+            "runtime storage source snapshot digest differs",
+        )
+        self.storage_helper_path = helper_path
 
     def prepare_daemon_configuration(self) -> None:
         require(self.runtime_identity is not None, "runtime identity is absent")
@@ -1105,8 +1397,28 @@ class RuntimeSupervisor:
                 and stat.S_IMODE(target.st_mode) == 0o700,
                 "runner storage target owner or mode differs",
             )
-            self.data_root = ensure_storage_directory(target_fd, "outer-docker")
-            self.containerd_root = ensure_storage_directory(target_fd, "outer-containerd")
+            loop = exact_keys(
+                self.storage["loop"],
+                {"device", "major", "minor"},
+                "active runner storage loop",
+            )
+            require(
+                (os.major(target.st_dev), os.minor(target.st_dev))
+                == (loop["major"], loop["minor"]),
+                "runner storage target backing device changed after activation",
+            )
+            self.data_root = ensure_storage_directory(
+                target_fd,
+                "outer-docker",
+                required_mode=0o710,
+                recoverable_modes={0o700, 0o710},
+            )
+            self.containerd_root = ensure_storage_directory(
+                target_fd,
+                "outer-containerd",
+                required_mode=0o700,
+                recoverable_modes={0o700},
+            )
         finally:
             os.close(target_fd)
 
@@ -1138,7 +1450,6 @@ class RuntimeSupervisor:
             )
         finally:
             os.close(runtime_fd)
-        require_address_pool_available(subprocess.run)
 
     def daemon_environment(self) -> dict[str, str]:
         return {"PATH": "/usr/bin:/bin", "LC_ALL": "C.UTF-8", "HOME": "/root"}
@@ -1148,7 +1459,10 @@ class RuntimeSupervisor:
         require(self.namespace is not None, "supervisor namespace is absent")
         require(self.containerd_config_path is not None, "containerd config is absent")
         require(self.docker_config_path is not None, "Docker config is absent")
-        require(self.containerd_socket is not None and self.socket is not None, "daemon socket path is absent")
+        require(
+            self.containerd_socket is not None and self.socket is not None,
+            "daemon socket path is absent",
+        )
         environment = self.daemon_environment()
         self.containerd_process = subprocess.Popen(
             [
@@ -1225,7 +1539,10 @@ class RuntimeSupervisor:
         except json.JSONDecodeError as error:
             raise SupervisorError("isolated Docker info is invalid") from error
         require(isinstance(info_value, dict), "isolated Docker info is not an object")
-        require(info_value.get("DockerRootDir") == str(self.data_root), "isolated Docker data root differs")
+        require(
+            info_value.get("DockerRootDir") == str(self.data_root),
+            "isolated Docker data root differs",
+        )
         self.server_id = info_value.get("ID")
         self.server_version = info_value.get("ServerVersion")
         require(
@@ -1258,6 +1575,42 @@ class RuntimeSupervisor:
         self.docker_identity = second_docker
         require_exact_children({self.containerd_process.pid, self.docker_process.pid})
 
+    def reprove_daemons(self) -> None:
+        require(self.process_verifier is not None, "process verifier is absent")
+        require(self.namespace is not None, "supervisor namespace is absent")
+        require(self.containerd_process is not None, "containerd process is absent")
+        require(self.docker_process is not None, "Docker process is absent")
+        require(self.containerd_config_path is not None, "containerd config is absent")
+        require(self.docker_config_path is not None, "Docker config is absent")
+        require(
+            self.containerd_process.poll() is None and self.docker_process.poll() is None,
+            "isolated daemon exited before publication",
+        )
+        containerd_identity = self.process_verifier(
+            self.containerd_process.pid,
+            CONTAINERD,
+            ("--config", str(self.containerd_config_path), "--log-level", "info"),
+            expected_uid=0,
+            expected_parent_pid=os.getpid(),
+            expected_mount_namespace=self.namespace,
+        )
+        docker_identity = self.process_verifier(
+            self.docker_process.pid,
+            DOCKERD,
+            ("--config-file", str(self.docker_config_path)),
+            expected_uid=0,
+            expected_parent_pid=os.getpid(),
+            expected_mount_namespace=self.namespace,
+        )
+        require(
+            containerd_identity == self.containerd_identity
+            and docker_identity == self.docker_identity,
+            "isolated daemon identity changed before publication",
+        )
+        require_exact_children(
+            {self.containerd_process.pid, self.docker_process.pid}
+        )
+
     def docker_command(self, *arguments: str) -> str:
         require(self.socket is not None, "Docker socket is absent")
         environment = {
@@ -1284,10 +1637,24 @@ class RuntimeSupervisor:
         require(self.supervisor_identity is not None, "supervisor identity is absent")
         require(self.namespace is not None, "supervisor namespace is absent")
         require(self.storage is not None, "storage projection is absent")
-        require(self.containerd_identity is not None and self.docker_identity is not None, "daemon identity is absent")
-        require(self.containerd_process is not None and self.docker_process is not None, "daemon process is absent")
-        require(self.socket is not None and self.containerd_socket is not None, "daemon socket is absent")
-        require(self.data_root is not None and self.containerd_root is not None, "daemon data root is absent")
+        require(
+            self.containerd_identity is not None
+            and self.docker_identity is not None,
+            "daemon identity is absent",
+        )
+        require(
+            self.containerd_process is not None
+            and self.docker_process is not None,
+            "daemon process is absent",
+        )
+        require(
+            self.socket is not None and self.containerd_socket is not None,
+            "daemon socket is absent",
+        )
+        require(
+            self.data_root is not None and self.containerd_root is not None,
+            "daemon data root is absent",
+        )
         value: dict[str, object] = {
             "schema": START_SCHEMA,
             "outcome": "passed",
@@ -1326,11 +1693,15 @@ class RuntimeSupervisor:
         self.state.write_json(START_RECEIPT_NAME, value)
 
     def monitor(self) -> int:
+        next_guardian_proof = 0.0
         while True:
             if self.stop_requested:
                 if self.try_shutdown(self.shutdown_reason):
                     return 0
                 self.stop_requested = False
+            if self.shutdown_started:
+                time.sleep(0.25)
+                continue
             for name, process in (
                 ("containerd", self.containerd_process),
                 ("dockerd", self.docker_process),
@@ -1339,6 +1710,21 @@ class RuntimeSupervisor:
                     self.shutdown_reason = f"{name}_unexpected_exit"
                     if self.try_shutdown(self.shutdown_reason):
                         return 70
+            if time.monotonic() >= next_guardian_proof:
+                try:
+                    observed_supervisor = self.verify_own_identity()
+                except Exception as error:
+                    print(
+                        f"root guardian proof failed: {error}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    observed_supervisor = None
+                if observed_supervisor != self.supervisor_identity:
+                    self.shutdown_reason = "root_guardian_lost"
+                    if self.try_shutdown(self.shutdown_reason):
+                        return 71
+                next_guardian_proof = time.monotonic() + 1.0
             time.sleep(0.25)
 
     def terminate_daemon(self, name: str, process: subprocess.Popen[bytes] | None) -> None:
@@ -1346,6 +1732,30 @@ class RuntimeSupervisor:
             if process is not None:
                 process.wait(timeout=0)
             return
+        require(self.process_verifier is not None, "process verifier is absent")
+        require(self.namespace is not None, "supervisor namespace is absent")
+        if name == "dockerd":
+            require(self.docker_config_path is not None, "Docker config is absent")
+            executable = DOCKERD
+            arguments = ("--config-file", str(self.docker_config_path))
+            expected_identity = self.docker_identity
+        elif name == "containerd":
+            require(self.containerd_config_path is not None, "containerd config is absent")
+            executable = CONTAINERD
+            arguments = ("--config", str(self.containerd_config_path), "--log-level", "info")
+            expected_identity = self.containerd_identity
+        else:
+            raise SupervisorError("unsupported daemon shutdown authority")
+        observed_identity = self.process_verifier(
+            process.pid,
+            executable,
+            arguments,
+            expected_uid=0,
+            expected_parent_pid=os.getpid(),
+            expected_mount_namespace=self.namespace,
+        )
+        if expected_identity is not None:
+            require(observed_identity == expected_identity, f"{name} identity changed before stop")
         process.terminate()
         try:
             process.wait(timeout=60)
@@ -1375,16 +1785,26 @@ class RuntimeSupervisor:
 
     def try_shutdown(self, reason: str) -> bool:
         require(self.state is not None, "state authority is absent")
+        first_attempt = not self.shutdown_started
+        self.shutdown_started = True
         try:
+            if first_attempt and self.state.exists(CONTROL_RECEIPT_NAME):
+                self.write_control_receipt("stopping")
             # Docker owns running containers; it must drain before its dedicated
             # containerd.  The storage mount stays alive until both are reaped.
             self.terminate_daemon("dockerd", self.docker_process)
             self.terminate_daemon("containerd", self.containerd_process)
-            require_exact_children(set())
+            wait_for_adopted_children(set())
             self.cleanup_task_netns()
-            deactivated = self.invoke_storage("deactivate-private", "deactivated")
-            if self.runtime_identity is not None:
+            if self.storage_activation_attempted and self.deactivated_storage is None:
+                self.deactivated_storage = self.invoke_storage(
+                    "deactivate-private",
+                    "deactivated",
+                    allow_unpublished=self.storage is None,
+                )
+            if self.runtime_identity is not None and not self.runtime_removed:
                 remove_runtime_root(self.runtime_identity)
+                self.runtime_removed = True
             value: dict[str, object] = {
                 "schema": STOP_SCHEMA,
                 "outcome": "passed",
@@ -1393,7 +1813,11 @@ class RuntimeSupervisor:
                 "stateRoot": str(self.state_root),
                 "reason": reason,
                 "supervisorProcessIdentity": self.supervisor_identity,
-                "storageProjectionDigest": deactivated["projectionDigest"],
+                "storageProjectionDigest": (
+                    self.deactivated_storage["projectionDigest"]
+                    if self.deactivated_storage is not None
+                    else None
+                ),
                 "runtimeRootRemoved": True,
             }
             self.state.write_json(STOP_RECEIPT_NAME, value)
@@ -1454,5 +1878,5 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    except (SupervisorError, OSError, ValueError, subprocess.SubprocessError) as error:
+    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as error:
         fail(str(error))
