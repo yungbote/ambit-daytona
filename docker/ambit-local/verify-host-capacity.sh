@@ -8,174 +8,251 @@ fi
 
 state_root=$1
 output=$2
-[[ ${state_root} =~ ^/home/[^/]+/[A-Za-z0-9._/-]+$ ]] || {
-  echo 'STATE_ROOT must be a specific path below /home' >&2
-  exit 64
-}
-[[ ${state_root} != *'/../'* && ${state_root} != */.. && ${state_root} != *'//'* ]] || {
-  echo 'STATE_ROOT must not contain traversal or empty path components' >&2
-  exit 64
-}
-[[ $(realpath -e -- "${state_root}") == "${state_root}" ]] || {
-  echo 'STATE_ROOT must be an existing canonical non-symlink path' >&2
-  exit 64
-}
-[[ ${output} = /* && ! -e ${output} ]] || { echo 'OUTPUT_RECEIPT must be an unused absolute path' >&2; exit 64; }
-command -v flock >/dev/null || { echo 'required host-capacity command is absent: flock' >&2; exit 66; }
+[[ ${state_root} =~ ^/home/[^/]+/[A-Za-z0-9._/-]+$ ]] || { echo 'invalid STATE_ROOT' >&2; exit 64; }
+[[ $(/usr/bin/realpath -e -- "${state_root}") == "${state_root}" ]] || { echo 'STATE_ROOT is not canonical' >&2; exit 64; }
+[[ ${output} = /* && ! -e ${output} && ! -L ${output} ]] || { echo 'OUTPUT_RECEIPT must be an unused absolute path' >&2; exit 64; }
 
-exec {lifecycle_fd}<"${state_root}"
-lifecycle_handle=/proc/$$/fd/${lifecycle_fd}
-lifecycle_identity=$(stat -Lc '%d:%i' -- "${lifecycle_handle}")
-[[ $(stat -c '%d:%i' -- "${state_root}") == "${lifecycle_identity}" ]] || {
-  echo 'runner storage state root changed before readiness lock' >&2
+caller_uid=$(/usr/bin/id -u)
+caller_gid=$(/usr/bin/id -g)
+[[ $(/usr/bin/stat -c '%u:%g:%a:%F' -- "${state_root}") == "${caller_uid}:${caller_gid}:700:directory" ]] || {
+  echo 'STATE_ROOT authority differs' >&2
   exit 66
 }
-flock -s "${lifecycle_fd}"
-[[ $(stat -c '%d:%i' -- "${state_root}") == "${lifecycle_identity}" ]] || {
-  echo 'runner storage state root changed while acquiring readiness lock' >&2
+evidence_root=${state_root}/evidence
+[[ $(/usr/bin/stat -c '%u:%g:%a:%F' -- "${evidence_root}") == "${caller_uid}:${caller_gid}:700:directory" ]] || {
+  echo 'evidence-root authority differs' >&2
   exit 66
 }
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-runtime_root_tool=${script_dir}/isolated_runtime_root.py
-process_identity_tool=${script_dir}/isolated_process_identity.py
-runner_storage_tool=${script_dir}/verify-runner-storage.py
-[[ -f ${runtime_root_tool} && -f ${process_identity_tool} && -f ${runner_storage_tool} ]] || {
-  echo 'isolated runtime identity verifier is absent' >&2
+process_identity=${script_dir}/isolated_process_identity.py
+process_identity_sha256=28ea7928529c55596174496fee625066fa05bfb0d8f6a077991aed715c1c1b15
+[[ $(/usr/bin/sha256sum "${process_identity}" | /usr/bin/cut -d' ' -f1) == "${process_identity_sha256}" ]] || {
+  echo 'process identity source digest differs' >&2
+  exit 66
+}
+for executable in /usr/bin/env /usr/bin/nsenter /usr/bin/python3 /usr/bin/sudo; do
+  [[ $(/usr/bin/stat -Lc '%u:%g:%F' -- "${executable}") == '0:0:regular file' ]] || {
+    echo "host gate executable authority differs: ${executable}" >&2
+    exit 66
+  }
+  executable_mode=$(/usr/bin/stat -Lc '%a' -- "${executable}")
+  (( (8#${executable_mode} & 8#022) == 0 )) || {
+    echo "host gate executable is writable: ${executable}" >&2
+    exit 66
+  }
+done
+
+read -r -d '' pinned_loader <<'PY' || true
+import hashlib
+import hmac
+import os
+import stat
+import sys
+
+path, expected, *arguments = sys.argv[1:]
+descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+try:
+    identity = os.fstat(descriptor)
+    if not stat.S_ISREG(identity.st_mode) or not 0 < identity.st_size <= 2 * 1024 * 1024:
+        raise SystemExit("pinned Python source identity is invalid")
+    source = bytearray()
+    while True:
+        block = os.read(descriptor, 1024 * 1024)
+        if not block:
+            break
+        source.extend(block)
+finally:
+    os.close(descriptor)
+if not hmac.compare_digest(hashlib.sha256(source).hexdigest(), expected):
+    raise SystemExit("pinned Python source digest differs")
+sys.argv = [path, *arguments]
+globals()["__file__"] = path
+globals()["__package__"] = None
+exec(compile(source, path, "exec"), globals(), globals())
+PY
+
+runtime_id=$(printf '%s' "${state_root}" | /usr/bin/sha256sum | /usr/bin/cut -c1-12)
+runtime_root=/run/ambit-c16b-docker-${runtime_id}
+control=${evidence_root}/outer-docker-control.json
+start=${evidence_root}/outer-docker-receipt.json
+projection=${evidence_root}/runner-docker-storage.json
+for receipt in "${control}" "${start}" "${projection}"; do
+  [[ $(/usr/bin/stat -c '%u:%g:%a:%F' -- "${receipt}") == "${caller_uid}:${caller_gid}:600:regular file" ]] || {
+    echo "required receipt authority differs: ${receipt}" >&2
+    exit 66
+  }
+done
+
+/usr/bin/jq -e \
+  --arg stateRoot "${state_root}" --arg runtimeRoot "${runtime_root}" \
+  --arg processSha "${process_identity_sha256}" '
+    .schema == "ambit.local-daytona-isolated-docker-control/v1" and
+    .outcome == "active" and .stateRoot == $stateRoot and .runtimeRoot == $runtimeRoot and
+    .processIdentitySourceSha256 == $processSha and
+    (.mountNamespace | keys | sort) == ["device","inode"] and
+    (.supervisorProcessIdentity | keys | sort) == [
+      "argumentsSha256","executable","mountNamespace","parentPid","pid","procInode","startTimeTicks"
+    ] and
+    .supervisorProcessIdentity.mountNamespace == .mountNamespace
+  ' "${control}" >/dev/null || { echo 'active supervisor control receipt is invalid' >&2; exit 66; }
+
+/usr/bin/jq -e \
+  --arg stateRoot "${state_root}" --arg runtimeRoot "${runtime_root}" \
+  --argjson control "$(/usr/bin/jq -cS . "${control}")" '
+    .schema == "ambit.local-daytona-isolated-docker/v4" and .outcome == "passed" and
+    .stateRoot == $stateRoot and .runtimeRoot == $runtimeRoot and
+    .mountNamespace == $control.mountNamespace and
+    .supervisorProcessIdentity == $control.supervisorProcessIdentity and
+    .storageLifecycleSourceSha256 == $control.storageLifecycleSourceSha256 and
+    .processIdentitySourceSha256 == $control.processIdentitySourceSha256 and
+    .storage.lifecycleSchema == "ambit.local-daytona-runner-storage-operation/v2" and
+    .storage.receiptSchema == "ambit.local-daytona-runner-storage/v2" and
+    .storage.authorityRoot == "/home/.ambit-c16b-runner-storage" and
+    .storage.target == "/home/.ambit-c16b-runner-storage/runner-docker" and
+    .storage.mountNamespace == .mountNamespace and
+    (.storage.projectionDigest | test("^[0-9a-f]{64}$"))
+  ' "${start}" >/dev/null || { echo 'v4 isolated runtime start receipt is invalid' >&2; exit 66; }
+
+namespace=$(/usr/bin/jq -cS '.mountNamespace' "${control}")
+supervisor_pid=$(/usr/bin/jq -er '.supervisorProcessIdentity.pid' "${control}")
+storage_sha=$(/usr/bin/jq -er '.storageLifecycleSourceSha256' "${control}")
+snapshot_helper=${runtime_root}/runner-storage-lifecycle.py
+[[ $(/usr/bin/stat -c '%u:%g:%a:%F' -- "${snapshot_helper}") == '0:0:400:regular file' ]] || {
+  echo 'runtime storage helper snapshot authority differs' >&2
+  exit 66
+}
+[[ $(/usr/bin/sha256sum "${snapshot_helper}" | /usr/bin/cut -d' ' -f1) == "${storage_sha}" ]] || {
+  echo 'runtime storage helper snapshot digest differs' >&2
   exit 66
 }
 
-runtime_id=$(printf '%s' "${state_root}" | sha256sum | cut -c1-12)
-runtime_root=/tmp/ambit-c16b-docker-${runtime_id}
-expected_socket=${runtime_root}/docker.sock
-expected_docker_host=unix://${expected_socket}
-isolated_receipt=${state_root}/evidence/outer-docker-receipt.json
-config=${state_root}/config/outer-docker.json
-containerd_config=${state_root}/config/outer-containerd.toml
-expected_data_root=${state_root}/outer-docker
-expected_containerd_root=${state_root}/outer-containerd
-runner_storage_receipt=${state_root}/evidence/runner-docker-storage.json
-[[ ${DOCKER_HOST:-} == "${expected_docker_host}" ]] || {
-  echo "DOCKER_HOST must name the task-owned socket: ${expected_docker_host}" >&2
+verify_process() {
+  local expected=$1 executable=$2 pid parent arguments namespace_value observed
+  pid=$(/usr/bin/jq -er '.pid' <<<"${expected}")
+  parent=$(/usr/bin/jq -er '.parentPid' <<<"${expected}")
+  arguments=$(/usr/bin/jq -er '.argumentsSha256' <<<"${expected}")
+  namespace_value=$(/usr/bin/jq -cS '.mountNamespace' <<<"${expected}")
+  observed=$(
+    /usr/bin/sudo -n /usr/bin/env -i -C / PATH=/usr/bin:/bin LC_ALL=C.UTF-8 \
+      /usr/bin/python3 -I -S -B -c "${pinned_loader}" \
+      "${process_identity}" "${process_identity_sha256}" verify-digest \
+      "${pid}" "${executable}" 0 "${arguments}" \
+      --parent-pid "${parent}" --mount-namespace "${namespace_value}"
+  )
+  [[ $(/usr/bin/jq -cS . <<<"${observed}") == "${expected}" ]] || {
+    echo "live process identity differs: ${executable}" >&2
+    return 66
+  }
+}
+
+supervisor_identity=$(/usr/bin/jq -cS '.supervisorProcessIdentity' "${start}")
+containerd_identity=$(/usr/bin/jq -cS '.containerd.processIdentity' "${start}")
+docker_identity=$(/usr/bin/jq -cS '.dockerProcessIdentity' "${start}")
+verify_process "${supervisor_identity}" /usr/bin/python3
+verify_process "${containerd_identity}" /usr/bin/containerd
+verify_process "${docker_identity}" /usr/bin/dockerd
+[[ $(/usr/bin/jq -cS '.mountNamespace' <<<"${containerd_identity}") == "${namespace}" &&
+   $(/usr/bin/jq -cS '.mountNamespace' <<<"${docker_identity}") == "${namespace}" ]] || {
+  echo 'daemon mount namespace differs from supervisor' >&2
+  exit 66
+}
+[[ $(/usr/bin/jq -er '.parentPid' <<<"${containerd_identity}") == "${supervisor_pid}" &&
+   $(/usr/bin/jq -er '.parentPid' <<<"${docker_identity}") == "${supervisor_pid}" ]] || {
+  echo 'daemon parent differs from supervisor' >&2
+  exit 66
+}
+
+namespace_device=$(/usr/bin/jq -er '.device' <<<"${namespace}")
+namespace_inode=$(/usr/bin/jq -er '.inode' <<<"${namespace}")
+storage_operation=$(
+  /usr/bin/sudo -n /usr/bin/nsenter --mount="/proc/${supervisor_pid}/ns/mnt" -- \
+    /usr/bin/env -i -C / PATH=/usr/bin:/bin LC_ALL=C.UTF-8 \
+    /usr/bin/python3 -I -S -B -c "${pinned_loader}" \
+    "${snapshot_helper}" "${storage_sha}" observe-private \
+    "${state_root}" "${caller_uid}" "${caller_gid}" \
+    "${namespace_device}" "${namespace_inode}"
+)
+
+verify_process "${supervisor_identity}" /usr/bin/python3
+verify_process "${containerd_identity}" /usr/bin/containerd
+verify_process "${docker_identity}" /usr/bin/dockerd
+
+/usr/bin/jq -e \
+  --arg digest "$(/usr/bin/jq -er '.storage.projectionDigest' "${start}")" \
+  --argjson namespace "${namespace}" '
+    .schema == "ambit.local-daytona-runner-storage-operation/v2" and
+    .outcome == "observed" and
+    .mountNamespace == (($namespace.device|tostring) + ":" + ($namespace.inode|tostring)) and
+    .authorityRoot == "/home/.ambit-c16b-runner-storage" and
+    .mountTarget == "/home/.ambit-c16b-runner-storage/runner-docker" and
+    .authorityReceiptSha256 == $digest and
+    .receipt.schema == "ambit.local-daytona-runner-storage/v2" and
+    .receipt.lifecycleState == "attached" and .receipt.mountNamespace == $namespace
+  ' <<<"${storage_operation}" >/dev/null || { echo 'private namespace storage observation is invalid' >&2; exit 66; }
+
+/usr/bin/jq -e \
+  --arg digest "$(/usr/bin/jq -er '.authorityReceiptSha256' <<<"${storage_operation}")" '
+    .schema == "ambit.local-daytona-runner-storage-projection/v1" and
+    .authorityReceiptSha256 == $digest and .receipt.schema == "ambit.local-daytona-runner-storage/v2"
+  ' "${projection}" >/dev/null || { echo 'user storage projection differs from root authority' >&2; exit 66; }
+projection_receipt_sha256=$(/usr/bin/jq -cS '.receipt' "${projection}" | /usr/bin/sha256sum | /usr/bin/cut -d' ' -f1)
+[[ ${projection_receipt_sha256} == "$(/usr/bin/jq -er '.authorityReceiptSha256' <<<"${storage_operation}")" ]] || {
+  echo 'user storage projection payload digest differs from root authority' >&2
+  exit 66
+}
+
+[[ ${DOCKER_HOST:-} == "unix://$(/usr/bin/jq -er '.socket' "${start}")" ]] || {
+  echo 'DOCKER_HOST differs from v4 start receipt' >&2
   exit 66
 }
 [[ -z ${DOCKER_CONTEXT:-} ]] || { echo 'DOCKER_CONTEXT must be unset' >&2; exit 66; }
-[[ -S ${expected_socket} && -f ${isolated_receipt} && -f ${config} && -f ${containerd_config} ]] || {
-  echo 'task-owned Docker socket/config/receipt is incomplete' >&2
-  exit 66
-}
-
-config_sha256=$(sha256sum "${config}" | cut -d' ' -f1)
-containerd_config_sha256=$(sha256sum "${containerd_config}" | cut -d' ' -f1)
-runtime_root_identity=$(jq -c -e '.runtimeRootIdentity' "${isolated_receipt}")
-python3 "${runtime_root_tool}" verify "${runtime_root}" --expected "${runtime_root_identity}" >/dev/null || {
-  echo 'live Docker runtime root differs from its task-owned startup receipt' >&2
-  exit 66
-}
-docker_root=$(docker info --format '{{.DockerRootDir}}')
-docker_server_id=$(docker info --format '{{.ID}}')
-docker_server_version=$(docker version --format '{{.Server.Version}}')
-docker_pid=$(jq -er '.dockerPid' "${isolated_receipt}")
-containerd_pid=$(jq -er '.containerd.pid' "${isolated_receipt}")
-docker_executable=$(readlink -e -- "$(command -v dockerd)")
-containerd_executable=$(readlink -e -- "$(command -v containerd)")
-docker_process_identity=$(sudo -n python3 "${process_identity_tool}" "${docker_pid}" "${docker_executable}" "${config}")
-containerd_process_identity=$(sudo -n python3 "${process_identity_tool}" "${containerd_pid}" "${containerd_executable}" "${containerd_config}")
-jq -e \
-  --arg runtimeRoot "${runtime_root}" \
-  --argjson runtimeRootIdentity "${runtime_root_identity}" \
-  --arg socket "${expected_socket}" \
-  --arg dataRoot "${expected_data_root}" \
-  --arg containerdRoot "${expected_containerd_root}" \
-  --arg serverId "${docker_server_id}" \
-  --arg serverVersion "${docker_server_version}" \
-  --arg configSha256 "${config_sha256}" \
-  --arg containerdConfigSha256 "${containerd_config_sha256}" \
-  --argjson containerdProcessIdentity "${containerd_process_identity}" \
-  --argjson dockerProcessIdentity "${docker_process_identity}" '
-    .schema == "ambit.local-daytona-isolated-docker/v3" and
-    .outcome == "passed" and
-    .runtimeRoot == $runtimeRoot and
-    .runtimeRootIdentity == $runtimeRootIdentity and
-    .socket == $socket and
-    .dataRoot == $dataRoot and
-    .containerd.root == $containerdRoot and
-    .containerd.address == ($runtimeRoot + "/containerd.sock") and
-    .containerd.configSha256 == $containerdConfigSha256 and
-    .containerd.processIdentity == $containerdProcessIdentity and
-    .network == {addressPool:"172.30.0.0/16",defaultBridge:"disabled",hostFirewallMutation:false} and
-    .serverId == $serverId and
-    .serverVersion == $serverVersion and
-    .dockerProcessIdentity == $dockerProcessIdentity and
-    .configSha256 == $configSha256
-  ' "${isolated_receipt}" >/dev/null || {
-    echo 'live Docker identity differs from its task-owned startup receipt' >&2
-    exit 66
-  }
-[[ ${docker_root} == "${expected_data_root}" ]] || { echo 'live Docker data root differs' >&2; exit 66; }
-runner_storage=$(python3 "${runner_storage_tool}" "${state_root}")
-[[ -f ${runner_storage_receipt} && ! -L ${runner_storage_receipt} ]] || {
-  echo 'runner storage persisted receipt is absent or unsafe' >&2
-  exit 66
-}
-runner_storage_filter='{schema,stateRoot,stateRootIdentity,capacityRoot,mountTarget,image:{path:.image.path,logicalBytes:.image.logicalBytes,device:.image.device,inode:.image.inode,ownerUid:.image.ownerUid,ownerGid:.image.ownerGid,mode:.image.mode},filesystem:{type:.filesystem.type,uuid:.filesystem.uuid,mountOptions:.filesystem.mountOptions,totalBytes:.filesystem.totalBytes,features:.filesystem.features},backingFilesystem:{device:.backingFilesystem.device,allocationDisposition:.backingFilesystem.allocationDisposition,minimumFreeBytes:.backingFilesystem.minimumFreeBytes},sandboxDiskPolicy}'
-[[ $(jq -S -c "${runner_storage_filter}" "${runner_storage_receipt}") == $(jq -S -c "${runner_storage_filter}" <<<"${runner_storage}") ]] || {
-  echo 'runner storage persisted receipt differs from live stable identity' >&2
-  exit 66
-}
-runner_storage_receipt_sha256=$(sha256sum "${runner_storage_receipt}" | cut -d' ' -f1)
-runner_storage_filesystem_total_bytes=$(jq -er '.filesystem.totalBytes' <<<"${runner_storage}")
-runner_storage_filesystem_free_bytes=$(jq -er '.filesystem.freeBytes' <<<"${runner_storage}")
-runner_storage_backing_free_bytes=$(jq -er '.backingFilesystem.freeBytes' <<<"${runner_storage}")
+docker_root=$(/usr/bin/docker info --format '{{.DockerRootDir}}')
+docker_server_id=$(/usr/bin/docker info --format '{{.ID}}')
+[[ ${docker_root} == "$(/usr/bin/jq -er '.dataRoot' "${start}")" ]] || { echo 'live Docker data root differs' >&2; exit 66; }
+[[ ${docker_server_id} == "$(/usr/bin/jq -er '.serverId' "${start}")" ]] || { echo 'live Docker server identity differs' >&2; exit 66; }
 
 cpu_count=$(nproc)
 memory_available_kib=$(awk '$1 == "MemAvailable:" { print $2 }' /proc/meminfo)
-storage_available_bytes=${runner_storage_backing_free_bytes}
-storage_filesystem=$(df -P "${state_root}" | awk 'NR == 2 { print $1 }')
-required_cpu=4
-required_memory=8589934592
-required_storage=42949672960
-headroom_cpu=2
-headroom_memory=4294967296
-headroom_storage=21474836480
-minimum_cpu=$((required_cpu + headroom_cpu))
-minimum_memory=$((required_memory + headroom_memory))
-minimum_storage=$((required_storage + headroom_storage))
 memory_available_bytes=$((memory_available_kib * 1024))
-
+storage_available_bytes=$(/usr/bin/jq -er '.receipt.backingFilesystem.freeBytes' <<<"${storage_operation}")
+runner_total=$(/usr/bin/jq -er '.receipt.filesystem.totalBytes' <<<"${storage_operation}")
+runner_free=$(/usr/bin/jq -er '.receipt.filesystem.freeBytes' <<<"${storage_operation}")
+minimum_cpu=6
+minimum_memory=12884901888
+minimum_storage=64424509440
+required_runner_storage=42949672960
 outcome=passed
 reasons=()
 (( cpu_count >= minimum_cpu )) || { outcome=failed; reasons+=(cpu_below_aggregate_plus_headroom); }
 (( memory_available_bytes >= minimum_memory )) || { outcome=failed; reasons+=(memory_below_aggregate_plus_headroom); }
 (( storage_available_bytes >= minimum_storage )) || { outcome=failed; reasons+=(storage_below_aggregate_plus_headroom); }
-(( runner_storage_filesystem_total_bytes >= required_storage )) || { outcome=failed; reasons+=(runner_storage_below_aggregate_capacity); }
-(( runner_storage_filesystem_free_bytes >= required_storage )) || { outcome=failed; reasons+=(runner_storage_below_aggregate_free_space); }
-[[ ${docker_root} == /home/* ]] || { outcome=failed; reasons+=(docker_root_not_under_home); }
-[[ ${docker_root} == "${state_root}"/* ]] || { outcome=failed; reasons+=(docker_root_outside_state_root); }
-
+(( runner_total >= required_runner_storage )) || { outcome=failed; reasons+=(runner_storage_below_aggregate_capacity); }
+(( runner_free >= required_runner_storage )) || { outcome=failed; reasons+=(runner_storage_below_aggregate_free_space); }
 reasons_json=$(printf '%s\n' "${reasons[@]:-}" | sed '/^$/d' | jq -R . | jq -s .)
-mkdir -p "$(dirname "${output}")"
-jq -n -S \
-  --arg outcome "${outcome}" \
-  --arg observedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  --arg stateRoot "${state_root}" \
-  --arg dockerHost "${expected_docker_host}" \
-  --arg dockerRoot "${docker_root}" \
-  --arg dockerServerId "${docker_server_id}" \
-  --arg storageFilesystem "${storage_filesystem}" \
-  --arg isolatedReceiptSha256 "$(sha256sum "${isolated_receipt}" | cut -d' ' -f1)" \
-  --arg configSha256 "${config_sha256}" \
-  --arg containerdConfigSha256 "${containerd_config_sha256}" \
-  --arg runnerStorageReceiptSha256 "${runner_storage_receipt_sha256}" \
-  --argjson cpu "${cpu_count}" \
-  --argjson memory "${memory_available_bytes}" \
-  --argjson storage "${storage_available_bytes}" \
-  --argjson reasons "${reasons_json}" \
-  --argjson dockerProcessIdentity "${docker_process_identity}" \
-  --argjson containerdProcessIdentity "${containerd_process_identity}" \
-  --argjson runnerStorage "${runner_storage}" \
-  '{
-    schema:"ambit.local-daytona-host-capacity-headroom/v3",
+
+temporary=$(mktemp "$(dirname "${output}")/.host-capacity.XXXXXX")
+cleanup_output() {
+  trap - EXIT INT TERM
+  unlink -- "${temporary}" 2>/dev/null || true
+}
+trap cleanup_output EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+/usr/bin/jq -n -S \
+  --arg outcome "${outcome}" --arg observedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg stateRoot "${state_root}" --arg dockerHost "${DOCKER_HOST}" \
+  --arg dockerRoot "${docker_root}" --arg dockerServerId "${docker_server_id}" \
+  --arg startReceiptSha256 "$(/usr/bin/sha256sum "${start}" | /usr/bin/cut -d' ' -f1)" \
+  --arg controlReceiptSha256 "$(/usr/bin/sha256sum "${control}" | /usr/bin/cut -d' ' -f1)" \
+  --arg projectionSha256 "$(/usr/bin/sha256sum "${projection}" | /usr/bin/cut -d' ' -f1)" \
+  --argjson cpu "${cpu_count}" --argjson memory "${memory_available_bytes}" \
+  --argjson storage "${storage_available_bytes}" --argjson reasons "${reasons_json}" \
+  --argjson namespace "${namespace}" --argjson supervisor "${supervisor_identity}" \
+  --argjson containerd "${containerd_identity}" --argjson dockerd "${docker_identity}" \
+  --argjson runnerStorage "$(/usr/bin/jq -cS '.receipt' <<<"${storage_operation}")" '
+  {
+    schema:"ambit.local-daytona-host-capacity-headroom/v4",
     outcome:$outcome,
     observedAt:$observedAt,
     capacityProfile:{
@@ -185,12 +262,17 @@ jq -n -S \
       requiredHeadroom:{cpuCores:2,memoryBytes:4294967296,diskBytes:21474836480,gpuCount:0},
       minimumObserved:{cpuCores:6,memoryBytes:12884901888,diskBytes:64424509440,gpuCount:0}
     },
-    providerOuterCeiling:{cpuCores:5.8,memoryBytes:12616466432,runnerStorageLogicalBytes:64424509440,minimumRunnerBackingFreeBytes:64424509440,diskCapacityDisposition:"sparse_current_headroom_not_preallocated"},
-    isolatedDaemon:{dockerHost:$dockerHost,dockerRoot:$dockerRoot,serverId:$dockerServerId,startupReceiptSha256:$isolatedReceiptSha256,configSha256:$configSha256,containerdConfigSha256:$containerdConfigSha256,processes:{dockerd:$dockerProcessIdentity,containerd:$containerdProcessIdentity}},
+    isolatedDaemon:{
+      dockerHost:$dockerHost,dockerRoot:$dockerRoot,serverId:$dockerServerId,
+      mountNamespace:$namespace,supervisor:$supervisor,containerd:$containerd,dockerd:$dockerd,
+      startReceiptSha256:$startReceiptSha256,controlReceiptSha256:$controlReceiptSha256
+    },
     runnerStorage:$runnerStorage,
-    runnerStorageReceiptSha256:$runnerStorageReceiptSha256,
-    observed:{cpuCores:$cpu,memoryAvailableBytes:$memory,storageAvailableBytes:$storage,storageFilesystem:$storageFilesystem,stateRoot:$stateRoot},
+    runnerStorageProjectionSha256:$projectionSha256,
+    observed:{cpuCores:$cpu,memoryAvailableBytes:$memory,storageAvailableBytes:$storage,stateRoot:$stateRoot},
     reasons:$reasons
-  }' > "${output}"
-
+  }' >"${temporary}"
+chmod 0600 "${temporary}"
+mv -- "${temporary}" "${output}"
+trap - EXIT INT TERM
 [[ ${outcome} == passed ]]

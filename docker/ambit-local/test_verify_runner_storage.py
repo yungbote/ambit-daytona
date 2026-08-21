@@ -12,6 +12,7 @@ SCRIPT = Path(__file__).with_name("verify-runner-storage.py")
 LIFECYCLE = Path(__file__).with_name("runner-storage-lifecycle.py")
 PREPARE = Path(__file__).with_name("prepare-runner-storage.sh")
 REMOVE = Path(__file__).with_name("remove-runner-storage.sh")
+HOST_GATE = Path(__file__).with_name("verify-host-capacity.sh")
 SPEC = importlib.util.spec_from_file_location("ambit_verify_runner_storage", SCRIPT)
 if SPEC is None or SPEC.loader is None:  # pragma: no cover
     raise RuntimeError("could not load verify-runner-storage.py")
@@ -175,6 +176,29 @@ class VerifyRunnerStorageTest(unittest.TestCase):
         self.assertIn("owned by start-isolated-docker.sh", source)
         for forbidden in ("sudo -n", "/usr/bin/mount", "losetup", "mkfs.xfs"):
             self.assertNotIn(forbidden, source)
+
+    def test_host_gate_brackets_private_namespace_observation_with_v4_identity(self) -> None:
+        source = HOST_GATE.read_text()
+        self.assertIn('ambit.local-daytona-host-capacity-headroom/v4', source)
+        self.assertIn('ambit.local-daytona-isolated-docker/v4', source)
+        self.assertIn('ambit.local-daytona-runner-storage/v2', source)
+        self.assertNotIn('ambit.local-daytona-host-capacity-headroom/v3', source)
+        self.assertIn('/usr/bin/nsenter --mount="/proc/${supervisor_pid}/ns/mnt"', source)
+        first_supervisor = source.index(
+            'verify_process "${supervisor_identity}" /usr/bin/python3'
+        )
+        observation = source.index('storage_operation=$(', first_supervisor)
+        second_supervisor = source.index(
+            'verify_process "${supervisor_identity}" /usr/bin/python3',
+            observation,
+        )
+        self.assertLess(first_supervisor, observation)
+        self.assertLess(observation, second_supervisor)
+        self.assertIn('runtime storage helper snapshot digest differs', source)
+        self.assertIn('projection_receipt_sha256=', source)
+        self.assertIn('projection payload digest differs', source)
+        self.assertIn("trap 'exit 130' INT", source)
+        self.assertIn("trap 'exit 143' TERM", source)
 
 
 if __name__ == "__main__":
