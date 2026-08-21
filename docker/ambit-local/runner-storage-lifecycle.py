@@ -59,6 +59,30 @@ def plain_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def validate_state_root_authority(
+    *,
+    descriptor_device: int,
+    descriptor_inode: int,
+    path_device: int,
+    path_inode: int,
+    path_owner_uid: int,
+    path_owner_gid: int,
+    path_mode: int,
+    caller_uid: int,
+    caller_gid: int,
+) -> None:
+    require(
+        (descriptor_device, descriptor_inode) == (path_device, path_inode),
+        "runner storage state root differs from its pinned descriptor",
+    )
+    require(
+        path_owner_uid == caller_uid
+        and path_owner_gid == caller_gid
+        and path_mode == 0o700,
+        "runner storage state root owner, group, or mode differs",
+    )
+
+
 @dataclass(frozen=True)
 class NodeFacts:
     kind: NodeKind
@@ -267,7 +291,10 @@ class OpenPrefix:
 
 
 def open_state_root(
-    state_root_handle: str, state_root_path: Path, caller_uid: int
+    state_root_handle: str,
+    state_root_path: Path,
+    caller_uid: int,
+    caller_gid: int,
 ) -> tuple[int, os.stat_result]:
     require(state_root_path.is_absolute(), "runner storage state root is not absolute")
     require(str(state_root_path).startswith("/home/"), "runner storage state root is outside /home")
@@ -280,11 +307,16 @@ def open_state_root(
         descriptor_stat = os.fstat(state_root_fd)
         path_stat = os.stat(state_root_path, follow_symlinks=False)
         require(stat.S_ISDIR(path_stat.st_mode), "runner storage state root is not a directory")
-        require(path_stat.st_uid == caller_uid, "runner storage state root owner differs")
-        require(
-            (descriptor_stat.st_dev, descriptor_stat.st_ino)
-            == (path_stat.st_dev, path_stat.st_ino),
-            "runner storage state root differs from its pinned descriptor",
+        validate_state_root_authority(
+            descriptor_device=descriptor_stat.st_dev,
+            descriptor_inode=descriptor_stat.st_ino,
+            path_device=path_stat.st_dev,
+            path_inode=path_stat.st_ino,
+            path_owner_uid=path_stat.st_uid,
+            path_owner_gid=path_stat.st_gid,
+            path_mode=stat.S_IMODE(path_stat.st_mode),
+            caller_uid=caller_uid,
+            caller_gid=caller_gid,
         )
         return state_root_fd, descriptor_stat
     except BaseException:
@@ -297,9 +329,10 @@ def inspect_prefix(
     state_root_handle: str,
     state_root_path: Path,
     caller_uid: int,
+    caller_gid: int,
 ) -> OpenPrefix:
     state_root_fd, state_root_stat = open_state_root(
-        state_root_handle, state_root_path, caller_uid
+        state_root_handle, state_root_path, caller_uid, caller_gid
     )
     capacity_fd: int | None = None
     image_fd: int | None = None
@@ -413,9 +446,23 @@ class MountRecord:
     target: str
 
 
-def read_mount_records() -> tuple[MountRecord, ...]:
+@dataclass(frozen=True)
+class MountNamespaceObservation:
+    namespace_id: str
+    representative_pid: int
+    records: tuple[MountRecord, ...]
+
+
+@dataclass(frozen=True)
+class NamespaceMountOccurrence:
+    namespace_id: str
+    representative_pid: int
+    target: str
+
+
+def read_mount_records(path: str = "/proc/self/mountinfo") -> tuple[MountRecord, ...]:
     records: list[MountRecord] = []
-    with open("/proc/self/mountinfo", encoding="utf-8") as mountinfo:
+    with open(path, encoding="utf-8") as mountinfo:
         for raw_line in mountinfo:
             fields = raw_line.rstrip("\n").split(" ")
             require(len(fields) >= 10 and "-" in fields, "mountinfo record is invalid")
@@ -428,6 +475,65 @@ def read_mount_records() -> tuple[MountRecord, ...]:
     return tuple(records)
 
 
+def mount_namespace_id(path: str) -> str:
+    value = os.stat(path)
+    return f"{value.st_dev}:{value.st_ino}"
+
+
+def read_observable_mount_namespaces() -> tuple[MountNamespaceObservation, ...]:
+    try:
+        own_namespace = mount_namespace_id("/proc/self/ns/mnt")
+        own_records = read_mount_records()
+    except (PermissionError, OSError) as error:
+        raise RunnerStorageLifecycleError(
+            "helper mount namespace is unreadable"
+        ) from error
+    observations: dict[str, MountNamespaceObservation] = {
+        own_namespace: MountNamespaceObservation(
+            namespace_id=own_namespace,
+            representative_pid=os.getpid(),
+            records=own_records,
+        )
+    }
+    try:
+        process_entries = tuple(sorted(os.listdir("/proc")))
+    except OSError as error:
+        raise RunnerStorageLifecycleError("observable mount namespace roster is unreadable") from error
+    for entry in process_entries:
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        namespace_path = f"/proc/{pid}/ns/mnt"
+        mountinfo_path = f"/proc/{pid}/mountinfo"
+        try:
+            before = mount_namespace_id(namespace_path)
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        except (PermissionError, OSError) as error:
+            raise RunnerStorageLifecycleError(
+                f"mount namespace identity is unreadable for pid {pid}"
+            ) from error
+        if before in observations:
+            continue
+        try:
+            records = read_mount_records(mountinfo_path)
+            after = mount_namespace_id(namespace_path)
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        except (PermissionError, OSError) as error:
+            raise RunnerStorageLifecycleError(
+                f"mount namespace contents are unreadable for pid {pid}"
+            ) from error
+        if before != after:
+            continue
+        observations[before] = MountNamespaceObservation(
+            namespace_id=before,
+            representative_pid=pid,
+            records=records,
+        )
+    return tuple(observations[key] for key in sorted(observations))
+
+
 def loop_device_number(loop_device: str) -> str:
     require(LOOP_DEVICE.fullmatch(loop_device) is not None, "runner storage loop device is invalid")
     value = os.stat(loop_device)
@@ -435,13 +541,28 @@ def loop_device_number(loop_device: str) -> str:
     return f"{os.major(value.st_rdev)}:{os.minor(value.st_rdev)}"
 
 
-def mount_targets_for_loop(loop_device: str) -> tuple[str, ...]:
+def observable_mounts_for_loop(
+    loop_device: str,
+) -> tuple[NamespaceMountOccurrence, ...]:
     device_number = loop_device_number(loop_device)
+    occurrences = [
+        NamespaceMountOccurrence(
+            namespace_id=namespace.namespace_id,
+            representative_pid=namespace.representative_pid,
+            target=record.target,
+        )
+        for namespace in read_observable_mount_namespaces()
+        for record in namespace.records
+        if record.device_number == device_number
+    ]
     return tuple(
         sorted(
-            record.target
-            for record in read_mount_records()
-            if record.device_number == device_number
+            occurrences,
+            key=lambda value: (
+                value.namespace_id,
+                value.representative_pid,
+                value.target,
+            ),
         )
     )
 
@@ -533,7 +654,10 @@ def open_target(state_root_fd: int, state_root_path: Path) -> tuple[int, Path]:
 
 
 def mount_loop(state_root_fd: int, state_root_path: Path, loop_device: str) -> None:
-    require(not mount_targets_for_loop(loop_device), "runner storage loop is already mounted")
+    require(
+        not observable_mounts_for_loop(loop_device),
+        "runner storage loop is already mounted in an observable namespace",
+    )
     target_fd, target = open_target(state_root_fd, state_root_path)
     try:
         require(not mounts_at_or_below(target), "runner storage target is already mounted")
@@ -550,9 +674,13 @@ def mount_loop(state_root_fd: int, state_root_path: Path, loop_device: str) -> N
             handle,
             pass_fds=(target_fd,),
         )
+        own_namespace = mount_namespace_id("/proc/self/ns/mnt")
+        observable_mounts = observable_mounts_for_loop(loop_device)
         require(
-            mount_targets_for_loop(loop_device) == (str(target),),
-            "runner storage mount target differs after mount",
+            len(observable_mounts) == 1
+            and observable_mounts[0].namespace_id == own_namespace
+            and observable_mounts[0].target == str(target),
+            "runner storage mount target or namespace differs after mount",
         )
     finally:
         os.close(target_fd)
@@ -568,7 +696,10 @@ def require_target_ready(state_root_fd: int, state_root_path: Path) -> None:
 
 
 def detach_loop(loop_device: str) -> None:
-    require(not mount_targets_for_loop(loop_device), "runner storage loop remains mounted")
+    require(
+        not observable_mounts_for_loop(loop_device),
+        "runner storage loop remains mounted in an observable namespace",
+    )
     run_tool("losetup", "--detach", loop_device)
 
 
@@ -592,10 +723,16 @@ def teardown_runtime(prefix: OpenPrefix, expected_device: int | None, expected_i
         require(not mounts_at_or_below(target), "runner storage target has a foreign mount")
         return
     loop_device = loops[0]
-    targets = mount_targets_for_loop(loop_device)
+    observable_mounts = observable_mounts_for_loop(loop_device)
     target_tree = mounts_at_or_below(target)
-    if targets:
-        require(targets == (str(target),), "runner storage loop has an additional global mount")
+    if observable_mounts:
+        own_namespace = mount_namespace_id("/proc/self/ns/mnt")
+        require(
+            len(observable_mounts) == 1
+            and observable_mounts[0].namespace_id == own_namespace
+            and observable_mounts[0].target == str(target),
+            "runner storage loop has a mount in another observable namespace or target",
+        )
         require(
             len(target_tree) == 1
             and target_tree[0].target == str(target)
@@ -607,7 +744,10 @@ def teardown_runtime(prefix: OpenPrefix, expected_device: int | None, expected_i
         # It also avoids holding an open file on the filesystem being unmounted.
         run_tool("umount", "--", loop_device)
         require(not mounts_at_or_below(target), "runner storage target remained mounted")
-        require(not mount_targets_for_loop(loop_device), "runner storage loop remained mounted")
+        require(
+            not observable_mounts_for_loop(loop_device),
+            "runner storage loop remained mounted in an observable namespace",
+        )
     else:
         require(not target_tree, "runner storage target has a foreign mount")
     detach_loop(loop_device)
@@ -713,7 +853,7 @@ def recover_attach_and_mount(
     loop_device = attach_image(prefix.image_fd)
     _, filesystem_uuid = read_filesystem_identity(loop_device)
     if filesystem_uuid != expected_uuid:
-        if not mount_targets_for_loop(loop_device):
+        if not observable_mounts_for_loop(loop_device):
             detach_loop(loop_device)
             require(
                 not associated_loops(prefix.image_fd),
@@ -757,13 +897,33 @@ def remove_objects(
 
 
 def decision_json(prefix: OpenPrefix, decision: PrefixDecision) -> dict[str, object]:
+    state_root = os.fstat(prefix.state_root_fd)
+    capacity = prefix.facts.capacity
     image = prefix.facts.image
     return {
         "schema": SCHEMA,
         "operation": decision.operation,
         "disposition": decision.disposition,
         "stateRoot": str(prefix.state_root_path),
+        "stateRootIdentity": {
+            "device": state_root.st_dev,
+            "inode": state_root.st_ino,
+            "ownerUid": state_root.st_uid,
+            "ownerGid": state_root.st_gid,
+            "mode": stat.S_IMODE(state_root.st_mode),
+        },
         "capacityState": decision.capacity_state,
+        "capacityIdentity": (
+            None
+            if capacity.kind == "absent"
+            else {
+                "device": capacity.device,
+                "inode": capacity.inode,
+                "ownerUid": capacity.owner_uid,
+                "ownerGid": capacity.owner_gid,
+                "mode": capacity.mode,
+            }
+        ),
         "imageState": decision.image_state,
         "imageIdentity": (
             None
@@ -814,6 +974,7 @@ def main() -> None:
         state_root_handle=args.state_root_handle,
         state_root_path=args.state_root_path,
         caller_uid=args.caller_uid,
+        caller_gid=args.caller_gid,
     ) as prefix:
         operation: Operation = (
             args.operation

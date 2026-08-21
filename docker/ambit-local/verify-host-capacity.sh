@@ -118,7 +118,7 @@ runner_storage=$(python3 "${runner_storage_tool}" "${state_root}")
   echo 'runner storage persisted receipt is absent or unsafe' >&2
   exit 66
 }
-runner_storage_filter='{schema,stateRoot,mountTarget,image:{path:.image.path,logicalBytes:.image.logicalBytes,device:.image.device,inode:.image.inode,ownerUid:.image.ownerUid,mode:.image.mode},filesystem:{type:.filesystem.type,uuid:.filesystem.uuid,mountOptions:.filesystem.mountOptions,totalBytes:.filesystem.totalBytes,features:.filesystem.features},backingFilesystem:{device:.backingFilesystem.device,totalBytes:.backingFilesystem.totalBytes,allocationDisposition:.backingFilesystem.allocationDisposition,minimumFreeBytes:.backingFilesystem.minimumFreeBytes},sandboxDiskPolicy}'
+runner_storage_filter='{schema,stateRoot,stateRootIdentity,capacityRoot,mountTarget,image:{path:.image.path,logicalBytes:.image.logicalBytes,device:.image.device,inode:.image.inode,ownerUid:.image.ownerUid,ownerGid:.image.ownerGid,mode:.image.mode},filesystem:{type:.filesystem.type,uuid:.filesystem.uuid,mountOptions:.filesystem.mountOptions,totalBytes:.filesystem.totalBytes,features:.filesystem.features},backingFilesystem:{device:.backingFilesystem.device,allocationDisposition:.backingFilesystem.allocationDisposition,minimumFreeBytes:.backingFilesystem.minimumFreeBytes},sandboxDiskPolicy}'
 [[ $(jq -S -c "${runner_storage_filter}" "${runner_storage_receipt}") == $(jq -S -c "${runner_storage_filter}" <<<"${runner_storage}") ]] || {
   echo 'runner storage persisted receipt differs from live stable identity' >&2
   exit 66

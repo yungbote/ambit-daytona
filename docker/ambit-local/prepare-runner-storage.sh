@@ -19,7 +19,7 @@ state_root=$1
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 verifier=${script_dir}/verify-runner-storage.py
 lifecycle_helper=${script_dir}/runner-storage-lifecycle.py
-lifecycle_helper_sha256=acf8dfaaad850d3da0b690d8b2d8c8c801d846fec50388108b6d0863c5b9d9fd
+lifecycle_helper_sha256=d26c21d4ec85f4b6bc40668fc83dfc780a6bccfd3a54f3e8da923264689720b9
 target=${state_root}/runner-docker
 image=${state_root}/capacity/runner-docker.xfs
 evidence_root=${state_root}/evidence
@@ -45,6 +45,10 @@ caller_gid=$(id -g)
   echo 'runner storage caller identity is invalid' >&2
   exit 66
 }
+[[ $(stat -c '%u:%g:%a' -- "${state_root}") == "${caller_uid}:${caller_gid}:700" ]] || {
+  echo 'runner storage state root owner, group, or mode differs' >&2
+  exit 66
+}
 
 exec {lifecycle_fd}<"${state_root}"
 state_root_handle=/proc/$$/fd/${lifecycle_fd}
@@ -60,7 +64,12 @@ flock -x "${lifecycle_fd}"
 }
 
 invoke_lifecycle_helper() {
-  sudo -n python3 -c '
+  sudo -n /usr/bin/env -i -C / \
+    PATH=/usr/bin:/bin \
+    LC_ALL=C.UTF-8 \
+    SUDO_UID="${caller_uid}" \
+    SUDO_GID="${caller_gid}" \
+    /usr/bin/python3 -I -S -B -c '
 import hashlib
 import hmac
 import os
@@ -123,6 +132,12 @@ require_inspection() {
     --arg stateRoot "${state_root}" '
       .schema == "ambit.local-daytona-runner-storage-lifecycle/v1" and
       .stateRoot == $stateRoot and
+      (.stateRootIdentity | keys | sort ==
+        ["device", "inode", "mode", "ownerGid", "ownerUid"]) and
+      .stateRootIdentity.mode == 448 and
+      ((.capacityIdentity == null) or
+        (.capacityIdentity | keys | sort ==
+          ["device", "inode", "mode", "ownerGid", "ownerUid"])) and
       (.disposition | type == "string") and
       ((.imageIdentity == null) or
         (.imageIdentity | keys | sort == ["device", "inode", "logicalBytes"]))
@@ -221,6 +236,15 @@ case ${disposition} in
     }
     expected_device=$(jq -er '.imageIdentity.device' <<<"${inspection}")
     expected_inode=$(jq -er '.imageIdentity.inode' <<<"${inspection}")
+    expected_capacity_device=$(jq -er '.capacityIdentity.device' <<<"${inspection}")
+    expected_capacity_inode=$(jq -er '.capacityIdentity.inode' <<<"${inspection}")
+    expected_state_root_device=$(jq -er '.stateRootIdentity.device' <<<"${inspection}")
+    expected_state_root_inode=$(jq -er '.stateRootIdentity.inode' <<<"${inspection}")
+    [[ $(jq -er '.stateRootIdentity.device' "${receipt}") == "${expected_state_root_device}" ]] || { echo 'runner storage receipt state-root device differs' >&2; exit 66; }
+    [[ $(jq -er '.stateRootIdentity.inode' "${receipt}") == "${expected_state_root_inode}" ]] || { echo 'runner storage receipt state-root inode differs' >&2; exit 66; }
+    [[ $(jq -er '.capacityRoot.path' "${receipt}") == "${state_root}/capacity" ]] || { echo 'runner storage receipt capacity path differs' >&2; exit 66; }
+    [[ $(jq -er '.capacityRoot.device' "${receipt}") == "${expected_capacity_device}" ]] || { echo 'runner storage receipt capacity device differs' >&2; exit 66; }
+    [[ $(jq -er '.capacityRoot.inode' "${receipt}") == "${expected_capacity_inode}" ]] || { echo 'runner storage receipt capacity inode differs' >&2; exit 66; }
     [[ $(jq -er '.image.path' "${receipt}") == "${image}" ]] || { echo 'runner storage receipt image path differs' >&2; exit 66; }
     [[ $(jq -er '.image.device' "${receipt}") == "${expected_device}" ]] || { echo 'runner storage receipt image device differs' >&2; exit 66; }
     [[ $(jq -er '.image.inode' "${receipt}") == "${expected_inode}" ]] || { echo 'runner storage receipt image inode differs' >&2; exit 66; }

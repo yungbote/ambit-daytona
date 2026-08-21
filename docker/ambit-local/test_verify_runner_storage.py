@@ -6,7 +6,6 @@ import importlib.util
 import os
 import re
 import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -30,6 +29,8 @@ class VerifyRunnerStorageTest(unittest.TestCase):
         image = f"{state_root}/capacity/runner-docker.xfs"
         return {
             "stateRoot": state_root,
+            "observerUid": 1000,
+            "observerGid": 100,
             "mountTarget": f"{state_root}/runner-docker",
             "imagePath": image,
             "loopDevice": "/dev/loop7",
@@ -52,6 +53,10 @@ class VerifyRunnerStorageTest(unittest.TestCase):
             "imageDevice": 47,
             "imageInode": 89,
             "stateRootDevice": 47,
+            "stateRootInode": 67,
+            "stateRootMode": 0o700,
+            "stateRootOwnerUid": 1000,
+            "stateRootOwnerGid": 100,
             "targetMountTree": [f"{state_root}/runner-docker"],
             "filesystemTotalBytes": 59 * 1024**3,
             "filesystemFreeBytes": 58 * 1024**3,
@@ -62,6 +67,18 @@ class VerifyRunnerStorageTest(unittest.TestCase):
     def test_exact_xfs_project_quota_observation_passes(self) -> None:
         receipt = MODULE.validate_storage_identity_observation(self.observation())
         self.assertEqual(receipt["outcome"], "passed")
+        self.assertEqual(
+            receipt["stateRootIdentity"],
+            {
+                "device": 47,
+                "inode": 67,
+                "ownerUid": 1000,
+                "ownerGid": 100,
+                "mode": "0700",
+            },
+        )
+        self.assertEqual(receipt["capacityRoot"]["device"], 47)
+        self.assertEqual(receipt["capacityRoot"]["inode"], 73)
         self.assertEqual(receipt["sandboxDiskPolicy"]["perSandboxBytes"], 20 * 1024**3)
         self.assertEqual(receipt["sandboxDiskPolicy"]["maximumSandboxes"], 2)
 
@@ -93,6 +110,9 @@ class VerifyRunnerStorageTest(unittest.TestCase):
             ("capacityOwnerGid", 1000),
             ("imageOwnerGid", 1000),
             ("stateRootDevice", 48),
+            ("stateRootMode", 0o755),
+            ("stateRootOwnerUid", 1001),
+            ("stateRootOwnerGid", 101),
             ("filesystemUuid", "not-a-uuid"),
         )
         for field, value in mutations:
@@ -114,6 +134,21 @@ class VerifyRunnerStorageTest(unittest.TestCase):
         self.assertEqual(receipt["filesystem"]["freeBytes"], 0)
         self.assertEqual(receipt["backingFilesystem"]["freeBytes"], 0)
 
+    def test_backing_resize_is_a_current_observation_not_stable_identity(self) -> None:
+        original = MODULE.validate_storage_identity_observation(self.observation())
+        resized_observation = self.observation()
+        resized_observation["backingFilesystemTotalBytes"] += 128 * 1024**3
+        resized = MODULE.validate_storage_identity_observation(resized_observation)
+        self.assertNotEqual(
+            original["backingFilesystem"]["totalBytes"],
+            resized["backingFilesystem"]["totalBytes"],
+        )
+        self.assertEqual(
+            original["backingFilesystem"]["device"],
+            resized["backingFilesystem"]["device"],
+        )
+        self.assertEqual(original["capacityRoot"], resized["capacityRoot"])
+
     def test_second_global_loop_mount_is_rejected(self) -> None:
         candidate = self.observation()
         candidate["loopMountTargets"] = [
@@ -131,6 +166,26 @@ class VerifyRunnerStorageTest(unittest.TestCase):
         ]
         with self.assertRaises(MODULE.RunnerStorageError):
             MODULE.validate_storage_identity_observation(candidate)
+
+    def test_capacity_and_state_root_substitution_are_receipt_visible(self) -> None:
+        baseline = MODULE.validate_storage_identity_observation(self.observation())
+        capacity_substitution = self.observation()
+        capacity_substitution["capacityInode"] += 1
+        substituted_capacity = MODULE.validate_storage_identity_observation(
+            capacity_substitution
+        )
+        self.assertNotEqual(
+            baseline["capacityRoot"], substituted_capacity["capacityRoot"]
+        )
+        state_root_substitution = self.observation()
+        state_root_substitution["stateRootInode"] += 1
+        substituted_state_root = MODULE.validate_storage_identity_observation(
+            state_root_substitution
+        )
+        self.assertNotEqual(
+            baseline["stateRootIdentity"],
+            substituted_state_root["stateRootIdentity"],
+        )
 
     def test_invalid_dynamic_observation_ranges_fail_closed(self) -> None:
         for field, value in (
@@ -167,6 +222,16 @@ class VerifyRunnerStorageTest(unittest.TestCase):
             'value["backingFilesystemFreeBytes"] >= IMAGE_BYTES', verifier
         )
         self.assertNotIn('df -PB1 "${state_root}"', host_gate)
+        stable_filter = re.search(
+            r"runner_storage_filter='(?P<filter>[^']+)'", host_gate
+        )
+        self.assertIsNotNone(stable_filter)
+        self.assertNotIn(
+            "totalBytes:.backingFilesystem.totalBytes",
+            stable_filter.group("filter"),
+        )
+        self.assertIn("stateRootIdentity", stable_filter.group("filter"))
+        self.assertIn("capacityRoot", stable_filter.group("filter"))
 
     def test_mounted_recovery_precedes_underlying_target_emptiness_check(self) -> None:
         prepare = PREPARE_SCRIPT.read_text()
@@ -255,7 +320,7 @@ printf 'continued\\n'
         object_removal = remove.index("invoke_state_transition remove-objects")
         self.assertLess(teardown, object_removal)
         helper = LIFECYCLE_HELPER_SCRIPT.read_text()
-        global_proof = helper.index('require(targets == (str(target),)')
+        global_proof = helper.index("len(observable_mounts) == 1")
         unmount = helper.index('run_tool("umount"', global_proof)
         self.assertLess(global_proof, unmount)
 
@@ -283,7 +348,7 @@ printf 'continued\\n'
     def test_wrappers_pin_and_execute_only_the_exact_helper_bytes(self) -> None:
         helper_sha256 = hashlib.sha256(LIFECYCLE_HELPER_SCRIPT.read_bytes()).hexdigest()
         launcher_pattern = re.compile(
-            r"sudo -n python3 -c '\n(?P<program>.*?)\n' \"\$\{lifecycle_helper\}",
+            r"/usr/bin/python3 -I -S -B -c '\n(?P<program>.*?)\n' \"\$\{lifecycle_helper\}",
             re.DOTALL,
         )
         launchers: list[str] = []
@@ -294,6 +359,8 @@ printf 'continued\\n'
             )
             self.assertIsNotNone(digest_match)
             self.assertEqual(digest_match.group(1), helper_sha256)
+            self.assertIn("sudo -n /usr/bin/env -i -C /", wrapper)
+            self.assertIn("PATH=/usr/bin:/bin", wrapper)
             launcher_match = launcher_pattern.search(wrapper)
             self.assertIsNotNone(launcher_match)
             launcher = launcher_match.group("program")
@@ -304,24 +371,40 @@ printf 'continued\\n'
             launchers.append(launcher)
         self.assertEqual(launchers[0], launchers[1])
 
-        accepted = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                launchers[0],
-                str(LIFECYCLE_HELPER_SCRIPT),
-                helper_sha256,
-                "--help",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(accepted.returncode, 0, accepted.stderr)
-        self.assertIn("create-and-mount", accepted.stdout)
+        with tempfile.TemporaryDirectory(prefix="runner-hostile-python-") as directory:
+            hostile_root = Path(directory)
+            marker = hostile_root / "executed"
+            hostile_source = f'open({str(marker)!r}, "a").write(__name__ + "\\n")\n'
+            for module_name in ("argparse", "hashlib", "hmac", "json", "subprocess"):
+                (hostile_root / f"{module_name}.py").write_text(hostile_source)
+            hostile_environment = {**os.environ, "PYTHONPATH": str(hostile_root)}
+            accepted = subprocess.run(
+                [
+                    "/usr/bin/python3",
+                    "-I",
+                    "-S",
+                    "-B",
+                    "-c",
+                    launchers[0],
+                    str(LIFECYCLE_HELPER_SCRIPT),
+                    helper_sha256,
+                    "--help",
+                ],
+                cwd=hostile_root,
+                env=hostile_environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            self.assertIn("create-and-mount", accepted.stdout)
+            self.assertFalse(marker.exists())
         rejected = subprocess.run(
             [
-                sys.executable,
+                "/usr/bin/python3",
+                "-I",
+                "-S",
+                "-B",
                 "-c",
                 launchers[0],
                 str(LIFECYCLE_HELPER_SCRIPT),

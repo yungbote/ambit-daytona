@@ -332,6 +332,32 @@ class RunnerStorageLifecycleReducerTest(unittest.TestCase):
             "/home/a b\tc\nd\\e",
         )
 
+    def test_state_root_authority_rejects_owner_group_mode_and_inode_drift(self) -> None:
+        base = {
+            "descriptor_device": DEVICE,
+            "descriptor_inode": 67,
+            "path_device": DEVICE,
+            "path_inode": 67,
+            "path_owner_uid": CALLER_UID,
+            "path_owner_gid": CALLER_GID,
+            "path_mode": 0o700,
+            "caller_uid": CALLER_UID,
+            "caller_gid": CALLER_GID,
+        }
+        MODULE.validate_state_root_authority(**base)
+        for field, value in (
+            ("path_device", DEVICE + 1),
+            ("path_inode", 68),
+            ("path_owner_uid", CALLER_UID + 1),
+            ("path_owner_gid", CALLER_GID + 1),
+            ("path_mode", 0o770),
+        ):
+            with self.subTest(field=field):
+                with self.assertRaises(MODULE.RunnerStorageLifecycleError):
+                    MODULE.validate_state_root_authority(
+                        **{**base, field: value}
+                    )
+
     def test_absent_nodes_cannot_smuggle_identity_fields(self) -> None:
         smuggled = MODULE.NodeFacts(kind="absent", owner_uid=0)
         for operation in ("prepare", "remove"):
@@ -390,7 +416,7 @@ class RunnerStorageLifecycleReducerTest(unittest.TestCase):
             self.assertFalse(capacity_root.exists())
             prefix.close()
 
-    def test_second_global_mount_blocks_teardown_before_mutation(self) -> None:
+    def test_foreign_observable_namespace_blocks_teardown_before_mutation(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="runner-lifecycle-mount-test-"
         ) as directory:
@@ -411,14 +437,21 @@ class RunnerStorageLifecycleReducerTest(unittest.TestCase):
                 ),
             )
             target = str(state_root / "runner-docker")
+            foreign_mount = MODULE.NamespaceMountOccurrence(
+                namespace_id="47:9001",
+                representative_pid=1234,
+                target=target,
+            )
             with mock.patch.object(
                 MODULE, "associated_loops", return_value=("/dev/loop7",)
             ), mock.patch.object(
                 MODULE,
-                "mount_targets_for_loop",
-                return_value=(target, "/home/example/foreign"),
+                "observable_mounts_for_loop",
+                return_value=(foreign_mount,),
             ), mock.patch.object(
                 MODULE, "mounts_at_or_below", return_value=()
+            ), mock.patch.object(
+                MODULE, "mount_namespace_id", return_value="47:8001"
             ), mock.patch.object(MODULE, "run_tool") as run_tool:
                 with self.assertRaises(MODULE.RunnerStorageLifecycleError):
                     MODULE.teardown_runtime(
@@ -428,6 +461,16 @@ class RunnerStorageLifecycleReducerTest(unittest.TestCase):
                     )
                 run_tool.assert_not_called()
             prefix.close()
+
+    def test_unreadable_mount_namespace_roster_fails_closed(self) -> None:
+        with mock.patch.object(
+            MODULE.os, "listdir", side_effect=PermissionError("denied")
+        ):
+            with self.assertRaisesRegex(
+                MODULE.RunnerStorageLifecycleError,
+                "namespace roster is unreadable",
+            ):
+                MODULE.read_observable_mount_namespaces()
 
     def test_caller_owned_empty_capacity_is_sealed_before_image_creation(self) -> None:
         helper = SCRIPT.read_text()

@@ -62,8 +62,14 @@ def validate_storage_identity_observation(value: dict[str, Any]) -> dict[str, An
         "loopMountTargets",
         "mountOptions",
         "mountTarget",
+        "observerGid",
+        "observerUid",
         "stateRoot",
         "stateRootDevice",
+        "stateRootInode",
+        "stateRootMode",
+        "stateRootOwnerGid",
+        "stateRootOwnerUid",
         "targetMountTree",
         "xfsFeatures",
     }
@@ -77,12 +83,33 @@ def validate_storage_identity_observation(value: dict[str, Any]) -> dict[str, An
     require(Path(value["imagePath"]) == expected_image, "runner storage image path differs")
     require(Path(value["backingFile"]) == expected_image, "runner storage loop backing differs")
     require(
+        is_plain_int(value["observerUid"])
+        and value["observerUid"] > 0
+        and is_plain_int(value["observerGid"])
+        and value["observerGid"] >= 0,
+        "runner storage observer identity is invalid",
+    )
+    require(
+        is_plain_int(value["stateRootDevice"])
+        and value["stateRootDevice"] >= 0
+        and is_plain_int(value["stateRootInode"])
+        and value["stateRootInode"] > 0,
+        "runner storage state-root identity is invalid",
+    )
+    require(
+        value["stateRootOwnerUid"] == value["observerUid"]
+        and value["stateRootOwnerGid"] == value["observerGid"]
+        and is_plain_int(value["stateRootMode"])
+        and value["stateRootMode"] == 0o700,
+        "runner storage state-root owner, group, or mode differs",
+    )
+    require(
         isinstance(value["loopDevice"], str) and LOOP_DEVICE.fullmatch(value["loopDevice"]) is not None,
         "runner storage loop device is invalid",
     )
     require(
         value["loopMountTargets"] == [str(expected_target)],
-        "runner storage loop device has a missing or additional global mount",
+        "runner storage loop device has a missing or additional current-namespace mount",
     )
     require(
         value["targetMountTree"] == [str(expected_target)],
@@ -196,6 +223,21 @@ def validate_storage_identity_observation(value: dict[str, Any]) -> dict[str, An
         "schema": SCHEMA,
         "outcome": "passed",
         "stateRoot": str(state_root),
+        "stateRootIdentity": {
+            "device": value["stateRootDevice"],
+            "inode": value["stateRootInode"],
+            "ownerUid": value["stateRootOwnerUid"],
+            "ownerGid": value["stateRootOwnerGid"],
+            "mode": "0700",
+        },
+        "capacityRoot": {
+            "path": str(state_root / "capacity"),
+            "device": value["capacityDevice"],
+            "inode": value["capacityInode"],
+            "ownerUid": value["capacityOwnerUid"],
+            "ownerGid": value["capacityOwnerGid"],
+            "mode": "0711",
+        },
         "mountTarget": str(expected_target),
         "image": {
             "path": str(expected_image),
@@ -204,6 +246,7 @@ def validate_storage_identity_observation(value: dict[str, Any]) -> dict[str, An
             "device": value["imageDevice"],
             "inode": value["imageInode"],
             "ownerUid": value["imageOwnerUid"],
+            "ownerGid": value["imageOwnerGid"],
             "mode": "0600",
         },
         "filesystem": {
@@ -291,7 +334,7 @@ def collect_storage_observation(state_root: Path) -> dict[str, Any]:
     loop_mount_filesystems = loop_mount_data.get("filesystems")
     require(
         isinstance(loop_mount_filesystems, list),
-        "runner storage global loop mount observation is invalid",
+        "runner storage current-namespace loop mount observation is invalid",
     )
     loop_mount_targets: list[str] = []
     target_mount_tree: list[str] = []
@@ -301,7 +344,7 @@ def collect_storage_observation(state_root: Path) -> dict[str, Any]:
             isinstance(loop_mount, dict)
             and isinstance(loop_mount.get("maj:min"), str)
             and isinstance(loop_mount.get("target"), str),
-            "runner storage global loop mount record is invalid",
+            "runner storage current-namespace loop mount record is invalid",
         )
         if loop_mount["maj:min"] == loop_device_number:
             loop_mount_targets.append(loop_mount["target"])
@@ -317,6 +360,8 @@ def collect_storage_observation(state_root: Path) -> dict[str, Any]:
     state_root_stat = os.stat(state_root)
     return {
         "stateRoot": str(state_root),
+        "observerUid": os.getuid(),
+        "observerGid": os.getgid(),
         "capacityMode": stat.S_IMODE(capacity_stat.st_mode),
         "capacityOwnerUid": capacity_stat.st_uid,
         "capacityOwnerGid": capacity_stat.st_gid,
@@ -337,6 +382,10 @@ def collect_storage_observation(state_root: Path) -> dict[str, Any]:
         "imageDevice": image_stat.st_dev,
         "imageInode": image_stat.st_ino,
         "stateRootDevice": state_root_stat.st_dev,
+        "stateRootInode": state_root_stat.st_ino,
+        "stateRootMode": stat.S_IMODE(state_root_stat.st_mode),
+        "stateRootOwnerUid": state_root_stat.st_uid,
+        "stateRootOwnerGid": state_root_stat.st_gid,
         "targetMountTree": sorted(target_mount_tree),
         "filesystemTotalBytes": filesystem.f_blocks * filesystem.f_frsize,
         "filesystemFreeBytes": filesystem.f_bavail * filesystem.f_frsize,
