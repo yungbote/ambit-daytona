@@ -131,8 +131,15 @@ def verify_process(
             )
         status = _read_at(directory_fd, "status").decode("ascii", "strict")
         uid_line = next((line for line in status.splitlines() if line.startswith("Uid:")), "")
-        real_uid = int(uid_line.split()[1]) if uid_line else -1
-        _require(real_uid == expected_uid, "process owner differs")
+        uid_fields = uid_line.split()[1:]
+        _require(
+            len(uid_fields) == 4 and all(value.isdigit() for value in uid_fields),
+            "process owner record is invalid",
+        )
+        _require(
+            all(int(value) == expected_uid for value in uid_fields),
+            "process owner differs",
+        )
         second_namespace = _mount_namespace(directory_fd)
         second_stat = _read_at(directory_fd, "stat")
         second_parent_pid, second_start_time = _stat_identity(second_stat)

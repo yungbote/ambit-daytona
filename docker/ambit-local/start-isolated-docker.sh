@@ -19,8 +19,8 @@ state_root=$1
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 supervisor=${script_dir}/isolated_runtime_supervisor.py
 process_identity=${script_dir}/isolated_process_identity.py
-supervisor_sha256=6b0b073e19304632803b5d729480a788756fc3de669230839bbbcdbfdf8f0c16
-process_identity_sha256=683b9e03db64fc0eaed797ee80de20af59963a075345243cc31bc8dc84a28f77
+supervisor_sha256=9c61b6fe32340a80924c5008b9c197826d2fe85034895841b152c21a5f6cc22c
+process_identity_sha256=28ea7928529c55596174496fee625066fa05bfb0d8f6a077991aed715c1c1b15
 storage_lifecycle_sha256=22c515fd204eba0006b807409d24be7a344fd8b9af14ee1b3507f9fdbcf7d01e
 
 read -r -d '' pinned_loader <<'PY' || true

@@ -71,7 +71,7 @@ IP = Path("/usr/bin/ip")
 UMOUNT = Path("/usr/bin/umount")
 
 PROCESS_IDENTITY_NAME = "isolated_process_identity.py"
-PROCESS_IDENTITY_SHA256 = "683b9e03db64fc0eaed797ee80de20af59963a075345243cc31bc8dc84a28f77"
+PROCESS_IDENTITY_SHA256 = "28ea7928529c55596174496fee625066fa05bfb0d8f6a077991aed715c1c1b15"
 STORAGE_LIFECYCLE_NAME = "runner-storage-lifecycle.py"
 STORAGE_LIFECYCLE_SHA256 = "22c515fd204eba0006b807409d24be7a344fd8b9af14ee1b3507f9fdbcf7d01e"
 STORAGE_IDENTITY_VERIFIER_NAME = "verify-runner-storage.py"
