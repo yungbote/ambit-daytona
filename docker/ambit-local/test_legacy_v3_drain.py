@@ -336,30 +336,223 @@ class ProcessUniverseTest(unittest.TestCase):
             MODULE.related_process_universe(
                 processes, runtime, sockets, allowed_roles=set()
             )
+        leader_only = {
+            **stable,
+            "related": [{"pid": 10, "taskId": 10}],
+            "proofSha256": "c" * 64,
+        }
+        nonleader_appeared = {
+            **stable,
+            "related": [{"pid": 10, "taskId": 10}, {"pid": 10, "taskId": 11}],
+            "proofSha256": "d" * 64,
+        }
+        with mock.patch.object(
+            MODULE,
+            "_related_process_universe_once",
+            side_effect=(leader_only, nonleader_appeared),
+        ), self.assertRaisesRegex(MODULE.DrainError, "across proof passes"):
+            MODULE.related_process_universe(
+                processes,
+                runtime,
+                sockets,
+                allowed_roles=set(),
+            )
 
     def test_allowed_pidfds_remain_held_through_action(self) -> None:
-        closed: list[int] = []
+        closed: list[str] = []
         roles = {"dockerd", "containerd"}
+        rows = [
+            {"pid": 1, "taskId": 1, "parentPid": 0, "startTimeTicks": 10},
+            {"pid": 1, "taskId": 3, "parentPid": 0, "startTimeTicks": 11},
+            {"pid": 2, "taskId": 2, "parentPid": 0, "startTimeTicks": 20},
+        ]
+        tasks = []
+        for row in rows:
+            task = mock.Mock(
+                parent_pid=row["parentPid"],
+                start_ticks=row["startTimeTicks"],
+                pidfd=30 + row["taskId"],
+            )
+            task.close.side_effect = (
+                lambda value=f"{row['pid']}/{row['taskId']}": closed.append(value)
+            )
+            tasks.append(task)
         with mock.patch.object(
-            MODULE, "require_related_process_cutoff", return_value={"proof": True}
+            MODULE,
+            "require_related_process_cutoff",
+            return_value={"related": rows},
         ), mock.patch.object(
             MODULE,
-            "process_authority",
-            side_effect=lambda _control, role: {"pid": 1 if role == "dockerd" else 2},
-        ), mock.patch.object(
-            MODULE.os, "pidfd_open", side_effect=(31, 32)
-        ), mock.patch.object(
-            MODULE, "exact_process_status", return_value="exact"
+            "capture_task",
+            side_effect=tasks,
         ), mock.patch.object(
             MODULE, "pidfd_exited", return_value=False
-        ), mock.patch.object(
-            MODULE.os, "close", side_effect=closed.append
         ):
             with MODULE.hold_related_process_cutoff(
                 {"authority": {}}, allowed_roles=roles
             ):
                 self.assertEqual(closed, [])
-        self.assertEqual(sorted(closed), [31, 32])
+        self.assertEqual(sorted(closed), ["1/1", "1/3", "2/2"])
+
+    def test_action_cutoff_rejects_a_new_unheld_thread(self) -> None:
+        original = {
+            "related": [
+                {"pid": 1, "taskId": 1, "parentPid": 0, "startTimeTicks": 10}
+            ]
+        }
+        changed = {
+            "related": [
+                *original["related"],
+                {"pid": 1, "taskId": 2, "parentPid": 0, "startTimeTicks": 11},
+            ]
+        }
+        task = mock.Mock(parent_pid=0, start_ticks=10, pidfd=31)
+        with mock.patch.object(
+            MODULE,
+            "require_related_process_cutoff",
+            side_effect=(original, changed),
+        ), mock.patch.object(
+            MODULE, "capture_task", return_value=task
+        ), mock.patch.object(
+            MODULE, "pidfd_exited", return_value=False
+        ), self.assertRaisesRegex(MODULE.DrainError, "entering the action cutoff"):
+            with MODULE.hold_related_process_cutoff(
+                {"authority": {}},
+                allowed_roles={"dockerd"},
+            ):
+                self.fail("a changed task roster reached the action")
+        task.close.assert_called_once_with()
+
+    def test_task_roster_includes_nonleader_threads(self) -> None:
+        with mock.patch.object(
+            MODULE.os,
+            "listdir",
+            side_effect=(("10", "20", "self"), ("10", "11"), ("20", "21", "22")),
+        ):
+            self.assertEqual(
+                MODULE.process_task_coordinates_once(),
+                ((10, 10), (10, 11), (20, 20), (20, 21), (20, 22)),
+            )
+
+    def test_nonleader_task_identity_is_bound_to_a_thread_pidfd(self) -> None:
+        identity = mock.Mock(st_dev=1, st_ino=2)
+        fields = [b"S", b"1", *([b"0"] * 17), b"77"]
+        raw_stat = b"101 (worker) " + b" ".join(fields)
+
+        def read(_directory_fd: int, name: str, maximum: int = 0) -> bytes:
+            del maximum
+            if name == "status":
+                return b"Name:\tworker\nTgid:\t100\nPid:\t101\n"
+            self.assertEqual(name, "stat")
+            return raw_stat
+
+        with mock.patch.object(
+            MODULE.os, "pidfd_open", return_value=30
+        ) as pidfd_open, mock.patch.object(
+            MODULE, "pidfd_exited", return_value=False
+        ), mock.patch.object(
+            MODULE.os, "open", return_value=31
+        ), mock.patch.object(
+            MODULE.os, "fstat", return_value=identity
+        ), mock.patch.object(
+            MODULE.os, "stat", return_value=identity
+        ), mock.patch.object(
+            MODULE, "read_at", side_effect=read
+        ), mock.patch.object(MODULE.os, "close"):
+            task = MODULE.capture_task(100, 101)
+            self.assertIsNotNone(task)
+            assert task is not None
+            self.assertEqual((task.parent_pid, task.start_ticks), (1, 77))
+            task.close()
+        pidfd_open.assert_called_once_with(101, MODULE.PIDFD_THREAD)
+
+    def test_nonleader_edge_is_in_the_related_task_proof(self) -> None:
+        namespaces = {
+            "mountNamespace": {"inode": 1},
+            "networkNamespace": {"inode": 2},
+            "pidNamespace": {"inode": 3},
+            "userNamespace": {"inode": 4},
+        }
+        processes = {
+            "dockerd": {
+                "pid": 100,
+                "parentPid": 1,
+                "startTimeTicks": 10,
+                **namespaces,
+            }
+        }
+        leader = {
+            "pid": 100,
+            "taskId": 100,
+            "parentPid": 1,
+            "startTimeTicks": 10,
+            "namespaces": {},
+            "relations": [],
+        }
+        worker = {
+            "pid": 100,
+            "taskId": 101,
+            "parentPid": 1,
+            "startTimeTicks": 11,
+            "namespaces": {},
+            "relations": ["runtimeFdInode"],
+        }
+
+        def observation(row: dict[str, object], offset: int) -> object:
+            return MODULE.ProcessReferenceObservation(row, 30 + offset, 40 + offset)
+
+        scans = (
+            observation(leader, 0),
+            observation(worker, 1),
+            observation(dict(leader), 2),
+            observation(dict(worker), 3),
+        )
+        with mock.patch.object(
+            MODULE, "process_task_coordinates_once", return_value=((100, 100), (100, 101))
+        ), mock.patch.object(
+            MODULE, "process_reference_scan", side_effect=scans
+        ), mock.patch.object(
+            MODULE.os, "stat", return_value=mock.Mock(st_ino=1)
+        ), mock.patch.object(
+            MODULE, "read_at", return_value=b"stat"
+        ), mock.patch.object(
+            MODULE, "stat_identity", side_effect=((1, 10), (1, 11))
+        ), mock.patch.object(
+            MODULE, "pidfd_exited", return_value=False
+        ), mock.patch.object(MODULE.os, "close"):
+            proof = MODULE._related_process_universe_once(
+                processes,
+                {"tree": [], "rootIdentity": {"device": 1, "inode": 2}},
+                {"unixRecords": []},
+                allowed_roles={"dockerd"},
+            )
+        self.assertEqual(
+            [(row["pid"], row["taskId"]) for row in proof["related"]],
+            [(100, 100), (100, 101)],
+        )
+
+    def test_task_roster_drives_process_socket_and_mount_censuses(self) -> None:
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        for start, end in (
+            ("def global_mount_roster_once", "def stable_global_mount_roster"),
+            ("def socket_inode_owners", "def tcp_registry_snapshot"),
+        ):
+            region = source[source.index(start) : source.index(end)]
+            self.assertIn("process_task_coordinates_once()", region)
+            self.assertIn("capture_task", region)
+        related = source[
+            source.index("def _related_process_universe_once")
+            : source.index("def related_process_universe")
+        ]
+        self.assertIn("process_task_coordinates_once()", related)
+        self.assertIn("process_reference_scan", related)
+        process_scan = source[
+            source.index("def process_reference_scan")
+            : source.index("def _related_process_universe_once")
+        ]
+        self.assertIn("capture_task", process_scan)
+        self.assertIn("taskId", process_scan)
+        self.assertIn("PIDFD_THREAD", source)
 
     def test_source_covers_empty_argv_maps_namespace_fds_and_pid_reuse(self) -> None:
         source = MODULE_PATH.read_text(encoding="utf-8")
@@ -377,12 +570,43 @@ class ProcessUniverseTest(unittest.TestCase):
             self.assertEqual(MODULE.exact_process_status(recorded), "exact")
 
     def test_socket_owner_permission_denial_is_not_treated_as_absence(self) -> None:
+        task = mock.Mock(process_fd=10, pidfd=11)
         with mock.patch.object(
-            MODULE.os, "listdir", side_effect=(("1",), ("3",))
+            MODULE, "process_task_coordinates_once", return_value=((1, 3),)
+        ), mock.patch.object(
+            MODULE, "capture_task", return_value=task
+        ), mock.patch.object(
+            MODULE.os, "open", return_value=12
+        ), mock.patch.object(
+            MODULE.os, "listdir", return_value=("4",)
+        ), mock.patch.object(
+            MODULE.os, "stat", return_value=mock.Mock()
         ), mock.patch.object(
             MODULE.os, "readlink", side_effect=PermissionError("denied")
+        ), mock.patch.object(
+            MODULE.os, "close"
         ), self.assertRaisesRegex(MODULE.ManualRecoveryRequired, "unreadable"):
             MODULE.socket_inode_owners({99})
+
+    def test_nonleader_unshared_socket_fd_is_owned_by_its_thread_group(self) -> None:
+        task = mock.Mock(process_fd=10, pidfd=11)
+        edge = mock.Mock(st_dev=1, st_ino=2, st_mode=stat.S_IFSOCK | 0o600)
+        with mock.patch.object(
+            MODULE, "process_task_coordinates_once", return_value=((100, 101),)
+        ), mock.patch.object(
+            MODULE, "capture_task", return_value=task
+        ), mock.patch.object(
+            MODULE.os, "open", return_value=12
+        ), mock.patch.object(
+            MODULE.os, "listdir", return_value=("4",)
+        ), mock.patch.object(
+            MODULE.os, "stat", side_effect=(edge, edge)
+        ), mock.patch.object(
+            MODULE.os, "readlink", return_value="socket:[99]"
+        ), mock.patch.object(
+            MODULE, "pidfd_exited", return_value=False
+        ), mock.patch.object(MODULE.os, "close"):
+            self.assertEqual(MODULE.socket_inode_owners({99})[99], (100,))
 
     def test_global_lease_classifies_flock_not_path_presence(self) -> None:
         parent = mock.Mock(st_mode=stat.S_IFDIR | 0o755, st_uid=0, st_gid=0)
@@ -413,6 +637,37 @@ class ProcessUniverseTest(unittest.TestCase):
 
 
 class MountAuthorityTest(unittest.TestCase):
+    def test_nonleader_unshared_mount_namespace_is_in_the_global_roster(self) -> None:
+        task = mock.Mock(process_fd=10, pidfd=11)
+        raw = (
+            f"10 1 0:1 / {MODULE.EXPECTED_RUNTIME_ROOT} rw - tmpfs tmpfs rw\n"
+        ).encode()
+        with mock.patch.object(
+            MODULE.Path, "read_text", return_value=""
+        ), mock.patch.object(
+            MODULE, "process_task_coordinates_once", return_value=((100, 101),)
+        ), mock.patch.object(
+            MODULE, "capture_task", return_value=task
+        ), mock.patch.object(
+            MODULE,
+            "namespace_identity",
+            side_effect=({"device": 1, "inode": 2}, {"device": 1, "inode": 2}),
+        ), mock.patch.object(
+            MODULE, "read_at", return_value=raw
+        ), mock.patch.object(
+            MODULE, "pidfd_exited", return_value=False
+        ):
+            anchors, namespaces = MODULE.global_mount_roster_once(
+                MODULE.EXPECTED_RUNTIME_ROOT,
+                anchors=(("0:1", "/"),),
+            )
+        self.assertEqual(anchors, (("0:1", "/"),))
+        self.assertEqual(namespaces[0][0], "1:2")
+        self.assertEqual(
+            namespaces[0][1][0].target,
+            str(MODULE.EXPECTED_RUNTIME_ROOT),
+        )
+
     def test_mount_records_preserve_ids_and_stacked_multiplicity(self) -> None:
         raw = (
             "21 20 0:4 net:[4026531833] /x rw - nsfs nsfs rw\n"
@@ -1015,7 +1270,7 @@ class DestructiveBoundaryTest(unittest.TestCase):
                 "tombstone",
             )
 
-    def test_archived_response_loss_is_read_only_and_byte_stable(self) -> None:
+    def test_archived_response_loss_is_namespace_read_only_and_byte_stable(self) -> None:
         control = ReducerStateMachineTest.FakeControl("archive_intent_final")
         expected = {"schema": MODULE.PROJECTION_SCHEMA, "outcome": "drained"}
         with mock.patch.object(
@@ -1033,6 +1288,104 @@ class DestructiveBoundaryTest(unittest.TestCase):
         self.assertEqual(read.call_count, 2)
         write.assert_not_called()
         rename.assert_not_called()
+
+    def test_linked_publication_replay_fsyncs_before_reproof(self) -> None:
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        regions = (
+            source[
+                source.index("def legacy_receipt_state")
+                : source.index("def transfer_receipt_custody")
+            ],
+            source[
+                source.index("def open_or_publish_prepared_archive")
+                : source.index("def _live_path_has_exact_legacy_bytes")
+            ],
+            source[
+                source.index("def read_projection")
+                : source.index("def read_terminal_projection_without_control")
+            ],
+            source[
+                source.index("def read_terminal_projection_without_control")
+                : source.index("def complete_terminal_tombstone_without_control")
+            ],
+            source[
+                source.index("def write_projection")
+                : source.index("def archive_receipt")
+            ],
+        )
+        for region in regions:
+            with self.subTest(header=region.splitlines()[0]):
+                self.assertLess(
+                    region.index("settle_linked_publication_replay(evidence_fd)"),
+                    region.index("_read_regular_at("),
+                )
+
+    def test_prepared_archive_response_loss_is_settled_before_return(self) -> None:
+        events: list[str] = []
+        observed = mock.Mock()
+        with mock.patch.object(
+            MODULE, "recorded_legacy_receipt_bytes", return_value=b"receipt"
+        ), mock.patch.object(
+            MODULE,
+            "_read_regular_at",
+            side_effect=lambda *_args, **_kwargs: events.append("read")
+            or (31, observed, b"receipt"),
+        ), mock.patch.object(
+            MODULE, "_require_legacy_receipt"
+        ), mock.patch.object(
+            MODULE.os,
+            "fsync",
+            side_effect=lambda _fd: events.append("fsync"),
+        ):
+            descriptor = MODULE.open_or_publish_prepared_archive(
+                {"authority": {"legacyReceipt": {}}},
+                20,
+            )
+        self.assertEqual(descriptor, 31)
+        self.assertEqual(events[:2], ["fsync", "read"])
+
+    def test_terminal_archive_response_loss_settles_and_rejects_live_original(self) -> None:
+        events: list[str] = []
+        observed = mock.Mock()
+        values = iter((None, (31, observed, b"archive")))
+        with mock.patch.object(
+            MODULE, "recorded_evidence_descriptors", return_value=(10, 20)
+        ), mock.patch.object(
+            MODULE,
+            "_read_regular_at",
+            side_effect=lambda *_args, **_kwargs: events.append("read")
+            or next(values),
+        ), mock.patch.object(
+            MODULE, "_require_legacy_receipt"
+        ), mock.patch.object(
+            MODULE.os,
+            "fsync",
+            side_effect=lambda _fd: events.append("fsync"),
+        ), mock.patch.object(MODULE.os, "close"):
+            state, raw = MODULE.legacy_receipt_state(
+                {"authority": {"legacyReceipt": {}}}
+            )
+        self.assertEqual((state, raw), ("archived", b"archive"))
+        self.assertEqual(events[:3], ["fsync", "read", "read"])
+
+        live_and_archive = iter(
+            ((30, observed, b"legacy"), (31, observed, b"archive"))
+        )
+        with mock.patch.object(
+            MODULE, "recorded_evidence_descriptors", return_value=(10, 20)
+        ), mock.patch.object(
+            MODULE, "_read_regular_at", side_effect=lambda *_args, **_kwargs: next(live_and_archive)
+        ), mock.patch.object(
+            MODULE, "_require_legacy_receipt"
+        ), mock.patch.object(
+            MODULE, "sha256_bytes", return_value=MODULE.EXPECTED_RECEIPT_SHA256
+        ), mock.patch.object(MODULE.os, "fsync"), mock.patch.object(MODULE.os, "close"), self.assertRaisesRegex(
+            MODULE.ManualRecoveryRequired,
+            "coexist",
+        ):
+            MODULE.legacy_receipt_state(
+                {"authority": {"legacyReceipt": {}}}
+            )
 
     def test_projection_is_deterministic_and_precedes_archive(self) -> None:
         control = ReducerStateMachineTest.FakeControl("archive_intent_final")
