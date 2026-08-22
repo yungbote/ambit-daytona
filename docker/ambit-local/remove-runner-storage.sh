@@ -1,5 +1,10 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash -p
 set -euo pipefail
+umask 077
+unset BASH_ENV ENV CDPATH GLOBIGNORE PYTHONPATH PYTHONHOME LD_PRELOAD LD_LIBRARY_PATH
+PATH=/usr/bin:/bin
+LC_ALL=C.UTF-8
+readonly PATH LC_ALL
 
 if [[ $# -ne 1 ]]; then
   echo 'Usage: remove-runner-storage.sh STATE_ROOT' >&2
@@ -11,36 +16,56 @@ state_root=$1
   echo 'STATE_ROOT must be a specific path below /home' >&2
   exit 64
 }
-[[ $(realpath -e -- "${state_root}") == "${state_root}" ]] || {
+[[ $(/usr/bin/realpath -e -- "${state_root}") == "${state_root}" ]] || {
   echo 'STATE_ROOT must be an existing canonical non-symlink path' >&2
   exit 64
 }
-caller_uid=$(id -u)
-caller_gid=$(id -g)
-[[ $(stat -c '%u:%g:%a' -- "${state_root}") == "${caller_uid}:${caller_gid}:700" ]] || {
+caller_uid=$(/usr/bin/id -u)
+caller_gid=$(/usr/bin/id -g)
+[[ $(/usr/bin/stat -c '%u:%g:%a' -- "${state_root}") == "${caller_uid}:${caller_gid}:700" ]] || {
   echo 'STATE_ROOT owner, group, or mode differs' >&2
   exit 66
 }
 
-script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+script_dir=$(cd "$(/usr/bin/dirname -- "${BASH_SOURCE[0]}")" && /usr/bin/pwd -P)
 lifecycle_helper=${script_dir}/runner-storage-lifecycle.py
-lifecycle_helper_sha256=991c7db087d88390d67263183afa70908710be40b49e8d5d3059958a8362641e
+lifecycle_helper_sha256=d3c6ff3293a3524da1f1a07fdc15bec8c57530b7ae99380678da1ecd5f241ffe
 [[ -f ${lifecycle_helper} && ! -L ${lifecycle_helper} ]] || {
   echo 'runner storage lifecycle helper is absent or unsafe' >&2
   exit 66
 }
 
-sudo -n /usr/bin/env -i -C / \
-  PATH=/usr/bin:/bin \
-  LC_ALL=C.UTF-8 \
-  /usr/bin/python3 -I -S -B -c '
+/usr/bin/sudo -n -- /usr/bin/python3 -I -S -B -c '
 import hashlib
 import hmac
 import os
+import re
 import stat
 import sys
 
-path, expected, *arguments = sys.argv[1:]
+path, expected, expected_uid, expected_gid, *arguments = sys.argv[1:]
+def authenticated_requester(name, expected_value):
+    value = os.environ.get(name)
+    if value is None or re.fullmatch(r"[0-9]+", value) is None:
+        raise SystemExit("sudo requester identity is absent or invalid")
+    parsed = int(value)
+    if str(parsed) != value or value != expected_value:
+        raise SystemExit("sudo requester identity differs")
+    return value
+
+if os.geteuid() != 0 or os.getegid() != 0:
+    raise SystemExit("runner storage lifecycle launcher is not privileged")
+requester_uid = authenticated_requester("SUDO_UID", expected_uid)
+requester_gid = authenticated_requester("SUDO_GID", expected_gid)
+os.chdir("/")
+os.environ.clear()
+os.environ.update({
+    "HOME": "/root",
+    "LC_ALL": "C.UTF-8",
+    "PATH": "/usr/bin:/bin",
+    "SUDO_UID": requester_uid,
+    "SUDO_GID": requester_gid,
+})
 descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
 try:
     identity = os.fstat(descriptor)
@@ -61,4 +86,5 @@ globals()["__file__"] = path
 globals()["__package__"] = None
 exec(compile(source, path, "exec"), globals(), globals())
 ' "${lifecycle_helper}" "${lifecycle_helper_sha256}" \
+  "${caller_uid}" "${caller_gid}" \
   remove-authority "${state_root}" "${caller_uid}" "${caller_gid}"
