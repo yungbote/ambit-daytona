@@ -10,16 +10,14 @@ IFS=$' \t\n'
 export PATH LC_ALL LANG
 readonly PATH LC_ALL LANG IFS
 
-trusted_tool_directories=(/ /bin /usr /usr/bin)
-for directory in "${trusted_tool_directories[@]}"; do
-  directory_identity=$(/usr/bin/stat -Lc '%u:%g:%a:%F' -- "${directory}")
-  [[ ${directory_identity} == 0:0:*:directory ]] || {
+for directory in / /bin /usr /usr/bin; do
+  identity=$(/usr/bin/stat -Lc '%u:%g:%a:%F' -- "${directory}")
+  [[ ${identity} == 0:0:*:directory ]] || {
     echo "host gate tool directory authority differs: ${directory}" >&2
     exit 66
   }
-  directory_mode=${directory_identity#0:0:}
-  directory_mode=${directory_mode%%:*}
-  (( (8#${directory_mode} & 8#022) == 0 )) || {
+  mode=${identity#0:0:}; mode=${mode%%:*}
+  (( (8#${mode} & 8#022) == 0 )) || {
     echo "host gate tool directory is writable: ${directory}" >&2
     exit 66
   }
@@ -29,16 +27,13 @@ trusted_executables=(
   /usr/bin/awk
   /usr/bin/bash
   /usr/bin/chmod
-  /usr/bin/containerd
   /usr/bin/date
   /usr/bin/dirname
   /usr/bin/docker
-  /usr/bin/dockerd
   /usr/bin/env
   /usr/bin/id
   /usr/bin/jq
   /usr/bin/mktemp
-  /usr/bin/mv
   /usr/bin/nproc
   /usr/bin/nsenter
   /usr/bin/python3
@@ -50,52 +45,27 @@ trusted_executables=(
   /usr/bin/unlink
 )
 for executable in "${trusted_executables[@]}"; do
-  executable_identity=$(/usr/bin/stat -Lc '%u:%g:%a:%F' -- "${executable}")
-  [[ ${executable_identity} == 0:0:*:'regular file' ]] || {
+  identity=$(/usr/bin/stat -Lc '%u:%g:%a:%F' -- "${executable}")
+  [[ ${identity} == 0:0:*:'regular file' ]] || {
     echo "host gate executable authority differs: ${executable}" >&2
     exit 66
   }
-  executable_mode=${executable_identity#0:0:}
-  executable_mode=${executable_mode%%:*}
-  (( (8#${executable_mode} & 8#022) == 0 && (8#${executable_mode} & 8#111) != 0 )) || {
+  mode=${identity#0:0:}; mode=${mode%%:*}
+  (( (8#${mode} & 8#022) == 0 && (8#${mode} & 8#111) != 0 )) || {
     echo "host gate executable mode is unsafe: ${executable}" >&2
     exit 66
   }
 done
 
-sha256_file() {
-  local digest_and_name digest
-  digest_and_name=$(/usr/bin/sha256sum -- "$1")
-  digest=${digest_and_name%% *}
-  [[ ${digest} =~ ^[0-9a-f]{64}$ ]] || {
-    echo "could not parse SHA-256 digest for: $1" >&2
-    return 66
-  }
-  printf '%s' "${digest}"
-}
-
-sha256_text() {
-  local digest_and_marker digest
-  digest_and_marker=$(printf '%s' "$1" | /usr/bin/sha256sum)
-  digest=${digest_and_marker%% *}
-  [[ ${digest} =~ ^[0-9a-f]{64}$ ]] || {
-    echo 'could not parse SHA-256 digest for text' >&2
-    return 66
-  }
-  printf '%s' "${digest}"
-}
-
 if [[ $# -ne 2 ]]; then
   echo 'Usage: DOCKER_HOST=unix://... verify-host-capacity.sh STATE_ROOT OUTPUT_RECEIPT' >&2
   exit 64
 fi
-
 readonly state_root=$1
 readonly output=$2
 [[ ${state_root} =~ ^/home/[^/]+/[A-Za-z0-9._/-]+$ ]] || { echo 'invalid STATE_ROOT' >&2; exit 64; }
 [[ $(/usr/bin/realpath -e -- "${state_root}") == "${state_root}" ]] || { echo 'STATE_ROOT is not canonical' >&2; exit 64; }
 [[ ${output} = /* && ! -e ${output} && ! -L ${output} ]] || { echo 'OUTPUT_RECEIPT must be an unused absolute path' >&2; exit 64; }
-
 caller_uid=$(/usr/bin/id -u)
 caller_gid=$(/usr/bin/id -g)
 [[ $(/usr/bin/stat -c '%u:%g:%a:%F' -- "${state_root}") == "${caller_uid}:${caller_gid}:700:directory" ]] || {
@@ -107,15 +77,26 @@ evidence_root=${state_root}/evidence
   echo 'evidence-root authority differs' >&2
   exit 66
 }
+runtime_digest=$(printf '%s' "${state_root}" | /usr/bin/sha256sum)
+runtime_digest=${runtime_digest%% *}
+expected_socket=/run/ambit-c16b-docker-api-${runtime_digest:0:12}/docker.sock
+runtime_root=/run/ambit-c16b-docker-${runtime_digest:0:12}
+[[ ${DOCKER_HOST:-} == "unix://${expected_socket}" ]] || {
+  echo 'DOCKER_HOST differs from the exact caller API socket' >&2
+  exit 66
+}
+[[ -z ${DOCKER_CONTEXT:-} ]] || { echo 'DOCKER_CONTEXT must be unset' >&2; exit 66; }
 
 script_source=${BASH_SOURCE[0]}
 [[ ${script_source} = /* ]] || script_source=${PWD}/${script_source}
 script_source=$(/usr/bin/realpath -e -- "${script_source}")
 script_dir=${script_source%/*}
-process_identity=${script_dir}/isolated_process_identity.py
-process_identity_sha256=28ea7928529c55596174496fee625066fa05bfb0d8f6a077991aed715c1c1b15
-[[ $(sha256_file "${process_identity}") == "${process_identity_sha256}" ]] || {
-  echo 'process identity source digest differs' >&2
+supervisor=${script_dir}/isolated_runtime_supervisor.py
+supervisor_sha256=69138beedc9ff533ba5f86bcd9bc982cd3147f865e428c838a6c13053005643c
+observed_supervisor_sha=$(/usr/bin/sha256sum -- "${supervisor}")
+observed_supervisor_sha=${observed_supervisor_sha%% *}
+[[ ${observed_supervisor_sha} == "${supervisor_sha256}" ]] || {
+  echo 'isolated runtime supervisor source digest differs' >&2
   exit 66
 }
 
@@ -145,166 +126,226 @@ if not hmac.compare_digest(hashlib.sha256(source).hexdigest(), expected):
 sys.argv = [path, *arguments]
 globals()["__file__"] = path
 globals()["__package__"] = None
+globals()["__verified_source_sha256__"] = expected
 exec(compile(source, path, "exec"), globals(), globals())
 PY
 
-runtime_digest=$(sha256_text "${state_root}")
-runtime_id=${runtime_digest:0:12}
-runtime_root=/run/ambit-c16b-docker-${runtime_id}
-control=${evidence_root}/outer-docker-control.json
-start=${evidence_root}/outer-docker-receipt.json
-projection=${evidence_root}/runner-docker-storage.json
-for receipt in "${control}" "${start}" "${projection}"; do
-  [[ $(/usr/bin/stat -c '%u:%g:%a:%F' -- "${receipt}") == "${caller_uid}:${caller_gid}:600:regular file" ]] || {
-    echo "required receipt authority differs: ${receipt}" >&2
-    exit 66
-  }
-done
+read -r -d '' runtime_snapshot_loader <<'PY' || true
+import hashlib
+import hmac
+import os
+import stat
+import sys
 
-/usr/bin/jq -e \
-  --arg stateRoot "${state_root}" --arg runtimeRoot "${runtime_root}" \
-  --arg processSha "${process_identity_sha256}" '
-    .schema == "ambit.local-daytona-isolated-docker-control/v1" and
-    .outcome == "active" and .stateRoot == $stateRoot and .runtimeRoot == $runtimeRoot and
-    .processIdentitySourceSha256 == $processSha and
-    (.mountNamespace | keys | sort) == ["device","inode"] and
-    (.supervisorProcessIdentity | keys | sort) == [
-      "argumentsSha256","executable","mountNamespace","parentPid","pid","procInode","startTimeTicks"
-    ] and
-    .supervisorProcessIdentity.mountNamespace == .mountNamespace
-  ' "${control}" >/dev/null || { echo 'active supervisor control receipt is invalid' >&2; exit 66; }
+runtime_root, fallback_path, fallback_digest, *arguments = sys.argv[1:]
+chosen = fallback_path
+control_present = False
+parent = os.stat("/run", follow_symlinks=False)
+if not (stat.S_ISDIR(parent.st_mode) and parent.st_uid == 0 and parent.st_gid == 0 and stat.S_IMODE(parent.st_mode) & 0o022 == 0):
+    raise SystemExit("runtime snapshot parent authority differs")
+try:
+    root_fd = os.open(runtime_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+except FileNotFoundError:
+    root_fd = None
+if root_fd is not None:
+    try:
+        root = os.fstat(root_fd)
+        if not (root.st_uid == 0 and root.st_gid == 0 and stat.S_IMODE(root.st_mode) == 0o700):
+            raise SystemExit("runtime snapshot root authority differs")
+        try:
+            os.stat("runtime-control.json", dir_fd=root_fd, follow_symlinks=False)
+            control_present = True
+        except FileNotFoundError:
+            pass
+        try:
+            descriptor = os.open("isolated_runtime_supervisor.py", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=root_fd)
+            chosen = runtime_root + "/isolated_runtime_supervisor.py"
+        except FileNotFoundError:
+            descriptor = None
+    finally:
+        os.close(root_fd)
+else:
+    descriptor = None
+if descriptor is None:
+    chosen = fallback_path
+    descriptor = os.open(fallback_path, os.O_RDONLY | os.O_NOFOLLOW)
+try:
+    identity = os.fstat(descriptor)
+    if not stat.S_ISREG(identity.st_mode) or not 0 < identity.st_size <= 2 * 1024 * 1024:
+        raise SystemExit("runtime supervisor source identity is invalid")
+    if chosen != fallback_path and not (identity.st_uid == 0 and identity.st_gid == 0 and stat.S_IMODE(identity.st_mode) == 0o400):
+        raise SystemExit("runtime supervisor snapshot authority differs")
+    source = bytearray()
+    while True:
+        block = os.read(descriptor, 1024 * 1024)
+        if not block:
+            break
+        source.extend(block)
+finally:
+    os.close(descriptor)
+actual = hashlib.sha256(source).hexdigest()
+if chosen == fallback_path and not hmac.compare_digest(actual, fallback_digest):
+    raise SystemExit("fallback supervisor digest differs")
+if chosen != fallback_path and not hmac.compare_digest(actual, fallback_digest):
+    fallback_fd = os.open(fallback_path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        fallback_source = bytearray()
+        while True:
+            block = os.read(fallback_fd, 1024 * 1024)
+            if not block:
+                break
+            fallback_source.extend(block)
+    finally:
+        os.close(fallback_fd)
+    if not hmac.compare_digest(hashlib.sha256(fallback_source).hexdigest(), fallback_digest):
+        raise SystemExit("fallback supervisor digest differs")
+    if not control_present and fallback_source.startswith(source):
+        source = fallback_source
+        actual = fallback_digest
+        chosen = fallback_path
+sys.argv = [chosen, *arguments]
+globals()["__file__"] = chosen
+globals()["__package__"] = None
+globals()["__verified_source_sha256__"] = actual
+exec(compile(source, chosen, "exec"), globals(), globals())
+PY
 
-/usr/bin/jq -e \
-  --arg stateRoot "${state_root}" --arg runtimeRoot "${runtime_root}" \
-  --argjson control "$(/usr/bin/jq -cS . "${control}")" '
-    .schema == "ambit.local-daytona-isolated-docker/v4" and .outcome == "passed" and
-    .stateRoot == $stateRoot and .runtimeRoot == $runtimeRoot and
-    .mountNamespace == $control.mountNamespace and
-    .supervisorProcessIdentity == $control.supervisorProcessIdentity and
-    .storageLifecycleSourceSha256 == $control.storageLifecycleSourceSha256 and
-    .processIdentitySourceSha256 == $control.processIdentitySourceSha256 and
-    .storage.lifecycleSchema == "ambit.local-daytona-runner-storage-operation/v2" and
-    .storage.receiptSchema == "ambit.local-daytona-runner-storage/v2" and
-    .storage.authorityRoot == "/home/.ambit-c16b-runner-storage" and
-    .storage.target == "/home/.ambit-c16b-runner-storage/runner-docker" and
-    .storage.mountNamespace == .mountNamespace and
-    (.storage.projectionDigest | test("^[0-9a-f]{64}$"))
-  ' "${start}" >/dev/null || { echo 'v4 isolated runtime start receipt is invalid' >&2; exit 66; }
+invoke_status() {
+  /usr/bin/sudo -n -- \
+    /usr/bin/python3 -I -S -B -c "${runtime_snapshot_loader}" \
+    "${runtime_root}" "${supervisor}" "${supervisor_sha256}" status \
+    "${state_root}" "${caller_uid}" "${caller_gid}"
+}
 
-namespace=$(/usr/bin/jq -cS '.mountNamespace' "${control}")
-supervisor_pid=$(/usr/bin/jq -er '.supervisorProcessIdentity.pid' "${control}")
-storage_sha=$(/usr/bin/jq -er '.storageLifecycleSourceSha256' "${control}")
+first_status=$(invoke_status)
+/usr/bin/jq -e --arg stateRoot "${state_root}" '
+  (keys | sort) == ["outcome","ready","rootReadySha256","schema","socket","stateRoot"] and
+  .schema == "ambit.local-daytona-isolated-docker-status/v1" and
+  .outcome == "ready" and .stateRoot == $stateRoot and
+  (.rootReadySha256 | test("^[0-9a-f]{64}$")) and
+  .ready.schema == "ambit.local-daytona-isolated-docker/v5" and
+  .ready.outcome == "passed" and .ready.stateRoot == $stateRoot and
+  .ready.socket == .socket and
+  .ready.storage.lifecycleSchema == "ambit.local-daytona-runner-storage-operation/v3" and
+  .ready.storage.receiptSchema == "ambit.local-daytona-runner-storage/v3" and
+  .ready.storage.innerRunnerDataRoot.path == "/home/.ambit-c16b-runner-storage/runner-docker/inner-runner" and
+  .ready.dataRoot == "/home/.ambit-c16b-runner-storage/outer-docker" and
+  .ready.containerd.root == "/home/.ambit-c16b-runner-storage/outer-containerd"
+' <<<"${first_status}" >/dev/null || { echo 'root runtime status authority is invalid' >&2; exit 66; }
+
+ready=$(/usr/bin/jq -cS '.ready' <<<"${first_status}")
+namespace=$(/usr/bin/jq -cS '.mountNamespace' <<<"${ready}")
+supervisor_pid=$(/usr/bin/jq -er '.supervisorProcessIdentity.pid' <<<"${ready}")
+runtime_root=$(/usr/bin/jq -er '.runtimeRoot' <<<"${ready}")
+storage_sha=$(/usr/bin/jq -er '.storageLifecycleSourceSha256' <<<"${ready}")
 snapshot_helper=${runtime_root}/runner-storage-lifecycle.py
-[[ $(/usr/bin/stat -c '%u:%g:%a:%F' -- "${snapshot_helper}") == '0:0:400:regular file' ]] || {
-  echo 'runtime storage helper snapshot authority differs' >&2
-  exit 66
-}
-[[ $(sha256_file "${snapshot_helper}") == "${storage_sha}" ]] || {
-  echo 'runtime storage helper snapshot digest differs' >&2
-  exit 66
-}
-
-verify_process() {
-  local expected=$1 executable=$2 pid parent arguments namespace_value observed
-  pid=$(/usr/bin/jq -er '.pid' <<<"${expected}")
-  parent=$(/usr/bin/jq -er '.parentPid' <<<"${expected}")
-  arguments=$(/usr/bin/jq -er '.argumentsSha256' <<<"${expected}")
-  namespace_value=$(/usr/bin/jq -cS '.mountNamespace' <<<"${expected}")
-  observed=$(
-    /usr/bin/sudo -n /usr/bin/env -i -C / PATH=/usr/bin:/bin LC_ALL=C.UTF-8 \
-      /usr/bin/python3 -I -S -B -c "${pinned_loader}" \
-      "${process_identity}" "${process_identity_sha256}" verify-digest \
-      "${pid}" "${executable}" 0 "${arguments}" \
-      --parent-pid "${parent}" --mount-namespace "${namespace_value}"
-  )
-  [[ $(/usr/bin/jq -cS . <<<"${observed}") == "${expected}" ]] || {
-    echo "live process identity differs: ${executable}" >&2
-    return 66
-  }
-}
-
-supervisor_identity=$(/usr/bin/jq -cS '.supervisorProcessIdentity' "${start}")
-containerd_identity=$(/usr/bin/jq -cS '.containerd.processIdentity' "${start}")
-docker_identity=$(/usr/bin/jq -cS '.dockerProcessIdentity' "${start}")
-verify_process "${supervisor_identity}" /usr/bin/python3
-verify_process "${containerd_identity}" /usr/bin/containerd
-verify_process "${docker_identity}" /usr/bin/dockerd
-[[ $(/usr/bin/jq -cS '.mountNamespace' <<<"${containerd_identity}") == "${namespace}" &&
-   $(/usr/bin/jq -cS '.mountNamespace' <<<"${docker_identity}") == "${namespace}" ]] || {
-  echo 'daemon mount namespace differs from supervisor' >&2
-  exit 66
-}
-[[ $(/usr/bin/jq -er '.parentPid' <<<"${containerd_identity}") == "${supervisor_pid}" &&
-   $(/usr/bin/jq -er '.parentPid' <<<"${docker_identity}") == "${supervisor_pid}" ]] || {
-  echo 'daemon parent differs from supervisor' >&2
-  exit 66
-}
-
 namespace_device=$(/usr/bin/jq -er '.device' <<<"${namespace}")
 namespace_inode=$(/usr/bin/jq -er '.inode' <<<"${namespace}")
+
+read -r -d '' storage_launcher <<'PY' || true
+import hashlib
+import hmac
+import os
+import re
+import stat
+import sys
+
+path, expected, expected_uid, expected_gid, *arguments = sys.argv[1:]
+if os.geteuid() != 0 or os.getegid() != 0:
+    raise SystemExit("storage observer launcher is not root")
+for name, expected_value in (("SUDO_UID", expected_uid), ("SUDO_GID", expected_gid)):
+    value = os.environ.get(name)
+    if value is None or re.fullmatch(r"[0-9]+", value) is None or str(int(value)) != value or value != expected_value:
+        raise SystemExit("storage observer sudo requester differs")
+requester_uid = expected_uid
+requester_gid = expected_gid
+os.chdir("/")
+os.environ.clear()
+os.environ.update({"HOME":"/root","LC_ALL":"C.UTF-8","PATH":"/usr/bin:/bin","SUDO_UID":requester_uid,"SUDO_GID":requester_gid})
+descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+try:
+    identity = os.fstat(descriptor)
+    if not (stat.S_ISREG(identity.st_mode) and identity.st_uid == 0 and identity.st_gid == 0 and stat.S_IMODE(identity.st_mode) == 0o400 and 0 < identity.st_size <= 2 * 1024 * 1024):
+        raise SystemExit("runtime storage helper snapshot identity differs")
+    source = bytearray()
+    while True:
+        block = os.read(descriptor, 1024 * 1024)
+        if not block:
+            break
+        source.extend(block)
+finally:
+    os.close(descriptor)
+if not hmac.compare_digest(hashlib.sha256(source).hexdigest(), expected):
+    raise SystemExit("runtime storage helper snapshot digest differs")
+sys.argv = [path, *arguments]
+globals()["__file__"] = path
+globals()["__package__"] = None
+exec(compile(source, path, "exec"), globals(), globals())
+PY
+
 storage_operation=$(
-  /usr/bin/sudo -n /usr/bin/nsenter --mount="/proc/${supervisor_pid}/ns/mnt" -- \
-    /usr/bin/env -i -C / PATH=/usr/bin:/bin LC_ALL=C.UTF-8 \
-    /usr/bin/python3 -I -S -B -c "${pinned_loader}" \
-    "${snapshot_helper}" "${storage_sha}" observe-private \
-    "${state_root}" "${caller_uid}" "${caller_gid}" \
+  /usr/bin/sudo -n -- /usr/bin/nsenter --mount="/proc/${supervisor_pid}/ns/mnt" -- \
+    /usr/bin/python3 -I -S -B -c "${storage_launcher}" \
+    "${snapshot_helper}" "${storage_sha}" "${caller_uid}" "${caller_gid}" \
+    observe-private "${state_root}" "${caller_uid}" "${caller_gid}" \
     "${namespace_device}" "${namespace_inode}"
 )
 
-verify_process "${supervisor_identity}" /usr/bin/python3
-verify_process "${containerd_identity}" /usr/bin/containerd
-verify_process "${docker_identity}" /usr/bin/dockerd
+second_status=$(invoke_status)
+[[ $(/usr/bin/jq -cS . <<<"${second_status}") == $(/usr/bin/jq -cS . <<<"${first_status}") ]] || {
+  echo 'root runtime authority changed during storage observation' >&2
+  exit 66
+}
+expected_storage_digest=$(/usr/bin/jq -er '.storage.projectionDigest' <<<"${ready}")
+/usr/bin/jq -e --arg digest "${expected_storage_digest}" --argjson namespace "${namespace}" '
+  .schema == "ambit.local-daytona-runner-storage-operation/v3" and
+  .outcome == "observed" and
+  .mountNamespace == (($namespace.device|tostring) + ":" + ($namespace.inode|tostring)) and
+  .authorityRoot == "/home/.ambit-c16b-runner-storage" and
+  .mountTarget == "/home/.ambit-c16b-runner-storage/runner-docker" and
+  .authorityReceiptSha256 == $digest and
+  .receipt.schema == "ambit.local-daytona-runner-storage/v3" and
+  .receipt.lifecycleState == "attached" and
+  .receipt.mountNamespace == $namespace and
+  .receipt.innerRunnerDataRoot.path == "/home/.ambit-c16b-runner-storage/runner-docker/inner-runner"
+' <<<"${storage_operation}" >/dev/null || { echo 'private namespace storage observation is invalid' >&2; exit 66; }
 
-/usr/bin/jq -e \
-  --arg digest "$(/usr/bin/jq -er '.storage.projectionDigest' "${start}")" \
-  --argjson namespace "${namespace}" '
-    .schema == "ambit.local-daytona-runner-storage-operation/v2" and
-    .outcome == "observed" and
-    .mountNamespace == (($namespace.device|tostring) + ":" + ($namespace.inode|tostring)) and
-    .authorityRoot == "/home/.ambit-c16b-runner-storage" and
-    .mountTarget == "/home/.ambit-c16b-runner-storage/runner-docker" and
-    .authorityReceiptSha256 == $digest and
-    .receipt.schema == "ambit.local-daytona-runner-storage/v2" and
-    .receipt.lifecycleState == "attached" and .receipt.mountNamespace == $namespace
-  ' <<<"${storage_operation}" >/dev/null || { echo 'private namespace storage observation is invalid' >&2; exit 66; }
+projection=${evidence_root}/runner-docker-storage.json
+[[ $(/usr/bin/stat -c '%u:%g:%a:%F' -- "${projection}") == "${caller_uid}:${caller_gid}:600:regular file" ]] || {
+  echo 'runner storage projection authority differs' >&2
+  exit 66
+}
+/usr/bin/jq -e --arg digest "${expected_storage_digest}" '
+  .schema == "ambit.local-daytona-runner-storage-projection/v2" and
+  .authorityReceiptSha256 == $digest and
+  .receipt.schema == "ambit.local-daytona-runner-storage/v3"
+' "${projection}" >/dev/null || { echo 'runner storage projection differs from root authority' >&2; exit 66; }
 
-/usr/bin/jq -e \
-  --arg digest "$(/usr/bin/jq -er '.authorityReceiptSha256' <<<"${storage_operation}")" '
-    .schema == "ambit.local-daytona-runner-storage-projection/v1" and
-    .authorityReceiptSha256 == $digest and .receipt.schema == "ambit.local-daytona-runner-storage/v2"
-  ' "${projection}" >/dev/null || { echo 'user storage projection differs from root authority' >&2; exit 66; }
-projection_receipt=$(/usr/bin/jq -cS '.receipt' "${projection}")
-projection_receipt_sha256=$(sha256_text "${projection_receipt}")
-[[ ${projection_receipt_sha256} == "$(/usr/bin/jq -er '.authorityReceiptSha256' <<<"${storage_operation}")" ]] || {
-  echo 'user storage projection payload digest differs from root authority' >&2
+socket=$(/usr/bin/jq -er '.socket' <<<"${ready}")
+[[ ${socket} == "${expected_socket}" ]] || { echo 'root ready API socket differs from derived authority' >&2; exit 66; }
+docker_info=$(
+  /usr/bin/env -i -C / PATH=/usr/bin:/bin LC_ALL=C.UTF-8 DOCKER_HOST="${DOCKER_HOST}" \
+    /usr/bin/docker info --format '{{json .}}'
+)
+docker_root=$(/usr/bin/jq -er '.DockerRootDir' <<<"${docker_info}")
+docker_server_id=$(/usr/bin/jq -er '.ID' <<<"${docker_info}")
+[[ ${docker_root} == $(/usr/bin/jq -er '.dataRoot' <<<"${ready}") ]] || { echo 'live Docker data root differs' >&2; exit 66; }
+[[ ${docker_server_id} == $(/usr/bin/jq -er '.serverId' <<<"${ready}") ]] || { echo 'live Docker server identity differs' >&2; exit 66; }
+third_status=$(invoke_status)
+[[ $(/usr/bin/jq -cS . <<<"${third_status}") == $(/usr/bin/jq -cS . <<<"${first_status}") ]] || {
+  echo 'root runtime authority changed during Docker observation' >&2
   exit 66
 }
 
-[[ ${DOCKER_HOST:-} == "unix://$(/usr/bin/jq -er '.socket' "${start}")" ]] || {
-  echo 'DOCKER_HOST differs from v4 start receipt' >&2
-  exit 66
-}
-[[ -z ${DOCKER_CONTEXT:-} ]] || { echo 'DOCKER_CONTEXT must be unset' >&2; exit 66; }
-docker_root=$(
-  /usr/bin/env -i -C / PATH=/usr/bin:/bin LC_ALL=C.UTF-8 \
-    DOCKER_HOST="${DOCKER_HOST}" /usr/bin/docker info --format '{{.DockerRootDir}}'
-)
-docker_server_id=$(
-  /usr/bin/env -i -C / PATH=/usr/bin:/bin LC_ALL=C.UTF-8 \
-    DOCKER_HOST="${DOCKER_HOST}" /usr/bin/docker info --format '{{.ID}}'
-)
-[[ ${docker_root} == "$(/usr/bin/jq -er '.dataRoot' "${start}")" ]] || { echo 'live Docker data root differs' >&2; exit 66; }
-[[ ${docker_server_id} == "$(/usr/bin/jq -er '.serverId' "${start}")" ]] || { echo 'live Docker server identity differs' >&2; exit 66; }
-
-cpu_count=$(
-  /usr/bin/env -i -C / PATH=/usr/bin:/bin LC_ALL=C.UTF-8 /usr/bin/nproc
-)
+cpu_count=$(/usr/bin/env -i -C / PATH=/usr/bin:/bin LC_ALL=C.UTF-8 /usr/bin/nproc)
 memory_available_kib=$(
   /usr/bin/env -i -C / PATH=/usr/bin:/bin LC_ALL=C.UTF-8 \
     /usr/bin/awk '$1 == "MemAvailable:" { print $2 }' /proc/meminfo
 )
-[[ ${cpu_count} =~ ^[1-9][0-9]*$ ]] || { echo 'available CPU observation is invalid' >&2; exit 66; }
-[[ ${memory_available_kib} =~ ^[0-9]+$ ]] || { echo 'available memory observation is invalid' >&2; exit 66; }
+[[ ${cpu_count} =~ ^[1-9][0-9]*$ && ${memory_available_kib} =~ ^[0-9]+$ ]] || {
+  echo 'host dynamic capacity observation is invalid' >&2
+  exit 66
+}
 memory_available_bytes=$((memory_available_kib * 1024))
 storage_available_bytes=$(/usr/bin/jq -er '.receipt.backingFilesystem.freeBytes' <<<"${storage_operation}")
 runner_total=$(/usr/bin/jq -er '.receipt.filesystem.totalBytes' <<<"${storage_operation}")
@@ -335,16 +376,19 @@ trap 'exit 143' TERM
   --arg observedAt "$(/usr/bin/env -i -C / PATH=/usr/bin:/bin LC_ALL=C.UTF-8 TZ=UTC /usr/bin/date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --arg stateRoot "${state_root}" --arg dockerHost "${DOCKER_HOST}" \
   --arg dockerRoot "${docker_root}" --arg dockerServerId "${docker_server_id}" \
-  --arg startReceiptSha256 "$(sha256_file "${start}")" \
-  --arg controlReceiptSha256 "$(sha256_file "${control}")" \
-  --arg projectionSha256 "$(sha256_file "${projection}")" \
+  --arg rootReadySha256 "$(/usr/bin/jq -er '.rootReadySha256' <<<"${first_status}")" \
+  --arg projectionSha256 "$({ /usr/bin/sha256sum -- "${projection}"; } | /usr/bin/awk '{print $1}')" \
   --argjson cpu "${cpu_count}" --argjson memory "${memory_available_bytes}" \
   --argjson storage "${storage_available_bytes}" --argjson reasons "${reasons_json}" \
-  --argjson namespace "${namespace}" --argjson supervisor "${supervisor_identity}" \
-  --argjson containerd "${containerd_identity}" --argjson dockerd "${docker_identity}" \
-  --argjson runnerStorage "$(/usr/bin/jq -cS '.receipt' <<<"${storage_operation}")" '
+  --argjson namespace "${namespace}" \
+  --argjson supervisor "$({ /usr/bin/jq -cS '.supervisorProcessIdentity' <<<"${ready}"; })" \
+  --argjson containerd "$({ /usr/bin/jq -cS '.containerd.processIdentity' <<<"${ready}"; })" \
+  --argjson dockerd "$({ /usr/bin/jq -cS '.dockerProcessIdentity' <<<"${ready}"; })" \
+  --argjson socketRoot "$({ /usr/bin/jq -cS '.socketRootIdentity' <<<"${ready}"; })" \
+  --argjson socketIdentity "$({ /usr/bin/jq -cS '.socketIdentity' <<<"${ready}"; })" \
+  --argjson runnerStorage "$({ /usr/bin/jq -cS '.receipt' <<<"${storage_operation}"; })" '
   {
-    schema:"ambit.local-daytona-host-capacity-headroom/v4",
+    schema:"ambit.local-daytona-host-capacity-headroom/v5",
     outcome:$outcome,
     observedAt:$observedAt,
     capacityProfile:{
@@ -357,14 +401,33 @@ trap 'exit 143' TERM
     isolatedDaemon:{
       dockerHost:$dockerHost,dockerRoot:$dockerRoot,serverId:$dockerServerId,
       mountNamespace:$namespace,supervisor:$supervisor,containerd:$containerd,dockerd:$dockerd,
-      startReceiptSha256:$startReceiptSha256,controlReceiptSha256:$controlReceiptSha256
+      socketRootIdentity:$socketRoot,socketIdentity:$socketIdentity,rootReadySha256:$rootReadySha256
     },
     runnerStorage:$runnerStorage,
     runnerStorageProjectionSha256:$projectionSha256,
     observed:{cpuCores:$cpu,memoryAvailableBytes:$memory,storageAvailableBytes:$storage,stateRoot:$stateRoot},
     reasons:$reasons
   }' >"${temporary}"
-/usr/bin/chmod 0600 "${temporary}"
-/usr/bin/mv --no-copy --update=none-fail -T -- "${temporary}" "${output}"
+/usr/bin/chmod 0600 -- "${temporary}"
+/usr/bin/python3 -I -S -B -c '
+import os, stat, sys
+temporary, output = sys.argv[1:]
+descriptor = os.open(temporary, os.O_RDONLY | os.O_NOFOLLOW)
+try:
+    value = os.fstat(descriptor)
+    if not stat.S_ISREG(value.st_mode) or stat.S_IMODE(value.st_mode) != 0o600:
+        raise SystemExit(66)
+    os.fsync(descriptor)
+finally:
+    os.close(descriptor)
+parent = os.open(os.path.dirname(output), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+try:
+    os.link(temporary, output, follow_symlinks=False)
+    os.fsync(parent)
+    os.unlink(temporary)
+    os.fsync(parent)
+finally:
+    os.close(parent)
+' "${temporary}" "${output}"
 trap - EXIT INT TERM
 [[ ${outcome} == passed ]]

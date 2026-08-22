@@ -20,16 +20,13 @@ HOST_GATE_EXECUTABLES = (
     "/usr/bin/awk",
     "/usr/bin/bash",
     "/usr/bin/chmod",
-    "/usr/bin/containerd",
     "/usr/bin/date",
     "/usr/bin/dirname",
     "/usr/bin/docker",
-    "/usr/bin/dockerd",
     "/usr/bin/env",
     "/usr/bin/id",
     "/usr/bin/jq",
     "/usr/bin/mktemp",
-    "/usr/bin/mv",
     "/usr/bin/nproc",
     "/usr/bin/nsenter",
     "/usr/bin/python3",
@@ -59,6 +56,12 @@ class VerifyRunnerStorageTest(unittest.TestCase):
             "stateRootMode": 0o700,
             "stateRootOwnerUid": 1000,
             "stateRootOwnerGid": 100,
+            "evidencePath": f"{state_root}/evidence",
+            "evidenceDevice": 47,
+            "evidenceInode": 68,
+            "evidenceMode": 0o700,
+            "evidenceOwnerUid": 1000,
+            "evidenceOwnerGid": 100,
             "authorityDevice": 47,
             "authorityInode": 71,
             "authorityMode": 0o700,
@@ -76,6 +79,11 @@ class VerifyRunnerStorageTest(unittest.TestCase):
             "mountTargetMode": 0o700,
             "mountTargetOwnerUid": 0,
             "mountTargetOwnerGid": 0,
+            "innerRunnerDevice": os.makedev(7, 7),
+            "innerRunnerInode": 80,
+            "innerRunnerMode": 0o700,
+            "innerRunnerOwnerUid": 0,
+            "innerRunnerOwnerGid": 0,
             "loopDevice": "/dev/loop7",
             "loopDeviceNumber": "7:7",
             "loopMountTargets": [str(MODULE.TARGET)],
@@ -95,7 +103,7 @@ class VerifyRunnerStorageTest(unittest.TestCase):
 
     def test_exact_private_namespace_xfs_identity_passes(self) -> None:
         receipt = MODULE.validate_storage_identity_observation(self.observation())
-        self.assertEqual(receipt["schema"], "ambit.local-daytona-runner-storage/v2")
+        self.assertEqual(receipt["schema"], "ambit.local-daytona-runner-storage/v3")
         self.assertEqual(receipt["lifecycleState"], "attached")
         self.assertEqual(
             receipt["authorityRoot"]["path"],
@@ -105,6 +113,12 @@ class VerifyRunnerStorageTest(unittest.TestCase):
             receipt["mountTarget"]["path"],
             "/home/.ambit-c16b-runner-storage/runner-docker",
         )
+        self.assertEqual(
+            receipt["innerRunnerDataRoot"]["path"],
+            "/home/.ambit-c16b-runner-storage/runner-docker/inner-runner",
+        )
+        self.assertEqual(receipt["caller"], {"uid": 1000, "gid": 100})
+        self.assertRegex(receipt["authorityClaimSha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(receipt["loop"], {"device": "/dev/loop7", "major": 7, "minor": 7})
         self.assertEqual(
             receipt["mountNamespace"],
@@ -196,7 +210,9 @@ class VerifyRunnerStorageTest(unittest.TestCase):
         self.assertIsNotNone(match)
         self.assertEqual(match.group(1), helper_digest)
         self.assertIn("/usr/bin/python3 -I -S -B -c", source)
-        self.assertIn("/usr/bin/env -i -C /", source)
+        self.assertNotIn("/usr/bin/env -i", source)
+        self.assertIn('authenticated_requester("SUDO_UID"', source)
+        self.assertIn("os.environ.clear()", source)
 
     def test_host_prepare_wrapper_cannot_mount(self) -> None:
         source = PREPARE.read_text()
@@ -204,26 +220,26 @@ class VerifyRunnerStorageTest(unittest.TestCase):
         for forbidden in ("sudo -n", "/usr/bin/mount", "losetup", "mkfs.xfs"):
             self.assertNotIn(forbidden, source)
 
-    def test_host_gate_brackets_private_namespace_observation_with_v4_identity(self) -> None:
+    def test_host_gate_brackets_private_namespace_observation_with_v5_root_authority(self) -> None:
         source = HOST_GATE.read_text()
-        self.assertIn('ambit.local-daytona-host-capacity-headroom/v4', source)
-        self.assertIn('ambit.local-daytona-isolated-docker/v4', source)
-        self.assertIn('ambit.local-daytona-runner-storage/v2', source)
-        self.assertNotIn('ambit.local-daytona-host-capacity-headroom/v3', source)
+        self.assertIn('ambit.local-daytona-host-capacity-headroom/v5', source)
+        self.assertIn('ambit.local-daytona-isolated-docker/v5', source)
+        self.assertIn('ambit.local-daytona-runner-storage/v3', source)
+        self.assertNotIn('ambit.local-daytona-host-capacity-headroom/v4', source)
         self.assertIn('/usr/bin/nsenter --mount="/proc/${supervisor_pid}/ns/mnt"', source)
-        first_supervisor = source.index(
-            'verify_process "${supervisor_identity}" /usr/bin/python3'
-        )
-        observation = source.index('storage_operation=$(', first_supervisor)
-        second_supervisor = source.index(
-            'verify_process "${supervisor_identity}" /usr/bin/python3',
-            observation,
-        )
-        self.assertLess(first_supervisor, observation)
-        self.assertLess(observation, second_supervisor)
+        first_status = source.index("first_status=$(invoke_status)")
+        observation = source.index("storage_operation=$(", first_status)
+        second_status = source.index("second_status=$(invoke_status)", observation)
+        docker_info = source.index("docker_info=$(", second_status)
+        third_status = source.index("third_status=$(invoke_status)", docker_info)
+        self.assertLess(first_status, observation)
+        self.assertLess(observation, second_status)
+        self.assertLess(second_status, docker_info)
+        self.assertLess(docker_info, third_status)
         self.assertIn('runtime storage helper snapshot digest differs', source)
-        self.assertIn('projection_receipt_sha256=', source)
-        self.assertIn('projection payload digest differs', source)
+        self.assertIn('socketRootIdentity:$socketRoot', source)
+        self.assertIn('socketIdentity:$socketIdentity', source)
+        self.assertIn('rootReadySha256:$rootReadySha256', source)
         self.assertIn("trap 'exit 130' INT", source)
         self.assertIn("trap 'exit 143' TERM", source)
 
@@ -270,13 +286,15 @@ class VerifyRunnerStorageTest(unittest.TestCase):
         self.assertIn("| /usr/bin/sed '/^$/d' | /usr/bin/jq -R .", source)
         self.assertIn("temporary=$(/usr/bin/mktemp --", source)
         self.assertIn("/usr/bin/chmod 0600", source)
-        self.assertIn("/usr/bin/mv --no-copy --update=none-fail -T --", source)
+        self.assertIn("os.link(temporary, output, follow_symlinks=False)", source)
+        self.assertIn("os.fsync(parent)", source)
         self.assertIn("/usr/bin/unlink --", source)
         self.assertIn("TZ=UTC /usr/bin/date -u", source)
         self.assertIn(
-            'DOCKER_HOST="${DOCKER_HOST}" /usr/bin/docker info',
+            'DOCKER_HOST="${DOCKER_HOST}"',
             source,
         )
+        self.assertIn("/usr/bin/docker info --format '{{json .}}'", source)
 
     @staticmethod
     def _write_hostile_path(hostile_path: Path, marker: Path) -> None:
@@ -325,7 +343,7 @@ class VerifyRunnerStorageTest(unittest.TestCase):
                 },
             )
             self.assertEqual(completed.returncode, 66, completed.stderr)
-            self.assertIn("required receipt authority differs", completed.stderr)
+            self.assertIn("DOCKER_HOST differs from the exact caller API socket", completed.stderr)
             self.assertFalse(marker.exists())
             self.assertFalse(output.exists())
             cpu = subprocess.run(

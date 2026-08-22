@@ -53,35 +53,47 @@ export AMBIT_C16B_RUNTIME_OCI_REFERENCE=registry:6000/ambit/runtime-pack-core-do
 
 Run this stack only through `start-isolated-docker.sh`. The normal host daemon
 is not an admitted provider. The start wrapper executes one exact-byte root
-supervisor under `/usr/bin/unshare --mount --propagation private`; the
-supervisor is the sole namespace holder and direct parent of the dedicated
-containerd and dockerd. All three process identities bind exact executable,
-full argument digest, parent PID, process start/proc inode, and the same mount
-namespace device/inode. Provider containers correctly have separate child
-namespaces; their storage acceptance is the exact XFS device/UUID exposed at
-the runner's `/var/lib/docker`, not namespace-inode equality.
+supervisor under `/usr/bin/unshare --mount --propagation private`. Before it
+spawns any helper or daemon, the supervisor enters one exact root-owned cgroup
+v2 boundary. It is the direct parent of the dedicated containerd and dockerd;
+all their descendants inherit that cgroup. All three process identities bind
+exact executable, full argument digest, process start/proc inode, and mount
+namespace device/inode. Parent PID remains a live-topology assertion rather
+than immutable recovery identity. Provider containers correctly have separate
+child namespaces; their storage acceptance is the exact XFS device/UUID
+exposed at the runner's `/var/lib/docker`, not namespace-inode equality.
 
 Privileged runner storage lives only below the fixed, root-owned, caller-
-unrenameable authority `/home/.ambit-c16b-runner-storage`. Its closed roster is
-the lifecycle lock, sparse 60 GiB `runner-docker.xfs`, `runner-docker` mount
-target, and durable v2 receipt. The user-owned `STATE_ROOT` contains no runner
-mountpoint or backing-image authority; it retains only config/logs and a
-digest-bound projection. Compose binds the literal root-owned target with
-`create_host_path: false` and `rprivate`, so a missing authority fails instead
-of creating a user directory. `prepare-runner-storage.sh` deliberately refuses
-host/caller mounting: storage activation belongs to the private supervisor.
+unrenameable authority `/home/.ambit-c16b-runner-storage`. Before that root can
+exist, the helper durably publishes a domain-separated, hash-named, root-owned
+claim directly below `/home`; the claim binds the exact caller, `STATE_ROOT`,
+and evidence-directory device/inode/owner/group/mode. The flock on the pinned
+`/home` descriptor is the sole lifecycle lock, so there is no crash-prone lock
+file. The authority contains the sparse 60 GiB `runner-docker.xfs`, the
+`runner-docker` XFS mount, the dedicated `inner-runner` data directory, durable
+v3 receipt, and root-owned outer dockerd/containerd directories. Compose binds
+only the literal `runner-docker/inner-runner` directory to the privileged
+runner's `/var/lib/docker`, with `create_host_path: false` and `rprivate`; it
+cannot see or mutate the outer daemon roots. The user-owned `STATE_ROOT`
+contains only config/logs and digest-bound projections. The prepare wrapper
+deliberately refuses host mounting: activation belongs to the private
+supervisor.
 
 Before XFS mount, the supervisor proves its `/home` propagation boundary is
-private. It invokes exact-hash-pinned `runner-storage-lifecycle.py` and
-`verify-runner-storage.py` snapshots from its root-only `/run/ambit-c16b-*`
-runtime root. New image creation retains the exact image descriptor through
+private. It snapshots the exact supervisor, process verifier, storage helper,
+and storage verifier into its root-only `/run/ambit-c16b-*` runtime root before
+publishing any control authority or mutating storage. New image creation
+retains the exact image descriptor through
 truncate, mkfs, loop attachment, and mount. Every mutating external tool runs
-under a guardian that retains the same flock-bearing open-file description;
-if the helper is killed, another lifecycle cannot interleave until the mutator
-exits. The root receipt is file-fsynced, atomically renamed, and followed by an
+under a bounded process-group guardian; the helper, guardian, and mutator all
+retain the same flock-bearing open-file description. If any parent is killed,
+serialization remains until the mutator exits; if the supervisor is killed,
+the bound cgroup is the exact descendant termination authority. The root
+receipt is file-fsynced, atomically renamed, and followed by an
 authority-directory fsync before success; its user projection receives the
-same durable ordering. Old receipt versions are never reinterpreted as v2 and
-are accepted only by the explicit remove path.
+same durable ordering. Random crash-temp names are not admitted. Old receipt
+versions are never reinterpreted as v3; explicit destructive removal still
+requires the exact durable lifecycle claim.
 
 The lifecycle reducer admits absent storage; zero/partial/exact root-owned
 `0600` image cutpoints; published attached state; committed detached state; and
@@ -92,26 +104,42 @@ observable through `/proc`, rejecting unreadable, changing, second, nested, or
 foreign loop/target occurrences. The provider and daemon children must stop
 before private unmount/detach. A namespace pinned without a live `/proc`
 representative remains outside the source proof and is an explicit live
-acceptance limit.
+acceptance limit. Static tests establish reducer and authority logic only; they
+do not establish that this host has successfully created the cgroup, mounted
+XFS, enforced project quotas, started the daemon, or completed two live 20 GiB
+sandbox journeys.
 
-The supervisor publishes exact control v1 and start v4 receipts. Export the
-`DOCKER_HOST` line returned by `start-isolated-docker.sh`, then run
-`verify-host-capacity.sh`. The v4 gate re-proves supervisor/containerd/dockerd
-before and after entering the exact supervisor namespace for a v2 storage
-observation. It binds the live socket/server/data root, root receipt digest,
-namespace, image/loop/UUID/quota identity, and user projection before applying
+The supervisor first publishes root-owned, canonical control v2 and ready v5
+manifests; caller-owned control/start files are projections only and never
+authorize a root signal or deletion. Root custody remains `0700`. The Docker
+API socket alone lives at `/run/ambit-c16b-docker-api-<state-hash>/docker.sock`
+under a root:`<caller-primary-gid>` `0750` directory, with exact `0660` socket
+identity. This grants Docker-root-equivalent authority to that local primary
+group and exposes no pinned sources or configs. Export the `DOCKER_HOST` line
+returned by `start-isolated-docker.sh`, then run `verify-host-capacity.sh`. The
+v5 gate brackets private v3 storage and single Docker-info observations with
+three exact root-status proofs. It binds the live socket/server/data root,
+root ready digest, root storage receipt digest, namespace,
+image/loop/UUID/quota-capable-mount identity, declared quota policy, and user projection before applying
 the 6-CPU, 12-GiB-memory, 60-GiB-backing, and 40-GiB-inner-free thresholds.
 Free/total/allocated capacity remains a current observation rather than stable
 identity, so ordinary use or online backing resize cannot strand recovery.
 
-`stop-isolated-docker.sh` pidfd-signals only the exact supervisor. The
-supervisor drains dockerd/provider children, reaps dockerd and containerd,
-removes task network-namespace mounts, deactivates storage while its private
-namespace still exists, writes the stop receipt, removes its root-only runtime
-root, and exits last. Persistent image/UUID state remains recoverable across a
-fresh private namespace after reboot. After exact stop, the separate
+One deterministic root-owned `/run` lease serializes start, stop, and recovery
+for the boot and is never unlinked while the boot is live. Stop invokes the
+root-custodied supervisor snapshot, which pidfd-signals only the exact recorded
+supervisor. The supervisor drains dockerd and containerd, removes the caller
+socket, cleans task network namespaces, deactivates storage, writes a root stop
+manifest, and exits. The outside recovery process then proves the task cgroup
+empty (or writes to its exact `cgroup.kill` and waits for `populated 0`),
+descriptor-removes the ephemeral runtime root, removes the empty cgroup, and
+publishes the caller stop projection. A killed supervisor follows the same
+bounded recovery path; no descendant discovery guess is used. Persistent
+image/UUID state remains recoverable across a fresh private namespace after
+reboot. After exact stop, the separate
 `remove-runner-storage.sh` operation can durably remove the user projection,
-root receipt, image, target, lock, and empty authority root. No boot unit,
+root receipt, image, target, outer daemon roots, and empty authority root, then
+remove the durable claim last. No boot unit,
 shared daemon config, global `/home` propagation mutation, or namespace bind
 pin is installed.
 
