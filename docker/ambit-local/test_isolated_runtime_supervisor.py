@@ -441,7 +441,7 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
                 [],
                 [],
             ),
-        ):
+        ), mock.patch.object(MODULE, "require_legacy_v3_transition_terminal"):
             with self.assertRaisesRegex(MODULE.SupervisorError, "another C16b runtime"):
                 MODULE.require_no_other_task_runtime(STATE_ROOT)
         with mock.patch.object(
@@ -454,7 +454,7 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
                 [],
                 ["ambit-c16b-docker-1577287b8182"],
             ),
-        ):
+        ), mock.patch.object(MODULE, "require_legacy_v3_transition_terminal"):
             with self.assertRaisesRegex(MODULE.SupervisorError, "legacy /tmp C16b runtime"):
                 MODULE.require_no_other_task_runtime(STATE_ROOT)
 
@@ -2248,6 +2248,100 @@ class RuntimeSupervisorSourceBoundaryTest(unittest.TestCase):
             "STORAGE_IDENTITY_VERIFIER_NAME",
         ):
             self.assertIn(name, snapshot_region)
+
+class LegacyV3TransitionBarrierTest(unittest.TestCase):
+    def test_complete_truth_table(self) -> None:
+        for source in (False, True):
+            for control in (False, True):
+                for archive in (False, True):
+                    with self.subTest(source=source, control=control, archive=archive):
+                        self.assertEqual(
+                            MODULE.legacy_v3_transition_blocked(
+                                source_exact=source,
+                                control_present=control,
+                                terminal_archive_exact=archive,
+                            ),
+                            source or (control and not archive),
+                        )
+
+    def test_observer_is_global_and_archive_is_the_only_control_handoff(self) -> None:
+        def present(path: Path) -> bool:
+            return path in {
+                MODULE.LEGACY_V3_LIVE_RECEIPT,
+                MODULE.LEGACY_V3_CONTROL_ROOT,
+            }
+
+        def exact(path: Path, *, require_terminal_identity: bool) -> bool:
+            return path == MODULE.LEGACY_V3_LIVE_RECEIPT and not require_terminal_identity
+
+        with mock.patch.object(MODULE, "path_exists_nofollow", side_effect=present), mock.patch.object(
+            MODULE, "_legacy_v3_regular_digest", side_effect=exact
+        ), self.assertRaisesRegex(MODULE.SupervisorError, "not terminally archived"):
+            MODULE.require_legacy_v3_transition_terminal()
+
+        def terminal_present(path: Path) -> bool:
+            return path == MODULE.LEGACY_V3_CONTROL_ROOT
+
+        def terminal_exact(path: Path, *, require_terminal_identity: bool) -> bool:
+            return path == MODULE.LEGACY_V3_TERMINAL_ARCHIVE and require_terminal_identity
+
+        with mock.patch.object(
+            MODULE, "path_exists_nofollow", side_effect=terminal_present
+        ), mock.patch.object(
+            MODULE, "_legacy_v3_regular_digest", side_effect=terminal_exact
+        ):
+            MODULE.require_legacy_v3_transition_terminal()
+
+    def test_wrong_digest_or_malformed_source_is_not_the_singleton(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "receipt.json"
+            for content in (b"not-json", b'{"schema":"ambit.local-daytona-isolated-docker/v3"}'):
+                with self.subTest(content=content):
+                    path.write_bytes(content)
+                    self.assertFalse(
+                        MODULE._legacy_v3_regular_digest(
+                            path,
+                            require_terminal_identity=False,
+                        )
+                    )
+
+    def test_barrier_uses_literal_paths_digest_and_no_legacy_mutation(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        region = source[
+            source.index("def legacy_v3_transition_blocked")
+            : source.index("def read_root_manifest")
+        ]
+        self.assertIn(str(MODULE.LEGACY_V3_STATE_ROOT), source)
+        self.assertIn(MODULE.LEGACY_V3_RECEIPT_SHA256, source)
+        self.assertIn(str(MODULE.LEGACY_V3_CONTROL_ROOT), source)
+        self.assertNotIn("LEGACY_V3_DRAIN_ROOT_RE", source)
+        for mutation in ("os.unlink", "os.rename", "os.replace", "os.write", "os.mkdir"):
+            self.assertNotIn(mutation, region)
+        self.assertNotIn("control.json", region)
+        self.assertNotIn("state.json", region)
+
+    def test_shared_observer_remains_central_to_all_runtime_routes(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("require_legacy_v3_transition_terminal()", source)
+        for marker in (
+            "def recover_existing_runtime",
+            "def runtime_status",
+            "def ensure_runtime_stopped",
+            "def ensure_orphaned_runtime_stopped",
+        ):
+            self.assertIn(marker, source)
+        self.assertGreaterEqual(source.count("require_no_other_task_runtime("), 8)
+
+    def test_all_three_launcher_pins_match_supervisor(self) -> None:
+        digest = hashlib.sha256(SCRIPT.read_bytes()).hexdigest()
+        for name in (
+            "start-isolated-docker.sh",
+            "stop-isolated-docker.sh",
+            "verify-host-capacity.sh",
+        ):
+            with self.subTest(name=name):
+                value = SCRIPT.with_name(name).read_text(encoding="utf-8")
+                self.assertIn(f"supervisor_sha256={digest}", value)
 
 
 if __name__ == "__main__":

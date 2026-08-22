@@ -57,6 +57,15 @@ RUNTIME_ROOT_RE = re.compile(r"^/run/ambit-c16b-docker-[0-9a-f]{12}$")
 RUNTIME_REMOVAL_ROOT_RE = re.compile(
     r"^/run/ambit-c16b-docker-removing-[0-9a-f]{12}$"
 )
+LEGACY_V3_STATE_ROOT = Path("/home/bote/m/.local/ambit-daytona-c16b/state")
+LEGACY_V3_RECEIPT_SHA256 = (
+    "c7b6f7f5f77ae5569a918cd33a811aa855b781f3c007df6f9f19bf1d3f458c21"
+)
+LEGACY_V3_LIVE_RECEIPT = LEGACY_V3_STATE_ROOT / "evidence/outer-docker-receipt.json"
+LEGACY_V3_TERMINAL_ARCHIVE = LEGACY_V3_STATE_ROOT / (
+    "evidence/outer-docker-receipt.legacy-v3-c7b6f7f5f77ae556.json"
+)
+LEGACY_V3_CONTROL_ROOT = Path("/run/ambit-c16b-legacy-v3-drain-1577287b8182")
 SOCKET_ROOT_RE = re.compile(r"^/run/ambit-c16b-docker-api-[0-9a-f]{12}$")
 LEASE_PATH_RE = re.compile(r"^/run/ambit-c16b-docker-global\.lock$")
 CGROUP_PARENT = Path("/sys/fs/cgroup")
@@ -2516,6 +2525,96 @@ def path_exists_nofollow(path: Path) -> bool:
         return False
 
 
+def legacy_v3_transition_blocked(
+    *,
+    source_exact: bool,
+    control_present: bool,
+    terminal_archive_exact: bool,
+) -> bool:
+    return source_exact or (control_present and not terminal_archive_exact)
+
+
+def _legacy_v3_regular_digest(
+    path: Path,
+    *,
+    require_terminal_identity: bool,
+) -> bool:
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except (FileNotFoundError, OSError):
+        return False
+    try:
+        observed = os.fstat(descriptor)
+        if not (
+            stat.S_ISREG(observed.st_mode)
+            and 0 < observed.st_size <= 2 * 1024 * 1024
+        ):
+            return False
+        if require_terminal_identity and not (
+            observed.st_uid == 0
+            and observed.st_gid == 0
+            and stat.S_IMODE(observed.st_mode) == 0o400
+            and observed.st_nlink == 1
+        ):
+            return False
+        raw = _read_fd_all(descriptor, limit=2 * 1024 * 1024)
+        after = os.fstat(descriptor)
+        literal = os.stat(path, follow_symlinks=False)
+        if not (
+            len(raw) == observed.st_size
+            and (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_uid,
+                after.st_gid,
+                stat.S_IMODE(after.st_mode),
+                after.st_nlink,
+            )
+            == (
+                observed.st_dev,
+                observed.st_ino,
+                observed.st_size,
+                observed.st_uid,
+                observed.st_gid,
+                stat.S_IMODE(observed.st_mode),
+                observed.st_nlink,
+            )
+            and (literal.st_dev, literal.st_ino)
+            == (observed.st_dev, observed.st_ino)
+        ):
+            return False
+        return hashlib.sha256(raw).hexdigest() == LEGACY_V3_RECEIPT_SHA256
+    except (OSError, SupervisorError):
+        return False
+    finally:
+        os.close(descriptor)
+
+
+def require_legacy_v3_transition_terminal() -> None:
+    source_present = path_exists_nofollow(LEGACY_V3_LIVE_RECEIPT)
+    source_exact = _legacy_v3_regular_digest(
+        LEGACY_V3_LIVE_RECEIPT,
+        require_terminal_identity=False,
+    )
+    control_present = path_exists_nofollow(LEGACY_V3_CONTROL_ROOT)
+    terminal_archive_exact = (
+        not source_present
+        and _legacy_v3_regular_digest(
+            LEGACY_V3_TERMINAL_ARCHIVE,
+            require_terminal_identity=True,
+        )
+    )
+    require(
+        not legacy_v3_transition_blocked(
+            source_exact=source_exact,
+            control_present=control_present,
+            terminal_archive_exact=terminal_archive_exact,
+        ),
+        "exact legacy v3 runtime transition is not terminally archived",
+    )
+
+
 def require_no_other_task_runtime(state_root: Path) -> None:
     expected_runtime = runtime_root_for(state_root).name
     expected_removal = runtime_removal_root_for(state_root).name
@@ -2537,6 +2636,7 @@ def require_no_other_task_runtime(state_root: Path) -> None:
         "another C16b runtime authority exists; use its original STATE_ROOT binding: "
         + ",".join(sorted(foreign)),
     )
+    require_legacy_v3_transition_terminal()
     legacy_tmp = tuple(
         sorted(
             str(Path("/tmp") / name)
