@@ -47,7 +47,7 @@ helper_operation=remove-authority
 
 script_dir=$(cd "$(/usr/bin/dirname -- "${BASH_SOURCE[0]}")" && /usr/bin/pwd -P)
 lifecycle_helper=${script_dir}/runner-storage-lifecycle.py
-lifecycle_helper_sha256=7301c32705fb6f5c459f98a96d07b9ae0b50092f6ad0cdcbf53f72d6fc313918
+lifecycle_helper_sha256=9e0f3c488ac553d2ea1f8af150c4ef5477fd426e5921ad6d80ddb839bb40e94c
 [[ -f ${lifecycle_helper} && ! -L ${lifecycle_helper} ]] || {
   echo 'runner storage lifecycle helper is absent or unsafe' >&2
   exit 66

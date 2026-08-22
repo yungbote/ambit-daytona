@@ -223,7 +223,10 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
             result = MODULE.ensure_orphaned_runtime_stopped(STATE_ROOT, 1000, 1000)
         self.assertEqual(result["outcome"], "passed")
         acquire.assert_called_once_with(STATE_ROOT)
-        singleton.assert_called_once_with(STATE_ROOT)
+        self.assertEqual(
+            singleton.call_args_list,
+            [mock.call(STATE_ROOT), mock.call(STATE_ROOT)],
+        )
         lease.close.assert_called_once_with()
 
         competing = mock.Mock()
@@ -235,6 +238,8 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
             MODULE.RuntimeLease,
             "acquire",
             return_value=competing,
+        ), mock.patch.object(
+            MODULE, "require_no_other_task_runtime"
         ), self.assertRaisesRegex(
             MODULE.SupervisorError,
             "appeared while acquiring the global lease",
@@ -483,9 +488,12 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         ensure = source[source.index("def ensure_runtime_stopped") : source.index("def ensure_orphaned_runtime_stopped")]
         validated = ensure.index("_validated_existing_authorities(")
         signal_call = ensure.index('process_authority["signal_recorded_process"]')
-        cgroup_kill = ensure.index("kill_cgroup_and_wait(")
         self.assertLess(validated, signal_call)
-        self.assertLess(validated, cgroup_kill)
+        self.assertNotIn("kill_cgroup_and_wait(", ensure)
+        self.assertLess(
+            ensure.index("acquire_runtime_lease_until(", signal_call),
+            ensure.index("supervisor.recover_existing_runtime()"),
+        )
         self.assertNotIn("CONTROL_RECEIPT_NAME", ensure[:signal_call])
 
     def test_real_docker_daemon_id_contract_is_bounded_and_opaque(self) -> None:
@@ -879,6 +887,79 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
             MODULE.mount_references_under(run_backed, runtime),
             ("/outside/docker.sock",),
         )
+        task = runtime / "docker-exec/netns/task-1"
+        source_namespace = (
+            "20 1 8:1 / / rw - ext4 /dev/root rw\n"
+            "21 20 0:31 / /run rw - tmpfs tmpfs rw\n"
+            f"22 21 0:42 / {task} rw - nsfs nsfs rw\n"
+        )
+        source_anchors = MODULE.mount_source_anchors(source_namespace, runtime)
+        self.assertIn(("0:42", Path("/")), source_anchors)
+        foreign_namespace_after_source_unmount = (
+            "20 1 8:1 / / rw - ext4 /dev/root rw\n"
+            "21 20 0:31 / /run rw - tmpfs tmpfs rw\n"
+            "22 20 0:42 / /outside/task-1 rw - nsfs nsfs rw\n"
+        )
+        self.assertEqual(
+            MODULE.mount_references_under(
+                foreign_namespace_after_source_unmount,
+                runtime,
+                source_anchors,
+            ),
+            ("/outside/task-1",),
+        )
+
+    def test_task_netns_cleanup_carries_source_anchors_across_unmount(self) -> None:
+        supervisor = MODULE.RuntimeSupervisor(STATE_ROOT, 1000, 1000)
+        supervisor.runtime_identity = MODULE.RuntimeIdentity(
+            MODULE.runtime_root_for(STATE_ROOT), 21, 22, 0, 0, 0o700
+        )
+        supervisor.namespace = NAMESPACE
+        target = supervisor.runtime_identity.path / "docker-exec/netns/task-1"
+        mounted = (
+            "20 1 8:1 / / rw - ext4 /dev/root rw\n"
+            "21 20 0:31 / /run rw - tmpfs tmpfs rw\n"
+            f"22 21 0:42 / {target} rw - nsfs nsfs rw\n"
+        )
+        expected = (("4:19", str(target)),)
+        with mock.patch.object(
+            MODULE.Path,
+            "read_text",
+            side_effect=(mounted, mounted, "20 1 8:1 / / rw - ext4 /dev/root rw\n"),
+        ), mock.patch.object(
+            MODULE,
+            "stable_global_mount_targets",
+            side_effect=(expected, ()),
+        ) as stable, mock.patch.object(
+            MODULE.subprocess, "run"
+        ) as run, mock.patch.object(
+            MODULE, "require_exact_children"
+        ):
+            supervisor.cleanup_task_netns()
+        run.assert_called_once()
+        self.assertEqual(stable.call_count, 2)
+        first_anchors = stable.call_args_list[0].kwargs["source_anchors"]
+        self.assertIn(("0:42", Path("/")), first_anchors)
+        self.assertEqual(stable.call_args_list[1].kwargs["source_anchors"], first_anchors)
+
+    def test_every_stop_route_scans_foreign_authorities_before_signal(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        bound = source[
+            source.index("def ensure_runtime_stopped(") : source.index(
+                "def ensure_orphaned_runtime_stopped("
+            )
+        ]
+        orphaned = source[
+            source.index("def ensure_orphaned_runtime_stopped(") : source.index(
+                "def parser()"
+            )
+        ]
+        for name, body in (("bound", bound), ("orphaned", orphaned)):
+            with self.subTest(route=name):
+                self.assertLess(
+                    body.index("require_no_other_task_runtime(state_root)"),
+                    body.index('process_authority["signal_recorded_process"]'),
+                )
 
     def test_pinned_loader_ignores_hostile_cwd_and_pythonpath(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

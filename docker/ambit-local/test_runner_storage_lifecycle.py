@@ -311,7 +311,12 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
         ]
         self.assertLess(migration.index("create_claim("), migration.index("os.unlink(RECEIPT_NAME"))
         self.assertIn("seal_claim(home_fd, claim_name, claim_bytes)", migration)
-        self.assertIn("remove_legacy_receipt_temporaries(root_fd)", migration)
+        self.assertIn("LEGACY_RECEIPT_TEMP_NAME", migration)
+        self.assertIn("LEGACY_PROJECTION_TEMP_NAME", migration)
+        self.assertLess(
+            migration.index("seal_claim(home_fd, claim_name, claim_bytes)"),
+            migration.index("LEGACY_PROJECTION_TEMP_NAME"),
+        )
         self.assertIn("unpublished pending claim; admin recovery is required", migration)
         self.assertIn("remove-legacy-v2-authority", source)
         wrapper = SCRIPT.with_name("remove-runner-storage.sh").read_text(encoding="utf-8")
@@ -366,39 +371,67 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
                     image_stat=image_stat,
                 )
 
-    def test_legacy_v2_random_receipt_temporary_is_a_typed_reducible_prefix(self) -> None:
+    def test_legacy_v2_random_atomic_temporaries_are_typed_reducible_prefixes(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="runner-legacy-receipt-temp-", dir=temporary_parent()
         ) as directory:
             root_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
-            temporary = Path(directory) / ".storage-receipt.json.123.0123456789abcdef"
-            temporary.write_bytes(b"partial")
-            temporary.chmod(0o600)
-            foreign = Path(directory) / ".storage-receipt.json.bad"
-            foreign.write_bytes(b"preserve")
             real_fstat = os.fstat
 
-            def root_owned_regular(descriptor: int):
-                value = real_fstat(descriptor)
-                if descriptor == root_fd or not stat.S_ISREG(value.st_mode):
-                    return value
-                return mock.Mock(
-                    st_mode=stat.S_IFREG | 0o600,
-                    st_uid=0,
-                    st_gid=0,
-                    st_dev=value.st_dev,
-                    st_ino=value.st_ino,
-                    st_nlink=value.st_nlink,
-                    st_size=value.st_size,
-                )
-
             try:
-                with mock.patch.object(MODULE.os, "fstat", side_effect=root_owned_regular):
-                    MODULE.remove_legacy_receipt_temporaries(root_fd)
+                for pattern, admitted_name, foreign_name, label, owner_uid, owner_gid in (
+                    (
+                        MODULE.LEGACY_RECEIPT_TEMP_NAME,
+                        ".storage-receipt.json.123.0123456789abcdef",
+                        ".storage-receipt.json.bad",
+                        "authority receipt",
+                        0,
+                        0,
+                    ),
+                    (
+                        MODULE.LEGACY_PROJECTION_TEMP_NAME,
+                        ".runner-docker-storage.json.456.fedcba9876543210",
+                        ".runner-docker-storage.json.bad",
+                        "user projection",
+                        1000,
+                        100,
+                    ),
+                ):
+                    with self.subTest(label=label):
+                        temporary = Path(directory) / admitted_name
+                        temporary.write_bytes(b"partial")
+                        temporary.chmod(0o600)
+                        foreign = Path(directory) / foreign_name
+                        foreign.write_bytes(b"preserve")
+
+                        def owned_regular(descriptor: int):
+                            value = real_fstat(descriptor)
+                            if descriptor == root_fd or not stat.S_ISREG(value.st_mode):
+                                return value
+                            return mock.Mock(
+                                st_mode=stat.S_IFREG | 0o600,
+                                st_uid=owner_uid,
+                                st_gid=owner_gid,
+                                st_dev=value.st_dev,
+                                st_ino=value.st_ino,
+                                st_nlink=value.st_nlink,
+                                st_size=value.st_size,
+                            )
+
+                        with mock.patch.object(
+                            MODULE.os, "fstat", side_effect=owned_regular
+                        ):
+                            MODULE.remove_legacy_atomic_temporaries(
+                                root_fd,
+                                pattern,
+                                owner_uid=owner_uid,
+                                owner_gid=owner_gid,
+                                label=label,
+                            )
+                        self.assertFalse(temporary.exists())
+                        self.assertTrue(foreign.exists())
             finally:
                 os.close(root_fd)
-            self.assertFalse(temporary.exists())
-            self.assertTrue(foreign.exists())
 
     def test_absolute_directory_walk_rejects_parent_and_leaf_symlinks(self) -> None:
         with tempfile.TemporaryDirectory(

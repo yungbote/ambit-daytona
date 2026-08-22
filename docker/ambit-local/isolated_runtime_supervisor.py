@@ -79,7 +79,7 @@ PROCESS_IDENTITY_NAME = "isolated_process_identity.py"
 SUPERVISOR_SNAPSHOT_NAME = "isolated_runtime_supervisor.py"
 PROCESS_IDENTITY_SHA256 = "8dc76b554bc5dd7810f217a0c5b082ada500d3bb9d0c5afce46e5415ed983b2c"
 STORAGE_LIFECYCLE_NAME = "runner-storage-lifecycle.py"
-STORAGE_LIFECYCLE_SHA256 = "7301c32705fb6f5c459f98a96d07b9ae0b50092f6ad0cdcbf53f72d6fc313918"
+STORAGE_LIFECYCLE_SHA256 = "9e0f3c488ac553d2ea1f8af150c4ef5477fd426e5921ad6d80ddb839bb40e94c"
 STORAGE_IDENTITY_VERIFIER_NAME = "verify-runner-storage.py"
 STORAGE_IDENTITY_VERIFIER_SHA256 = (
     "59c530e8c502c546689967c33c540217d2762ff9d3f8ef7424ba52462c554f0b"
@@ -1086,7 +1086,7 @@ def reject_legacy_v4_runtime_roster(runtime_identity: RuntimeIdentity) -> None:
         raise SupervisorError(LEGACY_V4_DIAGNOSTIC)
 
 
-def mount_references_under(raw_mountinfo: str, root: Path) -> tuple[str, ...]:
+def mount_records(raw_mountinfo: str) -> tuple[tuple[str, Path, Path], ...]:
     records: list[tuple[str, Path, Path]] = []
     for line in raw_mountinfo.splitlines():
         fields = line.split()
@@ -1095,43 +1095,107 @@ def mount_references_under(raw_mountinfo: str, root: Path) -> tuple[str, ...]:
         target = Path(decode_mount_path(fields[4]))
         require(mount_root.is_absolute() and target.is_absolute(), "mountinfo path is not absolute")
         records.append((fields[2], mount_root, target))
+    return tuple(records)
+
+
+def path_at_or_below(candidate: Path, root: Path) -> bool:
+    require(candidate.is_absolute() and root.is_absolute(), "mount path is not absolute")
+    try:
+        candidate.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def mount_source_anchors(
+    raw_mountinfo: str,
+    root: Path,
+) -> tuple[tuple[str, Path], ...]:
+    records = mount_records(raw_mountinfo)
     bases: list[tuple[str, Path, Path]] = []
     for record in records:
-        try:
-            root.relative_to(record[2])
+        if path_at_or_below(root, record[2]):
             bases.append(record)
-        except ValueError:
-            continue
     require(bases, "runtime mount backing record is absent")
-    base_device, base_root, base_target = max(bases, key=lambda item: len(item[2].parts))
-    source_prefix = base_root / root.relative_to(base_target)
+    deepest = max(len(record[2].parts) for record in bases)
+    base_coordinates = {
+        (device, mount_root / root.relative_to(target))
+        for device, mount_root, target in bases
+        if len(target.parts) == deepest
+    }
+    require(len(base_coordinates) == 1, "runtime mount backing coordinate is ambiguous")
+    anchors = set(base_coordinates)
+    anchors.update(
+        (device, mount_root)
+        for device, mount_root, target in records
+        if path_at_or_below(target, root)
+    )
+    return tuple(sorted(anchors, key=lambda value: (value[0], str(value[1]))))
+
+
+def mount_references_under(
+    raw_mountinfo: str,
+    root: Path,
+    source_anchors: tuple[tuple[str, Path], ...] | None = None,
+) -> tuple[str, ...]:
+    records = mount_records(raw_mountinfo)
+    anchors = (
+        mount_source_anchors(raw_mountinfo, root)
+        if source_anchors is None
+        else source_anchors
+    )
+    require(anchors, "runtime mount source anchors are absent")
+    for device, source_prefix in anchors:
+        require(
+            bool(device) and source_prefix.is_absolute(),
+            "runtime mount source anchor is invalid",
+        )
     result: set[str] = set()
     for device, mount_root, target in records:
-        target_reference = False
-        source_reference = False
-        try:
-            target.relative_to(root)
-            target_reference = True
-        except ValueError:
-            pass
-        if device == base_device:
-            try:
-                mount_root.relative_to(source_prefix)
-                source_reference = True
-            except ValueError:
-                pass
+        target_reference = path_at_or_below(target, root)
+        source_reference = any(
+            device == source_device and path_at_or_below(mount_root, source_prefix)
+            for source_device, source_prefix in anchors
+        )
         if target_reference or source_reference:
             result.add(str(target))
     return tuple(sorted(result))
 
 
-def _mount_targets_for_namespace(pid: int, root: Path) -> tuple[str, ...]:
+def _mount_targets_for_namespace(
+    pid: int,
+    root: Path,
+    source_anchors: tuple[tuple[str, Path], ...],
+) -> tuple[str, ...]:
     mountinfo = Path(f"/proc/{pid}/mountinfo").read_text(encoding="utf-8")
-    return mount_references_under(mountinfo, root)
+    return mount_references_under(mountinfo, root, source_anchors)
 
 
-def _global_mount_roster_once(root: Path) -> tuple[tuple[str, tuple[str, ...]], ...]:
-    seen: dict[str, tuple[str, ...]] = {}
+def _global_mount_roster_once(
+    root: Path,
+    source_anchors: tuple[tuple[str, Path], ...] | None = None,
+) -> tuple[
+    tuple[tuple[str, Path], ...],
+    tuple[tuple[str, tuple[str, ...]], ...],
+]:
+    own_before = os.stat("/proc/self/ns/mnt")
+    own_namespace = f"{own_before.st_dev}:{own_before.st_ino}"
+    own_mountinfo = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
+    anchors = source_anchors
+    if anchors is None:
+        anchors = mount_source_anchors(own_mountinfo, root)
+    require(anchors, "runtime mount source anchors are absent")
+    own_after = os.stat("/proc/self/ns/mnt")
+    require(
+        (own_after.st_dev, own_after.st_ino) == (own_before.st_dev, own_before.st_ino),
+        "helper mount namespace changed during source proof",
+    )
+    # Never let a chrooted sibling become the representative for the helper's
+    # own namespace. Its exact mountinfo supplied the source anchors and is the
+    # corresponding canonical target observation.
+    seen: dict[str, tuple[str, ...]] = {
+        own_namespace: mount_references_under(own_mountinfo, root, anchors)
+    }
     entries = tuple(sorted(os.listdir("/proc")))
     for entry in entries:
         if not entry.isdigit():
@@ -1156,7 +1220,7 @@ def _global_mount_roster_once(root: Path) -> tuple[tuple[str, tuple[str, ...]], 
             )
             continue
         try:
-            targets = _mount_targets_for_namespace(pid, root)
+            targets = _mount_targets_for_namespace(pid, root, anchors)
             after = os.stat(namespace_path)
         except OSError as error:
             raise SupervisorError(f"mount namespace disappeared for pid {pid}") from error
@@ -1165,15 +1229,20 @@ def _global_mount_roster_once(root: Path) -> tuple[tuple[str, tuple[str, ...]], 
             f"mount namespace changed for pid {pid}",
         )
         seen[namespace] = targets
-    return tuple(sorted(seen.items()))
+    return anchors, tuple(sorted(seen.items()))
 
 
-def stable_global_mount_targets(root: Path) -> tuple[tuple[str, str], ...]:
-    first = _global_mount_roster_once(root)
-    second = _global_mount_roster_once(root)
+def stable_global_mount_targets(
+    root: Path,
+    *,
+    source_anchors: tuple[tuple[str, Path], ...] | None = None,
+) -> tuple[tuple[str, str], ...]:
+    first = _global_mount_roster_once(root, source_anchors)
+    second = _global_mount_roster_once(root, source_anchors)
     require(first == second, "global mount namespace or target roster changed")
+    _, roster = second
     return tuple(
-        sorted((namespace, target) for namespace, targets in second for target in targets)
+        sorted((namespace, target) for namespace, targets in roster for target in targets)
     )
 
 
@@ -3788,8 +3857,29 @@ class RuntimeSupervisor:
 
     def cleanup_task_netns(self) -> None:
         require(self.runtime_identity is not None, "runtime identity is absent")
+        require(self.namespace is not None, "runtime mount namespace is absent")
         raw = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
         for target in task_netns_mounts(self.runtime_identity.path, raw):
+            current_mountinfo = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
+            require(
+                target in task_netns_mounts(self.runtime_identity.path, current_mountinfo),
+                "task network namespace mount disappeared before global proof",
+            )
+            source_anchors = mount_source_anchors(current_mountinfo, target)
+            expected_occurrence = (
+                (
+                    f"{self.namespace['device']}:{self.namespace['inode']}",
+                    str(target),
+                ),
+            )
+            require(
+                stable_global_mount_targets(
+                    target,
+                    source_anchors=source_anchors,
+                )
+                == expected_occurrence,
+                "task network namespace mount has a foreign bind occurrence",
+            )
             subprocess.run(
                 [str(UMOUNT), "--", str(target)],
                 check=True,
@@ -3801,6 +3891,13 @@ class RuntimeSupervisor:
                 env={"PATH": "/usr/bin:/bin", "LC_ALL": "C.UTF-8"},
             )
             require_exact_children(self.expected_child_pids())
+            require(
+                not stable_global_mount_targets(
+                    target,
+                    source_anchors=source_anchors,
+                ),
+                "task network namespace bind remained after source unmount",
+            )
         remaining = task_netns_mounts(
             self.runtime_identity.path,
             Path("/proc/self/mountinfo").read_text(encoding="utf-8"),
@@ -4166,6 +4263,10 @@ def ensure_runtime_stopped(
     state = StateAuthority.open(state_root, caller_uid, caller_gid)
     lease: RuntimeLease | None = None
     try:
+        # Refuse every signal/kill while a second task authority makes the
+        # singleton state ambiguous. The global lease prevents a new v5 start
+        # after this proof while the admitted target supervisor is active.
+        require_no_other_task_runtime(state_root)
         try:
             lease = RuntimeLease.acquire(state_root)
         except SupervisorError as error:
@@ -4205,6 +4306,7 @@ def ensure_runtime_stopped(
             )
         if lease is None:
             assert validated is not None and process_authority is not None
+            require_no_other_task_runtime(state_root)
             try:
                 process_authority["signal_recorded_process"](
                     validated["supervisor"],
@@ -4214,9 +4316,12 @@ def ensure_runtime_stopped(
                     exit_timeout_seconds=720.0,
                 )
             except process_authority["ProcessIdentityError"]:
-                # The immutable cgroup, rather than a recycled numeric PID, is
-                # the recovery authority for every surviving descendant.
-                kill_cgroup_and_wait(validated["cgroup"], timeout=60.0)
+                # A dead supervisor releases the lease. Do not mutate its
+                # cgroup while some other holder still owns the global
+                # transition; recovery below performs the cgroup kill only
+                # after this process acquires that lease and revalidates the
+                # root control authority.
+                pass
             lease = acquire_runtime_lease_until(state_root, timeout=60.0)
 
         supervisor = RuntimeSupervisor(state_root, caller_uid, caller_gid)
@@ -4253,6 +4358,7 @@ def ensure_orphaned_runtime_stopped(
     runtime_path = runtime_root_for(state_root)
     socket_path = socket_root_for(state_root)
     cgroup_path = cgroup_path_for(state_root)
+    require_no_other_task_runtime(state_root)
     if not path_exists_nofollow(runtime_path):
         lease = RuntimeLease.acquire(state_root)
         try:
@@ -4297,6 +4403,7 @@ def ensure_orphaned_runtime_stopped(
             lease = RuntimeLease.acquire(state_root)
         except SupervisorError as error:
             require(str(error) == "runtime lifecycle lease is busy", str(error))
+            require_no_other_task_runtime(state_root)
             try:
                 process_authority["signal_recorded_process"](
                     validated["supervisor"],
@@ -4306,7 +4413,7 @@ def ensure_orphaned_runtime_stopped(
                     exit_timeout_seconds=720.0,
                 )
             except process_authority["ProcessIdentityError"]:
-                kill_cgroup_and_wait(validated["cgroup"], timeout=60.0)
+                pass
             lease = acquire_runtime_lease_until(state_root, timeout=60.0)
         state, _, _, _, _ = _validated_orphaned_authorities(
             state_root,

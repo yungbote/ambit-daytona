@@ -31,6 +31,9 @@ LEGACY_LOCK_NAME = "lifecycle.lock"
 LEGACY_RECEIPT_TEMP_NAME = re.compile(
     r"^\.storage-receipt\.json\.[1-9][0-9]*\.[0-9a-f]{16}$"
 )
+LEGACY_PROJECTION_TEMP_NAME = re.compile(
+    r"^\.runner-docker-storage\.json\.[1-9][0-9]*\.[0-9a-f]{16}$"
+)
 IMAGE_NAME = "runner-docker.xfs"
 TARGET_NAME = "runner-docker"
 RUNNER_DATA_NAME = "inner-runner"
@@ -2907,34 +2910,41 @@ def validate_legacy_v2_removal_receipt(
     )
 
 
-def remove_legacy_receipt_temporaries(root_fd: int) -> None:
+def remove_legacy_atomic_temporaries(
+    directory_fd: int,
+    pattern: re.Pattern[str],
+    *,
+    owner_uid: int,
+    owner_gid: int,
+    label: str,
+) -> None:
     names = tuple(
         sorted(
             name
-            for name in os.listdir(root_fd)
-            if LEGACY_RECEIPT_TEMP_NAME.fullmatch(name) is not None
+            for name in os.listdir(directory_fd)
+            if pattern.fullmatch(name) is not None
         )
     )
     for name in names:
-        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=root_fd)
+        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
         try:
-            require_descriptor_entry(root_fd, name, descriptor)
+            require_descriptor_entry(directory_fd, name, descriptor)
             observed = os.fstat(descriptor)
             require(
                 stat.S_ISREG(observed.st_mode)
-                and observed.st_uid == 0
-                and observed.st_gid == 0
+                and observed.st_uid == owner_uid
+                and observed.st_gid == owner_gid
                 and stat.S_IMODE(observed.st_mode) == 0o600
-                and observed.st_dev == os.fstat(root_fd).st_dev
+                and observed.st_dev == os.fstat(directory_fd).st_dev
                 and observed.st_nlink == 1
                 and 0 <= observed.st_size <= MAX_DOCUMENT_BYTES,
-                "legacy receipt temporary identity differs",
+                f"legacy {label} temporary identity differs",
             )
-            os.unlink(name, dir_fd=root_fd)
+            os.unlink(name, dir_fd=directory_fd)
         finally:
             os.close(descriptor)
     if names:
-        os.fsync(root_fd)
+        os.fsync(directory_fd)
 
 
 def migrate_legacy_v2_for_removal(args: argparse.Namespace) -> None:
@@ -3030,7 +3040,20 @@ def migrate_legacy_v2_for_removal(args: argparse.Namespace) -> None:
             create_claim(home_fd, claim_name, claim_bytes)
         else:
             seal_claim(home_fd, claim_name, claim_bytes)
-        remove_legacy_receipt_temporaries(root_fd)
+        remove_legacy_atomic_temporaries(
+            root_fd,
+            LEGACY_RECEIPT_TEMP_NAME,
+            owner_uid=0,
+            owner_gid=0,
+            label="authority receipt",
+        )
+        remove_legacy_atomic_temporaries(
+            evidence_fd,
+            LEGACY_PROJECTION_TEMP_NAME,
+            owner_uid=args.caller_uid,
+            owner_gid=args.caller_gid,
+            label="user projection",
+        )
         if legacy_lock is not None:
             os.unlink(LEGACY_LOCK_NAME, dir_fd=root_fd)
             os.fsync(root_fd)

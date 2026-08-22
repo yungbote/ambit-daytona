@@ -113,7 +113,8 @@ versions are never reinterpreted as v3. `remove-runner-storage.sh --legacy-v2`
 is a separate remove-only transition for a fully published v2 authority: it
 re-proves the exact existing state/image/receipt, retains the old lifecycle
 flock, publishes the v3 claim before mutation, reduces only the historical
-fixed-shape random receipt temporaries, then removes the legacy lock and receipt
+fixed-shape random authority-receipt and user-projection temporaries, then
+removes the legacy lock and receipt
 before using the ordinary reducer. A prepublication/partial-image v2 authority
 or a migration pending claim beside an authority remains explicit admin
 recovery rather than being silently rebound. Normal activation never adopts
@@ -149,6 +150,12 @@ live acceptance limits, not a claimed global proof. Static tests establish reduc
 do not establish that this host has successfully created the cgroup, mounted
 XFS, enforced project quotas, started the daemon, or completed two live 20 GiB
 sandbox journeys.
+Runtime-root cleanup carries the supervisor namespace's source coordinates
+across every observed namespace as well. Nested filesystems contribute their
+own anchors, and each task nsfs mount must be the sole occurrence in the
+supervisor namespace before unmount. Those pre-unmount anchors remain fixed
+for the post-unmount scan, so a surviving external bind cannot disappear from
+the proof merely because its original source mount was removed.
 
 Pre-v5 `/run` daemon state has no root control or supervisor snapshot and is
 therefore never guessed or auto-adopted by this source. This packet is the
@@ -180,8 +187,10 @@ One deterministic root-owned `/run` lease serializes start, stop, recovery,
 and final storage deletion
 for the boot and is never unlinked while the boot is live. Stop invokes the
 root-custodied supervisor snapshot, which pidfd-signals only the exact recorded
-supervisor. Before draining anything it durably publishes a root stopping
-intent, so every later daemon/socket/storage cutpoint is classifiable. The
+supervisor. Both bound and orphaned stop paths reject a foreign runtime,
+socket, cgroup, or legacy `/tmp` authority before any process signal or cgroup
+kill. Before draining anything the admitted supervisor durably publishes a
+root stopping intent, so every later daemon/socket/storage cutpoint is classifiable. The
 supervisor drains dockerd and containerd, removes the caller
 socket, cleans task network namespaces, deactivates storage, writes a root stop
 manifest, and exits. The outside recovery process then proves the task cgroup
