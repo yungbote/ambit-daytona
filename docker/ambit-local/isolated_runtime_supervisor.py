@@ -65,6 +65,9 @@ LEGACY_V3_LIVE_RECEIPT = LEGACY_V3_STATE_ROOT / "evidence/outer-docker-receipt.j
 LEGACY_V3_TERMINAL_ARCHIVE = LEGACY_V3_STATE_ROOT / (
     "evidence/outer-docker-receipt.legacy-v3-c7b6f7f5f77ae556.json"
 )
+LEGACY_V3_PREPARED_ARCHIVE = LEGACY_V3_STATE_ROOT / (
+    "evidence/.outer-docker-receipt.legacy-v3-c7b6f7f5f77ae556.prepared"
+)
 LEGACY_V3_CONTROL_ROOT = Path("/run/ambit-c16b-legacy-v3-drain-1577287b8182")
 SOCKET_ROOT_RE = re.compile(r"^/run/ambit-c16b-docker-api-[0-9a-f]{12}$")
 LEASE_PATH_RE = re.compile(r"^/run/ambit-c16b-docker-global\.lock$")
@@ -2531,10 +2534,11 @@ def legacy_v3_transition_blocked(
     source_exact: bool,
     control_present: bool,
     archive_present: bool,
+    prepared_present: bool,
     terminal_archive_exact: bool,
 ) -> bool:
     return source_exact or (
-        (source_present or control_present or archive_present)
+        (source_present or control_present or archive_present or prepared_present)
         and not terminal_archive_exact
     )
 
@@ -2559,7 +2563,7 @@ def _legacy_v3_regular_digest(
             observed.st_uid == 0
             and observed.st_gid == 0
             and stat.S_IMODE(observed.st_mode) == 0o400
-            and observed.st_nlink == 1
+            and observed.st_nlink in (1, 2)
         ):
             return False
         raw = _read_fd_all(descriptor, limit=2 * 1024 * 1024)
@@ -2604,6 +2608,7 @@ def require_legacy_v3_transition_terminal() -> None:
     )
     control_present = path_exists_nofollow(LEGACY_V3_CONTROL_ROOT)
     archive_present = path_exists_nofollow(LEGACY_V3_TERMINAL_ARCHIVE)
+    prepared_present = path_exists_nofollow(LEGACY_V3_PREPARED_ARCHIVE)
     terminal_archive_exact = _legacy_v3_regular_digest(
         LEGACY_V3_TERMINAL_ARCHIVE,
         require_terminal_identity=True,
@@ -2614,6 +2619,7 @@ def require_legacy_v3_transition_terminal() -> None:
             source_exact=source_exact,
             control_present=control_present,
             archive_present=archive_present,
+            prepared_present=prepared_present,
             terminal_archive_exact=terminal_archive_exact,
         ),
         "exact legacy v3 runtime transition is not terminally archived",
