@@ -280,7 +280,8 @@ resume /home/bote/m/.local/ambit-daytona-c16b/state
 stable root-level passes over the exact receipt/config/runtime identities,
 pidfd-stabilized daemon/wrapper/shim/task graph, structured argv/cgroup
 relations, runtime paths, mapped files, namespace and socket FDs, descendants,
-Unix socket owners and connected-client roster, every observable mount
+Unix socket owners and the netlink Unix-diagnostic peer/pending-client graph
+(including pathless endpoints), every observable mount
 namespace, the full-ID ambient and owned nsfs occurrences, overlay and
 registry binds, persistent roots, and the complete local registry blob
 inventory. The legacy `procInode` values remain visible as
@@ -289,7 +290,10 @@ argv digest, credentials, namespace, cgroup, and topology remain mandatory.
 Any unreadable namespace, foreign client/process/source target, substituted
 path, unknown runtime entry, changed registry blob, residual v5 cgroup, or
 coexisting v5 authority is a manual blocker. The legacy tool observes but
-never mutates a cgroup.
+never mutates a cgroup. A residual matching v5 cgroup therefore requires a
+separate v5-owned, exact-empty reconciliation before this drain; teaching the
+legacy reducer to adopt it would cross the authority boundary and is
+deliberately not a fallback.
 
 `drain` recomputes that proof under the same boot-global lease used by v5 and
 requires the caller-supplied verification digest. Its sanitized in-sudo loader
@@ -309,39 +313,53 @@ both daemons are gone, the sole admitted mount mutation is an `umount2` through
 the held `/proc/self/fd/<mount-fd>` binding for the exact legacy task nsfs
 occurrence. Mount ID, parent ID, namespace, device, source root, filesystem,
 target, and multiplicity must still equal the recorded roster. The transition
-must reveal the exact root-owned, mode-0600, one-link, zero-byte underlying
-marker and leave precisely the recorded ambient host `default` occurrence.
+binds the held FD's kernel `mnt_id` immediately before `umount2`, must reveal
+the root-owned, mode-0600, one-link, zero-byte underlying marker, persists that
+exact marker device/inode in monotonic state, and leaves precisely the recorded
+ambient host `default` occurrence. Foreign stacks at either admitted target are
+included before source validation rather than filtered out.
 
 The `/tmp` root stays at its legacy name as a root-owned empty marker until its
 separate terminal `rmdir`, so v5 continues to see a blocker through every
 partial cleanup. Before any runtime unlink, one complete descriptor-relative
 preflight validates every remaining recorded entry and the descriptor-bound
-containerd pidfile; a second pass performs the pidfile unlink first and then
-deepest-first runtime reduction. Recorded absences are ordinary response-loss
-replay, while any late foreign entry blocks before destruction. The old outer
-Docker/containerd roots, registry, configs, logs, and registry blobs are
-preserved.
+containerd pidfile; a second pass performs deepest-first runtime reduction.
+The stale pidfile is preserved as immutable legacy config evidence instead of
+introducing a caller-owned-directory unlink race. Recorded runtime-entry
+absences are ordinary response-loss replay, while any late foreign entry
+blocks before destruction. The old outer Docker/containerd roots, registry,
+configs, logs, and registry blobs are preserved.
 
 After exact process, mount, runtime, pidfile, and registry reproof, the reducer
-publishes and revalidates one deterministic root-owned terminal projection,
-transfers the exact live receipt inode to root ownership and mode 0400, and
-durably enters `archive_intent_final`. The final authority mutation is
-descriptor-bound `renameat2(RENAME_NOREPLACE)` of that same inode to
-`outer-docker-receipt.legacy-v3-c7b6f7f5f77ae556.json`, followed by evidence
-directory fsync and exact destination reproof. A destination collision is
-never overwritten; source-plus-destination and neither-source-nor-destination
-are manual blockers. Archive response loss returns the already stored terminal
-bytes without rewriting state or projection. `resume` uses the loader-held
-control-root FD and executes the already-read snapshot bytes in-process, never
-an admitted pathname. A timeout or foreign state stops for an explicit manual
-route; the default tool has no force path.
+transfers the exact live receipt inode through the replayable original,
+root-owned-mode-0600, and root-owned-mode-0400 custody states, then durably
+enters `archive_intent_final`. It publishes and revalidates the deterministic
+root-owned terminal projection from an unnamed `O_TMPFILE` with
+`linkat(AT_EMPTY_PATH)`, so no caller-owned source name can be swapped into the
+publication. The immutable control retains the exact original receipt bytes.
+The reducer constructs the archive in a second root-owned unnamed file,
+descriptor-rewrites the old live inode to a deterministic non-legacy
+tombstone (including partial-tombstone replay), proves that the live path no
+longer has the legacy digest, and links the unnamed exact bytes to
+`outer-docker-receipt.legacy-v3-c7b6f7f5f77ae556.json`. That no-replace link is
+the final authority mutation, followed only by evidence-directory fsync and
+read-only destination reproof. A destination collision is never overwritten;
+an exact legacy digest at both live and archive paths is a manual blocker.
+Archive response loss returns the already stored terminal bytes without
+rewriting state or projection. `resume` uses the loader-held control-root FD
+and executes the already-read snapshot bytes in-process, never an admitted
+pathname. A timeout or foreign state stops for an explicit manual route; the
+default tool has no force path.
 
 The v5 barrier is global across every requested v5 `STATE_ROOT`. V5 recognizes
-only the one literal audited live receipt digest, literal reserved control
-path, and literal root-owned terminal archive. The exact live receipt always
-blocks. A remaining forensic control capsule blocks until the source is absent
-and the exact terminal archive exists; at that moment the no-replace archive is
-the final unblocking mutation. V5 does not parse, resume, repair, delete, or
+only the one literal audited live receipt path and digest, literal reserved
+control path, and literal root-owned terminal archive. Before a terminal
+archive, any occupied audited live path or reserved control path blocks; the
+exact legacy digest always blocks even if an archive also exists. After the
+terminal archive, the deterministic non-legacy tombstone or a later v5 receipt
+may occupy the live path without reviving legacy authority. The unnamed-file
+no-replace archive link is the final unblocking mutation. V5 does not parse,
+resume, repair, delete, or
 write legacy control/state, and regex-like sibling names do not become this
 singleton authority. The compatibility boundary can be deleted as a unit only
 after this local transition and its evidence-retention requirement are

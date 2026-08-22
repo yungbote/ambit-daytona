@@ -39,7 +39,7 @@ caller_gid=$(/usr/bin/id -g)
 script_source=$(/usr/bin/realpath -e -- "${BASH_SOURCE[0]}")
 script_dir=${script_source%/*}
 tool=${script_dir}/legacy_v3_drain.py
-tool_sha256=b9404a9f5d0fe6682a5c85c4eac9ecd97a646d76a6ee2dc3c4804691d94d34bd
+tool_sha256=4a063ea15027613cbcc3db25e7e07f368e8b4cf866775785cecdc583934dc9e2
 control_root=/run/ambit-c16b-legacy-v3-drain-1577287b8182
 
 read -r -d '' pinned_loader <<'PY' || true
@@ -69,7 +69,7 @@ def duplicate_rejector(pairs):
     return value
 
 def canonical(value):
-    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 def read_bound_at(directory_fd, name, maximum, *, expected_device=None):
     descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
@@ -194,6 +194,7 @@ else:
         raise SystemExit("legacy-v3 root control shape differs")
     if not isinstance(state, dict) or set(state) != {
         "schema", "observedAt", "bootId", "stateRoot", "controlSha256", "phase",
+        "netnsMarkerIdentity",
     }:
         raise SystemExit("legacy-v3 root state shape differs")
     with open("/proc/sys/kernel/random/boot_id", encoding="ascii") as boot_file:
@@ -214,6 +215,13 @@ else:
         and hmac.compare_digest(control["verificationSha256"], hashlib.sha256(canonical(control["authority"])).hexdigest())
         and hmac.compare_digest(state["controlSha256"], hashlib.sha256(canonical(control)).hexdigest())
         and state["phase"] in phases
+        and (
+            (state["phase"] in {"mounts_settled", "runtime_reducing", "runtime_empty", "archive_intent_final"}
+             and isinstance(state["netnsMarkerIdentity"], dict))
+            or
+            (state["phase"] not in {"mounts_settled", "runtime_reducing", "runtime_empty", "archive_intent_final"}
+             and state["netnsMarkerIdentity"] is None)
+        )
     ):
         raise SystemExit("legacy-v3 root control binding differs")
     if not hmac.compare_digest(hashlib.sha256(source).hexdigest(), control["sourceSha256"]):
