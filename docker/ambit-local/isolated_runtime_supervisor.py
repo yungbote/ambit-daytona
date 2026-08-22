@@ -37,6 +37,7 @@ START_SCHEMA = "ambit.local-daytona-isolated-docker/v5"
 CONTROL_SCHEMA = "ambit.local-daytona-isolated-docker-control/v2"
 STOP_SCHEMA = "ambit.local-daytona-isolated-docker-stop/v2"
 STOPPING_SCHEMA = "ambit.local-daytona-isolated-docker-stopping/v1"
+NETNS_BASELINE_SCHEMA = "ambit.local-daytona-isolated-docker-netns-baseline/v1"
 NETNS_DETACH_SCHEMA = "ambit.local-daytona-isolated-docker-netns-detach/v1"
 CONTROL_PROJECTION_SCHEMA = "ambit.local-daytona-isolated-docker-control-projection/v1"
 READY_PROJECTION_SCHEMA = "ambit.local-daytona-isolated-docker-ready-projection/v1"
@@ -72,6 +73,16 @@ IMAGE_BYTES = 60 * 1024**3
 SANDBOX_BYTES = 20 * 1024**3
 MAXIMUM_SANDBOXES = 2
 
+MountSourceAnchor = tuple[str, Path]
+MountOccurrence = tuple[str, str]
+AmbientNetnsSource = tuple[MountSourceAnchor, tuple[MountOccurrence, ...]]
+TaskNetnsDetachEntry = tuple[
+    Path,
+    tuple[MountSourceAnchor, ...],
+    tuple[MountOccurrence, ...],
+    tuple[MountOccurrence, ...],
+]
+
 PYTHON = Path("/usr/bin/python3")
 CONTAINERD = Path("/usr/bin/containerd")
 DOCKERD = Path("/usr/bin/dockerd")
@@ -83,7 +94,7 @@ PROCESS_IDENTITY_NAME = "isolated_process_identity.py"
 SUPERVISOR_SNAPSHOT_NAME = "isolated_runtime_supervisor.py"
 PROCESS_IDENTITY_SHA256 = "8dc76b554bc5dd7810f217a0c5b082ada500d3bb9d0c5afce46e5415ed983b2c"
 STORAGE_LIFECYCLE_NAME = "runner-storage-lifecycle.py"
-STORAGE_LIFECYCLE_SHA256 = "2b5fa766935fd427e9469d4bde9367b83d52828107164d87f9fce6ab08010996"
+STORAGE_LIFECYCLE_SHA256 = "d65c17a34facf3072617b965c2d4447ee1749a54721668cb32ab26c5f25d8811"
 STORAGE_IDENTITY_VERIFIER_NAME = "verify-runner-storage.py"
 STORAGE_IDENTITY_VERIFIER_SHA256 = (
     "59c530e8c502c546689967c33c540217d2762ff9d3f8ef7424ba52462c554f0b"
@@ -100,11 +111,13 @@ RUNTIME_REGULAR_ENTRIES = {
     "runtime-control.json",
     "runtime-ready.json",
     "runtime-stopping.json",
+    "runtime-netns-baseline.json",
     "runtime-netns-detach.json",
     "runtime-stop.json",
     ".runtime-control.json.pending",
     ".runtime-ready.json.pending",
     ".runtime-stopping.json.pending",
+    ".runtime-netns-baseline.json.pending",
     ".runtime-netns-detach.json.pending",
     ".runtime-stop.json.pending",
 }
@@ -113,6 +126,7 @@ RUNTIME_SOCKET_ENTRIES = {"containerd.sock", "containerd.sock.ttrpc"}
 ROOT_CONTROL_NAME = "runtime-control.json"
 ROOT_READY_NAME = "runtime-ready.json"
 ROOT_STOPPING_NAME = "runtime-stopping.json"
+ROOT_NETNS_BASELINE_NAME = "runtime-netns-baseline.json"
 ROOT_NETNS_DETACH_NAME = "runtime-netns-detach.json"
 ROOT_STOP_NAME = "runtime-stop.json"
 SOCKET_NAME = "docker.sock"
@@ -828,7 +842,7 @@ def create_cgroup(state_root: Path) -> CgroupIdentity:
             and (observed.st_dev, observed.st_ino) == (literal.st_dev, literal.st_ino),
             "runtime cgroup identity differs",
         )
-        for name in ("cgroup.procs", "cgroup.events", "cgroup.kill"):
+        for name in ("cgroup.procs", "cgroup.events", "cgroup.freeze", "cgroup.kill"):
             value = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
             require(stat.S_ISREG(value.st_mode), f"runtime cgroup control is absent: {name}")
         require(_read_at(descriptor, "cgroup.type").strip() == "domain", "runtime cgroup type differs")
@@ -938,7 +952,7 @@ def enter_cgroup(identity: CgroupIdentity) -> None:
     )
 
 
-def cgroup_is_populated(identity: CgroupIdentity) -> bool:
+def cgroup_events(identity: CgroupIdentity) -> dict[str, str]:
     descriptor = open_cgroup(identity)
     try:
         fields: dict[str, str] = {}
@@ -947,9 +961,28 @@ def cgroup_is_populated(identity: CgroupIdentity) -> bool:
             require(len(parts) == 2 and parts[0] not in fields, "cgroup events record is invalid")
             fields[parts[0]] = parts[1]
         require(fields.get("populated") in ("0", "1"), "cgroup populated state is absent")
-        return fields["populated"] == "1"
+        require(fields.get("frozen") in ("0", "1"), "cgroup frozen state is absent")
+        return fields
     finally:
         os.close(descriptor)
+
+
+def cgroup_is_populated(identity: CgroupIdentity) -> bool:
+    return cgroup_events(identity)["populated"] == "1"
+
+
+def freeze_cgroup_and_wait(identity: CgroupIdentity, *, timeout: float = 30.0) -> None:
+    descriptor = open_cgroup(identity)
+    try:
+        _write_at(descriptor, "cgroup.freeze", b"1\n")
+    finally:
+        os.close(descriptor)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if cgroup_events(identity)["frozen"] == "1":
+            return
+        time.sleep(0.05)
+    raise SupervisorError("runtime cgroup did not freeze")
 
 
 def kill_cgroup_and_wait(identity: CgroupIdentity, *, timeout: float = 30.0) -> None:
@@ -1369,6 +1402,217 @@ def mount_source_anchor_from_document(value: object) -> tuple[str, Path]:
     return document["device"], root
 
 
+def current_network_namespace_anchor() -> MountSourceAnchor:
+    path = "/proc/self/ns/net"
+    token = os.readlink(path)
+    require(
+        OPAQUE_MOUNT_ROOT.fullmatch(token) is not None and token.startswith("net:["),
+        "current network namespace identity is invalid",
+    )
+    observed = os.stat(path)
+    require(
+        int(token.removeprefix("net:[").removesuffix("]")) == observed.st_ino,
+        "current network namespace inode differs",
+    )
+    return f"{os.major(observed.st_dev)}:{os.minor(observed.st_dev)}", Path(token)
+
+
+def mount_occurrence_document(occurrence: MountOccurrence) -> dict[str, str]:
+    namespace, target = occurrence
+    require(MOUNT_DEVICE_RE.fullmatch(namespace) is not None, "mount namespace key is invalid")
+    path = Path(target)
+    require(
+        path.is_absolute() and os.path.normpath(str(path)) == str(path),
+        "mount occurrence target is invalid",
+    )
+    return {"mountNamespace": namespace, "target": str(path)}
+
+
+def mount_occurrence_from_document(value: object) -> MountOccurrence:
+    document = exact_keys(
+        value,
+        {"mountNamespace", "target"},
+        "ambient namespace mount occurrence",
+    )
+    require(
+        isinstance(document["mountNamespace"], str)
+        and MOUNT_DEVICE_RE.fullmatch(document["mountNamespace"]) is not None,
+        "ambient mount namespace key is invalid",
+    )
+    require(isinstance(document["target"], str), "ambient mount target is invalid")
+    target = Path(document["target"])
+    require(
+        target.is_absolute() and os.path.normpath(str(target)) == str(target),
+        "ambient mount target is noncanonical",
+    )
+    return document["mountNamespace"], str(target)
+
+
+def build_netns_baseline_manifest(
+    *,
+    runtime: RuntimeIdentity,
+    state_root: Path,
+    control_digest: str,
+    recorded_namespace: object,
+) -> dict[str, object]:
+    namespace = validate_namespace(recorded_namespace, "recorded supervisor mount namespace")
+    anchor = current_network_namespace_anchor()
+    occurrences = stable_global_mount_targets(
+        runtime.path / ".ambient-netns-baseline",
+        source_anchors=(anchor,),
+    )
+    return {
+        "schema": NETNS_BASELINE_SCHEMA,
+        "observedAt": utc_now(),
+        "bootId": current_boot_id(),
+        "stateRoot": str(state_root),
+        "runtimeRootIdentity": runtime.json(),
+        "rootControlSha256": control_digest,
+        "mountNamespace": namespace,
+        "ambientSources": [
+            {
+                "sourceAnchor": mount_source_anchor_document(anchor),
+                "occurrences": [
+                    mount_occurrence_document(occurrence) for occurrence in occurrences
+                ],
+            }
+        ],
+    }
+
+
+def validate_netns_baseline_manifest(
+    value: object,
+    *,
+    runtime: RuntimeIdentity,
+    state_root: Path,
+    control_digest: str,
+    recorded_namespace: object,
+) -> tuple[AmbientNetnsSource, ...]:
+    manifest = exact_keys(
+        value,
+        {
+            "schema",
+            "observedAt",
+            "bootId",
+            "stateRoot",
+            "runtimeRootIdentity",
+            "rootControlSha256",
+            "mountNamespace",
+            "ambientSources",
+        },
+        "ambient network namespace baseline",
+    )
+    namespace = validate_namespace(recorded_namespace, "recorded supervisor mount namespace")
+    require(
+        manifest["schema"] == NETNS_BASELINE_SCHEMA
+        and isinstance(manifest["observedAt"], str)
+        and 0 < len(manifest["observedAt"]) <= 128
+        and manifest["bootId"] == current_boot_id()
+        and manifest["stateRoot"] == str(state_root)
+        and manifest["runtimeRootIdentity"] == runtime.json()
+        and manifest["rootControlSha256"] == control_digest
+        and manifest["mountNamespace"] == namespace
+        and isinstance(manifest["ambientSources"], list),
+        "ambient network namespace baseline binding differs",
+    )
+    assert isinstance(manifest["ambientSources"], list)
+    require(
+        0 < len(manifest["ambientSources"]) <= 32,
+        "ambient network namespace source roster is invalid",
+    )
+    parsed: list[AmbientNetnsSource] = []
+    for item in manifest["ambientSources"]:
+        source = exact_keys(
+            item,
+            {"sourceAnchor", "occurrences"},
+            "ambient network namespace source",
+        )
+        require(
+            isinstance(source["occurrences"], list),
+            "ambient occurrence roster is invalid",
+        )
+        assert isinstance(source["occurrences"], list)
+        anchor = mount_source_anchor_from_document(source["sourceAnchor"])
+        occurrences = tuple(
+            mount_occurrence_from_document(occurrence)
+            for occurrence in source["occurrences"]
+        )
+        require(
+            occurrences == tuple(sorted(set(occurrences))),
+            "ambient occurrence roster is not canonical and unique",
+        )
+        parsed.append((anchor, occurrences))
+    require(
+        parsed == sorted(parsed, key=lambda item: (item[0][0], str(item[0][1])))
+        and len({anchor for anchor, _ in parsed}) == len(parsed),
+        "ambient source roster is not canonical and unique",
+    )
+    return tuple(parsed)
+
+
+def ensure_netns_baseline_manifest(
+    *,
+    runtime: RuntimeIdentity,
+    state_root: Path,
+    control_digest: str,
+    recorded_namespace: object,
+) -> tuple[str, tuple[AmbientNetnsSource, ...]]:
+    value = read_root_manifest(runtime, ROOT_NETNS_BASELINE_NAME)
+    if value is None:
+        value = build_netns_baseline_manifest(
+            runtime=runtime,
+            state_root=state_root,
+            control_digest=control_digest,
+            recorded_namespace=recorded_namespace,
+        )
+        digest = write_root_manifest(runtime, ROOT_NETNS_BASELINE_NAME, value)
+        value = read_root_manifest(runtime, ROOT_NETNS_BASELINE_NAME)
+        require(value is not None, "ambient network namespace baseline disappeared")
+    else:
+        digest = canonical_document_digest(value)
+    parsed = validate_netns_baseline_manifest(
+        value,
+        runtime=runtime,
+        state_root=state_root,
+        control_digest=control_digest,
+        recorded_namespace=recorded_namespace,
+    )
+    require(digest == canonical_document_digest(value), "ambient baseline digest differs")
+    return digest, parsed
+
+
+def ambient_occurrences_for_anchor(
+    anchor: MountSourceAnchor,
+    sources: tuple[AmbientNetnsSource, ...],
+) -> tuple[MountOccurrence, ...]:
+    matches = tuple(occurrences for candidate, occurrences in sources if candidate == anchor)
+    require(len(matches) <= 1, "ambient source baseline is ambiguous")
+    return () if not matches else matches[0]
+
+
+def validate_ready_netns_baseline(
+    *,
+    runtime: RuntimeIdentity,
+    ready: dict[str, object],
+    state_root: Path,
+    control_digest: str,
+    recorded_namespace: object,
+) -> tuple[AmbientNetnsSource, ...]:
+    value = read_root_manifest(runtime, ROOT_NETNS_BASELINE_NAME)
+    require(value is not None, "ready runtime lacks its ambient network namespace baseline")
+    require(
+        canonical_document_digest(value) == ready["netnsBaselineSha256"],
+        "root ready ambient network namespace baseline digest differs",
+    )
+    return validate_netns_baseline_manifest(
+        value,
+        runtime=runtime,
+        state_root=state_root,
+        control_digest=control_digest,
+        recorded_namespace=recorded_namespace,
+    )
+
+
 def read_mountinfo_for_namespace(
     expected_namespace: object,
     *,
@@ -1484,6 +1728,8 @@ def build_task_netns_detach_manifest(
     state_root: Path,
     control_digest: str,
     stopping_digest: str,
+    baseline_digest: str,
+    ambient_sources: tuple[AmbientNetnsSource, ...],
     recorded_namespace: object,
     preferred_pids: tuple[int, ...] = (),
 ) -> dict[str, object]:
@@ -1510,16 +1756,27 @@ def build_task_netns_detach_manifest(
             len(anchors) == 1,
             "task network namespace must have exactly one source coordinate",
         )
+        ambient = ambient_occurrences_for_anchor(anchors[0], ambient_sources)
+        current = stable_global_mount_targets(target, source_anchors=anchors)
         require(
-            stable_global_mount_targets(target, source_anchors=anchors)
-            == ((expected_namespace, str(target)),),
-            "task network namespace mount has a foreign bind occurrence",
+            set(ambient) <= set(current),
+            "ambient network namespace occurrence disappeared before detach",
+        )
+        owned = tuple(occurrence for occurrence in current if occurrence not in ambient)
+        require(
+            bool(owned)
+            and (expected_namespace, str(target)) in owned
+            and all(occurrence_target == str(target) for _, occurrence_target in owned),
+            "task network namespace occurrence is neither ambient nor the owned target",
         )
         entries.append(
             {
                 "target": str(target),
                 "fsType": "nsfs",
                 "sourceAnchor": mount_source_anchor_document(anchors[0]),
+                "ownedOccurrences": [
+                    mount_occurrence_document(occurrence) for occurrence in owned
+                ],
             }
         )
     return {
@@ -1530,6 +1787,7 @@ def build_task_netns_detach_manifest(
         "runtimeRootIdentity": runtime.json(),
         "rootControlSha256": control_digest,
         "rootStoppingSha256": stopping_digest,
+        "rootNetnsBaselineSha256": baseline_digest,
         "mountNamespace": namespace,
         "taskMounts": entries,
     }
@@ -1542,8 +1800,10 @@ def validate_task_netns_detach_manifest(
     state_root: Path,
     control_digest: str,
     stopping_digest: str,
+    baseline_digest: str,
+    ambient_sources: tuple[AmbientNetnsSource, ...],
     recorded_namespace: object,
-) -> tuple[tuple[Path, tuple[tuple[str, Path], ...]], ...]:
+) -> tuple[TaskNetnsDetachEntry, ...]:
     manifest = exact_keys(
         value,
         {
@@ -1554,6 +1814,7 @@ def validate_task_netns_detach_manifest(
             "runtimeRootIdentity",
             "rootControlSha256",
             "rootStoppingSha256",
+            "rootNetnsBaselineSha256",
             "mountNamespace",
             "taskMounts",
         },
@@ -1568,18 +1829,19 @@ def validate_task_netns_detach_manifest(
         and manifest["runtimeRootIdentity"] == runtime.json()
         and manifest["rootControlSha256"] == control_digest
         and manifest["rootStoppingSha256"] == stopping_digest
+        and manifest["rootNetnsBaselineSha256"] == baseline_digest
         and manifest["mountNamespace"] == namespace
         and isinstance(manifest["taskMounts"], list),
         "task network namespace detach manifest binding differs",
     )
     assert isinstance(manifest["taskMounts"], list)
     require(len(manifest["taskMounts"]) <= 4096, "task network namespace roster is too large")
-    parsed: list[tuple[Path, tuple[tuple[str, Path], ...]]] = []
+    parsed: list[TaskNetnsDetachEntry] = []
     prefix = runtime.path / "docker-exec" / "netns"
     for item in manifest["taskMounts"]:
         entry = exact_keys(
             item,
-            {"target", "fsType", "sourceAnchor"},
+            {"target", "fsType", "sourceAnchor", "ownedOccurrences"},
             "task network namespace detach entry",
         )
         require(
@@ -1594,10 +1856,33 @@ def validate_task_netns_detach_manifest(
             "task network namespace detach target differs",
         )
         anchor = mount_source_anchor_from_document(entry["sourceAnchor"])
-        parsed.append((target, (anchor,)))
+        require(
+            isinstance(entry["ownedOccurrences"], list),
+            "owned task network namespace occurrence roster is invalid",
+        )
+        assert isinstance(entry["ownedOccurrences"], list)
+        owned = tuple(
+            mount_occurrence_from_document(occurrence)
+            for occurrence in entry["ownedOccurrences"]
+        )
+        require(
+            bool(owned)
+            and owned == tuple(sorted(set(owned)))
+            and (mount_namespace_key(namespace), str(target)) in owned
+            and all(occurrence_target == str(target) for _, occurrence_target in owned),
+            "owned task network namespace occurrence roster differs",
+        )
+        parsed.append(
+            (
+                target,
+                (anchor,),
+                ambient_occurrences_for_anchor(anchor, ambient_sources),
+                owned,
+            )
+        )
     require(
         parsed == sorted(parsed, key=lambda item: str(item[0]))
-        and len({target for target, _ in parsed}) == len(parsed),
+        and len({target for target, _, _, _ in parsed}) == len(parsed),
         "task network namespace detach roster is not canonical and unique",
     )
     return tuple(parsed)
@@ -1609,9 +1894,11 @@ def ensure_task_netns_detach_manifest(
     state_root: Path,
     control_digest: str,
     stopping_digest: str,
+    baseline_digest: str,
+    ambient_sources: tuple[AmbientNetnsSource, ...],
     recorded_namespace: object,
     preferred_pids: tuple[int, ...] = (),
-) -> tuple[str, tuple[tuple[Path, tuple[tuple[str, Path], ...]], ...]]:
+) -> tuple[str, tuple[TaskNetnsDetachEntry, ...]]:
     value = read_root_manifest(runtime, ROOT_NETNS_DETACH_NAME)
     if value is None:
         value = build_task_netns_detach_manifest(
@@ -1619,6 +1906,8 @@ def ensure_task_netns_detach_manifest(
             state_root=state_root,
             control_digest=control_digest,
             stopping_digest=stopping_digest,
+            baseline_digest=baseline_digest,
+            ambient_sources=ambient_sources,
             recorded_namespace=recorded_namespace,
             preferred_pids=preferred_pids,
         )
@@ -1633,6 +1922,8 @@ def ensure_task_netns_detach_manifest(
         state_root=state_root,
         control_digest=control_digest,
         stopping_digest=stopping_digest,
+        baseline_digest=baseline_digest,
+        ambient_sources=ambient_sources,
         recorded_namespace=recorded_namespace,
     )
     require(digest == canonical_document_digest(value), "task network namespace digest differs")
@@ -1643,19 +1934,19 @@ def settle_task_netns_detach_manifest(
     *,
     runtime: RuntimeIdentity,
     recorded_namespace: object,
-    task_mounts: tuple[tuple[Path, tuple[tuple[str, Path], ...]], ...],
+    task_mounts: tuple[TaskNetnsDetachEntry, ...],
     expected_children: set[int],
 ) -> None:
     namespace = validate_namespace(recorded_namespace, "recorded supervisor mount namespace")
     current_namespace = mount_namespace()
     current_raw = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
     current_targets = set(task_netns_mounts(runtime.path, current_raw))
-    planned_targets = {target for target, _ in task_mounts}
+    planned_targets = {target for target, _, _, _ in task_mounts}
     require(
         current_targets <= planned_targets,
         "unplanned task network namespace mount appeared after detach publication",
     )
-    for target, anchors in task_mounts:
+    for target, anchors, ambient, owned in task_mounts:
         if target in current_targets:
             require(
                 current_namespace == namespace,
@@ -1665,10 +1956,12 @@ def settle_task_netns_detach_manifest(
                 mount_source_anchors(current_raw, target) == anchors,
                 "task network namespace source coordinate changed",
             )
+            current = stable_global_mount_targets(target, source_anchors=anchors)
             require(
-                stable_global_mount_targets(target, source_anchors=anchors)
-                == ((mount_namespace_key(namespace), str(target)),),
-                "task network namespace mount has a foreign bind occurrence",
+                set(ambient) <= set(current)
+                and set(current) - set(ambient) <= set(owned)
+                and (mount_namespace_key(namespace), str(target)) in current,
+                "task network namespace occurrence differs from its published cutoff",
             )
             subprocess.run(
                 [str(UMOUNT), "--", str(target)],
@@ -1682,18 +1975,18 @@ def settle_task_netns_detach_manifest(
             )
             require_exact_children(expected_children)
         require(
-            not stable_global_mount_targets(target, source_anchors=anchors),
-            "task network namespace bind remained after source unmount",
+            stable_global_mount_targets(target, source_anchors=anchors) == ambient,
+            "task network namespace occurrence did not return to its baseline",
         )
     remaining = task_netns_mounts(
         runtime.path,
         Path("/proc/self/mountinfo").read_text(encoding="utf-8"),
     )
     require(not remaining, "task network namespace mount remained after cleanup")
-    for target, anchors in task_mounts:
+    for target, anchors, ambient, _ in task_mounts:
         require(
-            not stable_global_mount_targets(target, source_anchors=anchors),
-            "task network namespace bind reappeared before runtime deletion",
+            stable_global_mount_targets(target, source_anchors=anchors) == ambient,
+            "task network namespace occurrence drifted from baseline before deletion",
         )
 
 
@@ -1951,6 +2244,35 @@ def remove_socket_root(
         os.close(parent_fd)
 
 
+def classify_recovery_socket(
+    root: SocketPathIdentity,
+    expected_socket: SocketPathIdentity | None,
+    caller_gid: int,
+    *,
+    absence_authorized: bool,
+) -> tuple[bool, SocketPathIdentity | None]:
+    try:
+        os.stat(root.path, follow_symlinks=False)
+    except FileNotFoundError:
+        require(
+            absence_authorized,
+            "Docker API root is absent without durable stopping authority",
+        )
+        return False, None
+    descriptor = verify_socket_root(root, caller_gid)
+    try:
+        roster = tuple(sorted(os.listdir(descriptor)))
+        require(roster in ((), (SOCKET_NAME,)), "Docker API root contains a foreign entry")
+    finally:
+        os.close(descriptor)
+    if expected_socket is not None:
+        verify_socket_boundary(root, expected_socket, caller_gid)
+        return True, expected_socket
+    if not roster:
+        return True, None
+    return True, capture_socket_identity(root, caller_gid)
+
+
 def ensure_storage_directory(
     parent_fd: int,
     parent_path: Path,
@@ -2040,6 +2362,7 @@ def _root_manifest_pending(name: str) -> str:
             ROOT_CONTROL_NAME,
             ROOT_READY_NAME,
             ROOT_STOPPING_NAME,
+            ROOT_NETNS_BASELINE_NAME,
             ROOT_NETNS_DETACH_NAME,
             ROOT_STOP_NAME,
         ),
@@ -2159,6 +2482,7 @@ def read_root_manifest(runtime_identity: RuntimeIdentity, name: str) -> dict[str
             ROOT_CONTROL_NAME,
             ROOT_READY_NAME,
             ROOT_STOPPING_NAME,
+            ROOT_NETNS_BASELINE_NAME,
             ROOT_NETNS_DETACH_NAME,
             ROOT_STOP_NAME,
         ),
@@ -2552,7 +2876,10 @@ def normalize_storage_operation(
         receipt["mountNamespace"],
         "runner storage receipt namespace",
     )
-    require(receipt_namespace == expected_namespace, "runner storage receipt namespace differs")
+    require(
+        expected_outcome == "deactivated" or receipt_namespace == expected_namespace,
+        "runner storage receipt namespace differs",
+    )
 
     backing = exact_keys(
         receipt["backingFilesystem"],
@@ -3018,6 +3345,7 @@ def validate_ready_authority(
             "runtimeRoot",
             "runtimeRootIdentity",
             "rootControlSha256",
+            "netnsBaselineSha256",
             "supervisorProcessIdentity",
             "mountNamespace",
             "cgroup",
@@ -3058,6 +3386,11 @@ def validate_ready_authority(
     ):
         require(ready[field] == control[field], f"root ready control field differs: {field}")
     require(ready["rootControlSha256"] == root_control_digest, "root ready control digest differs")
+    require(
+        isinstance(ready["netnsBaselineSha256"], str)
+        and SHA256_RE.fullmatch(ready["netnsBaselineSha256"]) is not None,
+        "root ready ambient netns baseline digest is invalid",
+    )
     state_root = Path(str(control["stateRoot"]))
     ready_cgroup = cgroup_identity_from_json(ready["cgroup"], state_root)
     require(
@@ -3284,6 +3617,68 @@ def validate_stopping_authority(
     return stopping
 
 
+def validate_stop_authority(
+    value: object,
+    *,
+    stopping: dict[str, object],
+    state_root: Path,
+    runtime: RuntimeIdentity,
+    cgroup: CgroupIdentity,
+    supervisor_identity: dict[str, object],
+    boot_id: str,
+    expected_netns_digest: str | None = None,
+) -> dict[str, object]:
+    stop = exact_keys(
+        value,
+        {
+            "schema",
+            "outcome",
+            "observedAt",
+            "bootId",
+            "stateRoot",
+            "reason",
+            "supervisorProcessIdentity",
+            "runtimeRootIdentity",
+            "cgroup",
+            "rootStoppingSha256",
+            "netnsDetachSha256",
+            "storageProjectionDigest",
+            "socketRootRemoved",
+            "externalFinalizationRequired",
+        },
+        "root runtime stop authority",
+    )
+    netns_digest = stop["netnsDetachSha256"]
+    storage_digest = stop["storageProjectionDigest"]
+    require(
+        stop["schema"] == STOP_SCHEMA
+        and stop["outcome"] == "quiesced"
+        and isinstance(stop["observedAt"], str)
+        and 0 < len(stop["observedAt"]) <= 128
+        and stop["bootId"] == boot_id
+        and stop["stateRoot"] == str(state_root)
+        and stop["reason"] == stopping["reason"]
+        and stop["supervisorProcessIdentity"] == supervisor_identity
+        and stop["runtimeRootIdentity"] == runtime.json()
+        and stop["cgroup"] == cgroup.json()
+        and stop["rootStoppingSha256"] == canonical_document_digest(stopping)
+        and isinstance(netns_digest, str)
+        and SHA256_RE.fullmatch(netns_digest) is not None
+        and (expected_netns_digest is None or netns_digest == expected_netns_digest)
+        and (
+            storage_digest is None
+            or (
+                isinstance(storage_digest, str)
+                and SHA256_RE.fullmatch(storage_digest) is not None
+            )
+        )
+        and stop["socketRootRemoved"] is True
+        and stop["externalFinalizationRequired"] is True,
+        "root stop authority differs",
+    )
+    return stop
+
+
 def _validate_snapshot_prefix(path: Path, expected: bytes) -> None:
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     try:
@@ -3500,10 +3895,10 @@ class RuntimeSupervisor:
         self.root_control_digest: str | None = None
         self.root_ready_digest: str | None = None
         self.root_stopping_digest: str | None = None
+        self.root_netns_baseline_digest: str | None = None
+        self.ambient_netns_sources: tuple[AmbientNetnsSource, ...] | None = None
         self.root_netns_detach_digest: str | None = None
-        self.task_netns_detach_manifest: tuple[
-            tuple[Path, tuple[tuple[str, Path], ...]], ...
-        ] | None = None
+        self.task_netns_detach_manifest: tuple[TaskNetnsDetachEntry, ...] | None = None
         self.root_stop_digest: str | None = None
         self.arguments_sha256 = process_arguments_sha256()
 
@@ -3551,6 +3946,11 @@ class RuntimeSupervisor:
         require(self.namespace is not None, "supervisor namespace is absent")
         require(self.storage_helper_path is not None, "storage helper snapshot is absent")
         require(self.lease is not None, "runtime lifecycle lease is absent")
+        runtime_lease_fd = (
+            self.lease.descriptor
+            if command in ("activate-private", "deactivate-private")
+            else None
+        )
         return invoke_storage_helper(
             helper=self.storage_helper_path,
             command=command,
@@ -3560,7 +3960,7 @@ class RuntimeSupervisor:
             namespace=self.namespace,
             expected_outcome=outcome,
             expected_children=self.expected_child_pids(),
-            runtime_lease_fd=self.lease.descriptor,
+            runtime_lease_fd=runtime_lease_fd,
             allow_unpublished=allow_unpublished,
         )
 
@@ -3711,58 +4111,23 @@ class RuntimeSupervisor:
         stop_value = read_root_manifest(runtime, ROOT_STOP_NAME)
         stop: dict[str, object] | None = None
         if stop_value is not None:
-            stop = exact_keys(
+            require(stopping is not None, "root stop authority lacks stopping authority")
+            stop = validate_stop_authority(
                 stop_value,
-                {
-                    "schema",
-                    "outcome",
-                    "observedAt",
-                    "bootId",
-                    "stateRoot",
-                    "reason",
-                    "supervisorProcessIdentity",
-                    "runtimeRootIdentity",
-                    "cgroup",
-                    "rootStoppingSha256",
-                    "netnsDetachSha256",
-                    "storageProjectionDigest",
-                    "socketRootRemoved",
-                    "externalFinalizationRequired",
-                },
-                "root runtime stop authority",
+                stopping=stopping,
+                state_root=self.state_root,
+                runtime=runtime,
+                cgroup=validated["cgroup"],
+                supervisor_identity=validated["supervisor"],
+                boot_id=validated["control"]["bootId"],
             )
-            require(
-                stop["schema"] == STOP_SCHEMA
-                and stop["outcome"] == "quiesced"
-                and stop["bootId"] == validated["control"]["bootId"]
-                and stop["stateRoot"] == str(self.state_root)
-                and stopping is not None
-                and stop["reason"] == stopping["reason"]
-                and stop["runtimeRootIdentity"] == runtime.json()
-                and stop["cgroup"] == validated["cgroup"].json()
-                and isinstance(stop["rootStoppingSha256"], str)
-                and stopping_value is not None
-                and stop["rootStoppingSha256"]
-                == canonical_document_digest(stopping_value)
-                and isinstance(stop["netnsDetachSha256"], str)
-                and SHA256_RE.fullmatch(stop["netnsDetachSha256"]) is not None
-                and (
-                    stop["storageProjectionDigest"] is None
-                    or (
-                        isinstance(stop["storageProjectionDigest"], str)
-                        and SHA256_RE.fullmatch(stop["storageProjectionDigest"]) is not None
-                    )
-                )
-                and stop["socketRootRemoved"] is True
-                and stop["externalFinalizationRequired"] is True,
-                "root stop authority differs",
-            )
-        if stop_value is None and stopping_value is None:
-            socket_root_fd = verify_socket_root(
-                validated["socketRoot"],
-                self.caller_gid,
-            )
-            os.close(socket_root_fd)
+        socket_root = validated["socketRoot"]
+        socket_present, expected_socket = classify_recovery_socket(
+            socket_root,
+            ready["socket"] if ready is not None else None,
+            self.caller_gid,
+            absence_authorized=stop_value is not None or stopping_value is not None,
+        )
 
         process_error = process_authority["ProcessIdentityError"]
         try:
@@ -3794,6 +4159,25 @@ class RuntimeSupervisor:
         else:
             root_stopping_digest = canonical_document_digest(stopping_value)
 
+        cgroup_was_populated = cgroup_is_populated(cgroup)
+        if cgroup_was_populated:
+            freeze_cgroup_and_wait(cgroup, timeout=60)
+
+        existing_netns_baseline = read_root_manifest(runtime, ROOT_NETNS_BASELINE_NAME)
+        require(
+            ready is None or existing_netns_baseline is not None,
+            "ready runtime lacks its ambient network namespace baseline",
+        )
+        netns_baseline_digest, ambient_sources = ensure_netns_baseline_manifest(
+            runtime=runtime,
+            state_root=self.state_root,
+            control_digest=root_control_digest,
+            recorded_namespace=validated["control"]["mountNamespace"],
+        )
+        require(
+            ready is None or ready["netnsBaselineSha256"] == netns_baseline_digest,
+            "root ready ambient network namespace baseline digest differs",
+        )
         existing_netns_detach = read_root_manifest(runtime, ROOT_NETNS_DETACH_NAME)
         require(
             stop is None or existing_netns_detach is not None,
@@ -3813,15 +4197,25 @@ class RuntimeSupervisor:
             state_root=self.state_root,
             control_digest=root_control_digest,
             stopping_digest=root_stopping_digest,
+            baseline_digest=netns_baseline_digest,
+            ambient_sources=ambient_sources,
             recorded_namespace=validated["control"]["mountNamespace"],
             preferred_pids=preferred_pids,
         )
-        require(
-            stop is None or stop["netnsDetachSha256"] == netns_detach_digest,
-            "root stop task network namespace digest differs",
-        )
+        if stop_value is not None:
+            assert stopping is not None
+            stop = validate_stop_authority(
+                stop_value,
+                stopping=stopping,
+                state_root=self.state_root,
+                runtime=runtime,
+                cgroup=cgroup,
+                supervisor_identity=validated["supervisor"],
+                boot_id=validated["control"]["bootId"],
+                expected_netns_digest=netns_detach_digest,
+            )
 
-        if cgroup_is_populated(cgroup):
+        if cgroup_was_populated or cgroup_is_populated(cgroup):
             kill_cgroup_and_wait(cgroup, timeout=60)
         settle_task_netns_detach_manifest(
             runtime=runtime,
@@ -3830,23 +4224,13 @@ class RuntimeSupervisor:
             expected_children=set(),
         )
 
-        socket_root = validated["socketRoot"]
-        try:
-            os.stat(socket_root.path, follow_symlinks=False)
-        except FileNotFoundError:
-            pass
-        else:
-            expected_socket = ready["socket"] if ready is not None else None
-            if expected_socket is None:
-                try:
-                    expected_socket = capture_socket_identity(socket_root, self.caller_gid)
-                except SupervisorError:
-                    descriptor = verify_socket_root(socket_root, self.caller_gid)
-                    try:
-                        require(not os.listdir(descriptor), "unpublished Docker API root differs")
-                    finally:
-                        os.close(descriptor)
-            remove_socket_root(socket_root, expected_socket, self.caller_gid)
+        if socket_present:
+            try:
+                os.stat(socket_root.path, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                remove_socket_root(socket_root, expected_socket, self.caller_gid)
 
         if not orphaned:
             helper = runtime.path / STORAGE_LIFECYCLE_NAME
@@ -3858,10 +4242,6 @@ class RuntimeSupervisor:
             self.runtime_identity = runtime
             self.storage_helper_path = helper
             self.storage_activation_attempted = True
-            self.root_control_digest = root_control_digest
-            self.root_stopping_digest = root_stopping_digest
-            self.root_netns_detach_digest = netns_detach_digest
-            self.task_netns_detach_manifest = task_mounts
             self.deactivated_storage = self.invoke_storage(
                 "deactivate-private",
                 "deactivated",
@@ -3928,6 +4308,8 @@ class RuntimeSupervisor:
         self.storage = self.invoke_storage("activate-private", "activated")
         self.reject_interrupted_startup()
         self.prepare_daemon_configuration()
+        self.reject_interrupted_startup()
+        self.prepare_netns_baseline()
         self.reject_interrupted_startup()
         self.start_daemons()
         self.reject_interrupted_startup()
@@ -4353,6 +4735,10 @@ class RuntimeSupervisor:
         require(self.cgroup_identity is not None, "runtime cgroup authority is absent")
         require(self.root_control_digest is not None, "root control authority is absent")
         require(
+            self.root_netns_baseline_digest is not None,
+            "ambient network namespace baseline is absent",
+        )
+        require(
             self.data_root is not None and self.containerd_root is not None,
             "daemon data root is absent",
         )
@@ -4369,6 +4755,7 @@ class RuntimeSupervisor:
             "runtimeRoot": str(self.runtime_identity.path),
             "runtimeRootIdentity": self.runtime_identity.json(),
             "rootControlSha256": self.root_control_digest,
+            "netnsBaselineSha256": self.root_netns_baseline_digest,
             "supervisorProcessIdentity": self.supervisor_identity,
             "mountNamespace": self.namespace,
             "cgroup": self.cgroup_identity.json(),
@@ -4497,11 +4884,36 @@ class RuntimeSupervisor:
         finally:
             os.close(pidfd)
 
+    def prepare_netns_baseline(self) -> None:
+        require(self.runtime_identity is not None, "runtime identity is absent")
+        require(self.namespace is not None, "runtime mount namespace is absent")
+        require(self.root_control_digest is not None, "root control authority is absent")
+        if self.root_netns_baseline_digest is not None:
+            require(
+                self.ambient_netns_sources is not None,
+                "ambient network namespace baseline is absent",
+            )
+            return
+        digest, sources = ensure_netns_baseline_manifest(
+            runtime=self.runtime_identity,
+            state_root=self.state_root,
+            control_digest=self.root_control_digest,
+            recorded_namespace=self.namespace,
+        )
+        self.root_netns_baseline_digest = digest
+        self.ambient_netns_sources = sources
+
     def prepare_task_netns_detach(self) -> None:
         require(self.runtime_identity is not None, "runtime identity is absent")
         require(self.namespace is not None, "runtime mount namespace is absent")
         require(self.root_control_digest is not None, "root control authority is absent")
         require(self.root_stopping_digest is not None, "root stopping authority is absent")
+        self.prepare_netns_baseline()
+        require(
+            self.root_netns_baseline_digest is not None
+            and self.ambient_netns_sources is not None,
+            "ambient network namespace baseline is absent",
+        )
         if self.root_netns_detach_digest is not None:
             require(
                 self.task_netns_detach_manifest is not None,
@@ -4513,6 +4925,8 @@ class RuntimeSupervisor:
             state_root=self.state_root,
             control_digest=self.root_control_digest,
             stopping_digest=self.root_stopping_digest,
+            baseline_digest=self.root_netns_baseline_digest,
+            ambient_sources=self.ambient_netns_sources,
             recorded_namespace=self.namespace,
             preferred_pids=tuple(
                 process.pid
@@ -4547,12 +4961,8 @@ class RuntimeSupervisor:
                 self.write_shutdown_intent(reason)
             if first_attempt:
                 self.write_control_receipt("stopping")
-            # Docker owns running containers; it must drain before its dedicated
-            # containerd.  The storage mount stays alive until both are reaped.
-            self.terminate_daemon("dockerd", self.docker_process)
-            self.terminate_daemon("containerd", self.containerd_process)
-            wait_for_adopted_children(set())
-            self.prepare_task_netns_detach()
+            # Revoke new API admission and durably capture every current nsfs
+            # source before either daemon can remove it during shutdown.
             if self.socket_root_identity is not None and not self.socket_root_removed:
                 remove_socket_root(
                     self.socket_root_identity,
@@ -4560,6 +4970,12 @@ class RuntimeSupervisor:
                     self.caller_gid,
                 )
                 self.socket_root_removed = True
+            self.prepare_task_netns_detach()
+            # Docker owns running containers; it must drain before its dedicated
+            # containerd.  The storage mount stays alive until both are reaped.
+            self.terminate_daemon("dockerd", self.docker_process)
+            self.terminate_daemon("containerd", self.containerd_process)
+            wait_for_adopted_children(set())
             self.cleanup_task_netns()
             if self.storage_activation_attempted and self.deactivated_storage is None:
                 self.deactivated_storage = self.invoke_storage(
@@ -4602,40 +5018,33 @@ class RuntimeSupervisor:
                     value,
                 )
             else:
-                value = exact_keys(
-                    existing_stop,
-                    {
-                        "schema",
-                        "outcome",
-                        "observedAt",
-                        "bootId",
-                        "stateRoot",
-                        "reason",
-                        "supervisorProcessIdentity",
-                        "runtimeRootIdentity",
-                        "cgroup",
-                        "rootStoppingSha256",
-                        "netnsDetachSha256",
-                        "storageProjectionDigest",
-                        "socketRootRemoved",
-                        "externalFinalizationRequired",
-                    },
-                    "existing root stop authority",
-                )
                 require(
-                    value["schema"] == STOP_SCHEMA
-                    and value["outcome"] == "quiesced"
-                    and value["bootId"] == current_boot_id()
-                    and value["stateRoot"] == str(self.state_root)
-                    and value["reason"] == reason
-                    and value["supervisorProcessIdentity"] == self.supervisor_identity
-                    and value["runtimeRootIdentity"] == self.runtime_identity.json()
-                    and value["cgroup"] == self.cgroup_identity.json()
-                    and value["rootStoppingSha256"] == self.root_stopping_digest
-                    and value["netnsDetachSha256"] == self.root_netns_detach_digest
-                    and value["socketRootRemoved"] is True
-                    and value["externalFinalizationRequired"] is True,
-                    "existing root stop authority differs",
+                    self.supervisor_identity is not None,
+                    "supervisor process identity is absent",
+                )
+                stopping_value = read_root_manifest(
+                    self.runtime_identity,
+                    ROOT_STOPPING_NAME,
+                )
+                require(stopping_value is not None, "root stopping authority disappeared")
+                stopping = validate_stopping_authority(
+                    stopping_value,
+                    state_root=self.state_root,
+                    control_digest=self.root_control_digest,
+                    runtime=self.runtime_identity,
+                    cgroup=self.cgroup_identity,
+                    supervisor_identity=self.supervisor_identity,
+                    boot_id=current_boot_id(),
+                )
+                value = validate_stop_authority(
+                    existing_stop,
+                    stopping=stopping,
+                    state_root=self.state_root,
+                    runtime=self.runtime_identity,
+                    cgroup=self.cgroup_identity,
+                    supervisor_identity=self.supervisor_identity,
+                    boot_id=current_boot_id(),
+                    expected_netns_digest=self.root_netns_detach_digest,
                 )
                 self.root_stop_digest = canonical_document_digest(value)
             require(self.root_stop_digest is not None, "root stop digest is absent")
@@ -4716,6 +5125,14 @@ def _validated_existing_authorities(
         if ready_value is not None
         else None
     )
+    if ready is not None:
+        validate_ready_netns_baseline(
+            runtime=runtime,
+            ready=ready,
+            state_root=state.path,
+            control_digest=canonical_document_digest(control_value),
+            recorded_namespace=validated["control"]["mountNamespace"],
+        )
     return runtime, validated, ready, process_authority
 
 
@@ -4815,6 +5232,14 @@ def _validated_orphaned_authorities(
         if ready_value is not None
         else None
     )
+    if ready is not None:
+        validate_ready_netns_baseline(
+            runtime=runtime,
+            ready=ready,
+            state_root=state_root,
+            control_digest=canonical_document_digest(control_value),
+            recorded_namespace=validated["control"]["mountNamespace"],
+        )
     return state, runtime, validated, ready, process_authority
 
 

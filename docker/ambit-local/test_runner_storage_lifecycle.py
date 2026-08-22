@@ -1361,6 +1361,7 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
         stored = {
             "schema": MODULE.RECEIPT_SCHEMA,
             "lifecycleState": "detached",
+            "mountNamespace": {"device": 8, "inode": 8000},
             "filesystem": {"uuid": "12345678-1234-1234-1234-123456789abc"},
         }
         with mock.patch.object(
@@ -1383,10 +1384,22 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
             MODULE,
             "publish_receipt",
             return_value=("1" * 64, {}),
-        ) as publish, mock.patch.object(MODULE, "unmount_and_detach") as teardown:
+        ) as publish, mock.patch.object(
+            MODULE, "publish_user_projection"
+        ) as projection, mock.patch.object(MODULE, "unmount_and_detach") as teardown:
             result = MODULE.deactivate_private(args)
         self.assertEqual(result["outcome"], "deactivated")
-        publish.assert_called_once()
+        self.assertEqual(result["receipt"], stored)
+        self.assertEqual(
+            result["authorityReceiptSha256"],
+            MODULE.sha256_bytes(MODULE.canonical_json_bytes(stored)),
+        )
+        publish.assert_not_called()
+        projection.assert_called_once_with(
+            context,
+            stored,
+            MODULE.sha256_bytes(MODULE.canonical_json_bytes(stored)),
+        )
         teardown.assert_not_called()
 
         foreign = MODULE.NamespaceOccurrence("8:8", 8, "7:7", str(MODULE.AUTHORITY_ROOT / MODULE.TARGET_NAME))

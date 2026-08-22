@@ -150,7 +150,10 @@ The lifecycle reducer admits absent storage; zero/partial/exact root-owned
 `0600` image cutpoints; published attached state; committed detached state; and
 exact no-receipt startup-abort state. Only exact target length can format or
 recover. Startup/deactivation response loss is idempotent, without fabricating
-receipt authority. Teardown scans two stable passes of every mount namespace
+receipt authority. A committed detached receipt with zero loop and mount
+occurrences is replayed byte-for-byte: its historical detach namespace and
+digest are not rewritten merely because finalization runs in a fresh private
+namespace. Teardown scans two stable passes of every mount namespace
 observable through `/proc`, rejecting unreadable, changing, second, nested, or
 foreign loop/target occurrences. Ordinary filesystem mount roots use canonical
 component-aware path coordinates. Linux `nsfs` roots such as
@@ -160,26 +163,35 @@ semantics. Storage-tree checks carry nested filesystem anchors, so a bind
 source below the authority mounted at an unrelated target is also a blocking
 occurrence. Every live process representing the same mount namespace must
 yield the same relevant mount view; a chroot-visible mismatch fails closed
-rather than letting the first PID become authority. The provider and daemon
+instead of letting the first PID become authority. Representatives that all
+share the same restricted root can still hide the same mount; that and a
+namespace with no live representative remain outside the source proof. The provider and daemon
 children must stop before private unmount/detach. A namespace pinned without a
-live `/proc` representative remains outside the source proof. This is an
-explicit local-host acceptance limit, not a claimed global proof. Static tests establish reducer and authority logic only; they
+live `/proc` representative therefore remains an explicit local-host
+acceptance limit, not a claimed global proof. Static tests establish reducer and authority logic only; they
 do not establish that this host has successfully created the cgroup, mounted
 XFS, enforced project quotas, started the daemon, or completed two live 20 GiB
 sandbox journeys.
 Runtime-root cleanup carries the supervisor namespace's source coordinates
-across every observed namespace as well. After daemon and adopted-child reap,
-but before socket or nsfs mutation, one immutable root-owned
-`runtime-netns-detach.json` manifest binds control/stopping digests, boot,
-state/runtime/namespace identities, and the canonical task target plus typed
-source coordinate roster. Each task nsfs mount must be the sole occurrence in
-the supervisor namespace before unmount. Same-process retry and external
-recovery consume the same stored anchors, prove global zero after source
-unmount, and repeat aggregate zero immediately before runtime-tree deletion.
+across every observed namespace as well. Before daemon start, immutable
+`runtime-netns-baseline.json` records the preexisting host-network-namespace
+source and its canonical ambient occurrences, including the normal host
+Docker's legitimate `default` bind. Shutdown first revokes new API admission,
+then publishes `runtime-netns-detach.json` before signaling either daemon. The
+detach authority binds baseline/control/stopping digests, boot,
+state/runtime/namespace identities, and each task target plus typed source
+coordinate. Before unmount, current occurrences must equal the stored ambient
+baseline plus the exact owned target; afterward they must return exactly to
+the baseline. Sources absent from the baseline retain the one-owned/zero-after
+rule. Same-process retry and external recovery consume the same stored anchors
+and repeat aggregate baseline equality immediately before runtime-tree deletion.
 A surviving external bind therefore cannot disappear from the proof merely
 because its original source mount was removed. If an abrupt death leaves task
 entries but no live representative from which to author the first manifest,
 automatic deletion blocks for admin recovery rather than inventing anchors.
+Revoking the socket pathname prevents new clients but cannot prove that no
+already-connected request is in flight; stop-time API quiescence remains an
+explicit live acceptance observation under the single-user local-host model.
 
 Pre-v5 `/run` daemon state has no root control or supervisor snapshot and is
 therefore never guessed or auto-adopted by this source. This packet is the
@@ -216,9 +228,12 @@ socket, cgroup, or legacy `/tmp` authority before any process signal or cgroup
 kill. Before draining anything the admitted supervisor durably publishes a
 root stopping intent, so every later daemon/socket/storage cutpoint is
 classifiable. Dead-supervisor recovery publishes the same stopping authority
-after exact death proof and before its first cgroup or socket mutation. The
-supervisor drains dockerd and containerd, publishes the durable netns detach
-roster, removes the caller socket, cleans task network namespaces, deactivates
+after exact death proof and before its first cgroup or socket mutation. It
+classifies the current socket first, freezes and proves a populated target
+cgroup, publishes or validates the baseline and detach authorities at that
+frozen cutoff, and only then uses `cgroup.kill`. Normal shutdown removes the
+caller socket, publishes the detach roster while source mounts still exist,
+drains dockerd and containerd, cleans task network namespaces, deactivates
 storage, writes a root stop
 manifest, and exits. The outside recovery process then proves the task cgroup
 empty (or writes to its exact `cgroup.kill` and waits for `populated 0`),

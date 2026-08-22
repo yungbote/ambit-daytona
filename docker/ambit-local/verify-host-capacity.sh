@@ -92,7 +92,7 @@ script_source=${BASH_SOURCE[0]}
 script_source=$(/usr/bin/realpath -e -- "${script_source}")
 script_dir=${script_source%/*}
 supervisor=${script_dir}/isolated_runtime_supervisor.py
-supervisor_sha256=8ef373bebd7ec81a583d5f12d769fe06862ad5759199931fe18b969d48b155c1
+supervisor_sha256=a462ed8927d1a6561e713bacb2f7e48a500e69a4422d86cd2a73281cd16fa67e
 observed_supervisor_sha=$(/usr/bin/sha256sum -- "${supervisor}")
 observed_supervisor_sha=${observed_supervisor_sha%% *}
 [[ ${observed_supervisor_sha} == "${supervisor_sha256}" ]] || {

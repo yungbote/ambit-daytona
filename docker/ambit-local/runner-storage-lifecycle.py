@@ -2557,18 +2557,14 @@ def canonical_json_bytes(value: dict[str, Any]) -> bytes:
     return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
-def publish_receipt(
+def publish_user_projection(
     context: AuthorityContext,
     receipt: dict[str, Any],
-) -> tuple[str, dict[str, Any]]:
+    digest: str,
+) -> dict[str, Any]:
     require_context_binding(context)
-    require(
-        context.root_fd is not None and context.evidence_fd is not None,
-        "receipt authority descriptors are absent",
-    )
-    receipt_bytes = canonical_json_bytes(receipt)
-    write_bytes_atomic(context.root_fd, RECEIPT_NAME, receipt_bytes, owner_uid=0, owner_gid=0)
-    digest = sha256_bytes(receipt_bytes)
+    require(context.evidence_fd is not None, "projection authority descriptor is absent")
+    require(re.fullmatch(r"[0-9a-f]{64}", digest) is not None, "receipt digest is invalid")
     projection = {
         "schema": PROJECTION_SCHEMA,
         "authorityReceiptSha256": digest,
@@ -2581,6 +2577,22 @@ def publish_receipt(
         owner_uid=context.caller_uid,
         owner_gid=context.caller_gid,
     )
+    return projection
+
+
+def publish_receipt(
+    context: AuthorityContext,
+    receipt: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    require_context_binding(context)
+    require(
+        context.root_fd is not None and context.evidence_fd is not None,
+        "receipt authority descriptors are absent",
+    )
+    receipt_bytes = canonical_json_bytes(receipt)
+    write_bytes_atomic(context.root_fd, RECEIPT_NAME, receipt_bytes, owner_uid=0, owner_gid=0)
+    digest = sha256_bytes(receipt_bytes)
+    projection = publish_user_projection(context, receipt, digest)
     return digest, projection
 
 
@@ -2945,6 +2957,12 @@ def deactivate_private(args: argparse.Namespace) -> dict[str, Any]:
         loops = associated_loops(context)
         require(len(loops) <= 1, "storage loop identity is ambiguous")
         targets = target_occurrences()
+        if stored.get("lifecycleState") == "detached":
+            require(not loops, "detached storage receipt retains an image loop")
+            require(not targets, "detached storage receipt retains a target mount")
+            digest = sha256_bytes(canonical_json_bytes(stored))
+            publish_user_projection(context, stored, digest)
+            return operation_result("deactivated", expected_namespace, digest, stored)
         if loops:
             loop = loops[0]
             require(filesystem_uuid(context, loop) == expected_uuid, "storage UUID differs")
