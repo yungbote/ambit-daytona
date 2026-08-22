@@ -4780,38 +4780,6 @@ def require_recovery_state_binding(state_fd: int, evidence_fd: int) -> None:
     )
 
 
-def require_no_boot_recovery_related_processes() -> None:
-    own_namespace_tokens = {
-        f"{name}:[{os.stat(f'/proc/self/ns/{name}').st_ino}]"
-        for name in ("mnt", "net", "pid", "user")
-    }
-    related: list[int] = []
-    for entry in sorted(os.listdir("/proc")):
-        if not entry.isdigit():
-            continue
-        observation = process_reference_scan(
-            int(entry),
-            runtime_inodes=set(),
-            socket_inodes=set(),
-            private_namespace_tokens=set(),
-            admitted_namespace_tokens=own_namespace_tokens,
-        )
-        if observation is None:
-            continue
-        try:
-            relations = set(observation.row["relations"])
-            relations.discard("unclassifiedNamespaceFd")
-            if relations:
-                related.append(int(entry))
-        finally:
-            observation.close()
-    manual(
-        not related,
-        "a legacy-related process exists during boot-independent recovery: "
-        + ",".join(map(str, related)),
-    )
-
-
 def recover_terminal_archive_without_control() -> dict[str, object]:
     manual(
         not exists_nofollow(CONTROL_ROOT),
@@ -4826,11 +4794,6 @@ def recover_terminal_archive_without_control() -> dict[str, object]:
         and not exists_nofollow(EXPECTED_RUNTIME_ROOT),
         "legacy runtime root remains during boot-independent recovery",
     )
-    manual(
-        all(not process_exists(int(value["pid"])) for value in EXPECTED_PROCESS_CANDIDATES.values()),
-        "a recorded legacy PID exists during boot-independent recovery",
-    )
-    require_no_boot_recovery_related_processes()
     require_registry_listener_absent()
     state_fd = os.open(
         EXPECTED_STATE_ROOT,
@@ -4852,6 +4815,14 @@ def recover_terminal_archive_without_control() -> dict[str, object]:
         assert isinstance(stored_control, dict)
         authority = stored_control["authority"]
         assert isinstance(authority, dict)
+        process_cutoff = require_related_process_cutoff(
+            stored_control,
+            allowed_roles=set(),
+        )
+        require(
+            process_cutoff["related"] == [],
+            "legacy boot-independent recovery process cutoff differs",
+        )
         expected_state = authority["stateRootIdentity"]
         expected_evidence = authority["evidenceRootIdentity"]
         require(
