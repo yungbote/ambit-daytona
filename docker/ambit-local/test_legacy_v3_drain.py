@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import ast
 import contextlib
 import hashlib
 import importlib.util
 import json
 import os
 import signal
+import socket
 import stat
+import struct
 import sys
 import tempfile
 import unittest
@@ -346,7 +349,7 @@ class ProcessUniverseTest(unittest.TestCase):
         ), mock.patch.object(
             MODULE.os, "pidfd_open", side_effect=(31, 32)
         ), mock.patch.object(
-            MODULE, "exact_process_status", return_value="live"
+            MODULE, "exact_process_status", return_value="exact"
         ), mock.patch.object(
             MODULE, "pidfd_exited", return_value=False
         ), mock.patch.object(
@@ -365,6 +368,13 @@ class ProcessUniverseTest(unittest.TestCase):
         self.assertIn('"privateRuntimeNamespace"', source)
         self.assertIn("recorded legacy process PID was reused", source)
         self.assertNotIn("if not raw_arguments:\n                second_parent", source)
+
+    def test_exact_process_status_uses_the_real_exact_vocabulary(self) -> None:
+        recorded = captured_process().authority
+        with mock.patch.object(MODULE, "process_exists", return_value=True), mock.patch.object(
+            MODULE, "capture_process", return_value=captured_process()
+        ):
+            self.assertEqual(MODULE.exact_process_status(recorded), "exact")
 
 
 class MountAuthorityTest(unittest.TestCase):
@@ -434,6 +444,44 @@ class MountAuthorityTest(unittest.TestCase):
         self.assertNotIn("subprocess.run", body)
         self.assertNotIn("/usr/bin/umount", body)
 
+    def test_foreign_stack_at_ambient_target_is_selected(self) -> None:
+        raw = (
+            "21 20 0:4 net:[1] /owned rw - nsfs nsfs rw\n"
+            "22 20 0:4 net:[1] /ambient rw - nsfs nsfs rw\n"
+            "23 20 8:1 /foreign /ambient rw - ext4 /dev/root rw\n"
+        )
+        records = MODULE.mount_reference_records(
+            raw,
+            Path("/owned"),
+            (("0:4", "net:[1]"),),
+            ("/owned", "/ambient"),
+        )
+        self.assertEqual([row.mount_id for row in records], [21, 22, 23])
+
+    def test_held_fd_exposes_a_kernel_mount_id(self) -> None:
+        with tempfile.NamedTemporaryFile() as value:
+            descriptor = os.open(value.name, os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                self.assertGreater(MODULE.fd_mount_id(descriptor), 0)
+            finally:
+                os.close(descriptor)
+
+    def test_unix_diag_parser_preserves_peer_and_pending_icons(self) -> None:
+        sequence = 7
+        attributes = (
+            struct.pack("=HHI", 8, 3, 42)
+            + struct.pack("=HHII", 12, 4, 43, 44)
+            + struct.pack("=HHI", 8, 8, 1000)
+        )
+        payload = struct.pack("=BBBBIII", socket.AF_UNIX, 1, 1, 0, 41, 1, 2) + attributes
+        message = struct.pack("=IHHII", 16 + len(payload), MODULE.SOCK_DIAG_BY_FAMILY, 0, sequence, 0) + payload
+        done = struct.pack("=IHHII", 16, MODULE.NLMSG_DONE, 0, sequence, 0)
+        rows, complete = MODULE.parse_unix_diag_datagram(message + done, expected_sequence=sequence)
+        self.assertTrue(complete)
+        self.assertEqual(rows[0]["peer"], 42)
+        self.assertEqual(rows[0]["icons"], [43, 44])
+        self.assertEqual(rows[0]["uid"], 1000)
+
 
 class ReducerStateMachineTest(unittest.TestCase):
     class FakeControl:
@@ -442,6 +490,12 @@ class ReducerStateMachineTest(unittest.TestCase):
                 "phase": phase or MODULE.PHASES[0],
                 "observedAt": "2026-08-22T00:00:00+00:00",
                 "bootId": "b" * 36,
+                "netnsMarkerIdentity": (
+                    {"device": 44, "inode": 99}
+                    if MODULE.PHASES.index(phase or MODULE.PHASES[0])
+                    >= MODULE.PHASES.index("mounts_settled")
+                    else None
+                ),
             }
             self.control_digest = "c" * 64
             self.control = {
@@ -463,13 +517,15 @@ class ReducerStateMachineTest(unittest.TestCase):
         def phase(self) -> str:
             return str(self.state["phase"])
 
-        def advance(self, phase: str) -> None:
+        def advance(self, phase: str, **kwargs: object) -> None:
             current = MODULE.PHASES.index(self.phase)
             target = MODULE.PHASES.index(phase)
             if target != current + 1:
                 raise AssertionError(f"nonadjacent transition {self.phase}->{phase}")
             self.events.append(f"phase:{phase}")
             self.state = {**self.state, "phase": phase}
+            if kwargs.get("netns_marker_identity") is not None:
+                self.state["netnsMarkerIdentity"] = kwargs["netns_marker_identity"]
 
     def patches(
         self, control: "ReducerStateMachineTest.FakeControl"
@@ -478,9 +534,7 @@ class ReducerStateMachineTest(unittest.TestCase):
         event_functions = {
             "transfer_runtime_custody": "custody",
             "remove_bound_socket": "socket",
-            "settle_task_netns": "netns",
             "runtime_reduction_preflight": "preflight",
-            "unlink_containerd_pidfile": "pidfile",
             "reduce_runtime_tree": "runtime-reduced",
             "remove_empty_runtime_root": "runtime-root-removed",
             "require_terminal_reproof": "terminal-reproof",
@@ -494,6 +548,25 @@ class ReducerStateMachineTest(unittest.TestCase):
                     side_effect=lambda *_args, marker=event, **_kwargs: control.events.append(marker),
                 )
             )
+        stack.enter_context(
+            mock.patch.object(
+                MODULE,
+                "settle_task_netns",
+                side_effect=lambda *_args: (
+                    control.events.append("netns")
+                    or {
+                        "device": 44,
+                        "inode": 99,
+                        "uid": 0,
+                        "gid": 0,
+                        "mode": 0o600,
+                        "type": stat.S_IFREG,
+                        "links": 1,
+                        "size": 0,
+                    }
+                ),
+            )
+        )
         stack.enter_context(
             mock.patch.object(
                 MODULE,
@@ -521,8 +594,16 @@ class ReducerStateMachineTest(unittest.TestCase):
         )
         stack.enter_context(mock.patch.object(MODULE, "require_mounts_absent"))
         stack.enter_context(mock.patch.object(MODULE, "require_registry_listener_absent"))
+        stack.enter_context(mock.patch.object(MODULE, "post_revocation_socket_snapshot"))
         stack.enter_context(mock.patch.object(MODULE, "registry_inventory_matches"))
         stack.enter_context(mock.patch.object(MODULE, "require_related_process_cutoff"))
+        stack.enter_context(
+            mock.patch.object(
+                MODULE,
+                "hold_related_process_cutoff",
+                side_effect=lambda *_args, **_kwargs: contextlib.nullcontext({}),
+            )
+        )
         stack.enter_context(
             mock.patch.object(
                 MODULE,
@@ -543,7 +624,7 @@ class ReducerStateMachineTest(unittest.TestCase):
         self.assertLess(control.events.index("custody"), control.events.index("socket"))
         self.assertLess(control.events.index("signal:dockerd"), control.events.index("signal:containerd"))
         self.assertLess(control.events.index("netns"), control.events.index("preflight"))
-        self.assertLess(control.events.index("pidfile"), control.events.index("runtime-reduced"))
+        self.assertLess(control.events.index("preflight"), control.events.index("runtime-reduced"))
         self.assertLess(control.events.index("runtime-root-removed"), control.events.index("receipt-custody"))
         self.assertEqual(control.events[-1], "archive")
         self.assertEqual(control.phase, "archive_intent_final")
@@ -609,6 +690,112 @@ class DestructiveBoundaryTest(unittest.TestCase):
             after = (root / "destination").stat()
             self.assertEqual((before.st_dev, before.st_ino), (after.st_dev, after.st_ino))
 
+    def test_unnamed_tmpfile_link_is_source_fd_bound_and_no_replace(self) -> None:
+        if not hasattr(os, "O_TMPFILE"):
+            self.skipTest("O_TMPFILE is unavailable")
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            directory_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            temporary_fd = os.open(
+                ".", os.O_TMPFILE | os.O_RDWR, 0o600, dir_fd=directory_fd
+            )
+            try:
+                os.write(temporary_fd, b"exact")
+                os.fsync(temporary_fd)
+                MODULE.link_tmpfile_noreplace_at(
+                    temporary_fd, directory_fd, "published"
+                )
+                self.assertEqual((root / "published").read_bytes(), b"exact")
+                with self.assertRaises(FileExistsError):
+                    MODULE.link_tmpfile_noreplace_at(
+                        temporary_fd, directory_fd, "published"
+                    )
+            finally:
+                os.close(temporary_fd)
+                os.close(directory_fd)
+
+    def test_receipt_custody_admits_original_intermediate_and_final_only(self) -> None:
+        raw = b"receipt\n"
+        digest = hashlib.sha256(raw).hexdigest()
+        expected = {
+            "device": 7,
+            "inode": 9,
+            "uid": 1000,
+            "gid": 1000,
+            "mode": 0o600,
+            "size": len(raw),
+        }
+        with mock.patch.object(MODULE, "EXPECTED_RECEIPT_SHA256", digest):
+            for uid, gid, mode in ((1000, 1000, 0o600), (0, 0, 0o600), (0, 0, 0o400)):
+                with self.subTest(uid=uid, mode=mode):
+                    observed = mock.Mock(
+                        st_mode=stat.S_IFREG | mode,
+                        st_uid=uid,
+                        st_gid=gid,
+                        st_nlink=1,
+                        st_dev=7,
+                        st_ino=9,
+                        st_size=len(raw),
+                    )
+                    MODULE._require_legacy_receipt(
+                        observed, raw, expected, terminal=False
+                    )
+            invalid = mock.Mock(
+                st_mode=stat.S_IFREG | 0o644,
+                st_uid=0,
+                st_gid=0,
+                st_nlink=1,
+                st_dev=7,
+                st_ino=9,
+                st_size=len(raw),
+            )
+            with self.assertRaises(MODULE.DrainError):
+                MODULE._require_legacy_receipt(
+                    invalid, raw, expected, terminal=False
+                )
+
+    def test_receipt_tombstone_prefixes_are_total_replay_states(self) -> None:
+        raw = b'{"legacy":true}\n'
+        digest = hashlib.sha256(raw).hexdigest()
+        control = {
+            "authority": {
+                "legacyReceipt": {
+                    "device": 7,
+                    "inode": 9,
+                    "uid": 1000,
+                    "gid": 1000,
+                    "mode": 0o600,
+                    "size": len(raw),
+                },
+                "legacyReceiptBytes": raw.decode(),
+            }
+        }
+        observed = mock.Mock(
+            st_mode=stat.S_IFREG | 0o400,
+            st_uid=0,
+            st_gid=0,
+            st_nlink=1,
+            st_dev=7,
+            st_ino=9,
+            st_size=0,
+        )
+        with mock.patch.object(MODULE, "EXPECTED_RECEIPT_SHA256", digest):
+            tombstone = MODULE.receipt_tombstone_bytes(control)
+            for length in (0, 1, len(tombstone) - 1):
+                with self.subTest(length=length):
+                    observed.st_size = length
+                    self.assertEqual(
+                        MODULE._live_receipt_disposition(
+                            observed, tombstone[:length], control
+                        ),
+                        "tombstone_prefix",
+                    )
+            observed.st_size = len(tombstone)
+            self.assertEqual(
+                MODULE._live_receipt_disposition(observed, tombstone, control),
+                "tombstone",
+            )
+
     def test_archived_response_loss_is_read_only_and_byte_stable(self) -> None:
         control = ReducerStateMachineTest.FakeControl("archive_intent_final")
         expected = {"schema": MODULE.PROJECTION_SCHEMA, "outcome": "drained"}
@@ -641,14 +828,15 @@ class DestructiveBoundaryTest(unittest.TestCase):
         ]
         self.assertLess(
             archive.index("terminal = write_projection(control)"),
-            archive.index("rename_noreplace_at("),
+            archive.index("link_tmpfile_noreplace_at("),
         )
 
     def test_runtime_and_pidfile_have_complete_preflight_before_unlink(self) -> None:
         source = MODULE_PATH.read_text(encoding="utf-8")
         reducer = source[source.index("def run_reducer") : source.index("def require_root")]
-        self.assertLess(reducer.index("runtime_reduction_preflight"), reducer.index("unlink_containerd_pidfile"))
-        self.assertLess(reducer.index("unlink_containerd_pidfile"), reducer.index("reduce_runtime_tree"))
+        self.assertLess(reducer.index("runtime_reduction_preflight"), reducer.index("reduce_runtime_tree"))
+        self.assertNotIn("unlink_containerd_pidfile", source)
+        self.assertIn("require_containerd_pidfile_exact", source)
         runtime = source[source.index("def _scan_runtime_directory") : source.index("def _read_regular_at")]
         self.assertNotIn("os.walk", runtime)
         self.assertNotIn("shutil.rmtree", runtime)
@@ -671,6 +859,17 @@ class DestructiveBoundaryTest(unittest.TestCase):
         self.assertLess(publish.index("atomic_write_at(descriptor, STATE_NAME"), publish.index("rename_noreplace_at("))
         self.assertIn('control["bootId"] == current_boot_id()', source)
         self.assertIn('state["bootId"] == current_boot_id()', source)
+
+    def test_projection_and_archive_publish_only_from_unnamed_fds(self) -> None:
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        projection = source[source.index("def write_projection") : source.index("def archive_receipt")]
+        archive = source[source.index("def archive_receipt") : source.index("def registry_inventory_matches")]
+        self.assertIn("_create_root_tmpfile", projection)
+        self.assertIn("link_tmpfile_noreplace_at", projection)
+        self.assertNotIn("pending_name", projection)
+        self.assertIn("complete_receipt_tombstone", archive)
+        self.assertIn("link_tmpfile_noreplace_at", archive)
+        self.assertNotIn("rename_noreplace_at(\n                evidence_fd,\n                RECEIPT_PATH.name", archive)
 
 
 class WrapperBoundaryTest(unittest.TestCase):
@@ -706,6 +905,21 @@ class WrapperBoundaryTest(unittest.TestCase):
             source.index("control_root_fd = os.open("),
             source.index('read_bound_at(control_root_fd, "legacy_v3_drain.py"'),
         )
+
+    def test_loader_and_reducer_share_exact_canonical_bytes(self) -> None:
+        source = WRAPPER.read_text(encoding="utf-8")
+        loader = source.split("read -r -d '' pinned_loader <<'PY' || true\n", 1)[1].split("\nPY\n", 1)[0]
+        tree = ast.parse(loader)
+        canonical = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "canonical"
+        )
+        module = ast.fix_missing_locations(ast.Module(body=[canonical], type_ignores=[]))
+        namespace = {"json": json}
+        exec(compile(module, "<loader-canonical>", "exec"), namespace, namespace)
+        value = {"nested": {"b": 2}, "a": [1, True, None]}
+        self.assertEqual(namespace["canonical"](value), MODULE.canonical_json(value))
 
     def test_verify_only_has_no_output_file_argument(self) -> None:
         source = WRAPPER.read_text(encoding="utf-8")
