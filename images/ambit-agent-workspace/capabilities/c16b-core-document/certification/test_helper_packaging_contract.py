@@ -43,6 +43,7 @@ class HelperPackagingContractTest(unittest.TestCase):
 
     def test_closed_helper_manifest_and_general_go_copy_remove_duplicate_roster(self) -> None:
         manifest = PACK / "helper-input.sha256"
+        toolchain = json.loads((PACK / "toolchain-manifest.json").read_text())
         self.assertEqual(
             hashlib.sha256(manifest.read_bytes()).hexdigest(),
             "10bc2e0565fb4bc5adc7ce889a15b31257ae852017b1f989bca58cfdb23b1c01",
@@ -72,6 +73,15 @@ class HelperPackagingContractTest(unittest.TestCase):
         self.assertNotIn("cp /helper-input/main.go /helper-input/main_test.go", dockerfile)
         self.assertIn("io.ambit.atomic-tree-materializer-protocol", dockerfile)
         self.assertIn('io.ambit.runtime-pack="${BUILD_RUNTIME_PACK_REF}"', dockerfile)
+        self.assertIn("xargs -r apk add --no-cache < /tmp/apk-packages.lock", dockerfile)
+        self.assertNotIn("apk add --no-cache < /tmp/apk-direct-packages.lock", dockerfile)
+        closure = set((PACK / "apk-packages.lock").read_text().splitlines())
+        direct = set((PACK / "apk-direct-packages.lock").read_text().splitlines())
+        self.assertTrue(direct <= closure)
+        self.assertEqual(
+            toolchain["osClosureLockSha256"],
+            hashlib.sha256((PACK / "apk-packages.lock").read_bytes()).hexdigest(),
+        )
         certification = (PACK / "certification/certify-local.sh").read_text()
         self.assertIn('schema:"ambit.runtime-pack-evidence-binding/v4"', certification)
         self.assertIn('packRef:$runtime_pack_ref', certification)

@@ -98,18 +98,9 @@ ARG BUILD_RUNTIME_PACK_REF
 
 USER root
 
-COPY apk-direct-packages.lock apk-packages.lock /tmp/
+COPY apk-packages.lock /tmp/
 RUN set -eux; \
-    xargs -r apk add --no-cache < /tmp/apk-direct-packages.lock; \
-    while IFS= read -r expected; do \
-      package="${expected%%=*}"; \
-      wanted="${expected#*=}"; \
-      actual="$(awk -v package="${package}" '\
-        $0 == "P:" package { found=1; next } \
-        found && /^V:/ { print substr($0, 3); exit } \
-        found && $0 == "" { found=0 }' /lib/apk/db/installed)"; \
-      test "${actual}" = "${wanted}"; \
-    done < /tmp/apk-direct-packages.lock; \
+    xargs -r apk add --no-cache < /tmp/apk-packages.lock; \
     addgroup -g 1000 daytona; \
     adduser -D -u 1000 -G daytona -s /bin/bash daytona; \
     ln -s python3.14 /usr/bin/python3; \
@@ -131,7 +122,6 @@ RUN set -eux; \
       /usr/bin/pip3.14 \
       /usr/bin/apk \
       /var/lib/db/sbom \
-      /tmp/apk-direct-packages.lock \
       /tmp/apk-packages.lock \
       /tmp/apk-packages.actual.lock
 
