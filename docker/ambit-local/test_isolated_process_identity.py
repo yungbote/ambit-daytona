@@ -225,9 +225,20 @@ class IsolatedProcessIdentityTest(unittest.TestCase):
         replacement["procInode"] = recorded["procInode"] + 1
         read_fd, write_fd = os.pipe()
         self.addCleanup(os.close, write_fd)
+        events: list[str] = []
+
+        def open_pidfd(pid: int, flags: int) -> int:
+            self.assertEqual((pid, flags), (self.process.pid, 0))
+            events.append("pidfd_open")
+            return read_fd
+
+        def observe_reused_pid(*_: object, **__: object) -> dict[str, object]:
+            events.append("verify_process")
+            return replacement
+
         with (
-            mock.patch.object(MODULE.os, "pidfd_open", return_value=read_fd) as pidfd_open,
-            mock.patch.object(MODULE, "verify_process", return_value=replacement),
+            mock.patch.object(MODULE.os, "pidfd_open", side_effect=open_pidfd) as pidfd_open,
+            mock.patch.object(MODULE, "verify_process", side_effect=observe_reused_pid),
             mock.patch.object(MODULE.signal, "pidfd_send_signal") as sender,
         ):
             with self.assertRaisesRegex(MODULE.ProcessIdentityError, "procInode differs"):
@@ -237,6 +248,25 @@ class IsolatedProcessIdentityTest(unittest.TestCase):
                     exit_timeout_seconds=0.1,
                 )
         pidfd_open.assert_called_once_with(self.process.pid, 0)
+        self.assertEqual(events, ["pidfd_open", "verify_process"])
+        sender.assert_not_called()
+        self.assertIsNone(self.process.poll())
+
+    def test_pidfd_target_exit_during_proof_sends_no_signal(self) -> None:
+        recorded = self.recorded_identity()
+        read_fd, write_fd = os.pipe()
+        os.close(write_fd)
+        with (
+            mock.patch.object(MODULE.os, "pidfd_open", return_value=read_fd),
+            mock.patch.object(MODULE, "verify_process", return_value=recorded),
+            mock.patch.object(MODULE.signal, "pidfd_send_signal") as sender,
+        ):
+            with self.assertRaisesRegex(MODULE.ProcessIdentityError, "exited during identity proof"):
+                MODULE.signal_recorded_process(
+                    recorded,
+                    expected_uid=os.geteuid(),
+                    exit_timeout_seconds=0.1,
+                )
         sender.assert_not_called()
         self.assertIsNone(self.process.poll())
 
@@ -351,7 +381,7 @@ class IsolatedProcessIdentityTest(unittest.TestCase):
                 str(os.geteuid()),
                 raw,
                 "--timeout-ms",
-                "2000",
+                "720000",
             ],
             text=True,
         )
@@ -364,6 +394,13 @@ class IsolatedProcessIdentityTest(unittest.TestCase):
             [str(self.process.pid), str(self.executable), "/tmp/dockerd.json"],
             [
                 "verify-digest",
+                str(self.process.pid),
+                str(self.executable),
+                str(os.geteuid()),
+                hashlib.sha256(raw_arguments).hexdigest(),
+            ],
+            [
+                "signal-exact",
                 str(self.process.pid),
                 str(self.executable),
                 str(os.geteuid()),

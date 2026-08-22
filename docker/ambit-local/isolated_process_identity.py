@@ -52,7 +52,7 @@ MAX_EXECUTABLE_BYTES = 4 * 1024
 MAX_PID = (1 << 31) - 1
 MAX_UID = (1 << 32) - 1
 MAX_KERNEL_IDENTITY = (1 << 64) - 1
-MAX_EXIT_WAIT_SECONDS = 60.0
+MAX_EXIT_WAIT_SECONDS = 900.0
 
 
 def _plain_int(
@@ -456,7 +456,7 @@ def main() -> None:
     recorded = parse_recorded_identity_json(args.recorded_identity_json)
     if args.operation == "signal-recorded":
         _require(
-            re.fullmatch(r"[1-9][0-9]{0,4}", args.timeout_ms) is not None,
+            re.fullmatch(r"[1-9][0-9]{0,5}", args.timeout_ms) is not None,
             "process exit timeout is invalid",
         )
         timeout_ms = int(args.timeout_ms)
