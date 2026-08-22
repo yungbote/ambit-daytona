@@ -255,6 +255,62 @@ remove the durable claim last. No boot unit,
 shared daemon config, global `/home` propagation mutation, or namespace bind
 pin is installed.
 
+### Exact legacy-v3 drain boundary
+
+The still-running pre-v5 daemon created on 2026-08-20 is not current runtime
+authority and must never be passed to either the historical stop script or the
+v5 stop operation. Its caller-owned v3 receipt records stable daemon PIDs,
+start ticks, executables, argv digests, config digests, and the `/tmp` runtime
+inode, but also records `/proc/<pid>` directory inodes. The kernel has
+reinstantiated those procfs dentries for the same long-lived process, so the
+old script's whole-JSON comparison now rejects before stopping. Numeric-PID
+signals and its recursive `find -delete` fallback are not accepted recovery
+mechanisms.
+
+`drain-legacy-v3-runtime.sh` is a task-scoped, remove-only compatibility tool
+for that one exact receipt and state root. It exposes only:
+
+```text
+verify-only /home/bote/m/.local/ambit-daytona-c16b/state
+drain /home/bote/m/.local/ambit-daytona-c16b/state VERIFICATION_SHA256
+resume /home/bote/m/.local/ambit-daytona-c16b/state
+```
+
+`verify-only` writes nothing and authorizes no mutation. It performs two
+stable root-level passes over the exact receipt/config/runtime identities,
+pidfd-held daemon/wrapper/shim/task graph, Unix socket owners and connected
+client roster, every observable mount namespace, the ambient and owned nsfs
+targets, overlay and registry binds, persistent roots, and the complete local
+registry blob inventory. The legacy `procInode` values remain visible as
+`ignored_unstable_procfs_dentry` observations; PID, start ticks, executable,
+argv digest, credentials, namespace, cgroup, and topology remain mandatory.
+Any unreadable namespace, foreign client/process/target, substituted path,
+unknown runtime entry, changed registry blob, or coexisting v5 authority is a
+manual blocker.
+
+`drain` recomputes that proof under the same boot-global lease used by v5,
+requires the caller-supplied verification digest, snapshots its exact source,
+and publishes a distinct root-owned legacy control. It revokes only the bound
+Docker socket, pidfd-signals exact dockerd with `SIGTERM`, and requires the
+sudo wrappers, registry task, shim, overlay, registry bind, and all related
+socket ownership to disappear before it may pidfd-signal containerd. It never
+uses the shared 66-process caller cgroup, never sends `SIGKILL`, never signals a
+shim or task directly, and never unmounts overlay or persistent data. After
+both daemons are gone, the sole admitted mount mutation is removal of the exact
+legacy task nsfs target after its source target set is proved to be ambient
+host `default` plus that owned target; it must return exactly to ambient.
+
+The `/tmp` root stays at its legacy name until the final parent-relative
+`rmdir`, so v5 continues to see a blocking legacy authority through every
+partial cleanup. Runtime deletion is descriptor-relative and replayable over
+the originally bound roster. The old outer Docker/containerd roots, registry,
+configs, logs, and registry blobs are preserved. The exact v3 receipt is
+atomically archived only after runtime removal and registry reproof, then a
+non-authoritative completion projection is written. `resume` executes the
+root-custodied source snapshot and continues the same monotonic reducer. A
+timeout or foreign state stops for an explicit manual route; the default tool
+has no force path.
+
 Runtime-tree deletion has its own crash classification boundary. Only after
 all runtime proofs pass does the reducer atomically rename the exact root to
 `/run/ambit-c16b-docker-removing-<state-hash>` and fsync `/run`. Internal files
