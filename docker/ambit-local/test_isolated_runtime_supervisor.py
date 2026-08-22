@@ -2255,28 +2255,36 @@ class LegacyV3TransitionBarrierTest(unittest.TestCase):
             for source_exact in (False, True):
                 for control in (False, True):
                     for archive_present in (False, True):
-                        for archive_exact in (False, True):
-                            with self.subTest(
-                                source_present=source_present,
-                                source_exact=source_exact,
-                                control=control,
-                                archive_present=archive_present,
-                                archive_exact=archive_exact,
-                            ):
-                                expected = source_exact or (
-                                    (source_present or control or archive_present)
-                                    and not archive_exact
-                                )
-                                self.assertEqual(
-                                    MODULE.legacy_v3_transition_blocked(
-                                        source_present=source_present,
-                                        source_exact=source_exact,
-                                        control_present=control,
-                                        archive_present=archive_present,
-                                        terminal_archive_exact=archive_exact,
-                                    ),
-                                    expected,
-                                )
+                        for prepared_present in (False, True):
+                            for archive_exact in (False, True):
+                                with self.subTest(
+                                    source_present=source_present,
+                                    source_exact=source_exact,
+                                    control=control,
+                                    archive_present=archive_present,
+                                    prepared_present=prepared_present,
+                                    archive_exact=archive_exact,
+                                ):
+                                    expected = source_exact or (
+                                        (
+                                            source_present
+                                            or control
+                                            or archive_present
+                                            or prepared_present
+                                        )
+                                        and not archive_exact
+                                    )
+                                    self.assertEqual(
+                                        MODULE.legacy_v3_transition_blocked(
+                                            source_present=source_present,
+                                            source_exact=source_exact,
+                                            control_present=control,
+                                            archive_present=archive_present,
+                                            prepared_present=prepared_present,
+                                            terminal_archive_exact=archive_exact,
+                                        ),
+                                        expected,
+                                    )
 
     def test_observer_is_global_and_archive_is_the_only_control_handoff(self) -> None:
         def present(path: Path) -> bool:
@@ -2350,6 +2358,32 @@ class LegacyV3TransitionBarrierTest(unittest.TestCase):
             side_effect=lambda path, **_kwargs: path == MODULE.LEGACY_V3_TERMINAL_ARCHIVE,
         ):
             MODULE.require_legacy_v3_transition_terminal()
+
+    def test_final_tombstone_identity_uses_ordinary_v5_projection_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            evidence = root / "evidence"
+            evidence.mkdir(mode=0o700)
+            os.chmod(root, 0o700)
+            tombstone = evidence / MODULE.START_RECEIPT_NAME
+            tombstone.write_bytes(b'{"schema":"legacy-tombstone"}\n')
+            os.chmod(tombstone, 0o600)
+            root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            evidence_fd = os.open(
+                evidence, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            )
+            state = MODULE.StateAuthority(
+                root,
+                os.getuid(),
+                os.getgid(),
+                root_fd,
+                evidence_fd,
+            )
+            try:
+                MODULE.remove_user_runtime_projections(state)
+                self.assertFalse(tombstone.exists())
+            finally:
+                state.close()
 
     def test_barrier_uses_literal_paths_digest_and_no_legacy_mutation(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
@@ -2427,6 +2461,7 @@ class LegacyV3TransitionBarrierTest(unittest.TestCase):
         self.assertEqual(legacy.EXPECTED_STATE_ROOT, MODULE.LEGACY_V3_STATE_ROOT)
         self.assertEqual(legacy.RECEIPT_PATH, MODULE.LEGACY_V3_LIVE_RECEIPT)
         self.assertEqual(legacy.ARCHIVE_RECEIPT_PATH, MODULE.LEGACY_V3_TERMINAL_ARCHIVE)
+        self.assertEqual(legacy.PREPARED_ARCHIVE_PATH, MODULE.LEGACY_V3_PREPARED_ARCHIVE)
         self.assertEqual(legacy.CONTROL_ROOT, MODULE.LEGACY_V3_CONTROL_ROOT)
         self.assertEqual(legacy.EXPECTED_RECEIPT_SHA256, MODULE.LEGACY_V3_RECEIPT_SHA256)
         self.assertEqual(
