@@ -2251,18 +2251,32 @@ class RuntimeSupervisorSourceBoundaryTest(unittest.TestCase):
 
 class LegacyV3TransitionBarrierTest(unittest.TestCase):
     def test_complete_truth_table(self) -> None:
-        for source in (False, True):
-            for control in (False, True):
-                for archive in (False, True):
-                    with self.subTest(source=source, control=control, archive=archive):
-                        self.assertEqual(
-                            MODULE.legacy_v3_transition_blocked(
-                                source_exact=source,
-                                control_present=control,
-                                terminal_archive_exact=archive,
-                            ),
-                            source or (control and not archive),
-                        )
+        for source_present in (False, True):
+            for source_exact in (False, True):
+                for control in (False, True):
+                    for archive_present in (False, True):
+                        for archive_exact in (False, True):
+                            with self.subTest(
+                                source_present=source_present,
+                                source_exact=source_exact,
+                                control=control,
+                                archive_present=archive_present,
+                                archive_exact=archive_exact,
+                            ):
+                                expected = source_exact or (
+                                    (source_present or control or archive_present)
+                                    and not archive_exact
+                                )
+                                self.assertEqual(
+                                    MODULE.legacy_v3_transition_blocked(
+                                        source_present=source_present,
+                                        source_exact=source_exact,
+                                        control_present=control,
+                                        archive_present=archive_present,
+                                        terminal_archive_exact=archive_exact,
+                                    ),
+                                    expected,
+                                )
 
     def test_observer_is_global_and_archive_is_the_only_control_handoff(self) -> None:
         def present(path: Path) -> bool:
@@ -2276,6 +2290,16 @@ class LegacyV3TransitionBarrierTest(unittest.TestCase):
 
         with mock.patch.object(MODULE, "path_exists_nofollow", side_effect=present), mock.patch.object(
             MODULE, "_legacy_v3_regular_digest", side_effect=exact
+        ), self.assertRaisesRegex(MODULE.SupervisorError, "not terminally archived"):
+            MODULE.require_legacy_v3_transition_terminal()
+        with mock.patch.object(
+            MODULE,
+            "path_exists_nofollow",
+            side_effect=lambda path: path == MODULE.LEGACY_V3_TERMINAL_ARCHIVE,
+        ), mock.patch.object(
+            MODULE,
+            "_legacy_v3_regular_digest",
+            return_value=False,
         ), self.assertRaisesRegex(MODULE.SupervisorError, "not terminally archived"):
             MODULE.require_legacy_v3_transition_terminal()
 
@@ -2304,6 +2328,28 @@ class LegacyV3TransitionBarrierTest(unittest.TestCase):
                             require_terminal_identity=False,
                         )
                     )
+        with mock.patch.object(
+            MODULE,
+            "path_exists_nofollow",
+            side_effect=lambda path: path == MODULE.LEGACY_V3_LIVE_RECEIPT,
+        ), mock.patch.object(
+            MODULE,
+            "_legacy_v3_regular_digest",
+            return_value=False,
+        ), self.assertRaisesRegex(MODULE.SupervisorError, "not terminally archived"):
+            MODULE.require_legacy_v3_transition_terminal()
+
+    def test_terminal_archive_allows_a_later_nonlegacy_live_receipt(self) -> None:
+        with mock.patch.object(
+            MODULE,
+            "path_exists_nofollow",
+            side_effect=lambda path: path == MODULE.LEGACY_V3_LIVE_RECEIPT,
+        ), mock.patch.object(
+            MODULE,
+            "_legacy_v3_regular_digest",
+            side_effect=lambda path, **_kwargs: path == MODULE.LEGACY_V3_TERMINAL_ARCHIVE,
+        ):
+            MODULE.require_legacy_v3_transition_terminal()
 
     def test_barrier_uses_literal_paths_digest_and_no_legacy_mutation(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
@@ -2332,6 +2378,32 @@ class LegacyV3TransitionBarrierTest(unittest.TestCase):
             self.assertIn(marker, source)
         self.assertGreaterEqual(source.count("require_no_other_task_runtime("), 8)
 
+    def test_each_runtime_route_checks_barrier_before_its_first_mutation(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        recover = source[
+            source.index("    def recover_existing_runtime")
+            : source.index("    def setup", source.index("    def recover_existing_runtime"))
+        ]
+        self.assertLess(
+            recover.index("require_no_other_task_runtime"),
+            recover.index("reduce_runtime_removal_root"),
+        )
+        status = source[source.index("def runtime_status") : source.index("def acquire_runtime_lease_until")]
+        self.assertLess(
+            status.index("require_no_other_task_runtime"),
+            status.index("_validated_existing_authorities"),
+        )
+        stopped = source[source.index("def ensure_runtime_stopped") : source.index("def ensure_orphaned_runtime_stopped")]
+        self.assertLess(
+            stopped.index("require_no_other_task_runtime"),
+            stopped.index("signal_recorded_process"),
+        )
+        orphaned = source[source.index("def ensure_orphaned_runtime_stopped") : source.index("def parser")]
+        self.assertLess(
+            orphaned.index("require_no_other_task_runtime"),
+            orphaned.index("remove_empty_cgroup"),
+        )
+
     def test_all_three_launcher_pins_match_supervisor(self) -> None:
         digest = hashlib.sha256(SCRIPT.read_bytes()).hexdigest()
         for name in (
@@ -2342,6 +2414,25 @@ class LegacyV3TransitionBarrierTest(unittest.TestCase):
             with self.subTest(name=name):
                 value = SCRIPT.with_name(name).read_text(encoding="utf-8")
                 self.assertIn(f"supervisor_sha256={digest}", value)
+
+    def test_legacy_and_v5_share_one_literal_handoff_contract(self) -> None:
+        legacy_path = SCRIPT.with_name("legacy_v3_drain.py")
+        specification = importlib.util.spec_from_file_location(
+            "ambit_legacy_v3_contract", legacy_path
+        )
+        assert specification is not None and specification.loader is not None
+        legacy = importlib.util.module_from_spec(specification)
+        sys.modules[specification.name] = legacy
+        specification.loader.exec_module(legacy)
+        self.assertEqual(legacy.EXPECTED_STATE_ROOT, MODULE.LEGACY_V3_STATE_ROOT)
+        self.assertEqual(legacy.RECEIPT_PATH, MODULE.LEGACY_V3_LIVE_RECEIPT)
+        self.assertEqual(legacy.ARCHIVE_RECEIPT_PATH, MODULE.LEGACY_V3_TERMINAL_ARCHIVE)
+        self.assertEqual(legacy.CONTROL_ROOT, MODULE.LEGACY_V3_CONTROL_ROOT)
+        self.assertEqual(legacy.EXPECTED_RECEIPT_SHA256, MODULE.LEGACY_V3_RECEIPT_SHA256)
+        self.assertEqual(
+            legacy.GLOBAL_LEASE_PATH,
+            MODULE.RUNTIME_PARENT / MODULE.GLOBAL_LEASE_NAME,
+        )
 
 
 if __name__ == "__main__":

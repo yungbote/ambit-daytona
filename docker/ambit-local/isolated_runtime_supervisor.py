@@ -2527,11 +2527,16 @@ def path_exists_nofollow(path: Path) -> bool:
 
 def legacy_v3_transition_blocked(
     *,
+    source_present: bool,
     source_exact: bool,
     control_present: bool,
+    archive_present: bool,
     terminal_archive_exact: bool,
 ) -> bool:
-    return source_exact or (control_present and not terminal_archive_exact)
+    return source_exact or (
+        (source_present or control_present or archive_present)
+        and not terminal_archive_exact
+    )
 
 
 def _legacy_v3_regular_digest(
@@ -2598,17 +2603,17 @@ def require_legacy_v3_transition_terminal() -> None:
         require_terminal_identity=False,
     )
     control_present = path_exists_nofollow(LEGACY_V3_CONTROL_ROOT)
-    terminal_archive_exact = (
-        not source_present
-        and _legacy_v3_regular_digest(
-            LEGACY_V3_TERMINAL_ARCHIVE,
-            require_terminal_identity=True,
-        )
+    archive_present = path_exists_nofollow(LEGACY_V3_TERMINAL_ARCHIVE)
+    terminal_archive_exact = _legacy_v3_regular_digest(
+        LEGACY_V3_TERMINAL_ARCHIVE,
+        require_terminal_identity=True,
     )
     require(
         not legacy_v3_transition_blocked(
+            source_present=source_present,
             source_exact=source_exact,
             control_present=control_present,
+            archive_present=archive_present,
             terminal_archive_exact=terminal_archive_exact,
         ),
         "exact legacy v3 runtime transition is not terminally archived",
