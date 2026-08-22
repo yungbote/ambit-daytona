@@ -636,6 +636,218 @@ class ProcessUniverseTest(unittest.TestCase):
             self.assertTrue(MODULE.global_runtime_lease_busy())
 
 
+class RuntimeSymlinkAuthorityTest(unittest.TestCase):
+    @staticmethod
+    def symlink_identity(**changes: object) -> object:
+        values: dict[str, object] = {
+            "st_mode": stat.S_IFLNK | 0o777,
+            "st_uid": 0,
+            "st_gid": 0,
+            "st_nlink": 1,
+            "st_size": len(os.fsencode(MODULE.EXPECTED_CONTAINERD_WORK_TARGET)),
+            "st_dev": 44,
+            "st_ino": 12496406,
+        }
+        values.update(changes)
+        return mock.Mock(**values)
+
+    def test_exact_containerd_work_symlink_is_the_only_admitted_symlink(self) -> None:
+        observed = self.symlink_identity()
+        MODULE._require_runtime_entry_contract(
+            MODULE.EXPECTED_CONTAINERD_WORK_RELATIVE,
+            observed,
+            MODULE.EXPECTED_CONTAINERD_WORK_TARGET,
+        )
+        self.assertEqual(
+            hashlib.sha256(os.fsencode(MODULE.EXPECTED_CONTAINERD_WORK_TARGET)).hexdigest(),
+            MODULE.EXPECTED_CONTAINERD_WORK_TARGET_SHA256,
+        )
+        with self.assertRaisesRegex(MODULE.ManualRecoveryRequired, "coordinate is foreign"):
+            MODULE._require_runtime_entry_contract(
+                MODULE.EXPECTED_CONTAINERD_WORK_RELATIVE + "-foreign",
+                observed,
+                MODULE.EXPECTED_CONTAINERD_WORK_TARGET,
+            )
+
+    def test_wrong_relative_parent_and_prefix_sibling_targets_reject(self) -> None:
+        observed = self.symlink_identity()
+        for target in (
+            "outer-containerd/io.containerd.runtime.v2.task/ambit-c16b/" + MODULE.EXPECTED_CONTAINER_ID,
+            MODULE.EXPECTED_CONTAINERD_WORK_TARGET + "-foreign",
+            str(MODULE.EXPECTED_STATE_ROOT / "outer-containerd-foreign" / MODULE.EXPECTED_CONTAINER_ID),
+            str(MODULE.EXPECTED_STATE_ROOT / "outer-containerd/../outer-docker" / MODULE.EXPECTED_CONTAINER_ID),
+        ):
+            with self.subTest(target=target), self.assertRaisesRegex(
+                MODULE.DrainError,
+                "work symlink authority differs",
+            ):
+                MODULE._require_runtime_entry_contract(
+                    MODULE.EXPECTED_CONTAINERD_WORK_RELATIVE,
+                    observed,
+                    target,
+                )
+
+    def test_symlink_metadata_and_exact_coordinate_type_are_closed(self) -> None:
+        for changes in (
+            {"st_uid": 1000},
+            {"st_gid": 1000},
+            {"st_mode": stat.S_IFLNK | 0o700},
+            {"st_nlink": 2},
+            {"st_size": 1},
+        ):
+            with self.subTest(changes=changes), self.assertRaisesRegex(
+                MODULE.DrainError,
+                "work symlink authority differs",
+            ):
+                MODULE._require_runtime_entry_contract(
+                    MODULE.EXPECTED_CONTAINERD_WORK_RELATIVE,
+                    self.symlink_identity(**changes),
+                    MODULE.EXPECTED_CONTAINERD_WORK_TARGET,
+                )
+        with self.assertRaisesRegex(MODULE.ManualRecoveryRequired, "not its exact symlink"):
+            MODULE._require_runtime_entry_contract(
+                MODULE.EXPECTED_CONTAINERD_WORK_RELATIVE,
+                self.symlink_identity(st_mode=stat.S_IFREG | 0o600),
+                None,
+            )
+
+    def test_link_text_swap_during_no_follow_capture_rejects(self) -> None:
+        observed = self.symlink_identity()
+        with mock.patch.object(
+            MODULE.os, "stat", side_effect=(observed, observed)
+        ), mock.patch.object(
+            MODULE.os, "open", return_value=31
+        ) as opened, mock.patch.object(
+            MODULE.os, "fstat", return_value=observed
+        ), mock.patch.object(
+            MODULE.os,
+            "readlink",
+            side_effect=(
+                MODULE.EXPECTED_CONTAINERD_WORK_TARGET,
+                MODULE.EXPECTED_CONTAINERD_WORK_TARGET + "-swapped",
+            ),
+        ), mock.patch.object(MODULE.os, "close") as closed, self.assertRaisesRegex(
+            MODULE.DrainError,
+            "link authority changed",
+        ):
+            MODULE._verify_runtime_entry_no_follow(
+                20,
+                "work",
+                MODULE.EXPECTED_CONTAINERD_WORK_RELATIVE,
+                expected=None,
+                marker_identity=None,
+                forbid_docker_socket=False,
+                label="test work",
+            )
+        opened.assert_called_once_with(
+            "work",
+            os.O_PATH | os.O_NOFOLLOW,
+            dir_fd=20,
+        )
+        closed.assert_called_once_with(31)
+
+    def test_reducer_reproves_and_unlinks_only_the_symlink_entry(self) -> None:
+        events: list[str] = []
+        proof = mock.Mock(
+            observed=self.symlink_identity(),
+            link_target=MODULE.EXPECTED_CONTAINERD_WORK_TARGET,
+        )
+        with mock.patch.object(
+            MODULE.os, "listdir", return_value=("work",)
+        ), mock.patch.object(
+            MODULE, "_verify_runtime_entry_no_follow", return_value=proof
+        ), mock.patch.object(
+            MODULE,
+            "_reprove_runtime_entry_name",
+            side_effect=lambda *_args, **_kwargs: events.append("reprove"),
+        ), mock.patch.object(
+            MODULE.os,
+            "unlink",
+            side_effect=lambda *_args, **_kwargs: events.append("unlink"),
+        ) as unlink, mock.patch.object(
+            MODULE.os, "rmdir"
+        ) as rmdir, mock.patch.object(
+            MODULE.os, "open"
+        ) as opened, mock.patch.object(MODULE.os, "fsync"):
+            MODULE._reduce_runtime_directory(
+                20,
+                {MODULE.EXPECTED_CONTAINERD_WORK_RELATIVE: {}},
+                prefix=str(Path(MODULE.EXPECTED_CONTAINERD_WORK_RELATIVE).parent),
+                marker_identity={},
+            )
+        self.assertEqual(events, ["reprove", "unlink"])
+        unlink.assert_called_once_with("work", dir_fd=20)
+        rmdir.assert_not_called()
+        opened.assert_not_called()
+        proof.close.assert_called_once_with()
+
+    def test_name_swap_blocks_before_unlink_and_absence_is_replay(self) -> None:
+        proof = mock.Mock(
+            observed=self.symlink_identity(),
+            link_target=MODULE.EXPECTED_CONTAINERD_WORK_TARGET,
+        )
+        with mock.patch.object(
+            MODULE.os, "listdir", return_value=("work",)
+        ), mock.patch.object(
+            MODULE, "_verify_runtime_entry_no_follow", return_value=proof
+        ), mock.patch.object(
+            MODULE,
+            "_reprove_runtime_entry_name",
+            side_effect=MODULE.DrainError("name binding differs"),
+        ), mock.patch.object(MODULE.os, "unlink") as unlink, self.assertRaisesRegex(
+            MODULE.DrainError,
+            "name binding differs",
+        ):
+            MODULE._reduce_runtime_directory(
+                20,
+                {MODULE.EXPECTED_CONTAINERD_WORK_RELATIVE: {}},
+                prefix=str(Path(MODULE.EXPECTED_CONTAINERD_WORK_RELATIVE).parent),
+                marker_identity={},
+            )
+        unlink.assert_not_called()
+        proof.close.assert_called_once_with()
+
+        with mock.patch.object(
+            MODULE.os, "listdir", return_value=()
+        ), mock.patch.object(MODULE.os, "unlink") as absent_unlink:
+            MODULE._reduce_runtime_directory(
+                20,
+                {MODULE.EXPECTED_CONTAINERD_WORK_RELATIVE: {}},
+                prefix=str(Path(MODULE.EXPECTED_CONTAINERD_WORK_RELATIVE).parent),
+                marker_identity={},
+            )
+        absent_unlink.assert_not_called()
+
+    def test_capture_preflight_and_reducer_share_one_no_follow_verifier(self) -> None:
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        capture = source[
+            source.index("def runtime_tree_snapshot")
+            : source.index("def registry_inventory")
+        ]
+        preflight = source[
+            source.index("def _scan_runtime_directory")
+            : source.index("def runtime_reduction_preflight")
+        ]
+        reducer = source[
+            source.index("def _reduce_runtime_directory")
+            : source.index("def reduce_runtime_tree")
+        ]
+        for region in (capture, preflight, reducer):
+            self.assertIn("_verify_runtime_entry_no_follow", region)
+        self.assertNotIn("require_recorded_entry", preflight)
+        self.assertNotIn("require_recorded_entry", reducer)
+        verifier = source[
+            source.index("def _verify_runtime_entry_no_follow")
+            : source.index("def transfer_runtime_custody")
+        ]
+        self.assertIn("os.O_PATH | os.O_NOFOLLOW", verifier)
+        self.assertIn("os.readlink(name, dir_fd=directory_fd)", verifier)
+        self.assertNotIn("os.stat(EXPECTED_CONTAINERD_WORK_TARGET", verifier)
+        self.assertNotIn("os.open(EXPECTED_CONTAINERD_WORK_TARGET", verifier)
+        self.assertIn('os.unlink(name, dir_fd=directory_fd)', reducer)
+        self.assertNotIn("proof.link_target", reducer)
+
+
 class MountAuthorityTest(unittest.TestCase):
     def test_nonleader_unshared_mount_namespace_is_in_the_global_roster(self) -> None:
         task = mock.Mock(process_fd=10, pidfd=11)

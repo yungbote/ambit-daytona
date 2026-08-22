@@ -341,8 +341,16 @@ containerd pidfile; a second pass performs deepest-first runtime reduction.
 The stale pidfile is preserved as immutable legacy config evidence instead of
 introducing a caller-owned-directory unlink race. Recorded runtime-entry
 absences are ordinary response-loss replay, while any late foreign entry
-blocks before destruction. The old outer Docker/containerd roots, registry,
-configs, logs, and registry blobs are preserved.
+blocks before destruction. The sole admitted symlink is containerd's standard
+runtime-v2 bundle `.../ambit-c16b/<exact-container-id>/work` entry: it must be
+root-owned, mode 0777, one-link, and contain the exact absolute text for the
+preserved `outer-containerd/io.containerd.runtime.v2.task/.../<exact-id>` work
+directory. Capture, both preflight passes, and reduction use one shared
+`O_PATH|O_NOFOLLOW` entry verifier and reprove name/inode/type/link text
+immediately before unlinking only that symlink entry. The target is never
+opened, followed, walked, unlinked, or removed; every other symlink remains a
+foreign blocker. The old outer Docker/containerd roots, registry, configs,
+logs, and registry blobs are preserved.
 
 After exact process, mount, runtime, pidfile, and registry reproof, the reducer
 transfers the exact live receipt inode through the replayable original,

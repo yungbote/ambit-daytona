@@ -101,6 +101,19 @@ EXPECTED_CONTAINERD_CONFIG_SHA256 = (
 EXPECTED_CONTAINER_ID = (
     "d3777dd5521ce67fe714ed5bd1fd855d5ee7f2ed3ffa2d0786cbb67a20a07f02"
 )
+EXPECTED_CONTAINERD_WORK_RELATIVE = str(
+    Path("containerd-state/io.containerd.runtime.v2.task/ambit-c16b")
+    / EXPECTED_CONTAINER_ID
+    / "work"
+)
+EXPECTED_CONTAINERD_WORK_TARGET = str(
+    EXPECTED_STATE_ROOT
+    / "outer-containerd/io.containerd.runtime.v2.task/ambit-c16b"
+    / EXPECTED_CONTAINER_ID
+)
+EXPECTED_CONTAINERD_WORK_TARGET_SHA256 = (
+    "4eec5795356db4caf35532fc5521b975892bd807ef4d3197f3971209fd2739f0"
+)
 EXPECTED_OVERLAY_TARGET = (
     EXPECTED_STATE_ROOT
     / "outer-docker/overlay2/7cada294f2f87de67b35bcbeab5c66bc59b88ade36d2e8736e92a9b441890ecb/merged"
@@ -2150,43 +2163,40 @@ def runtime_tree_snapshot() -> dict[str, object]:
     def scan(directory_fd: int, base: Path) -> None:
         for name in tuple(sorted(os.listdir(directory_fd))):
             path = base / name
-            observed = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-            mode_type = stat.S_IFMT(observed.st_mode)
-            manual(
-                mode_type
-                in (stat.S_IFDIR, stat.S_IFREG, stat.S_IFSOCK, stat.S_IFIFO),
-                f"legacy runtime entry type is foreign: {path}",
+            relative = str(path.relative_to(EXPECTED_RUNTIME_ROOT))
+            proof = _verify_runtime_entry_no_follow(
+                directory_fd,
+                name,
+                relative,
+                expected=None,
+                marker_identity=None,
+                forbid_docker_socket=False,
+                label=f"legacy runtime snapshot entry {relative}",
             )
-            manual(
-                not stat.S_ISLNK(observed.st_mode),
-                f"legacy runtime symlink is forbidden: {path}",
-            )
-            row = identity_document(path, observed)
-            if not stat.S_ISDIR(observed.st_mode):
-                row["size"] = observed.st_size
-            rows.append(row)
-            if stat.S_ISDIR(observed.st_mode):
-                child_fd = os.open(
+            try:
+                row = identity_document(path, proof.observed)
+                if not stat.S_ISDIR(proof.observed.st_mode):
+                    row["size"] = proof.observed.st_size
+                if proof.link_target is not None:
+                    row["linkTarget"] = proof.link_target
+                    row["linkTargetSha256"] = sha256_bytes(
+                        os.fsencode(proof.link_target)
+                    )
+                rows.append(row)
+                if not stat.S_ISDIR(proof.observed.st_mode):
+                    continue
+                child_fd = _open_bound_runtime_directory(
+                    directory_fd,
                     name,
-                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                    dir_fd=directory_fd,
+                    proof,
+                    label=f"legacy runtime snapshot entry {relative}",
                 )
                 try:
-                    bound = os.fstat(child_fd)
-                    literal = os.stat(
-                        name,
-                        dir_fd=directory_fd,
-                        follow_symlinks=False,
-                    )
-                    require(
-                        (bound.st_dev, bound.st_ino)
-                        == (observed.st_dev, observed.st_ino)
-                        == (literal.st_dev, literal.st_ino),
-                        f"legacy runtime directory changed during snapshot: {path}",
-                    )
                     scan(child_fd, path)
                 finally:
                     os.close(child_fd)
+            finally:
+                proof.close()
 
     try:
         root = os.fstat(root_fd)
@@ -3578,6 +3588,186 @@ def require_recorded_entry(
     )
 
 
+@dataclass
+class RuntimeEntryProof:
+    descriptor: int
+    observed: os.stat_result
+    link_target: str | None
+
+    def close(self) -> None:
+        os.close(self.descriptor)
+
+
+def _require_runtime_entry_contract(
+    relative: str,
+    observed: os.stat_result,
+    link_target: str | None,
+) -> None:
+    mode_type = stat.S_IFMT(observed.st_mode)
+    if mode_type == stat.S_IFLNK:
+        manual(
+            relative == EXPECTED_CONTAINERD_WORK_RELATIVE,
+            f"legacy runtime symlink coordinate is foreign: {relative}",
+        )
+        require(
+            observed.st_uid == 0
+            and observed.st_gid == 0
+            and stat.S_IMODE(observed.st_mode) == 0o777
+            and observed.st_nlink == 1
+            and observed.st_size == len(os.fsencode(EXPECTED_CONTAINERD_WORK_TARGET))
+            and link_target == EXPECTED_CONTAINERD_WORK_TARGET
+            and sha256_bytes(os.fsencode(str(link_target)))
+            == EXPECTED_CONTAINERD_WORK_TARGET_SHA256,
+            "legacy containerd work symlink authority differs",
+        )
+        return
+    manual(
+        relative != EXPECTED_CONTAINERD_WORK_RELATIVE,
+        "legacy containerd work entry is not its exact symlink",
+    )
+    manual(
+        mode_type in (stat.S_IFDIR, stat.S_IFREG, stat.S_IFSOCK, stat.S_IFIFO),
+        f"legacy runtime entry type is foreign: {relative}",
+    )
+    require(link_target is None, f"legacy runtime non-symlink has link text: {relative}")
+
+
+def _reprove_runtime_entry_name(
+    directory_fd: int,
+    name: str,
+    proof: RuntimeEntryProof,
+    *,
+    label: str,
+) -> None:
+    bound = os.fstat(proof.descriptor)
+    literal = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    require(
+        (bound.st_dev, bound.st_ino, stat.S_IFMT(bound.st_mode))
+        == (
+            proof.observed.st_dev,
+            proof.observed.st_ino,
+            stat.S_IFMT(proof.observed.st_mode),
+        )
+        == (literal.st_dev, literal.st_ino, stat.S_IFMT(literal.st_mode)),
+        f"{label} name binding differs",
+    )
+    if proof.link_target is not None:
+        require(
+            (
+                bound.st_uid,
+                bound.st_gid,
+                stat.S_IMODE(bound.st_mode),
+                bound.st_nlink,
+                bound.st_size,
+            )
+            == (
+                proof.observed.st_uid,
+                proof.observed.st_gid,
+                stat.S_IMODE(proof.observed.st_mode),
+                proof.observed.st_nlink,
+                proof.observed.st_size,
+            )
+            == (
+                literal.st_uid,
+                literal.st_gid,
+                stat.S_IMODE(literal.st_mode),
+                literal.st_nlink,
+                literal.st_size,
+            )
+            and os.readlink(name, dir_fd=directory_fd) == proof.link_target,
+            f"{label} link authority changed",
+        )
+
+
+def _verify_runtime_entry_no_follow(
+    directory_fd: int,
+    name: str,
+    relative: str,
+    *,
+    expected: Mapping[str, object] | None,
+    marker_identity: Mapping[str, object] | None,
+    forbid_docker_socket: bool,
+    label: str,
+) -> RuntimeEntryProof:
+    observed = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    descriptor = os.open(
+        name,
+        os.O_PATH | os.O_NOFOLLOW,
+        dir_fd=directory_fd,
+    )
+    keep = False
+    try:
+        link_target = (
+            os.readlink(name, dir_fd=directory_fd)
+            if stat.S_ISLNK(observed.st_mode)
+            else None
+        )
+        _require_runtime_entry_contract(relative, observed, link_target)
+        proof = RuntimeEntryProof(descriptor, observed, link_target)
+        _reprove_runtime_entry_name(
+            directory_fd,
+            name,
+            proof,
+            label=label,
+        )
+        if forbid_docker_socket and relative == "docker.sock":
+            raise ManualRecoveryRequired("legacy Docker API socket reappeared")
+        if marker_identity is not None and relative == TASK_NETNS_RELATIVE:
+            _require_task_netns_marker(observed, marker_identity)
+        elif expected is not None:
+            require_recorded_entry(observed, expected, label=label)
+            if link_target is not None:
+                require(
+                    expected.get("linkTarget") == link_target
+                    and expected.get("linkTargetSha256")
+                    == EXPECTED_CONTAINERD_WORK_TARGET_SHA256,
+                    f"{label} recorded link authority differs",
+                )
+            else:
+                require(
+                    "linkTarget" not in expected
+                    and "linkTargetSha256" not in expected,
+                    f"{label} invents link authority",
+                )
+        keep = True
+        return proof
+    finally:
+        if not keep:
+            os.close(descriptor)
+
+
+def _open_bound_runtime_directory(
+    parent_fd: int,
+    name: str,
+    proof: RuntimeEntryProof,
+    *,
+    label: str,
+) -> int:
+    require(stat.S_ISDIR(proof.observed.st_mode), f"{label} is not a directory")
+    descriptor = os.open(
+        name,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        dir_fd=parent_fd,
+    )
+    try:
+        observed = os.fstat(descriptor)
+        literal = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        require(
+            (observed.st_dev, observed.st_ino, stat.S_IFMT(observed.st_mode))
+            == (
+                proof.observed.st_dev,
+                proof.observed.st_ino,
+                stat.S_IFMT(proof.observed.st_mode),
+            )
+            == (literal.st_dev, literal.st_ino, stat.S_IFMT(literal.st_mode)),
+            f"{label} directory binding differs",
+        )
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
 def transfer_runtime_custody(control: Mapping[str, object]) -> None:
     with hold_related_process_cutoff(
         control,
@@ -3730,30 +3920,6 @@ def _runtime_tree_rows(control: Mapping[str, object]) -> dict[str, Mapping[str, 
     }
 
 
-def _open_recorded_runtime_directory(
-    parent_fd: int,
-    name: str,
-    expected: Mapping[str, object],
-) -> int:
-    descriptor = os.open(
-        name,
-        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-        dir_fd=parent_fd,
-    )
-    try:
-        observed = os.fstat(descriptor)
-        literal = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-        require_recorded_entry(observed, expected, label=f"legacy runtime directory {name}")
-        require(
-            (literal.st_dev, literal.st_ino) == (observed.st_dev, observed.st_ino),
-            f"legacy runtime directory binding differs: {name}",
-        )
-        return descriptor
-    except BaseException:
-        os.close(descriptor)
-        raise
-
-
 def settle_task_netns(control: Mapping[str, object]) -> dict[str, object]:
     require_related_process_cutoff(control, allowed_roles=set())
     authority = control["authority"]
@@ -3783,17 +3949,39 @@ def settle_task_netns(control: Mapping[str, object]) -> dict[str, object]:
     exec_fd: int | None = None
     netns_fd: int | None = None
     target_fd: int | None = None
+    exec_proof: RuntimeEntryProof | None = None
+    netns_proof: RuntimeEntryProof | None = None
     marker_identity: dict[str, object] | None = None
     try:
-        exec_fd = _open_recorded_runtime_directory(
+        exec_proof = _verify_runtime_entry_no_follow(
             root_fd,
             "docker-exec",
-            rows["docker-exec"],
+            "docker-exec",
+            expected=rows["docker-exec"],
+            marker_identity=None,
+            forbid_docker_socket=False,
+            label="legacy runtime entry docker-exec",
         )
-        netns_fd = _open_recorded_runtime_directory(
+        exec_fd = _open_bound_runtime_directory(
+            root_fd,
+            "docker-exec",
+            exec_proof,
+            label="legacy runtime entry docker-exec",
+        )
+        netns_proof = _verify_runtime_entry_no_follow(
             exec_fd,
             "netns",
-            rows["docker-exec/netns"],
+            "docker-exec/netns",
+            expected=rows["docker-exec/netns"],
+            marker_identity=None,
+            forbid_docker_socket=False,
+            label="legacy runtime entry docker-exec/netns",
+        )
+        netns_fd = _open_bound_runtime_directory(
+            exec_fd,
+            "netns",
+            netns_proof,
+            label="legacy runtime entry docker-exec/netns",
         )
         target_fd = os.open(
             "default",
@@ -3876,6 +4064,9 @@ def settle_task_netns(control: Mapping[str, object]) -> dict[str, object]:
         for descriptor in (target_fd, netns_fd, exec_fd, root_fd, root_parent_fd):
             if descriptor is not None:
                 os.close(descriptor)
+        for proof in (netns_proof, exec_proof):
+            if proof is not None:
+                proof.close()
     final = stable_global_mount_roster(
         TASK_NETNS_TARGET,
         anchor,
@@ -3924,34 +4115,40 @@ def _scan_runtime_directory(
             relative in expected_rows,
             f"legacy runtime preflight found a foreign entry: {relative}",
         )
-        observed = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-        if relative == "docker.sock":
-            raise ManualRecoveryRequired("legacy Docker API socket reappeared")
-        if relative == TASK_NETNS_RELATIVE:
-            _require_task_netns_marker(observed, marker_identity)
-        else:
-            require_recorded_entry(
-                observed,
-                expected_rows[relative],
-                label=f"legacy runtime entry {relative}",
-            )
-        row = {
-            "path": relative,
-            "device": observed.st_dev,
-            "inode": observed.st_ino,
-            "uid": observed.st_uid,
-            "gid": observed.st_gid,
-            "mode": stat.S_IMODE(observed.st_mode),
-            "type": stat.S_IFMT(observed.st_mode),
-            "links": observed.st_nlink,
-            "size": observed.st_size,
-        }
-        result.append(row)
-        if stat.S_ISDIR(observed.st_mode):
-            child_fd = _open_recorded_runtime_directory(
+        proof = _verify_runtime_entry_no_follow(
+            directory_fd,
+            name,
+            relative,
+            expected=expected_rows[relative],
+            marker_identity=marker_identity,
+            forbid_docker_socket=True,
+            label=f"legacy runtime entry {relative}",
+        )
+        try:
+            row = {
+                "path": relative,
+                "device": proof.observed.st_dev,
+                "inode": proof.observed.st_ino,
+                "uid": proof.observed.st_uid,
+                "gid": proof.observed.st_gid,
+                "mode": stat.S_IMODE(proof.observed.st_mode),
+                "type": stat.S_IFMT(proof.observed.st_mode),
+                "links": proof.observed.st_nlink,
+                "size": proof.observed.st_size,
+            }
+            if proof.link_target is not None:
+                row["linkTarget"] = proof.link_target
+                row["linkTargetSha256"] = sha256_bytes(
+                    os.fsencode(proof.link_target)
+                )
+            result.append(row)
+            if not stat.S_ISDIR(proof.observed.st_mode):
+                continue
+            child_fd = _open_bound_runtime_directory(
                 directory_fd,
                 name,
-                expected_rows[relative],
+                proof,
+                label=f"legacy runtime entry {relative}",
             )
             try:
                 result.extend(
@@ -3964,6 +4161,8 @@ def _scan_runtime_directory(
                 )
             finally:
                 os.close(child_fd)
+        finally:
+            proof.close()
     return result
 
 
@@ -4105,56 +4304,54 @@ def _reduce_runtime_directory(
             relative in expected_rows,
             f"legacy runtime reducer found a foreign entry: {relative}",
         )
-        observed = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-        if relative == "docker.sock":
-            raise ManualRecoveryRequired("legacy Docker API socket reappeared")
-        if relative == TASK_NETNS_RELATIVE:
-            _require_task_netns_marker(observed, marker_identity)
-        else:
-            require_recorded_entry(
-                observed,
-                expected_rows[relative],
-                label=f"legacy runtime entry {relative}",
-            )
-        if stat.S_ISDIR(observed.st_mode):
-            child_fd = _open_recorded_runtime_directory(
-                directory_fd,
-                name,
-                expected_rows[relative],
-            )
-            try:
-                _reduce_runtime_directory(
-                    child_fd,
-                    expected_rows,
-                    prefix=relative,
-                    marker_identity=marker_identity,
+        proof = _verify_runtime_entry_no_follow(
+            directory_fd,
+            name,
+            relative,
+            expected=expected_rows[relative],
+            marker_identity=marker_identity,
+            forbid_docker_socket=True,
+            label=f"legacy runtime entry {relative}",
+        )
+        try:
+            if stat.S_ISDIR(proof.observed.st_mode):
+                child_fd = _open_bound_runtime_directory(
+                    directory_fd,
+                    name,
+                    proof,
+                    label=f"legacy runtime entry {relative}",
                 )
-                require(not os.listdir(child_fd), f"legacy runtime directory remained: {relative}")
-                os.fsync(child_fd)
-                literal = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-                require(
-                    (literal.st_dev, literal.st_ino)
-                    == (observed.st_dev, observed.st_ino),
-                    f"legacy runtime directory changed before removal: {relative}",
-                )
-                os.rmdir(name, dir_fd=directory_fd)
-            finally:
-                os.close(child_fd)
-        else:
-            leaf_fd = os.open(
-                name,
-                os.O_PATH | os.O_NOFOLLOW,
-                dir_fd=directory_fd,
-            )
-            try:
-                bound = os.fstat(leaf_fd)
-                require(
-                    (bound.st_dev, bound.st_ino) == (observed.st_dev, observed.st_ino),
-                    f"legacy runtime leaf changed before removal: {relative}",
+                try:
+                    _reduce_runtime_directory(
+                        child_fd,
+                        expected_rows,
+                        prefix=relative,
+                        marker_identity=marker_identity,
+                    )
+                    require(
+                        not os.listdir(child_fd),
+                        f"legacy runtime directory remained: {relative}",
+                    )
+                    os.fsync(child_fd)
+                    _reprove_runtime_entry_name(
+                        directory_fd,
+                        name,
+                        proof,
+                        label=f"legacy runtime entry {relative}",
+                    )
+                    os.rmdir(name, dir_fd=directory_fd)
+                finally:
+                    os.close(child_fd)
+            else:
+                _reprove_runtime_entry_name(
+                    directory_fd,
+                    name,
+                    proof,
+                    label=f"legacy runtime entry {relative}",
                 )
                 os.unlink(name, dir_fd=directory_fd)
-            finally:
-                os.close(leaf_fd)
+        finally:
+            proof.close()
         os.fsync(directory_fd)
 
 
