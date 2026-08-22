@@ -278,38 +278,74 @@ resume /home/bote/m/.local/ambit-daytona-c16b/state
 
 `verify-only` writes nothing and authorizes no mutation. It performs two
 stable root-level passes over the exact receipt/config/runtime identities,
-pidfd-held daemon/wrapper/shim/task graph, Unix socket owners and connected
-client roster, every observable mount namespace, the ambient and owned nsfs
-targets, overlay and registry binds, persistent roots, and the complete local
-registry blob inventory. The legacy `procInode` values remain visible as
+pidfd-stabilized daemon/wrapper/shim/task graph, structured argv/cgroup
+relations, runtime paths, mapped files, namespace and socket FDs, descendants,
+Unix socket owners and connected-client roster, every observable mount
+namespace, the full-ID ambient and owned nsfs occurrences, overlay and
+registry binds, persistent roots, and the complete local registry blob
+inventory. The legacy `procInode` values remain visible as
 `ignored_unstable_procfs_dentry` observations; PID, start ticks, executable,
 argv digest, credentials, namespace, cgroup, and topology remain mandatory.
-Any unreadable namespace, foreign client/process/target, substituted path,
-unknown runtime entry, changed registry blob, or coexisting v5 authority is a
-manual blocker.
+Any unreadable namespace, foreign client/process/source target, substituted
+path, unknown runtime entry, changed registry blob, residual v5 cgroup, or
+coexisting v5 authority is a manual blocker. The legacy tool observes but
+never mutates a cgroup.
 
-`drain` recomputes that proof under the same boot-global lease used by v5,
-requires the caller-supplied verification digest, snapshots its exact source,
-and publishes a distinct root-owned legacy control. It revokes only the bound
+`drain` recomputes that proof under the same boot-global lease used by v5 and
+requires the caller-supplied verification digest. Its sanitized in-sudo loader
+reads, hashes, compiles, and executes one exact source byte buffer; that same
+buffer becomes its root-custodied snapshot. Source, control, and initial state
+are built in one fixed root-owned staging capsule, file- and directory-fsynced,
+then published together with `RENAME_NOREPLACE` and `/run` fsync. The final
+capsule is therefore absent or complete, never a visible sequential prefix,
+and every state is bound to the current boot. The reducer first transfers the
+exact `/tmp` runtime-root inode to root custody. It then revokes only the bound
 Docker socket, pidfd-signals exact dockerd with `SIGTERM`, and requires the
 sudo wrappers, registry task, shim, overlay, registry bind, and all related
 socket ownership to disappear before it may pidfd-signal containerd. It never
 uses the shared 66-process caller cgroup, never sends `SIGKILL`, never signals a
 shim or task directly, and never unmounts overlay or persistent data. After
-both daemons are gone, the sole admitted mount mutation is removal of the exact
-legacy task nsfs target after its source target set is proved to be ambient
-host `default` plus that owned target; it must return exactly to ambient.
+both daemons are gone, the sole admitted mount mutation is an `umount2` through
+the held `/proc/self/fd/<mount-fd>` binding for the exact legacy task nsfs
+occurrence. Mount ID, parent ID, namespace, device, source root, filesystem,
+target, and multiplicity must still equal the recorded roster. The transition
+must reveal the exact root-owned, mode-0600, one-link, zero-byte underlying
+marker and leave precisely the recorded ambient host `default` occurrence.
 
-The `/tmp` root stays at its legacy name until the final parent-relative
-`rmdir`, so v5 continues to see a blocking legacy authority through every
-partial cleanup. Runtime deletion is descriptor-relative and replayable over
-the originally bound roster. The old outer Docker/containerd roots, registry,
-configs, logs, and registry blobs are preserved. The exact v3 receipt is
-atomically archived only after runtime removal and registry reproof, then a
-non-authoritative completion projection is written. `resume` executes the
-root-custodied source snapshot and continues the same monotonic reducer. A
-timeout or foreign state stops for an explicit manual route; the default tool
-has no force path.
+The `/tmp` root stays at its legacy name as a root-owned empty marker until its
+separate terminal `rmdir`, so v5 continues to see a blocker through every
+partial cleanup. Before any runtime unlink, one complete descriptor-relative
+preflight validates every remaining recorded entry and the descriptor-bound
+containerd pidfile; a second pass performs the pidfile unlink first and then
+deepest-first runtime reduction. Recorded absences are ordinary response-loss
+replay, while any late foreign entry blocks before destruction. The old outer
+Docker/containerd roots, registry, configs, logs, and registry blobs are
+preserved.
+
+After exact process, mount, runtime, pidfile, and registry reproof, the reducer
+publishes and revalidates one deterministic root-owned terminal projection,
+transfers the exact live receipt inode to root ownership and mode 0400, and
+durably enters `archive_intent_final`. The final authority mutation is
+descriptor-bound `renameat2(RENAME_NOREPLACE)` of that same inode to
+`outer-docker-receipt.legacy-v3-c7b6f7f5f77ae556.json`, followed by evidence
+directory fsync and exact destination reproof. A destination collision is
+never overwritten; source-plus-destination and neither-source-nor-destination
+are manual blockers. Archive response loss returns the already stored terminal
+bytes without rewriting state or projection. `resume` uses the loader-held
+control-root FD and executes the already-read snapshot bytes in-process, never
+an admitted pathname. A timeout or foreign state stops for an explicit manual
+route; the default tool has no force path.
+
+The v5 barrier is global across every requested v5 `STATE_ROOT`. V5 recognizes
+only the one literal audited live receipt digest, literal reserved control
+path, and literal root-owned terminal archive. The exact live receipt always
+blocks. A remaining forensic control capsule blocks until the source is absent
+and the exact terminal archive exists; at that moment the no-replace archive is
+the final unblocking mutation. V5 does not parse, resume, repair, delete, or
+write legacy control/state, and regex-like sibling names do not become this
+singleton authority. The compatibility boundary can be deleted as a unit only
+after this local transition and its evidence-retention requirement are
+explicitly retired.
 
 Runtime-tree deletion has its own crash classification boundary. Only after
 all runtime proofs pass does the reducer atomically rename the exact root to

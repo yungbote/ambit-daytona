@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import ctypes
 import datetime as dt
 import errno
 import fcntl
@@ -34,7 +35,7 @@ from typing import Any, Callable, Iterator, Mapping, Protocol, Sequence
 SCHEMA = "ambit.local-daytona-legacy-v3-drain-verification/v1"
 CONTROL_SCHEMA = "ambit.local-daytona-legacy-v3-drain-control/v1"
 STATE_SCHEMA = "ambit.local-daytona-legacy-v3-drain-state/v1"
-PROJECTION_SCHEMA = "ambit.local-daytona-legacy-v3-drain-projection/v1"
+PROJECTION_SCHEMA = "ambit.local-daytona-legacy-v3-drain-terminal/v1"
 LEGACY_SCHEMA = "ambit.local-daytona-isolated-docker/v3"
 
 EXPECTED_STATE_ROOT = Path("/home/bote/m/.local/ambit-daytona-c16b/state")
@@ -60,7 +61,7 @@ ARCHIVE_RECEIPT_PATH = (
     EXPECTED_STATE_ROOT
     / f"evidence/outer-docker-receipt.legacy-v3-{EXPECTED_RECEIPT_SHA256[:16]}.json"
 )
-PROJECTION_PATH = EXPECTED_STATE_ROOT / "evidence/legacy-v3-drain-receipt.json"
+PROJECTION_PATH = EXPECTED_STATE_ROOT / "evidence/legacy-v3-drain-terminal.json"
 DOCKER_CONFIG = EXPECTED_STATE_ROOT / "config/outer-docker.json"
 CONTAINERD_CONFIG = EXPECTED_STATE_ROOT / "config/outer-containerd.toml"
 CONTAINERD_PIDFILE = EXPECTED_STATE_ROOT / "config/outer-containerd.pid"
@@ -68,6 +69,8 @@ DOCKER_PIDFILE = EXPECTED_RUNTIME_ROOT / "docker.pid"
 DOCKER_SOCKET = EXPECTED_RUNTIME_ROOT / "docker.sock"
 CONTAINERD_SOCKET = EXPECTED_RUNTIME_ROOT / "containerd.sock"
 TASK_NETNS_TARGET = EXPECTED_RUNTIME_ROOT / "docker-exec/netns/default"
+TASK_NETNS_RELATIVE = "docker-exec/netns/default"
+TASK_NETNS_MARKER_MODE = 0o600
 PERSISTENT_ROOTS = (
     EXPECTED_STATE_ROOT / "outer-docker",
     EXPECTED_STATE_ROOT / "outer-containerd",
@@ -77,6 +80,7 @@ REGISTRY_STORAGE = EXPECTED_STATE_ROOT / "registry/docker/registry/v2"
 
 GLOBAL_LEASE_PATH = Path("/run/ambit-c16b-docker-global.lock")
 CONTROL_ROOT = Path(f"/run/ambit-c16b-legacy-v3-drain-{EXPECTED_RUNTIME_ID}")
+CONTROL_PENDING_NAME = f".{CONTROL_ROOT.name}.pending"
 CONTROL_NAME = "control.json"
 STATE_NAME = "state.json"
 SNAPSHOT_NAME = "legacy_v3_drain.py"
@@ -172,6 +176,7 @@ EXPECTED_PROCESS_CANDIDATES: dict[str, dict[str, object]] = {
 
 PHASES = (
     "stopping_intent_final",
+    "runtime_custody_transferred",
     "docker_api_revoked",
     "dockerd_stop_requested",
     "dockerd_stopped",
@@ -180,9 +185,8 @@ PHASES = (
     "containerd_stopped",
     "mounts_settled",
     "runtime_reducing",
-    "runtime_removed",
-    "receipt_archived",
-    "complete",
+    "runtime_empty",
+    "archive_intent_final",
 )
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -193,6 +197,10 @@ V5_RUNTIME_RE = re.compile(
 OPAQUE_MOUNT_ROOT_RE = re.compile(r"^[a-z][a-z0-9_-]*:\[[1-9][0-9]*\]$")
 MOUNT_DEVICE_RE = re.compile(r"^[0-9]+:[0-9]+$")
 MAX_JSON_BYTES = 2 * 1024 * 1024
+CGROUP_PARENT = Path("/sys/fs/cgroup")
+CGROUP_NAME_RE = re.compile(r"^ambit-c16b-docker-[0-9a-f]{12}$")
+LIBC = ctypes.CDLL(None, use_errno=True)
+RENAME_NOREPLACE = 1
 
 
 class DrainError(RuntimeError):
@@ -760,6 +768,8 @@ def unescape_mount_field(value: str) -> str:
 
 @dataclass(frozen=True, order=True)
 class MountRecord:
+    mount_id: int
+    parent_id: int
     device: str
     root: str
     target: str
@@ -773,6 +783,12 @@ def mount_records(raw: str) -> tuple[MountRecord, ...]:
         require("-" in fields, "mountinfo separator is absent")
         separator = fields.index("-")
         require(separator >= 6 and len(fields) > separator + 2, "mountinfo record is invalid")
+        require(
+            fields[0].isdigit() and fields[1].isdigit(),
+            "mountinfo identity is invalid",
+        )
+        mount_id = int(fields[0])
+        parent_id = int(fields[1])
         device = fields[2]
         root = unescape_mount_field(fields[3])
         target = unescape_mount_field(fields[4])
@@ -789,6 +805,8 @@ def mount_records(raw: str) -> tuple[MountRecord, ...]:
             canonical_root = root
         result.append(
             MountRecord(
+                mount_id,
+                parent_id,
                 device,
                 canonical_root,
                 os.path.normpath(target),
@@ -827,12 +845,12 @@ def source_anchors(raw: str, root: Path) -> tuple[tuple[str, str], ...]:
     return tuple(sorted(anchors))
 
 
-def mount_references(
+def mount_reference_records(
     raw: str,
     root: Path,
     anchors: tuple[tuple[str, str], ...],
-) -> tuple[str, ...]:
-    result: set[str] = set()
+) -> tuple[MountRecord, ...]:
+    result: list[MountRecord] = []
     for record in mount_records(raw):
         target_reference = path_at_or_below(record.target, str(root))
         source_reference = any(
@@ -840,8 +858,18 @@ def mount_references(
             for device, source_root in anchors
         )
         if target_reference or source_reference:
-            result.add(record.target)
+            result.append(record)
     return tuple(sorted(result))
+
+
+def mount_references(
+    raw: str,
+    root: Path,
+    anchors: tuple[tuple[str, str], ...],
+) -> tuple[str, ...]:
+    return tuple(
+        sorted(record.target for record in mount_reference_records(raw, root, anchors))
+    )
 
 
 def mount_namespace_key(pid: int) -> str:
@@ -852,13 +880,18 @@ def mount_namespace_key(pid: int) -> str:
 def global_mount_roster_once(
     root: Path,
     anchors: tuple[tuple[str, str], ...] | None = None,
-) -> tuple[tuple[tuple[str, str], ...], tuple[tuple[str, tuple[str, ...]], ...]]:
+) -> tuple[
+    tuple[tuple[str, str], ...],
+    tuple[tuple[str, tuple[MountRecord, ...]], ...],
+]:
     own_pid = os.getpid()
     own_raw = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
     actual_anchors = source_anchors(own_raw, root) if anchors is None else anchors
     require(actual_anchors, f"mount source anchors are absent: {root}")
-    seen: dict[str, tuple[str, ...]] = {
-        mount_namespace_key(own_pid): mount_references(own_raw, root, actual_anchors)
+    seen: dict[str, tuple[MountRecord, ...]] = {
+        mount_namespace_key(own_pid): mount_reference_records(
+            own_raw, root, actual_anchors
+        )
     }
     for entry in sorted(os.listdir("/proc")):
         if not entry.isdigit():
@@ -880,7 +913,7 @@ def global_mount_roster_once(
             f"mount namespace changed during proof: {pid}",
         )
         namespace = f"{before.st_dev}:{before.st_ino}"
-        targets = mount_references(raw, root, actual_anchors)
+        targets = mount_reference_records(raw, root, actual_anchors)
         if namespace in seen:
             manual(
                 seen[namespace] == targets,
@@ -900,7 +933,11 @@ def stable_global_mount_roster(
     require(first == second, f"global mount roster changed: {root}")
     actual_anchors, namespaces = second
     occurrences = tuple(
-        sorted((namespace, target) for namespace, targets in namespaces for target in targets)
+        sorted(
+            (namespace, record)
+            for namespace, records in namespaces
+            for record in records
+        )
     )
     return {
         "root": str(root),
@@ -909,8 +946,16 @@ def stable_global_mount_roster(
             for device, source_root in actual_anchors
         ],
         "occurrences": [
-            {"mountNamespace": namespace, "target": target}
-            for namespace, target in occurrences
+            {
+                "mountNamespace": namespace,
+                "mountId": record.mount_id,
+                "parentId": record.parent_id,
+                "device": record.device,
+                "root": record.root,
+                "target": record.target,
+                "filesystem": record.filesystem,
+            }
+            for namespace, record in occurrences
         ],
     }
 
@@ -1024,21 +1069,22 @@ def require_registry_listener_absent() -> None:
 
 
 def runtime_socket_snapshot(dockerd_pid: int, registry_pid: int = 964683) -> dict[str, object]:
-    paths = tuple(
+    expected_paths = tuple(
         sorted(
-            path
-            for path in (
+            (
                 DOCKER_SOCKET,
                 CONTAINERD_SOCKET,
                 EXPECTED_RUNTIME_ROOT / "containerd.sock.ttrpc",
                 EXPECTED_RUNTIME_ROOT / "docker-exec/metrics.sock",
-                EXPECTED_RUNTIME_ROOT
-                / f"docker-exec/libnetwork/{'25fb8cc9e82d'}.sock",
+                EXPECTED_RUNTIME_ROOT / "docker-exec/libnetwork/25fb8cc9e82d.sock",
             )
-            if path.exists()
         )
     )
-    identities = [socket_identity(path, expected_uid=0) for path in paths]
+    manual(
+        all(exists_nofollow(path) for path in expected_paths),
+        "legacy runtime socket pathname roster differs",
+    )
+    identities = [socket_identity(path, expected_uid=0) for path in expected_paths]
     unix = proc_unix_records()
     relevant = tuple(
         row
@@ -1052,6 +1098,17 @@ def runtime_socket_snapshot(dockerd_pid: int, registry_pid: int = 964683) -> dic
         value = dict(row)
         value["owners"] = list(owners[int(row["inode"])])
         documented.append(value)
+    admitted_owners = {
+        int(candidate["pid"]) for candidate in EXPECTED_PROCESS_CANDIDATES.values()
+    }
+    manual(
+        all(
+            value["owners"]
+            and set(value["owners"]) <= admitted_owners
+            for value in documented
+        ),
+        "legacy runtime socket has a foreign or ownerless endpoint",
+    )
     docker_rows = [row for row in documented if row["path"] == str(DOCKER_SOCKET)]
     listeners = [
         row
@@ -1070,6 +1127,47 @@ def runtime_socket_snapshot(dockerd_pid: int, registry_pid: int = 964683) -> dic
         "foreignDockerApiClients": [],
         "registryTcpListener": tcp_registry_snapshot(registry_pid),
     }
+
+
+def post_revocation_socket_snapshot(control: Mapping[str, object]) -> dict[str, object]:
+    manual(not exists_nofollow(DOCKER_SOCKET), "Docker API pathname reappeared")
+    authority = control["authority"]
+    assert isinstance(authority, dict)
+    recorded = authority["sockets"]
+    assert isinstance(recorded, dict)
+    recorded_rows = [
+        row for row in recorded["unixRecords"] if row["path"] == str(DOCKER_SOCKET)
+    ]
+    require(len(recorded_rows) == 1, "recorded Docker listener is ambiguous")
+    listener = recorded_rows[0]
+
+    def once() -> dict[str, object]:
+        rows = [
+            row
+            for row in proc_unix_records()
+            if row["path"] == str(DOCKER_SOCKET)
+            or row["inode"] == listener["inode"]
+        ]
+        owners = socket_inode_owners({int(row["inode"]) for row in rows})
+        documented = [
+            {**row, "owners": list(owners[int(row["inode"])])} for row in rows
+        ]
+        manual(
+            documented
+            == [
+                {
+                    **{key: listener[key] for key in listener if key != "owners"},
+                    "owners": [int(process_authority(control, "dockerd")["pid"])],
+                }
+            ],
+            "Docker API accepted or foreign endpoint survived revocation",
+        )
+        return {"pathAbsent": True, "listener": documented[0]}
+
+    first = once()
+    second = once()
+    require(first == second, "Docker API post-revocation roster changed")
+    return second
 
 
 def process_exists(pid: int) -> bool:
@@ -1166,6 +1264,340 @@ def capture_process_graph(parsed_receipt: Mapping[str, object]) -> tuple[dict[st
     )
 
 
+@dataclass
+class ProcessReferenceObservation:
+    row: dict[str, object]
+    pidfd: int
+    process_fd: int
+
+    def close(self) -> None:
+        os.close(self.process_fd)
+        os.close(self.pidfd)
+
+
+def _structured_argument_relations(raw: bytes) -> set[str]:
+    values = raw.rstrip(b"\0").split(b"\0") if raw else []
+    relations: set[str] = set()
+    exact_values = {
+        str(EXPECTED_RUNTIME_ROOT): "runtimeArgv",
+        str(CONTAINERD_SOCKET): "containerdSocketArgv",
+        str(DOCKER_CONFIG): "dockerConfigArgv",
+        str(CONTAINERD_CONFIG): "containerdConfigArgv",
+        EXPECTED_CONTAINER_ID: "containerIdArgv",
+        "ambit-c16b": "namespaceArgv",
+    }
+    for raw_value in values:
+        value = os.fsdecode(raw_value)
+        candidates = {value}
+        if "=" in value:
+            candidates.add(value.split("=", 1)[1])
+        for prefix in ("unix://", "unix:"):
+            candidates.update(
+                candidate.removeprefix(prefix)
+                for candidate in tuple(candidates)
+                if candidate.startswith(prefix)
+            )
+        for candidate in candidates:
+            label = exact_values.get(candidate)
+            if label is not None:
+                relations.add(label)
+            if candidate.startswith("/") and path_at_or_below(
+                candidate, str(EXPECTED_RUNTIME_ROOT)
+            ):
+                relations.add("runtimeArgvPath")
+    return relations
+
+
+def process_reference_scan(
+    pid: int,
+    *,
+    runtime_inodes: set[tuple[int, int]],
+    socket_inodes: set[int],
+    private_namespace_tokens: set[str],
+) -> ProcessReferenceObservation | None:
+    try:
+        pidfd = os.pidfd_open(pid, 0)
+    except OSError as error:
+        if error.errno == errno.ESRCH:
+            return None
+        raise
+    process_fd: int | None = None
+    keep = False
+    try:
+        if pidfd_exited(pidfd):
+            return None
+        try:
+            process_fd = os.open(
+                Path("/proc") / str(pid),
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            )
+            first_parent, first_start = stat_identity(read_at(process_fd, "stat"))
+            raw_arguments = read_at(process_fd, "cmdline")
+            cgroup = read_at(process_fd, "cgroup").decode("ascii", "strict")
+            relations = _structured_argument_relations(raw_arguments)
+            namespaces = {
+                name: namespace_identity(process_fd, name)
+                for name in ("mnt", "net", "pid", "user")
+            }
+            namespace_tokens = {
+                f"{name}:[{identity['inode']}]"
+                for name, identity in namespaces.items()
+            }
+            if namespace_tokens & private_namespace_tokens:
+                relations.add("privateRuntimeNamespace")
+            for label, name in (("cwd", "cwd"), ("root", "root"), ("exe", "exe")):
+                try:
+                    target = os.readlink(name, dir_fd=process_fd)
+                    observed = os.stat(name, dir_fd=process_fd)
+                except FileNotFoundError:
+                    if pidfd_exited(pidfd):
+                        return None
+                    if not raw_arguments:
+                        continue
+                    raise ManualRecoveryRequired(
+                        f"live process {label} edge disappeared: {pid}"
+                    )
+                except PermissionError as error:
+                    raise ManualRecoveryRequired(
+                        f"live process {label} edge is unreadable: {pid}"
+                    ) from error
+                normalized = target.removesuffix(" (deleted)")
+                if path_at_or_below(normalized, str(EXPECTED_RUNTIME_ROOT)):
+                    relations.add(label)
+                if (observed.st_dev, observed.st_ino) in runtime_inodes:
+                    relations.add(f"{label}Inode")
+            try:
+                fd_directory = os.open(
+                    "fd",
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=process_fd,
+                )
+            except FileNotFoundError:
+                if pidfd_exited(pidfd):
+                    return None
+                if raw_arguments:
+                    raise ManualRecoveryRequired(
+                        f"live process fd table disappeared: {pid}"
+                    )
+                fd_directory = None
+            except PermissionError as error:
+                raise ManualRecoveryRequired(
+                    f"live process fd table is unreadable: {pid}"
+                ) from error
+            if fd_directory is not None:
+                try:
+                    for fd_name in tuple(os.listdir(fd_directory)):
+                        try:
+                            observed = os.stat(fd_name, dir_fd=fd_directory)
+                            target = os.readlink(fd_name, dir_fd=fd_directory)
+                        except (FileNotFoundError, ProcessLookupError):
+                            continue
+                        except PermissionError as error:
+                            raise ManualRecoveryRequired(
+                                f"live process fd edge is unreadable: {pid}"
+                            ) from error
+                        if (observed.st_dev, observed.st_ino) in runtime_inodes:
+                            relations.add("runtimeFdInode")
+                        normalized = target.removesuffix(" (deleted)")
+                        if normalized.startswith("/") and path_at_or_below(
+                            normalized, str(EXPECTED_RUNTIME_ROOT)
+                        ):
+                            relations.add("runtimeFdPath")
+                        socket_match = re.fullmatch(
+                            r"socket:\[([1-9][0-9]*)\]", target
+                        )
+                        if (
+                            socket_match is not None
+                            and int(socket_match.group(1)) in socket_inodes
+                        ):
+                            relations.add("runtimeSocketFd")
+                        if target in private_namespace_tokens:
+                            relations.add("runtimeNamespaceFd")
+                        try:
+                            stable = os.stat(fd_name, dir_fd=fd_directory)
+                        except (FileNotFoundError, ProcessLookupError):
+                            if pidfd_exited(pidfd):
+                                return None
+                            raise ManualRecoveryRequired(
+                                f"live process fd edge changed: {pid}"
+                            )
+                        require(
+                            (stable.st_dev, stable.st_ino, stat.S_IFMT(stable.st_mode))
+                            == (observed.st_dev, observed.st_ino, stat.S_IFMT(observed.st_mode)),
+                            f"live process fd edge changed: {pid}",
+                        )
+                finally:
+                    os.close(fd_directory)
+            try:
+                maps = read_at(process_fd, "maps", maximum=16 * 1024 * 1024)
+            except (FileNotFoundError, ProcessLookupError):
+                if pidfd_exited(pidfd):
+                    return None
+                maps = b""
+            if str(EXPECTED_RUNTIME_ROOT).encode() in maps:
+                relations.add("runtimeMappedPath")
+            cgroup_components = {
+                component
+                for line in cgroup.splitlines()
+                for component in line.split("/")
+            }
+            if EXPECTED_CONTAINER_ID in cgroup_components:
+                relations.add("containerCgroup")
+            second_parent, second_start = stat_identity(read_at(process_fd, "stat"))
+            require(
+                (first_parent, first_start) == (second_parent, second_start)
+                and not pidfd_exited(pidfd),
+                f"process reference scan changed: {pid}",
+            )
+            row = {
+                "pid": pid,
+                "parentPid": first_parent,
+                "startTimeTicks": first_start,
+                "namespaces": namespaces,
+                "relations": sorted(relations),
+            }
+            keep = True
+            return ProcessReferenceObservation(row, pidfd, process_fd)
+        except (FileNotFoundError, ProcessLookupError):
+            if pidfd_exited(pidfd):
+                return None
+            raise
+    finally:
+        if process_fd is not None and not keep:
+            os.close(process_fd)
+        if not keep:
+            os.close(pidfd)
+
+
+def _related_process_universe_once(
+    processes: Mapping[str, Mapping[str, object]],
+    runtime: Mapping[str, object],
+    sockets: Mapping[str, object],
+    *,
+    allowed_roles: set[str],
+) -> dict[str, object]:
+    runtime_inodes = {
+        (int(item["device"]), int(item["inode"])) for item in runtime["tree"]
+    }
+    root = runtime["rootIdentity"]
+    runtime_inodes.add((int(root["device"]), int(root["inode"])))
+    socket_inodes = {int(item["inode"]) for item in sockets["unixRecords"]}
+    own_namespace_tokens = {
+        f"{name}:[{os.stat(f'/proc/self/ns/{name}').st_ino}]"
+        for name in ("mnt", "net", "pid", "user")
+    }
+    recorded_namespace_tokens = {
+        f"{name}:[{int(value[field]['inode'])}]"
+        for value in processes.values()
+        for name, field in (
+            ("mnt", "mountNamespace"),
+            ("net", "networkNamespace"),
+            ("pid", "pidNamespace"),
+            ("user", "userNamespace"),
+        )
+    }
+    private_namespace_tokens = recorded_namespace_tokens - own_namespace_tokens
+    observations: list[ProcessReferenceObservation] = []
+    try:
+        for entry in sorted(os.listdir("/proc")):
+            if not entry.isdigit():
+                continue
+            observation = process_reference_scan(
+                int(entry),
+                runtime_inodes=runtime_inodes,
+                socket_inodes=socket_inodes,
+                private_namespace_tokens=private_namespace_tokens,
+            )
+            if observation is not None:
+                observations.append(observation)
+        rows = {int(value.row["pid"]): value.row for value in observations}
+        require(len(rows) == len(observations), "process census contains duplicate PIDs")
+        known_by_pid = {
+            int(value["pid"]): role for role, value in processes.items()
+        }
+        require(
+            len(known_by_pid) == len(processes),
+            "recorded process authority reuses a PID",
+        )
+        for pid, role in known_by_pid.items():
+            row = rows.get(pid)
+            if row is None:
+                continue
+            recorded = processes[role]
+            manual(
+                (row["parentPid"], row["startTimeTicks"])
+                == (recorded["parentPid"], recorded["startTimeTicks"]),
+                f"recorded legacy process PID was reused: {role}",
+            )
+        related = {
+            pid
+            for pid, row in rows.items()
+            if row["relations"] or pid in known_by_pid
+        }
+        changed = True
+        while changed:
+            changed = False
+            for pid, row in rows.items():
+                if int(row["parentPid"]) in related and pid not in related:
+                    related.add(pid)
+                    row["relations"] = sorted((*row["relations"], "descendant"))
+                    changed = True
+        allowed_pids = {int(processes[role]["pid"]) for role in allowed_roles}
+        unknown = sorted(related - allowed_pids)
+        manual(
+            not unknown,
+            "unrecognized legacy-related process: " + ",".join(map(str, unknown)),
+        )
+        for role in allowed_roles:
+            pid = int(processes[role]["pid"])
+            manual(pid in rows, f"recorded legacy process is not visible: {role}")
+        for observation in observations:
+            parent_pid, start_ticks = stat_identity(
+                read_at(observation.process_fd, "stat")
+            )
+            require(
+                (parent_pid, start_ticks)
+                == (
+                    observation.row["parentPid"],
+                    observation.row["startTimeTicks"],
+                )
+                and not pidfd_exited(observation.pidfd),
+                f"process changed before census commit: {observation.row['pid']}",
+            )
+        proof = [rows[pid] for pid in sorted(related)]
+        return {
+            "allowedRoles": sorted(allowed_roles),
+            "related": proof,
+            "proofSha256": sha256_bytes(canonical_json(proof)),
+        }
+    finally:
+        for observation in observations:
+            observation.close()
+
+
+def related_process_universe(
+    processes: Mapping[str, Mapping[str, object]],
+    runtime: Mapping[str, object],
+    sockets: Mapping[str, object],
+    *,
+    allowed_roles: set[str],
+) -> dict[str, object]:
+    first = _related_process_universe_once(
+        processes,
+        runtime,
+        sockets,
+        allowed_roles=allowed_roles,
+    )
+    second = _related_process_universe_once(
+        processes,
+        runtime,
+        sockets,
+        allowed_roles=allowed_roles,
+    )
+    require(first == second, "related process universe changed across proof passes")
+    return second
+
+
 def runtime_tree_snapshot() -> dict[str, object]:
     allowed_top_level = {
         "containerd-state",
@@ -1204,7 +1636,10 @@ def runtime_tree_snapshot() -> dict[str, object]:
                 f"legacy runtime entry type is foreign: {path}",
             )
             manual(not stat.S_ISLNK(observed.st_mode), f"legacy runtime symlink is forbidden: {path}")
-            rows.append(identity_document(path, observed))
+            row = identity_document(path, observed)
+            if not stat.S_ISDIR(observed.st_mode):
+                row["size"] = observed.st_size
+            rows.append(row)
     return {
         "rootIdentity": identity_document(EXPECTED_RUNTIME_ROOT, root),
         "topLevel": list(top_level),
@@ -1278,6 +1713,9 @@ def require_v5_absent(
             ".ambit-c16b-runner-storage-claim"
         ):
             foreign.append(str(Path("/home") / name))
+    for name in os.listdir(CGROUP_PARENT):
+        if CGROUP_NAME_RE.fullmatch(name) is not None:
+            foreign.append(str(CGROUP_PARENT / name))
     if not allow_global_lease and exists_nofollow(GLOBAL_LEASE_PATH):
         foreign.append(str(GLOBAL_LEASE_PATH))
     manual(not foreign, "current v5 authority coexists: " + ",".join(sorted(foreign)))
@@ -1314,10 +1752,11 @@ def pidfile_identity(
         maximum=64,
     )
     require(raw.decode("ascii", "strict").strip() == str(expected_pid), f"pidfile differs: {path}")
+    identity["expectedPid"] = expected_pid
     return identity
 
 
-def netns_baseline(runtime_mounts: Mapping[str, object]) -> dict[str, object]:
+def netns_baseline() -> dict[str, object]:
     target = str(TASK_NETNS_TARGET)
     records = mount_records(Path("/proc/self/mountinfo").read_text(encoding="utf-8"))
     matches = [record for record in records if record.target == target]
@@ -1327,11 +1766,18 @@ def netns_baseline(runtime_mounts: Mapping[str, object]) -> dict[str, object]:
         source == {"device": "0:4", "root": "net:[4026531833]"},
         "legacy task netns source differs",
     )
-    occurrences = [
-        item
-        for item in runtime_mounts["occurrences"]
-        if item["target"] == target or item["target"] == "/run/docker/netns/default"
-    ]
+    source_anchor = ((str(source["device"]), str(source["root"])),)
+    source_roster = stable_global_mount_roster(TASK_NETNS_TARGET, source_anchor)
+    occurrences = list(source_roster["occurrences"])
+    require(
+        all(
+            item["device"] == source["device"]
+            and item["root"] == source["root"]
+            and item["filesystem"] == "nsfs"
+            for item in occurrences
+        ),
+        "legacy task netns occurrence provenance differs",
+    )
     targets = {str(item["target"]) for item in occurrences}
     require(target in targets, "legacy task netns occurrence is absent")
     manual(
@@ -1344,6 +1790,25 @@ def netns_baseline(runtime_mounts: Mapping[str, object]) -> dict[str, object]:
         "ambientTargets": ["/run/docker/netns/default"],
         "occurrences": occurrences,
     }
+
+
+def require_mount_targets_within(
+    value: Mapping[str, object],
+    *,
+    allowed_roots: tuple[Path, ...],
+    label: str,
+) -> None:
+    occurrences = value.get("occurrences")
+    require(isinstance(occurrences, list), f"{label} mount occurrence roster is invalid")
+    foreign = sorted(
+        str(item["target"])
+        for item in occurrences
+        if not any(
+            path_at_or_below(str(item["target"]), str(root))
+            for root in allowed_roots
+        )
+    )
+    manual(not foreign, f"{label} source has a foreign target: " + ",".join(foreign))
 
 
 def collect_authority(
@@ -1361,6 +1826,12 @@ def collect_authority(
     )
     evidence_identity = directory_identity(
         EXPECTED_STATE_ROOT / "evidence",
+        expected_uid=caller_uid,
+        expected_gid=caller_gid,
+        expected_modes={0o700},
+    )
+    config_identity = directory_identity(
+        EXPECTED_STATE_ROOT / "config",
         expected_uid=caller_uid,
         expected_gid=caller_gid,
         expected_modes={0o700},
@@ -1400,10 +1871,33 @@ def collect_authority(
     )
     process_graph, process_observations = capture_process_graph(parsed)
     sockets = runtime_socket_snapshot(960217, 964683)
+    processes = process_graph["processes"]
+    assert isinstance(processes, dict)
+    process_graph["relatedUniverse"] = related_process_universe(
+        processes,
+        runtime_tree,
+        sockets,
+        allowed_roles=set(processes),
+    )
     runtime_mounts = stable_global_mount_roster(EXPECTED_RUNTIME_ROOT)
     data_mounts = stable_global_mount_roster(EXPECTED_STATE_ROOT / "outer-docker")
     registry_mounts = stable_global_mount_roster(EXPECTED_STATE_ROOT / "registry")
-    netns = netns_baseline(runtime_mounts)
+    netns = netns_baseline()
+    require_mount_targets_within(
+        runtime_mounts,
+        allowed_roots=(EXPECTED_RUNTIME_ROOT,),
+        label="legacy runtime",
+    )
+    require_mount_targets_within(
+        data_mounts,
+        allowed_roots=(EXPECTED_STATE_ROOT / "outer-docker",),
+        label="legacy outer Docker",
+    )
+    require_mount_targets_within(
+        registry_mounts,
+        allowed_roots=(EXPECTED_STATE_ROOT / "registry", EXPECTED_OVERLAY_TARGET),
+        label="legacy registry",
+    )
     manual(
         any(item["target"] == str(EXPECTED_OVERLAY_TARGET) for item in data_mounts["occurrences"]),
         "legacy registry overlay mount is absent",
@@ -1424,6 +1918,7 @@ def collect_authority(
         "bootId": current_boot_id(),
         "stateRootIdentity": state_identity,
         "evidenceRootIdentity": evidence_identity,
+        "configRootIdentity": config_identity,
         "legacySource": EXPECTED_LEGACY_SOURCE,
         "legacyReceipt": receipt_identity,
         "runtime": runtime_tree,
@@ -1620,15 +2115,20 @@ def read_json_at(directory_fd: int, name: str, label: str) -> dict[str, Any] | N
     return value
 
 
-def open_control_root(*, create: bool) -> int:
-    if create:
-        try:
-            os.mkdir(CONTROL_ROOT, 0o700)
-        except FileExistsError:
-            pass
-    descriptor = os.open(CONTROL_ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+def _control_allowed_entries() -> set[str]:
+    return {
+        SNAPSHOT_NAME,
+        f".{SNAPSHOT_NAME}.pending",
+        CONTROL_NAME,
+        f".{CONTROL_NAME}.pending",
+        STATE_NAME,
+        f".{STATE_NAME}.pending",
+    }
+
+
+def _validate_control_root_descriptor(parent_fd: int, descriptor: int, name: str) -> None:
+    literal = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
     observed = os.fstat(descriptor)
-    literal = os.stat(CONTROL_ROOT, follow_symlinks=False)
     require(
         stat.S_ISDIR(observed.st_mode)
         and observed.st_uid == 0
@@ -1637,30 +2137,54 @@ def open_control_root(*, create: bool) -> int:
         and (observed.st_dev, observed.st_ino) == (literal.st_dev, literal.st_ino),
         "legacy drain control root differs",
     )
-    allowed = {
-        SNAPSHOT_NAME,
-        f".{SNAPSHOT_NAME}.pending",
-        CONTROL_NAME,
-        f".{CONTROL_NAME}.pending",
-        STATE_NAME,
-        f".{STATE_NAME}.pending",
-    }
     require(
-        set(os.listdir(descriptor)) <= allowed,
+        set(os.listdir(descriptor)) <= _control_allowed_entries(),
         "legacy drain control root contains a foreign entry",
     )
-    return descriptor
+
+
+def open_run_parent() -> int:
+    parent_fd = os.open("/run", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        parent = os.fstat(parent_fd)
+        require(
+            stat.S_ISDIR(parent.st_mode)
+            and parent.st_uid == 0
+            and parent.st_gid == 0
+            and stat.S_IMODE(parent.st_mode) & 0o022 == 0,
+            "legacy drain control parent differs",
+        )
+        return parent_fd
+    except BaseException:
+        os.close(parent_fd)
+        raise
+
+
+def open_control_root() -> int:
+    parent_fd = open_run_parent()
+    try:
+        descriptor = os.open(
+            CONTROL_ROOT.name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=parent_fd,
+        )
+        _validate_control_root_descriptor(parent_fd, descriptor, CONTROL_ROOT.name)
+        return descriptor
+    except BaseException:
+        if "descriptor" in locals():
+            os.close(descriptor)
+        raise
+    finally:
+        os.close(parent_fd)
 
 
 def snapshot_source(control_fd: int) -> str:
-    source_path = Path(__file__).resolve(strict=True)
-    raw, source_stat = read_regular(source_path, maximum=4 * 1024 * 1024)
+    raw = globals().get("__legacy_pinned_source_bytes__")
     require(
-        source_stat.st_uid in (0, 1000)
-        and source_stat.st_gid in (0, 1000)
-        and stat.S_IMODE(source_stat.st_mode) & 0o022 == 0,
-        "legacy drain source authority differs",
+        isinstance(raw, bytes) and 0 < len(raw) <= 4 * 1024 * 1024,
+        "legacy drain was not entered through its in-sudo pinned-byte loader",
     )
+    assert isinstance(raw, bytes)
     digest = sha256_bytes(raw)
     try:
         existing = read_at(control_fd, SNAPSHOT_NAME, maximum=4 * 1024 * 1024)
@@ -1706,6 +2230,118 @@ def snapshot_source(control_fd: int) -> str:
     else:
         require(existing == raw, "legacy drain source snapshot differs")
     return digest
+
+
+def _reduce_pending_control_capsule(parent_fd: int) -> None:
+    try:
+        descriptor = os.open(
+            CONTROL_PENDING_NAME,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=parent_fd,
+        )
+    except FileNotFoundError:
+        return
+    try:
+        _validate_control_root_descriptor(parent_fd, descriptor, CONTROL_PENDING_NAME)
+        for name in tuple(sorted(os.listdir(descriptor))):
+            observed = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+            require(
+                name in _control_allowed_entries()
+                and stat.S_ISREG(observed.st_mode)
+                and observed.st_uid == 0
+                and observed.st_gid == 0
+                and stat.S_IMODE(observed.st_mode) == 0o400
+                and observed.st_nlink == 1
+                and observed.st_size <= 4 * 1024 * 1024,
+                "legacy drain pending capsule entry differs",
+            )
+            leaf_fd = os.open(name, os.O_PATH | os.O_NOFOLLOW, dir_fd=descriptor)
+            try:
+                bound = os.fstat(leaf_fd)
+                require(
+                    (bound.st_dev, bound.st_ino)
+                    == (observed.st_dev, observed.st_ino),
+                    "legacy drain pending capsule entry changed",
+                )
+                os.unlink(name, dir_fd=descriptor)
+                os.fsync(descriptor)
+            finally:
+                os.close(leaf_fd)
+        require(not os.listdir(descriptor), "legacy drain pending capsule did not empty")
+        os.rmdir(CONTROL_PENDING_NAME, dir_fd=parent_fd)
+        os.fsync(parent_fd)
+    finally:
+        os.close(descriptor)
+
+
+def publish_control_capsule(
+    control: Mapping[str, object],
+    state: Mapping[str, object],
+) -> int:
+    parent_fd = open_run_parent()
+    descriptor: int | None = None
+    published = False
+    try:
+        try:
+            existing = os.open(
+                CONTROL_ROOT.name,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=parent_fd,
+            )
+        except FileNotFoundError:
+            existing = None
+        if existing is not None:
+            _validate_control_root_descriptor(parent_fd, existing, CONTROL_ROOT.name)
+            return existing
+        _reduce_pending_control_capsule(parent_fd)
+        os.mkdir(CONTROL_PENDING_NAME, 0o700, dir_fd=parent_fd)
+        os.fsync(parent_fd)
+        descriptor = os.open(
+            CONTROL_PENDING_NAME,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=parent_fd,
+        )
+        _validate_control_root_descriptor(parent_fd, descriptor, CONTROL_PENDING_NAME)
+        source_digest = snapshot_source(descriptor)
+        require(
+            source_digest == control["sourceSha256"],
+            "legacy drain staged source digest differs",
+        )
+        atomic_write_at(descriptor, CONTROL_NAME, control)
+        atomic_write_at(descriptor, STATE_NAME, state)
+        require(
+            set(os.listdir(descriptor)) == {SNAPSHOT_NAME, CONTROL_NAME, STATE_NAME},
+            "legacy drain staged capsule is incomplete",
+        )
+        os.fsync(descriptor)
+        try:
+            rename_noreplace_at(
+                parent_fd,
+                CONTROL_PENDING_NAME,
+                parent_fd,
+                CONTROL_ROOT.name,
+            )
+        except OSError as error:
+            if error.errno != errno.EEXIST:
+                raise
+            os.close(descriptor)
+            descriptor = None
+            _reduce_pending_control_capsule(parent_fd)
+            existing = os.open(
+                CONTROL_ROOT.name,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=parent_fd,
+            )
+            _validate_control_root_descriptor(parent_fd, existing, CONTROL_ROOT.name)
+            return existing
+        os.fsync(parent_fd)
+        _validate_control_root_descriptor(parent_fd, descriptor, CONTROL_ROOT.name)
+        published = True
+        return descriptor
+    finally:
+        if descriptor is not None and not published:
+            os.close(descriptor)
+        os.close(parent_fd)
 
 
 def validate_control(value: object) -> dict[str, Any]:
@@ -1781,43 +2417,87 @@ class ControlAuthority:
             verification["verificationSha256"] == expected_verification_sha256,
             "legacy verification digest differs",
         )
-        descriptor = open_control_root(create=True)
+        raw = globals().get("__legacy_pinned_source_bytes__")
+        require(
+            isinstance(raw, bytes) and 0 < len(raw) <= 4 * 1024 * 1024,
+            "legacy drain pinned source bytes are absent",
+        )
+        assert isinstance(raw, bytes)
+        source_digest = sha256_bytes(raw)
         try:
-            source_digest = snapshot_source(descriptor)
-            existing_raw = read_json_at(descriptor, CONTROL_NAME, "legacy drain control")
-            if existing_raw is None:
-                control = {
-                    "schema": CONTROL_SCHEMA,
-                    "observedAt": utc_now(),
-                    "bootId": current_boot_id(),
-                    "stateRoot": str(EXPECTED_STATE_ROOT),
-                    "caller": {"uid": 1000, "gid": 1000},
-                    "verificationSha256": expected_verification_sha256,
-                    "sourceSha256": source_digest,
-                    "authority": verification["authority"],
-                }
-                atomic_write_at(descriptor, CONTROL_NAME, control)
-            else:
-                control = validate_control(existing_raw)
+            existing_descriptor = open_control_root()
+        except FileNotFoundError:
+            existing_descriptor = None
+        if existing_descriptor is not None:
+            try:
+                snapshot = read_at(
+                    existing_descriptor,
+                    SNAPSHOT_NAME,
+                    maximum=4 * 1024 * 1024,
+                )
+                control_raw = read_json_at(
+                    existing_descriptor,
+                    CONTROL_NAME,
+                    "legacy drain control",
+                )
+                require(control_raw is not None, "legacy drain control is absent")
+                control = validate_control(control_raw)
                 require(
-                    control["verificationSha256"] == expected_verification_sha256
-                    and control["sourceSha256"] == source_digest,
+                    snapshot == raw
+                    and control["sourceSha256"] == source_digest
+                    and control["verificationSha256"] == expected_verification_sha256
+                    and control["authority"] == verification["authority"],
                     "existing legacy drain control differs",
                 )
+                control_digest = sha256_bytes(canonical_json(control))
+                state_raw = read_json_at(
+                    existing_descriptor,
+                    STATE_NAME,
+                    "legacy drain state",
+                )
+                require(state_raw is not None, "legacy drain state is absent")
+                state = validate_state(state_raw, control_digest)
+                return cls(existing_descriptor, control, state)
+            except BaseException:
+                os.close(existing_descriptor)
+                raise
+        control_candidate = {
+            "schema": CONTROL_SCHEMA,
+            "observedAt": utc_now(),
+            "bootId": current_boot_id(),
+            "stateRoot": str(EXPECTED_STATE_ROOT),
+            "caller": {"uid": 1000, "gid": 1000},
+            "verificationSha256": expected_verification_sha256,
+            "sourceSha256": source_digest,
+            "authority": verification["authority"],
+        }
+        control_digest = sha256_bytes(canonical_json(control_candidate))
+        state_candidate = {
+            "schema": STATE_SCHEMA,
+            "observedAt": utc_now(),
+            "bootId": current_boot_id(),
+            "stateRoot": str(EXPECTED_STATE_ROOT),
+            "controlSha256": control_digest,
+            "phase": "stopping_intent_final",
+        }
+        descriptor = publish_control_capsule(control_candidate, state_candidate)
+        try:
+            snapshot = read_at(descriptor, SNAPSHOT_NAME, maximum=4 * 1024 * 1024)
+            require(snapshot == raw, "legacy drain published source snapshot differs")
+            existing_raw = read_json_at(descriptor, CONTROL_NAME, "legacy drain control")
+            require(existing_raw is not None, "legacy drain published control is absent")
+            control = validate_control(existing_raw)
+            require(
+                control["verificationSha256"] == expected_verification_sha256
+                and control["sourceSha256"] == source_digest
+                and control == control_candidate,
+                "existing legacy drain control differs",
+            )
             control_digest = sha256_bytes(canonical_json(control))
             state_raw = read_json_at(descriptor, STATE_NAME, "legacy drain state")
-            if state_raw is None:
-                state = {
-                    "schema": STATE_SCHEMA,
-                    "observedAt": utc_now(),
-                    "bootId": current_boot_id(),
-                    "stateRoot": str(EXPECTED_STATE_ROOT),
-                    "controlSha256": control_digest,
-                    "phase": "stopping_intent_final",
-                }
-                atomic_write_at(descriptor, STATE_NAME, state)
-            else:
-                state = validate_state(state_raw, control_digest)
+            require(state_raw is not None, "legacy drain published state is absent")
+            state = validate_state(state_raw, control_digest)
+            require(state == state_candidate, "existing legacy drain initial state differs")
             return cls(descriptor, control, state)
         except BaseException:
             os.close(descriptor)
@@ -1825,7 +2505,13 @@ class ControlAuthority:
 
     @classmethod
     def open(cls) -> "ControlAuthority":
-        descriptor = open_control_root(create=False)
+        held = globals().get("__legacy_control_root_fd__")
+        require(
+            isinstance(held, int) and held >= 0,
+            "resume did not retain the in-sudo control-root descriptor",
+        )
+        assert isinstance(held, int)
+        descriptor = os.dup(held)
         try:
             snapshot = read_at(descriptor, SNAPSHOT_NAME, maximum=4 * 1024 * 1024)
             control_raw = read_json_at(descriptor, CONTROL_NAME, "legacy drain control")
@@ -1890,6 +2576,66 @@ def process_authority(control: Mapping[str, object], role: str) -> dict[str, obj
     value = processes[role]
     require(isinstance(value, dict), f"recorded process is invalid: {role}")
     return value
+
+
+def require_related_process_cutoff(
+    control: Mapping[str, object],
+    *,
+    allowed_roles: set[str],
+) -> dict[str, object]:
+    authority = control["authority"]
+    assert isinstance(authority, dict)
+    graph = authority["processGraph"]
+    assert isinstance(graph, dict)
+    processes = graph["processes"]
+    runtime = authority["runtime"]
+    sockets = authority["sockets"]
+    require(
+        isinstance(processes, dict)
+        and isinstance(runtime, dict)
+        and isinstance(sockets, dict),
+        "recorded related-process authority is invalid",
+    )
+    return related_process_universe(
+        processes,
+        runtime,
+        sockets,
+        allowed_roles=allowed_roles,
+    )
+
+
+@contextlib.contextmanager
+def hold_related_process_cutoff(
+    control: Mapping[str, object],
+    *,
+    allowed_roles: set[str],
+) -> Iterator[dict[str, object]]:
+    proof = require_related_process_cutoff(
+        control,
+        allowed_roles=allowed_roles,
+    )
+    held: list[int] = []
+    try:
+        for role in sorted(allowed_roles):
+            recorded = process_authority(control, role)
+            pid = int(recorded["pid"])
+            try:
+                descriptor = os.pidfd_open(pid, 0)
+            except OSError as error:
+                if error.errno == errno.ESRCH:
+                    raise ManualRecoveryRequired(
+                        f"recorded legacy process left the action cutoff: {role}"
+                    ) from error
+                raise
+            held.append(descriptor)
+            manual(
+                exact_process_status(recorded) == "live" and not pidfd_exited(descriptor),
+                f"recorded legacy process changed at the action cutoff: {role}",
+            )
+        yield proof
+    finally:
+        for descriptor in held:
+            os.close(descriptor)
 
 
 def exact_process_status(recorded: Mapping[str, object]) -> str:
@@ -1959,7 +2705,206 @@ def wait_for_roles_absent(
         time.sleep(0.1)
 
 
+def runtime_root_descriptors(
+    control: Mapping[str, object],
+    *,
+    require_root_owned: bool | None,
+) -> tuple[int, int]:
+    authority = control["authority"]
+    assert isinstance(authority, dict)
+    expected = authority["runtime"]["rootIdentity"]
+    parent_fd = os.open("/tmp", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    root_fd: int | None = None
+    try:
+        root_fd = os.open(
+            EXPECTED_RUNTIME_ROOT.name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=parent_fd,
+        )
+        observed = os.fstat(root_fd)
+        literal = os.stat(
+            EXPECTED_RUNTIME_ROOT.name,
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+        admitted_owners = (
+            {(0, 0)}
+            if require_root_owned is True
+            else {(int(expected["uid"]), int(expected["gid"]))}
+            if require_root_owned is False
+            else {(int(expected["uid"]), int(expected["gid"])), (0, 0)}
+        )
+        require(
+            stat.S_ISDIR(observed.st_mode)
+            and (observed.st_dev, observed.st_ino)
+            == (expected["device"], expected["inode"])
+            and (literal.st_dev, literal.st_ino)
+            == (observed.st_dev, observed.st_ino)
+            and (observed.st_uid, observed.st_gid) in admitted_owners
+            and stat.S_IMODE(observed.st_mode) == 0o700,
+            "legacy runtime root custody differs",
+        )
+        return parent_fd, root_fd
+    except BaseException:
+        if root_fd is not None:
+            os.close(root_fd)
+        os.close(parent_fd)
+        raise
+
+
+def _recorded_directory_pair(
+    control: Mapping[str, object],
+    *,
+    child_name: str,
+    authority_key: str,
+) -> tuple[int, int]:
+    authority = control["authority"]
+    assert isinstance(authority, dict)
+    state_expected = authority["stateRootIdentity"]
+    child_expected = authority[authority_key]
+    assert isinstance(state_expected, dict) and isinstance(child_expected, dict)
+    state_fd = os.open(
+        EXPECTED_STATE_ROOT,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+    )
+    child_fd: int | None = None
+    try:
+        state_observed = os.fstat(state_fd)
+        state_literal = os.stat(EXPECTED_STATE_ROOT, follow_symlinks=False)
+        require(
+            stat.S_ISDIR(state_observed.st_mode)
+            and (state_observed.st_dev, state_observed.st_ino)
+            == (state_expected["device"], state_expected["inode"])
+            == (state_literal.st_dev, state_literal.st_ino),
+            "legacy state root binding differs",
+        )
+        child_fd = os.open(
+            child_name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=state_fd,
+        )
+        child_observed = os.fstat(child_fd)
+        child_literal = os.stat(
+            child_name,
+            dir_fd=state_fd,
+            follow_symlinks=False,
+        )
+        require(
+            stat.S_ISDIR(child_observed.st_mode)
+            and (child_observed.st_dev, child_observed.st_ino)
+            == (child_expected["device"], child_expected["inode"])
+            == (child_literal.st_dev, child_literal.st_ino)
+            and (child_observed.st_uid, child_observed.st_gid)
+            == (child_expected["uid"], child_expected["gid"])
+            and stat.S_IMODE(child_observed.st_mode) == child_expected["mode"],
+            f"legacy {child_name} directory binding differs",
+        )
+        return state_fd, child_fd
+    except BaseException:
+        if child_fd is not None:
+            os.close(child_fd)
+        os.close(state_fd)
+        raise
+
+
+def recorded_evidence_descriptors(
+    control: Mapping[str, object],
+) -> tuple[int, int]:
+    return _recorded_directory_pair(
+        control,
+        child_name="evidence",
+        authority_key="evidenceRootIdentity",
+    )
+
+
+def recorded_config_descriptors(
+    control: Mapping[str, object],
+) -> tuple[int, int]:
+    return _recorded_directory_pair(
+        control,
+        child_name="config",
+        authority_key="configRootIdentity",
+    )
+
+
+def require_recorded_entry(
+    observed: os.stat_result,
+    expected: Mapping[str, object],
+    *,
+    label: str,
+) -> None:
+    expected_links = int(expected["links"])
+    links_match = observed.st_nlink == expected_links or (
+        stat.S_ISDIR(observed.st_mode)
+        and 2 <= observed.st_nlink <= expected_links
+    )
+    require(
+        (
+            observed.st_dev,
+            observed.st_ino,
+            observed.st_uid,
+            observed.st_gid,
+            stat.S_IMODE(observed.st_mode),
+            stat.S_IFMT(observed.st_mode),
+        )
+        == (
+            expected["device"],
+            expected["inode"],
+            expected["uid"],
+            expected["gid"],
+            expected["mode"],
+            expected["type"],
+        )
+        and links_match
+        and (
+            "size" not in expected or observed.st_size == expected["size"]
+        ),
+        f"{label} identity differs",
+    )
+
+
+def transfer_runtime_custody(control: Mapping[str, object]) -> None:
+    with hold_related_process_cutoff(
+        control,
+        allowed_roles=set(EXPECTED_PROCESS_CANDIDATES),
+    ):
+        _transfer_runtime_custody(control)
+
+
+def _transfer_runtime_custody(control: Mapping[str, object]) -> None:
+    parent_fd, root_fd = runtime_root_descriptors(control, require_root_owned=None)
+    try:
+        os.fchown(root_fd, 0, 0)
+        os.fchmod(root_fd, 0o700)
+        os.fsync(root_fd)
+        literal = os.stat(
+            EXPECTED_RUNTIME_ROOT.name,
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+        observed = os.fstat(root_fd)
+        require(
+            (literal.st_dev, literal.st_ino) == (observed.st_dev, observed.st_ino)
+            and observed.st_uid == 0
+            and observed.st_gid == 0
+            and stat.S_IMODE(observed.st_mode) == 0o700,
+            "legacy runtime root changed during custody transfer",
+        )
+        os.fsync(parent_fd)
+    finally:
+        os.close(root_fd)
+        os.close(parent_fd)
+
+
 def remove_bound_socket(control: Mapping[str, object]) -> None:
+    with hold_related_process_cutoff(
+        control,
+        allowed_roles=set(EXPECTED_PROCESS_CANDIDATES),
+    ):
+        _remove_bound_socket(control)
+
+
+def _remove_bound_socket(control: Mapping[str, object]) -> None:
     authority = control["authority"]
     assert isinstance(authority, dict)
     sockets = authority["sockets"]
@@ -1969,36 +2914,41 @@ def remove_bound_socket(control: Mapping[str, object]) -> None:
         for item in sockets["pathIdentities"]
         if item["path"] == str(DOCKER_SOCKET)
     )
-    if not exists_nofollow(DOCKER_SOCKET):
-        return
-    runtime_socket_snapshot(int(process_authority(control, "dockerd")["pid"]))
-    root_fd = os.open(EXPECTED_RUNTIME_ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    socket_present = exists_nofollow(DOCKER_SOCKET)
+    if socket_present:
+        runtime_socket_snapshot(int(process_authority(control, "dockerd")["pid"]))
+    parent_fd, root_fd = runtime_root_descriptors(control, require_root_owned=True)
     leaf_fd: int | None = None
     try:
         try:
             leaf_fd = os.open("docker.sock", os.O_PATH | os.O_NOFOLLOW, dir_fd=root_fd)
         except FileNotFoundError:
-            return
-        observed = os.fstat(leaf_fd)
-        literal = os.stat("docker.sock", dir_fd=root_fd, follow_symlinks=False)
-        require(
-            stat.S_ISSOCK(observed.st_mode)
-            and (observed.st_dev, observed.st_ino, observed.st_uid, observed.st_gid)
-            == (
-                expected["device"],
-                expected["inode"],
-                expected["uid"],
-                expected["gid"],
+            leaf_fd = None
+        if leaf_fd is None:
+            require(not socket_present, "Docker API socket disappeared before revocation")
+        else:
+            observed = os.fstat(leaf_fd)
+            literal = os.stat("docker.sock", dir_fd=root_fd, follow_symlinks=False)
+            require(
+                stat.S_ISSOCK(observed.st_mode)
+                and (observed.st_dev, observed.st_ino, observed.st_uid, observed.st_gid)
+                == (
+                    expected["device"],
+                    expected["inode"],
+                    expected["uid"],
+                    expected["gid"],
+                )
+                and (literal.st_dev, literal.st_ino) == (observed.st_dev, observed.st_ino),
+                "Docker API socket binding differs before revocation",
             )
-            and (literal.st_dev, literal.st_ino) == (observed.st_dev, observed.st_ino),
-            "Docker API socket binding differs before revocation",
-        )
-        os.unlink("docker.sock", dir_fd=root_fd)
-        os.fsync(root_fd)
+            os.unlink("docker.sock", dir_fd=root_fd)
+            os.fsync(root_fd)
     finally:
         if leaf_fd is not None:
             os.close(leaf_fd)
         os.close(root_fd)
+        os.close(parent_fd)
+    post_revocation_socket_snapshot(control)
 
 
 def anchors_from_document(value: Mapping[str, object]) -> tuple[tuple[str, str], ...]:
@@ -2027,134 +2977,479 @@ def require_mounts_absent(
     manual(not observed["occurrences"], f"legacy mount remains: {key}")
 
 
-def trusted_umount() -> Path:
-    path = Path("/usr/bin/umount").resolve(strict=True)
-    observed = path.stat()
-    require(
-        stat.S_ISREG(observed.st_mode)
-        and observed.st_uid == 0
-        and observed.st_gid == 0
-        and stat.S_IMODE(observed.st_mode) & 0o022 == 0,
-        "umount executable authority differs",
+def fd_umount(descriptor: int) -> None:
+    require(descriptor >= 0, "nsfs mount descriptor is invalid")
+    proc_path = f"/proc/self/fd/{descriptor}".encode("ascii")
+    function = getattr(LIBC, "umount2", None)
+    require(function is not None, "fd-backed umount is unavailable")
+    result = function(ctypes.c_char_p(proc_path), ctypes.c_int(0))
+    if result != 0:
+        observed_errno = ctypes.get_errno()
+        raise OSError(observed_errno, os.strerror(observed_errno))
+
+
+def _runtime_tree_rows(control: Mapping[str, object]) -> dict[str, Mapping[str, object]]:
+    authority = control["authority"]
+    assert isinstance(authority, dict)
+    runtime = authority["runtime"]
+    assert isinstance(runtime, dict)
+    return {
+        str(Path(str(item["path"])).relative_to(EXPECTED_RUNTIME_ROOT)): item
+        for item in runtime["tree"]
+    }
+
+
+def _open_recorded_runtime_directory(
+    parent_fd: int,
+    name: str,
+    expected: Mapping[str, object],
+) -> int:
+    descriptor = os.open(
+        name,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        dir_fd=parent_fd,
     )
-    return path
+    try:
+        observed = os.fstat(descriptor)
+        literal = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        require_recorded_entry(observed, expected, label=f"legacy runtime directory {name}")
+        require(
+            (literal.st_dev, literal.st_ino) == (observed.st_dev, observed.st_ino),
+            f"legacy runtime directory binding differs: {name}",
+        )
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
 
 
 def settle_task_netns(control: Mapping[str, object]) -> None:
+    require_related_process_cutoff(control, allowed_roles=set())
     authority = control["authority"]
     assert isinstance(authority, dict)
     netns = authority["mounts"]["networkNamespace"]
     source = netns["sourceAnchor"]
     anchor = ((str(source["device"]), str(source["root"])),)
     observed = stable_global_mount_roster(TASK_NETNS_TARGET, anchor)
-    targets = {item["target"] for item in observed["occurrences"]}
+    recorded_occurrences = list(netns["occurrences"])
     ambient = set(netns["ambientTargets"])
     owned = str(netns["ownedTarget"])
-    if owned in targets:
-        manual(targets == ambient | {owned}, "legacy netns source has a foreign target")
-        result = subprocess.run(
-            [str(trusted_umount()), "--", owned],
-            check=False,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=30,
-            cwd="/",
-            env={"PATH": "/usr/bin:/bin", "LC_ALL": "C.UTF-8"},
+    expected_ambient = [
+        item for item in recorded_occurrences if item["target"] in ambient
+    ]
+    owned_occurrences = [
+        item for item in observed["occurrences"] if item["target"] == owned
+    ]
+    rows = _runtime_tree_rows(control)
+    root_parent_fd, root_fd = runtime_root_descriptors(
+        control,
+        require_root_owned=True,
+    )
+    exec_fd: int | None = None
+    netns_fd: int | None = None
+    target_fd: int | None = None
+    try:
+        exec_fd = _open_recorded_runtime_directory(
+            root_fd,
+            "docker-exec",
+            rows["docker-exec"],
         )
-        require(result.returncode == 0, "exact legacy task nsfs unmount failed")
+        netns_fd = _open_recorded_runtime_directory(
+            exec_fd,
+            "netns",
+            rows["docker-exec/netns"],
+        )
+        target_fd = os.open(
+            "default",
+            os.O_PATH | os.O_NOFOLLOW,
+            dir_fd=netns_fd,
+        )
+        if owned_occurrences:
+            manual(
+                observed["occurrences"] == recorded_occurrences
+                and len(owned_occurrences) == 1,
+                "legacy netns action-time occurrence roster differs",
+            )
+            mounted = os.fstat(target_fd)
+            literal = os.stat("default", dir_fd=netns_fd, follow_symlinks=False)
+            require_recorded_entry(
+                mounted,
+                rows[TASK_NETNS_RELATIVE],
+                label="legacy mounted task nsfs",
+            )
+            require(
+                (literal.st_dev, literal.st_ino)
+                == (mounted.st_dev, mounted.st_ino),
+                "legacy mounted task nsfs binding differs",
+            )
+            fd_umount(target_fd)
+            os.close(target_fd)
+            target_fd = None
+        else:
+            manual(
+                observed["occurrences"] == expected_ambient,
+                "legacy netns absent replay roster differs",
+            )
+        marker_fd = os.open(
+            "default",
+            os.O_RDONLY | os.O_NOFOLLOW,
+            dir_fd=netns_fd,
+        )
+        try:
+            marker = os.fstat(marker_fd)
+            marker_literal = os.stat(
+                "default", dir_fd=netns_fd, follow_symlinks=False
+            )
+            require(
+                stat.S_ISREG(marker.st_mode)
+                and marker.st_uid == 0
+                and marker.st_gid == 0
+                and stat.S_IMODE(marker.st_mode) == TASK_NETNS_MARKER_MODE
+                and marker.st_nlink == 1
+                and marker.st_size == 0
+                and (marker_literal.st_dev, marker_literal.st_ino)
+                == (marker.st_dev, marker.st_ino),
+                "legacy task nsfs did not reveal its exact root-owned empty marker",
+            )
+        finally:
+            os.close(marker_fd)
+        os.fsync(netns_fd)
+    finally:
+        for descriptor in (target_fd, netns_fd, exec_fd, root_fd, root_parent_fd):
+            if descriptor is not None:
+                os.close(descriptor)
     final = stable_global_mount_roster(TASK_NETNS_TARGET, anchor)
     manual(
-        {item["target"] for item in final["occurrences"]} == ambient,
-        "legacy task netns did not return to ambient targets",
+        final["occurrences"] == expected_ambient,
+        "legacy task netns did not return to its exact ambient roster",
     )
 
 
-def remove_tree_entry(directory_fd: int, name: str, expected: Mapping[str, object]) -> None:
-    observed = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+def _require_task_netns_marker(observed: os.stat_result) -> None:
     require(
-        (
-            observed.st_dev,
-            observed.st_ino,
-            observed.st_uid,
-            observed.st_gid,
-            stat.S_IFMT(observed.st_mode),
-        )
-        == (
-            expected["device"],
-            expected["inode"],
-            expected["uid"],
-            expected["gid"],
-            expected["type"],
-        ),
-        f"legacy runtime entry changed: {name}",
+        stat.S_ISREG(observed.st_mode)
+        and observed.st_uid == 0
+        and observed.st_gid == 0
+        and stat.S_IMODE(observed.st_mode) == TASK_NETNS_MARKER_MODE
+        and observed.st_nlink == 1
+        and observed.st_size == 0,
+        "legacy task netns marker identity differs",
     )
-    if stat.S_ISDIR(observed.st_mode):
-        child_fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd)
-        try:
-            os.fsync(child_fd)
-        finally:
-            os.close(child_fd)
-        os.rmdir(name, dir_fd=directory_fd)
-    else:
-        require(
-            stat.S_ISREG(observed.st_mode)
-            or stat.S_ISSOCK(observed.st_mode)
-            or stat.S_ISFIFO(observed.st_mode),
-            f"legacy runtime leaf type differs: {name}",
+
+
+def _scan_runtime_directory(
+    directory_fd: int,
+    expected_rows: Mapping[str, Mapping[str, object]],
+    *,
+    prefix: str = "",
+) -> list[dict[str, object]]:
+    result: list[dict[str, object]] = []
+    for name in tuple(sorted(os.listdir(directory_fd))):
+        relative = f"{prefix}/{name}" if prefix else name
+        manual(
+            relative in expected_rows,
+            f"legacy runtime preflight found a foreign entry: {relative}",
         )
-        os.unlink(name, dir_fd=directory_fd)
-    os.fsync(directory_fd)
+        observed = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        if relative == "docker.sock":
+            raise ManualRecoveryRequired("legacy Docker API socket reappeared")
+        if relative == TASK_NETNS_RELATIVE:
+            _require_task_netns_marker(observed)
+        else:
+            require_recorded_entry(
+                observed,
+                expected_rows[relative],
+                label=f"legacy runtime entry {relative}",
+            )
+        row = {
+            "path": relative,
+            "device": observed.st_dev,
+            "inode": observed.st_ino,
+            "uid": observed.st_uid,
+            "gid": observed.st_gid,
+            "mode": stat.S_IMODE(observed.st_mode),
+            "type": stat.S_IFMT(observed.st_mode),
+            "links": observed.st_nlink,
+            "size": observed.st_size,
+        }
+        result.append(row)
+        if stat.S_ISDIR(observed.st_mode):
+            child_fd = _open_recorded_runtime_directory(
+                directory_fd,
+                name,
+                expected_rows[relative],
+            )
+            try:
+                result.extend(
+                    _scan_runtime_directory(
+                        child_fd,
+                        expected_rows,
+                        prefix=relative,
+                    )
+                )
+            finally:
+                os.close(child_fd)
+    return result
 
 
-def reduce_runtime_tree(control: Mapping[str, object]) -> None:
-    if not exists_nofollow(EXPECTED_RUNTIME_ROOT):
-        return
+def runtime_reduction_preflight(control: Mapping[str, object]) -> dict[str, object]:
+    require_related_process_cutoff(control, allowed_roles=set())
     require_mounts_absent(
         control,
         "runtime",
         EXPECTED_RUNTIME_ROOT,
         use_recorded_anchors=False,
     )
+    parent_fd, root_fd = runtime_root_descriptors(
+        control,
+        require_root_owned=True,
+    )
+    try:
+        rows = _runtime_tree_rows(control)
+        first = _scan_runtime_directory(root_fd, rows)
+        second = _scan_runtime_directory(root_fd, rows)
+        require(first == second, "legacy runtime tree changed across preflight passes")
+    finally:
+        os.close(root_fd)
+        os.close(parent_fd)
+
     authority = control["authority"]
     assert isinstance(authority, dict)
-    runtime = authority["runtime"]
-    assert isinstance(runtime, dict)
-    expected_rows = {
-        str(Path(str(item["path"])).relative_to(EXPECTED_RUNTIME_ROOT)): item
-        for item in runtime["tree"]
-    }
-
-    def reduce_directory(path: Path, expected_prefix: str = "") -> None:
-        directory_fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        try:
-            for name in tuple(sorted(os.listdir(directory_fd))):
-                relative = f"{expected_prefix}/{name}" if expected_prefix else name
-                manual(relative in expected_rows, f"legacy runtime reducer found a foreign entry: {relative}")
-                expected = expected_rows[relative]
-                observed = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-                if stat.S_ISDIR(observed.st_mode):
-                    reduce_directory(path / name, relative)
-                remove_tree_entry(directory_fd, name, expected)
-        finally:
-            os.close(directory_fd)
-
-    reduce_directory(EXPECTED_RUNTIME_ROOT)
-    parent_fd = os.open("/tmp", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    root_fd = os.open(EXPECTED_RUNTIME_ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    expected_pidfile = authority["configs"]["containerdPidfile"]
+    state_fd, config_fd = recorded_config_descriptors(control)
     try:
-        observed = os.fstat(root_fd)
-        expected_root = runtime["rootIdentity"]
-        require(
-            (observed.st_dev, observed.st_ino, observed.st_uid, observed.st_gid)
-            == (
-                expected_root["device"],
-                expected_root["inode"],
-                expected_root["uid"],
-                expected_root["gid"],
+        try:
+            pidfile_fd = os.open(
+                CONTAINERD_PIDFILE.name,
+                os.O_RDONLY | os.O_NOFOLLOW,
+                dir_fd=config_fd,
             )
-            and not os.listdir(root_fd),
-            "legacy runtime root changed before final removal",
+        except FileNotFoundError:
+            pidfile = None
+        else:
+            try:
+                observed = os.fstat(pidfile_fd)
+                literal = os.stat(
+                    CONTAINERD_PIDFILE.name,
+                    dir_fd=config_fd,
+                    follow_symlinks=False,
+                )
+                require_recorded_entry(
+                    observed,
+                    expected_pidfile,
+                    label="legacy containerd pidfile",
+                )
+                raw = b""
+                while len(raw) <= 64:
+                    chunk = os.read(pidfile_fd, 65 - len(raw))
+                    if not chunk:
+                        break
+                    raw += chunk
+                require(
+                    raw.decode("ascii", "strict").strip()
+                    == str(expected_pidfile["expectedPid"])
+                    and sha256_bytes(raw) == expected_pidfile["sha256"]
+                    and (literal.st_dev, literal.st_ino)
+                    == (observed.st_dev, observed.st_ino),
+                    "legacy containerd pidfile bytes or binding differ",
+                )
+                pidfile = identity_document(CONTAINERD_PIDFILE, observed)
+                pidfile["sha256"] = sha256_bytes(raw)
+                pidfile["size"] = len(raw)
+            finally:
+                os.close(pidfile_fd)
+    finally:
+        os.close(config_fd)
+        os.close(state_fd)
+    return {"runtime": second, "pidfile": pidfile}
+
+
+def unlink_containerd_pidfile(control: Mapping[str, object]) -> None:
+    require_related_process_cutoff(control, allowed_roles=set())
+    authority = control["authority"]
+    assert isinstance(authority, dict)
+    expected = authority["configs"]["containerdPidfile"]
+    state_fd, config_fd = recorded_config_descriptors(control)
+    leaf_fd: int | None = None
+    try:
+        try:
+            leaf_fd = os.open(
+                CONTAINERD_PIDFILE.name,
+                os.O_RDONLY | os.O_NOFOLLOW,
+                dir_fd=config_fd,
+            )
+        except FileNotFoundError:
+            leaf_fd = None
+        if leaf_fd is not None:
+            observed = os.fstat(leaf_fd)
+            literal = os.stat(
+                CONTAINERD_PIDFILE.name,
+                dir_fd=config_fd,
+                follow_symlinks=False,
+            )
+            require_recorded_entry(
+                observed,
+                expected,
+                label="legacy containerd pidfile",
+            )
+            raw = os.read(leaf_fd, 65)
+            require(
+                raw.decode("ascii", "strict").strip() == str(expected["expectedPid"])
+                and sha256_bytes(raw) == expected["sha256"]
+                and (literal.st_dev, literal.st_ino)
+                == (observed.st_dev, observed.st_ino),
+                "legacy containerd pidfile changed at unlink cutoff",
+            )
+            os.unlink(CONTAINERD_PIDFILE.name, dir_fd=config_fd)
+            os.fsync(config_fd)
+        try:
+            os.stat(
+                CONTAINERD_PIDFILE.name,
+                dir_fd=config_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            pass
+        else:
+            raise DrainError("legacy containerd pidfile reappeared")
+    finally:
+        if leaf_fd is not None:
+            os.close(leaf_fd)
+        os.close(config_fd)
+        os.close(state_fd)
+
+
+def _reduce_runtime_directory(
+    directory_fd: int,
+    expected_rows: Mapping[str, Mapping[str, object]],
+    *,
+    prefix: str = "",
+) -> None:
+    for name in tuple(sorted(os.listdir(directory_fd))):
+        relative = f"{prefix}/{name}" if prefix else name
+        manual(
+            relative in expected_rows,
+            f"legacy runtime reducer found a foreign entry: {relative}",
+        )
+        observed = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        if relative == "docker.sock":
+            raise ManualRecoveryRequired("legacy Docker API socket reappeared")
+        if relative == TASK_NETNS_RELATIVE:
+            _require_task_netns_marker(observed)
+        else:
+            require_recorded_entry(
+                observed,
+                expected_rows[relative],
+                label=f"legacy runtime entry {relative}",
+            )
+        if stat.S_ISDIR(observed.st_mode):
+            child_fd = _open_recorded_runtime_directory(
+                directory_fd,
+                name,
+                expected_rows[relative],
+            )
+            try:
+                _reduce_runtime_directory(
+                    child_fd,
+                    expected_rows,
+                    prefix=relative,
+                )
+                require(not os.listdir(child_fd), f"legacy runtime directory remained: {relative}")
+                os.fsync(child_fd)
+                literal = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                require(
+                    (literal.st_dev, literal.st_ino)
+                    == (observed.st_dev, observed.st_ino),
+                    f"legacy runtime directory changed before removal: {relative}",
+                )
+                os.rmdir(name, dir_fd=directory_fd)
+            finally:
+                os.close(child_fd)
+        else:
+            leaf_fd = os.open(
+                name,
+                os.O_PATH | os.O_NOFOLLOW,
+                dir_fd=directory_fd,
+            )
+            try:
+                bound = os.fstat(leaf_fd)
+                require(
+                    (bound.st_dev, bound.st_ino) == (observed.st_dev, observed.st_ino),
+                    f"legacy runtime leaf changed before removal: {relative}",
+                )
+                os.unlink(name, dir_fd=directory_fd)
+            finally:
+                os.close(leaf_fd)
+        os.fsync(directory_fd)
+
+
+def reduce_runtime_tree(control: Mapping[str, object]) -> None:
+    require_related_process_cutoff(control, allowed_roles=set())
+    require_mounts_absent(
+        control,
+        "runtime",
+        EXPECTED_RUNTIME_ROOT,
+        use_recorded_anchors=False,
+    )
+    parent_fd, root_fd = runtime_root_descriptors(
+        control,
+        require_root_owned=True,
+    )
+    try:
+        _reduce_runtime_directory(root_fd, _runtime_tree_rows(control))
+        require(not os.listdir(root_fd), "legacy runtime root did not become empty")
+        root = os.fstat(root_fd)
+        require(
+            root.st_uid == 0
+            and root.st_gid == 0
+            and stat.S_IMODE(root.st_mode) == 0o700,
+            "legacy runtime empty marker custody differs",
+        )
+        os.fsync(root_fd)
+        os.fsync(parent_fd)
+    finally:
+        os.close(root_fd)
+        os.close(parent_fd)
+
+
+def remove_empty_runtime_root(control: Mapping[str, object]) -> None:
+    require_related_process_cutoff(control, allowed_roles=set())
+    try:
+        parent_fd, root_fd = runtime_root_descriptors(
+            control,
+            require_root_owned=True,
+        )
+    except FileNotFoundError:
+        parent_fd = os.open("/tmp", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            for _ in range(2):
+                try:
+                    os.stat(
+                        EXPECTED_RUNTIME_ROOT.name,
+                        dir_fd=parent_fd,
+                        follow_symlinks=False,
+                    )
+                except FileNotFoundError:
+                    continue
+                raise DrainError("legacy runtime root absence is unstable")
+            os.fsync(parent_fd)
+        finally:
+            os.close(parent_fd)
+        return
+    try:
+        require(not os.listdir(root_fd), "legacy runtime empty marker is not empty")
+        literal = os.stat(
+            EXPECTED_RUNTIME_ROOT.name,
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+        observed = os.fstat(root_fd)
+        require(
+            (literal.st_dev, literal.st_ino) == (observed.st_dev, observed.st_ino)
+            and observed.st_uid == 0
+            and observed.st_gid == 0
+            and stat.S_IMODE(observed.st_mode) == 0o700,
+            "legacy runtime empty marker binding differs",
         )
         os.rmdir(EXPECTED_RUNTIME_ROOT.name, dir_fd=parent_fd)
         os.fsync(parent_fd)
@@ -2163,101 +3458,418 @@ def reduce_runtime_tree(control: Mapping[str, object]) -> None:
         os.close(parent_fd)
 
 
-def unlink_containerd_pidfile(control: Mapping[str, object]) -> None:
-    if not exists_nofollow(CONTAINERD_PIDFILE):
-        return
-    authority = control["authority"]
-    assert isinstance(authority, dict)
-    expected = authority["configs"]["containerdPidfile"]
-    parent_fd = os.open(CONTAINERD_PIDFILE.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+def _read_regular_at(
+    directory_fd: int,
+    name: str,
+    *,
+    maximum: int,
+) -> tuple[int, os.stat_result, bytes] | None:
     try:
-        observed = os.stat(CONTAINERD_PIDFILE.name, dir_fd=parent_fd, follow_symlinks=False)
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | os.O_NOFOLLOW,
+            dir_fd=directory_fd,
+        )
+    except FileNotFoundError:
+        return None
+    try:
+        observed = os.fstat(descriptor)
         require(
-            (observed.st_dev, observed.st_ino, observed.st_uid, observed.st_gid)
+            stat.S_ISREG(observed.st_mode)
+            and observed.st_nlink == 1
+            and 0 < observed.st_size <= maximum,
+            f"bound regular file identity differs: {name}",
+        )
+        raw = b""
+        while len(raw) <= maximum:
+            chunk = os.read(descriptor, min(64 * 1024, maximum + 1 - len(raw)))
+            if not chunk:
+                break
+            raw += chunk
+        require(
+            len(raw) == observed.st_size and len(raw) <= maximum,
+            f"bound regular file read differs: {name}",
+        )
+        literal = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        after = os.fstat(descriptor)
+        require(
+            (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_uid,
+                after.st_gid,
+                stat.S_IMODE(after.st_mode),
+                after.st_nlink,
+            )
             == (
-                expected["device"],
-                expected["inode"],
-                expected["uid"],
-                expected["gid"],
-            ),
-            "legacy containerd pidfile changed before removal",
+                observed.st_dev,
+                observed.st_ino,
+                observed.st_size,
+                observed.st_uid,
+                observed.st_gid,
+                stat.S_IMODE(observed.st_mode),
+                observed.st_nlink,
+            )
+            and (literal.st_dev, literal.st_ino)
+            == (observed.st_dev, observed.st_ino),
+            f"bound regular file changed while reading: {name}",
         )
-        os.unlink(CONTAINERD_PIDFILE.name, dir_fd=parent_fd)
-        os.fsync(parent_fd)
-    finally:
-        os.close(parent_fd)
+        return descriptor, observed, raw
+    except BaseException:
+        os.close(descriptor)
+        raise
 
 
-def archive_receipt(control: Mapping[str, object]) -> None:
-    if exists_nofollow(ARCHIVE_RECEIPT_PATH):
-        identity, _ = regular_identity(
-            ARCHIVE_RECEIPT_PATH,
-            expected_uid=1000,
-            expected_gid=1000,
-            expected_mode=0o600,
-            expected_sha256=EXPECTED_RECEIPT_SHA256,
-        )
-        require(identity["sha256"] == EXPECTED_RECEIPT_SHA256, "legacy receipt archive differs")
-        manual(not exists_nofollow(RECEIPT_PATH), "live and archived legacy receipts coexist")
-        return
-    manual(exists_nofollow(RECEIPT_PATH), "legacy receipt and archive are both absent")
+def rename_noreplace_at(
+    source_directory_fd: int,
+    source_name: str,
+    destination_directory_fd: int,
+    destination_name: str,
+) -> None:
+    function = getattr(LIBC, "renameat2", None)
+    require(function is not None, "no-replace rename is unavailable")
+    result = function(
+        ctypes.c_int(source_directory_fd),
+        ctypes.c_char_p(os.fsencode(source_name)),
+        ctypes.c_int(destination_directory_fd),
+        ctypes.c_char_p(os.fsencode(destination_name)),
+        ctypes.c_uint(RENAME_NOREPLACE),
+    )
+    if result != 0:
+        observed_errno = ctypes.get_errno()
+        raise OSError(observed_errno, os.strerror(observed_errno))
+
+
+def _require_legacy_receipt(
+    observed: os.stat_result,
+    raw: bytes,
+    expected: Mapping[str, object],
+    *,
+    terminal: bool,
+) -> None:
+    expected_owner = (0, 0, 0o400) if terminal else None
+    admitted_live_owners = {
+        (int(expected["uid"]), int(expected["gid"]), int(expected["mode"])),
+        (0, 0, 0o400),
+    }
+    owner = (
+        observed.st_uid,
+        observed.st_gid,
+        stat.S_IMODE(observed.st_mode),
+    )
+    owner_matches = owner == expected_owner if terminal else owner in admitted_live_owners
+    require(
+        stat.S_ISREG(observed.st_mode)
+        and observed.st_nlink == 1
+        and (observed.st_dev, observed.st_ino)
+        == (expected["device"], expected["inode"])
+        and observed.st_size == expected["size"]
+        and sha256_bytes(raw) == EXPECTED_RECEIPT_SHA256
+        and owner_matches,
+        "legacy receipt terminal identity differs"
+        if terminal
+        else "legacy receipt live identity differs",
+    )
+
+
+def legacy_receipt_state(
+    control: Mapping[str, object],
+) -> tuple[str, bytes | None]:
     authority = control["authority"]
     assert isinstance(authority, dict)
     expected = authority["legacyReceipt"]
-    evidence_fd = os.open(
-        EXPECTED_STATE_ROOT / "evidence",
-        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-    )
+    state_fd, evidence_fd = recorded_evidence_descriptors(control)
+    live: tuple[int, os.stat_result, bytes] | None = None
+    archive: tuple[int, os.stat_result, bytes] | None = None
     try:
-        observed = os.stat(RECEIPT_PATH.name, dir_fd=evidence_fd, follow_symlinks=False)
-        require(
-            (observed.st_dev, observed.st_ino, observed.st_uid, observed.st_gid)
-            == (
-                expected["device"],
-                expected["inode"],
-                expected["uid"],
-                expected["gid"],
-            ),
-            "legacy receipt changed before archival",
-        )
-        os.rename(
+        live = _read_regular_at(
+            evidence_fd,
             RECEIPT_PATH.name,
+            maximum=MAX_JSON_BYTES,
+        )
+        archive = _read_regular_at(
+            evidence_fd,
             ARCHIVE_RECEIPT_PATH.name,
-            src_dir_fd=evidence_fd,
-            dst_dir_fd=evidence_fd,
+            maximum=MAX_JSON_BYTES,
+        )
+        manual(not (live is not None and archive is not None), "live and archived legacy receipts coexist")
+        manual(live is not None or archive is not None, "legacy receipt and archive are both absent")
+        if live is not None:
+            _require_legacy_receipt(live[1], live[2], expected, terminal=False)
+            return "live", live[2]
+        assert archive is not None
+        _require_legacy_receipt(archive[1], archive[2], expected, terminal=True)
+        return "archived", archive[2]
+    finally:
+        for value in (live, archive):
+            if value is not None:
+                os.close(value[0])
+        os.close(evidence_fd)
+        os.close(state_fd)
+
+
+def transfer_receipt_custody(control: Mapping[str, object]) -> None:
+    require_related_process_cutoff(control, allowed_roles=set())
+    authority = control["authority"]
+    assert isinstance(authority, dict)
+    expected = authority["legacyReceipt"]
+    state_fd, evidence_fd = recorded_evidence_descriptors(control)
+    value: tuple[int, os.stat_result, bytes] | None = None
+    try:
+        value = _read_regular_at(
+            evidence_fd,
+            RECEIPT_PATH.name,
+            maximum=MAX_JSON_BYTES,
+        )
+        if value is None:
+            state, _ = legacy_receipt_state(control)
+            require(state == "archived", "legacy receipt custody source is absent")
+            return
+        descriptor, observed, raw = value
+        _require_legacy_receipt(observed, raw, expected, terminal=False)
+        os.fchown(descriptor, 0, 0)
+        os.fchmod(descriptor, 0o400)
+        os.fsync(descriptor)
+        literal = os.stat(
+            RECEIPT_PATH.name,
+            dir_fd=evidence_fd,
+            follow_symlinks=False,
+        )
+        final = os.fstat(descriptor)
+        _require_legacy_receipt(final, raw, expected, terminal=True)
+        require(
+            (literal.st_dev, literal.st_ino) == (final.st_dev, final.st_ino),
+            "legacy receipt changed during custody transfer",
         )
         os.fsync(evidence_fd)
     finally:
+        if value is not None:
+            os.close(value[0])
         os.close(evidence_fd)
+        os.close(state_fd)
 
 
-def write_projection(control: ControlAuthority) -> None:
-    evidence_fd = os.open(
-        EXPECTED_STATE_ROOT / "evidence",
-        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-    )
+def terminal_projection_value(control: ControlAuthority) -> dict[str, object]:
+    require(control.phase == "archive_intent_final", "terminal projection phase differs")
+    return {
+        "schema": PROJECTION_SCHEMA,
+        "outcome": "drained",
+        "observedAt": control.state["observedAt"],
+        "bootId": control.state["bootId"],
+        "stateRoot": str(EXPECTED_STATE_ROOT),
+        "legacyReceiptSha256": EXPECTED_RECEIPT_SHA256,
+        "legacyReceiptArchive": str(ARCHIVE_RECEIPT_PATH),
+        "controlSha256": control.control_digest,
+        "sourceSha256": control.control["sourceSha256"],
+        "persistentDataPreserved": [str(path) for path in PERSISTENT_ROOTS],
+        "legacyRuntimeRemoved": True,
+        "cgroupMutationPerformed": False,
+        "forceKillPerformed": False,
+    }
+
+
+def read_projection(control: ControlAuthority) -> dict[str, object]:
+    expected = terminal_projection_value(control)
+    encoded = canonical_json(expected)
+    state_fd, evidence_fd = recorded_evidence_descriptors(control.control)
+    value: tuple[int, os.stat_result, bytes] | None = None
     try:
-        atomic_write_at(
+        value = _read_regular_at(
             evidence_fd,
             PROJECTION_PATH.name,
-            {
-                "schema": PROJECTION_SCHEMA,
-                "outcome": "drained",
-                "observedAt": utc_now(),
-                "stateRoot": str(EXPECTED_STATE_ROOT),
-                "legacyReceiptSha256": EXPECTED_RECEIPT_SHA256,
-                "controlSha256": control.control_digest,
-                "persistentDataPreserved": [str(path) for path in PERSISTENT_ROOTS],
-                "legacyRuntimeRemoved": True,
-                "cgroupMutationPerformed": False,
-                "forceKillPerformed": False,
-            },
-            uid=1000,
-            gid=1000,
-            mode=0o600,
+            maximum=MAX_JSON_BYTES,
         )
+        require(value is not None, "legacy terminal projection is absent")
+        observed = value[1]
+        require(
+            observed.st_uid == 0
+            and observed.st_gid == 0
+            and stat.S_IMODE(observed.st_mode) == 0o400
+            and value[2] == encoded,
+            "legacy terminal projection differs",
+        )
+        return expected
     finally:
+        if value is not None:
+            os.close(value[0])
         os.close(evidence_fd)
+        os.close(state_fd)
+
+
+def write_projection(control: ControlAuthority) -> dict[str, object]:
+    value = terminal_projection_value(control)
+    encoded = canonical_json(value)
+    pending_name = f".{PROJECTION_PATH.name}.pending"
+    state_fd, evidence_fd = recorded_evidence_descriptors(control.control)
+    pending_fd: int | None = None
+    final_fd: int | None = None
+    try:
+        final = _read_regular_at(
+            evidence_fd,
+            PROJECTION_PATH.name,
+            maximum=MAX_JSON_BYTES,
+        )
+        if final is not None:
+            final_fd, observed, raw = final
+            require(
+                observed.st_uid == 0
+                and observed.st_gid == 0
+                and stat.S_IMODE(observed.st_mode) == 0o400
+                and raw == encoded,
+                "legacy terminal projection differs",
+            )
+            return value
+        pending = _read_regular_at(
+            evidence_fd,
+            pending_name,
+            maximum=MAX_JSON_BYTES,
+        )
+        if pending is not None:
+            pending_fd, pending_stat, pending_raw = pending
+            require(
+                pending_stat.st_uid == 0
+                and pending_stat.st_gid == 0
+                and stat.S_IMODE(pending_stat.st_mode) == 0o400
+                and encoded.startswith(pending_raw),
+                "legacy terminal projection pending prefix differs",
+            )
+            os.unlink(pending_name, dir_fd=evidence_fd)
+            os.fsync(evidence_fd)
+            os.close(pending_fd)
+            pending_fd = None
+        pending_fd = os.open(
+            pending_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o400,
+            dir_fd=evidence_fd,
+        )
+        os.fchown(pending_fd, 0, 0)
+        os.fchmod(pending_fd, 0o400)
+        offset = 0
+        while offset < len(encoded):
+            offset += os.write(pending_fd, encoded[offset:])
+        os.fsync(pending_fd)
+        try:
+            rename_noreplace_at(
+                evidence_fd,
+                pending_name,
+                evidence_fd,
+                PROJECTION_PATH.name,
+            )
+        except OSError as error:
+            if error.errno != errno.EEXIST:
+                raise
+        os.fsync(evidence_fd)
+        final = _read_regular_at(
+            evidence_fd,
+            PROJECTION_PATH.name,
+            maximum=MAX_JSON_BYTES,
+        )
+        require(final is not None, "legacy terminal projection publication disappeared")
+        final_fd, observed, raw = final
+        require(
+            observed.st_uid == 0
+            and observed.st_gid == 0
+            and stat.S_IMODE(observed.st_mode) == 0o400
+            and raw == encoded,
+            "legacy terminal projection publication differs",
+        )
+        try:
+            os.stat(pending_name, dir_fd=evidence_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            os.unlink(pending_name, dir_fd=evidence_fd)
+            os.fsync(evidence_fd)
+        return value
+    finally:
+        if final_fd is not None:
+            os.close(final_fd)
+        if pending_fd is not None:
+            os.close(pending_fd)
+        os.close(evidence_fd)
+        os.close(state_fd)
+
+
+def archive_receipt(control: ControlAuthority) -> dict[str, object]:
+    require(control.phase == "archive_intent_final", "legacy archive intent is absent")
+    receipt_state, _ = legacy_receipt_state(control.control)
+    if receipt_state == "archived":
+        return read_projection(control)
+    terminal = write_projection(control)
+    require_related_process_cutoff(control.control, allowed_roles=set())
+    authority = control.control["authority"]
+    assert isinstance(authority, dict)
+    expected = authority["legacyReceipt"]
+    state_fd, evidence_fd = recorded_evidence_descriptors(control.control)
+    source: tuple[int, os.stat_result, bytes] | None = None
+    try:
+        source = _read_regular_at(
+            evidence_fd,
+            RECEIPT_PATH.name,
+            maximum=MAX_JSON_BYTES,
+        )
+        archive = _read_regular_at(
+            evidence_fd,
+            ARCHIVE_RECEIPT_PATH.name,
+            maximum=MAX_JSON_BYTES,
+        )
+        if archive is not None:
+            try:
+                manual(source is None, "live and archived legacy receipts coexist")
+                _require_legacy_receipt(archive[1], archive[2], expected, terminal=True)
+                return terminal
+            finally:
+                os.close(archive[0])
+        manual(source is not None, "legacy receipt and archive are both absent")
+        assert source is not None
+        _require_legacy_receipt(source[1], source[2], expected, terminal=True)
+        try:
+            rename_noreplace_at(
+                evidence_fd,
+                RECEIPT_PATH.name,
+                evidence_fd,
+                ARCHIVE_RECEIPT_PATH.name,
+            )
+        except OSError as error:
+            if error.errno != errno.EEXIST:
+                raise
+            raise ManualRecoveryRequired(
+                "legacy receipt archive destination appeared without replacement"
+            ) from error
+        os.fsync(evidence_fd)
+        try:
+            os.stat(
+                RECEIPT_PATH.name,
+                dir_fd=evidence_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            pass
+        else:
+            raise DrainError("legacy live receipt remained after archival")
+        archived = _read_regular_at(
+            evidence_fd,
+            ARCHIVE_RECEIPT_PATH.name,
+            maximum=MAX_JSON_BYTES,
+        )
+        require(archived is not None, "legacy receipt archive disappeared")
+        try:
+            _require_legacy_receipt(archived[1], archived[2], expected, terminal=True)
+            require(
+                (archived[1].st_dev, archived[1].st_ino)
+                == (source[1].st_dev, source[1].st_ino),
+                "legacy receipt archive inode differs",
+            )
+        finally:
+            os.close(archived[0])
+        return terminal
+    finally:
+        if source is not None:
+            os.close(source[0])
+        os.close(evidence_fd)
+        os.close(state_fd)
 
 
 def registry_inventory_matches(control: Mapping[str, object]) -> None:
@@ -2269,16 +3881,77 @@ def registry_inventory_matches(control: Mapping[str, object]) -> None:
     )
 
 
-def run_reducer(control: ControlAuthority) -> dict[str, object]:
-    if control.phase == "complete":
-        return {
-            "schema": PROJECTION_SCHEMA,
-            "outcome": "drained",
-            "stateRoot": str(EXPECTED_STATE_ROOT),
-            "controlSha256": control.control_digest,
-        }
+def require_task_netns_ambient(control: Mapping[str, object]) -> None:
+    authority = control["authority"]
+    assert isinstance(authority, dict)
+    netns = authority["mounts"]["networkNamespace"]
+    source = netns["sourceAnchor"]
+    anchor = ((str(source["device"]), str(source["root"])),)
+    expected = [
+        item
+        for item in netns["occurrences"]
+        if item["target"] in set(netns["ambientTargets"])
+    ]
+    observed = stable_global_mount_roster(TASK_NETNS_TARGET, anchor)
+    manual(
+        observed["occurrences"] == expected,
+        "legacy task netns ambient roster differs",
+    )
 
+
+def require_containerd_pidfile_absent(control: Mapping[str, object]) -> None:
+    state_fd, config_fd = recorded_config_descriptors(control)
+    try:
+        try:
+            os.stat(
+                CONTAINERD_PIDFILE.name,
+                dir_fd=config_fd,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return
+        raise ManualRecoveryRequired("legacy containerd pidfile remained")
+    finally:
+        os.close(config_fd)
+        os.close(state_fd)
+
+
+def require_terminal_reproof(control: Mapping[str, object]) -> None:
+    require_related_process_cutoff(control, allowed_roles=set())
+    manual(not exists_nofollow(EXPECTED_RUNTIME_ROOT), "legacy runtime root remained")
+    require_containerd_pidfile_absent(control)
+    for role in EXPECTED_PROCESS_CANDIDATES:
+        manual(
+            exact_process_status(process_authority(control, role)) == "absent",
+            f"legacy process remains: {role}",
+        )
+    require_mounts_absent(
+        control,
+        "runtime",
+        EXPECTED_RUNTIME_ROOT,
+        use_recorded_anchors=False,
+    )
+    require_mounts_absent(
+        control,
+        "outerDocker",
+        EXPECTED_STATE_ROOT / "outer-docker",
+    )
+    require_mounts_absent(
+        control,
+        "registry",
+        EXPECTED_STATE_ROOT / "registry",
+    )
+    require_task_netns_ambient(control)
+    require_registry_listener_absent()
+    registry_inventory_matches(control)
+
+
+def run_reducer(control: ControlAuthority) -> dict[str, object]:
     if control.phase == "stopping_intent_final":
+        transfer_runtime_custody(control.control)
+        control.advance("runtime_custody_transferred")
+
+    if control.phase == "runtime_custody_transferred":
         remove_bound_socket(control.control)
         control.advance("docker_api_revoked")
 
@@ -2309,6 +3982,14 @@ def run_reducer(control: ControlAuthority) -> dict[str, object]:
         )
         require_registry_listener_absent()
         registry_inventory_matches(control.control)
+        require_related_process_cutoff(
+            control.control,
+            allowed_roles={
+                "containerdWrapperOuter",
+                "containerdWrapperInner",
+                "containerd",
+            },
+        )
         control.advance("container_graph_quiesced")
 
     if control.phase == "container_graph_quiesced":
@@ -2328,6 +4009,7 @@ def run_reducer(control: ControlAuthority) -> dict[str, object]:
             ),
             timeout_seconds=120.0,
         )
+        require_related_process_cutoff(control.control, allowed_roles=set())
         settle_task_netns(control.control)
         require_mounts_absent(
             control.control,
@@ -2341,38 +4023,22 @@ def run_reducer(control: ControlAuthority) -> dict[str, object]:
         control.advance("runtime_reducing")
 
     if control.phase == "runtime_reducing":
-        reduce_runtime_tree(control.control)
+        runtime_reduction_preflight(control.control)
         unlink_containerd_pidfile(control.control)
+        reduce_runtime_tree(control.control)
         registry_inventory_matches(control.control)
-        control.advance("runtime_removed")
+        control.advance("runtime_empty")
 
-    if control.phase == "runtime_removed":
-        manual(not exists_nofollow(EXPECTED_RUNTIME_ROOT), "legacy runtime root remained")
-        for role in EXPECTED_PROCESS_CANDIDATES:
-            manual(
-                exact_process_status(process_authority(control.control, role)) == "absent",
-                f"legacy process remains: {role}",
-            )
-        registry_inventory_matches(control.control)
-        archive_receipt(control.control)
-        control.advance("receipt_archived")
+    if control.phase == "runtime_empty":
+        remove_empty_runtime_root(control.control)
+        require_terminal_reproof(control.control)
+        transfer_receipt_custody(control.control)
+        control.advance("archive_intent_final")
 
-    if control.phase == "receipt_archived":
-        write_projection(control)
-        control.advance("complete")
-
-    require(control.phase == "complete", "legacy drain did not reach completion")
-    return {
-        "schema": PROJECTION_SCHEMA,
-        "outcome": "drained",
-        "observedAt": utc_now(),
-        "stateRoot": str(EXPECTED_STATE_ROOT),
-        "controlSha256": control.control_digest,
-        "legacyReceiptArchive": str(ARCHIVE_RECEIPT_PATH),
-        "persistentDataPreserved": [str(path) for path in PERSISTENT_ROOTS],
-        "cgroupMutationPerformed": False,
-        "forceKillPerformed": False,
-    }
+    require(control.phase == "archive_intent_final", "legacy drain did not reach archive intent")
+    require_terminal_reproof(control.control)
+    transfer_receipt_custody(control.control)
+    return archive_receipt(control)
 
 
 def require_root(caller_uid: int, caller_gid: int) -> None:
