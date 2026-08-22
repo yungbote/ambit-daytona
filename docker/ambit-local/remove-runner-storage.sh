@@ -33,10 +33,6 @@ if [[ -e ${state_root} || -L ${state_root} ]]; then
     exit 66
   }
 else
-  [[ ${legacy_v2} == false ]] || {
-    echo 'legacy v2 removal requires the original existing STATE_ROOT identity' >&2
-    exit 66
-  }
   [[ $(/usr/bin/realpath -m -- "${state_root}") == "${state_root}" ]] || {
     echo 'absent original STATE_ROOT path is not lexically canonical' >&2
     exit 64
@@ -47,7 +43,7 @@ helper_operation=remove-authority
 
 script_dir=$(cd "$(/usr/bin/dirname -- "${BASH_SOURCE[0]}")" && /usr/bin/pwd -P)
 lifecycle_helper=${script_dir}/runner-storage-lifecycle.py
-lifecycle_helper_sha256=9e0f3c488ac553d2ea1f8af150c4ef5477fd426e5921ad6d80ddb839bb40e94c
+lifecycle_helper_sha256=2b5fa766935fd427e9469d4bde9367b83d52828107164d87f9fce6ab08010996
 [[ -f ${lifecycle_helper} && ! -L ${lifecycle_helper} ]] || {
   echo 'runner storage lifecycle helper is absent or unsafe' >&2
   exit 66
