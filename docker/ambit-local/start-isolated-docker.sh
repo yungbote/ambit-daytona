@@ -43,7 +43,7 @@ evidence_root=${state_root}/evidence
 
 script_dir=$(cd "$(/usr/bin/dirname -- "${BASH_SOURCE[0]}")" && /usr/bin/pwd -P)
 supervisor=${script_dir}/isolated_runtime_supervisor.py
-supervisor_sha256=f3328a048264ecd108697876d3315906a970bef3f4a3f5bb7ba615b23628ca4d
+supervisor_sha256=ea7a1e2c3ca2ead63b9be3e201a28f68e7e0b98c9b01903375c1b9e390297f2a
 
 read -r -d '' pinned_loader <<'PY' || true
 import hashlib
