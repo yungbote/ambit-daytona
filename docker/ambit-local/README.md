@@ -78,9 +78,15 @@ device/inode/owner/group/mode. Claim bytes are first written and file-fsynced
 under one fixed admitted pending name, then atomically renamed to the final
 hash name and followed by a `/home` fsync, so a published final claim is never
 partial. A prepublication pending node is reducible only while the final claim,
-storage authority, every task runtime/cgroup, and every source- or target-side
-storage mount are all absent. A pending node beside an authority is deliberate
-fail-closed admin evidence, not guessed or discarded. The flock on the pinned
+storage authority, and every source- or target-side storage mount are absent.
+With no task runtime it is reduced under the removal operation's global lease;
+during startup or shutdown it is reduced only after the storage helper proves
+the inherited global-lease open-file description and the nonempty runtime
+roster is a subset of the exact state-derived runtime/socket/cgroup paths. A
+foreign v5 path or any legacy `/tmp` authority still blocks. A pending node
+beside an authority remains fail-closed except inside the explicit legacy-v2
+migration, where the old lock and receipt must first re-prove the complete
+binding. The flock on the pinned
 `/home` descriptor is the sole lifecycle lock, so there is no crash-prone lock
 file. That flock is advisory under the explicit single-user local-host model:
 an unrelated holder can cause the bounded availability timeout, but cannot
@@ -104,7 +110,9 @@ under a bounded process-group guardian; the helper, guardian, and mutator all
 receive the same flock-bearing open-file description. Helper death leaves the
 guardian waiting; guardian death delivers kernel `PDEATHSIG` to the direct
 tool; supervisor death uses the task cgroup as descendant termination
-authority. The admitted synchronous host tools retaining inherited FDs and not
+authority. Only mutating storage-helper calls inherit the boot-global runtime
+lease; read-only observation does not. The admitted synchronous host tools
+retaining inherited FDs and not
 daemonizing remains a measured binary contract for live acceptance. The root
 receipt is file-fsynced, atomically renamed, and followed by an
 authority-directory fsync before success; its user projection receives the
@@ -115,17 +123,23 @@ re-proves the exact existing state/image/receipt, retains the old lifecycle
 flock, publishes the v3 claim before mutation, reduces only the historical
 fixed-shape random authority-receipt and user-projection temporaries, then
 removes the legacy lock and receipt
-before using the ordinary reducer. A prepublication/partial-image v2 authority
-or a migration pending claim beside an authority remains explicit admin
-recovery rather than being silently rebound. Normal activation never adopts
-legacy state. If the caller renames or deletes `STATE_ROOT`, the
+before using the ordinary reducer. The same legacy command is reentrant across
+an interrupted v3 pending claim, a sealed claim with remaining legacy
+material, every ordinary partial-delete cutpoint, and total absence. A v2
+authority that never published its receipt, or retained only a partial image,
+remains explicit admin recovery rather than being guessed. Normal activation
+never adopts legacy state. If the caller renames or deletes `STATE_ROOT`, the
 root claim and root runtime control retain the original binding: stop can be
 invoked with the absent original path, and storage removal can use either that
 original spelling or a relocated directory with the same immutable identity.
 Neither route republishes or adopts the authority under a new normal path. A
 relocated evidence directory contributes only its descriptor-pinned capability
 to delete the nonauthoritative user projection; it never becomes receipt,
-runtime, or root-storage authority.
+runtime, or root-storage authority. After the authority and claim are removed,
+the exact lease-serialized tuple of absent original state path, absent claim
+and pending claim, absent storage authority, absent task authorities, and zero
+observable mount occurrences is itself the terminal response-loss state; no
+persistent tombstone is added.
 
 The dedicated containerd configuration uses schema v3, so the supervisor
 preflights and requires containerd 2.x or later before launching it. The
@@ -138,24 +152,34 @@ exact no-receipt startup-abort state. Only exact target length can format or
 recover. Startup/deactivation response loss is idempotent, without fabricating
 receipt authority. Teardown scans two stable passes of every mount namespace
 observable through `/proc`, rejecting unreadable, changing, second, nested, or
-foreign loop/target occurrences. Storage-tree checks translate the trusted
-namespace path into device plus filesystem-root coordinates and carry nested
-filesystem anchors, so a bind source below the authority mounted at an
-unrelated target is also a blocking occurrence. The provider and daemon
+foreign loop/target occurrences. Ordinary filesystem mount roots use canonical
+component-aware path coordinates. Linux `nsfs` roots such as
+`net:[4026531833]` are retained as typed opaque identities and match only by
+exact device plus token; they are never coerced to `/` or given descendant
+semantics. Storage-tree checks carry nested filesystem anchors, so a bind
+source below the authority mounted at an unrelated target is also a blocking
+occurrence. Every live process representing the same mount namespace must
+yield the same relevant mount view; a chroot-visible mismatch fails closed
+rather than letting the first PID become authority. The provider and daemon
 children must stop before private unmount/detach. A namespace pinned without a
-live `/proc`
-representative remains outside the source proof; choosing one representative
-also inherits that process's mountinfo/chroot visibility. These are explicit
-live acceptance limits, not a claimed global proof. Static tests establish reducer and authority logic only; they
+live `/proc` representative remains outside the source proof. This is an
+explicit local-host acceptance limit, not a claimed global proof. Static tests establish reducer and authority logic only; they
 do not establish that this host has successfully created the cgroup, mounted
 XFS, enforced project quotas, started the daemon, or completed two live 20 GiB
 sandbox journeys.
 Runtime-root cleanup carries the supervisor namespace's source coordinates
-across every observed namespace as well. Nested filesystems contribute their
-own anchors, and each task nsfs mount must be the sole occurrence in the
-supervisor namespace before unmount. Those pre-unmount anchors remain fixed
-for the post-unmount scan, so a surviving external bind cannot disappear from
-the proof merely because its original source mount was removed.
+across every observed namespace as well. After daemon and adopted-child reap,
+but before socket or nsfs mutation, one immutable root-owned
+`runtime-netns-detach.json` manifest binds control/stopping digests, boot,
+state/runtime/namespace identities, and the canonical task target plus typed
+source coordinate roster. Each task nsfs mount must be the sole occurrence in
+the supervisor namespace before unmount. Same-process retry and external
+recovery consume the same stored anchors, prove global zero after source
+unmount, and repeat aggregate zero immediately before runtime-tree deletion.
+A surviving external bind therefore cannot disappear from the proof merely
+because its original source mount was removed. If an abrupt death leaves task
+entries but no live representative from which to author the first manifest,
+automatic deletion blocks for admin recovery rather than inventing anchors.
 
 Pre-v5 `/run` daemon state has no root control or supervisor snapshot and is
 therefore never guessed or auto-adopted by this source. This packet is the
@@ -190,9 +214,12 @@ root-custodied supervisor snapshot, which pidfd-signals only the exact recorded
 supervisor. Both bound and orphaned stop paths reject a foreign runtime,
 socket, cgroup, or legacy `/tmp` authority before any process signal or cgroup
 kill. Before draining anything the admitted supervisor durably publishes a
-root stopping intent, so every later daemon/socket/storage cutpoint is classifiable. The
-supervisor drains dockerd and containerd, removes the caller
-socket, cleans task network namespaces, deactivates storage, writes a root stop
+root stopping intent, so every later daemon/socket/storage cutpoint is
+classifiable. Dead-supervisor recovery publishes the same stopping authority
+after exact death proof and before its first cgroup or socket mutation. The
+supervisor drains dockerd and containerd, publishes the durable netns detach
+roster, removes the caller socket, cleans task network namespaces, deactivates
+storage, writes a root stop
 manifest, and exits. The outside recovery process then proves the task cgroup
 empty (or writes to its exact `cgroup.kill` and waits for `populated 0`),
 descriptor-removes the ephemeral runtime root, removes empty descendant

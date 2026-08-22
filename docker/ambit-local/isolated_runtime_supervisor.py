@@ -37,6 +37,7 @@ START_SCHEMA = "ambit.local-daytona-isolated-docker/v5"
 CONTROL_SCHEMA = "ambit.local-daytona-isolated-docker-control/v2"
 STOP_SCHEMA = "ambit.local-daytona-isolated-docker-stop/v2"
 STOPPING_SCHEMA = "ambit.local-daytona-isolated-docker-stopping/v1"
+NETNS_DETACH_SCHEMA = "ambit.local-daytona-isolated-docker-netns-detach/v1"
 CONTROL_PROJECTION_SCHEMA = "ambit.local-daytona-isolated-docker-control-projection/v1"
 READY_PROJECTION_SCHEMA = "ambit.local-daytona-isolated-docker-ready-projection/v1"
 STORAGE_OPERATION_SCHEMA = "ambit.local-daytona-runner-storage-operation/v3"
@@ -64,6 +65,9 @@ UUID_RE = re.compile(
 DOCKER_DAEMON_ID_RE = re.compile(r"^[A-Z2-7]{4}(?::[A-Z2-7]{4}){11}$")
 CONTAINERD_VERSION_RE = re.compile(r"\bv([0-9]+)\.[0-9]+\.[0-9]+(?:[-+][^\s]+)?\b")
 LOOP_DEVICE_RE = re.compile(r"^/dev/loop[0-9]+$")
+OPAQUE_MOUNT_ROOT = re.compile(r"^[a-z][a-z0-9_-]*:\[[1-9][0-9]*\]$")
+MOUNT_DEVICE_RE = re.compile(r"^(?:0|[1-9][0-9]*):(?:0|[1-9][0-9]*)$")
+TASK_NETNS_ENTRY_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 IMAGE_BYTES = 60 * 1024**3
 SANDBOX_BYTES = 20 * 1024**3
 MAXIMUM_SANDBOXES = 2
@@ -79,7 +83,7 @@ PROCESS_IDENTITY_NAME = "isolated_process_identity.py"
 SUPERVISOR_SNAPSHOT_NAME = "isolated_runtime_supervisor.py"
 PROCESS_IDENTITY_SHA256 = "8dc76b554bc5dd7810f217a0c5b082ada500d3bb9d0c5afce46e5415ed983b2c"
 STORAGE_LIFECYCLE_NAME = "runner-storage-lifecycle.py"
-STORAGE_LIFECYCLE_SHA256 = "9e0f3c488ac553d2ea1f8af150c4ef5477fd426e5921ad6d80ddb839bb40e94c"
+STORAGE_LIFECYCLE_SHA256 = "2b5fa766935fd427e9469d4bde9367b83d52828107164d87f9fce6ab08010996"
 STORAGE_IDENTITY_VERIFIER_NAME = "verify-runner-storage.py"
 STORAGE_IDENTITY_VERIFIER_SHA256 = (
     "59c530e8c502c546689967c33c540217d2762ff9d3f8ef7424ba52462c554f0b"
@@ -96,10 +100,12 @@ RUNTIME_REGULAR_ENTRIES = {
     "runtime-control.json",
     "runtime-ready.json",
     "runtime-stopping.json",
+    "runtime-netns-detach.json",
     "runtime-stop.json",
     ".runtime-control.json.pending",
     ".runtime-ready.json.pending",
     ".runtime-stopping.json.pending",
+    ".runtime-netns-detach.json.pending",
     ".runtime-stop.json.pending",
 }
 RUNTIME_SOCKET_ENTRIES = {"containerd.sock", "containerd.sock.ttrpc"}
@@ -107,6 +113,7 @@ RUNTIME_SOCKET_ENTRIES = {"containerd.sock", "containerd.sock.ttrpc"}
 ROOT_CONTROL_NAME = "runtime-control.json"
 ROOT_READY_NAME = "runtime-ready.json"
 ROOT_STOPPING_NAME = "runtime-stopping.json"
+ROOT_NETNS_DETACH_NAME = "runtime-netns-detach.json"
 ROOT_STOP_NAME = "runtime-stop.json"
 SOCKET_NAME = "docker.sock"
 LEGACY_V4_RUNTIME_MARKERS = {
@@ -514,17 +521,29 @@ class StateAuthority:
             return False
 
     def unlink_regular(self, name: str) -> None:
-        observed = os.stat(name, dir_fd=self.evidence_fd, follow_symlinks=False)
-        require(
-            stat.S_ISREG(observed.st_mode)
-            and observed.st_uid == self.caller_uid
-            and observed.st_gid == self.caller_gid
-            and stat.S_IMODE(observed.st_mode) == 0o600
-            and observed.st_nlink == 1,
-            f"evidence entry identity differs: {name}",
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | os.O_NOFOLLOW,
+            dir_fd=self.evidence_fd,
         )
-        os.unlink(name, dir_fd=self.evidence_fd)
-        os.fsync(self.evidence_fd)
+        try:
+            observed = os.fstat(descriptor)
+            literal = os.stat(name, dir_fd=self.evidence_fd, follow_symlinks=False)
+            require(
+                stat.S_ISREG(observed.st_mode)
+                and observed.st_uid == self.caller_uid
+                and observed.st_gid == self.caller_gid
+                and stat.S_IMODE(observed.st_mode) == 0o600
+                and observed.st_dev == os.fstat(self.evidence_fd).st_dev
+                and observed.st_nlink == 1
+                and (observed.st_dev, observed.st_ino)
+                == (literal.st_dev, literal.st_ino),
+                f"evidence entry identity differs: {name}",
+            )
+            os.unlink(name, dir_fd=self.evidence_fd)
+            os.fsync(self.evidence_fd)
+        finally:
+            os.close(descriptor)
 
     def write_json(self, name: str, value: dict[str, object]) -> None:
         encoded = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
@@ -543,8 +562,7 @@ class StateAuthority:
                 and pending.st_nlink == 1,
                 f"evidence pending entry identity differs: {temporary}",
             )
-            os.unlink(temporary, dir_fd=self.evidence_fd)
-            os.fsync(self.evidence_fd)
+            self.unlink_regular(temporary)
         descriptor = os.open(
             temporary,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
@@ -570,9 +588,8 @@ class StateAuthority:
             os.fsync(self.evidence_fd)
         except BaseException:
             try:
-                os.unlink(temporary, dir_fd=self.evidence_fd)
-                os.fsync(self.evidence_fd)
-            except OSError:
+                self.unlink_regular(temporary)
+            except (FileNotFoundError, OSError, SupervisorError):
                 pass
             raise
 
@@ -590,6 +607,13 @@ class StoredStateAuthority:
             "stateRoot": self.state_identity,
             "evidenceRoot": self.evidence_identity,
         }
+
+
+def writable_state_authority(
+    value: StateAuthority | StoredStateAuthority,
+) -> StateAuthority:
+    require(isinstance(value, StateAuthority), "writable caller state authority is absent")
+    return value
 
 
 @dataclass(frozen=True)
@@ -1091,9 +1115,20 @@ def mount_records(raw_mountinfo: str) -> tuple[tuple[str, Path, Path], ...]:
     for line in raw_mountinfo.splitlines():
         fields = line.split()
         require("-" in fields and len(fields) >= 10, "mountinfo record is invalid")
+        separator = fields.index("-")
+        require(separator + 1 < len(fields), "mountinfo filesystem type is absent")
+        filesystem_type = fields[separator + 1]
         mount_root = Path(decode_mount_path(fields[3]))
         target = Path(decode_mount_path(fields[4]))
-        require(mount_root.is_absolute() and target.is_absolute(), "mountinfo path is not absolute")
+        require(target.is_absolute(), "mountinfo target is not absolute")
+        require(
+            mount_root.is_absolute()
+            or (
+                filesystem_type == "nsfs"
+                and OPAQUE_MOUNT_ROOT.fullmatch(str(mount_root)) is not None
+            ),
+            "mountinfo root is neither absolute nor an admitted opaque identity",
+        )
         records.append((fields[2], mount_root, target))
     return tuple(records)
 
@@ -1105,6 +1140,33 @@ def path_at_or_below(candidate: Path, root: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def mount_root_at_or_below(candidate: Path, root: Path) -> bool:
+    if candidate.is_absolute() and root.is_absolute():
+        return path_at_or_below(candidate, root)
+    if candidate.is_absolute() or root.is_absolute():
+        return False
+    require(
+        OPAQUE_MOUNT_ROOT.fullmatch(str(candidate)) is not None
+        and OPAQUE_MOUNT_ROOT.fullmatch(str(root)) is not None,
+        "opaque mount-root identity is invalid",
+    )
+    return candidate == root
+
+
+def translate_mount_root(mount_root: Path, relative: Path) -> Path:
+    if mount_root.is_absolute():
+        return mount_root / relative
+    require(
+        OPAQUE_MOUNT_ROOT.fullmatch(str(mount_root)) is not None,
+        "opaque mount-root identity is invalid",
+    )
+    require(
+        relative == Path("."),
+        "opaque mount-root identity cannot address a descendant",
+    )
+    return mount_root
 
 
 def mount_source_anchors(
@@ -1119,7 +1181,10 @@ def mount_source_anchors(
     require(bases, "runtime mount backing record is absent")
     deepest = max(len(record[2].parts) for record in bases)
     base_coordinates = {
-        (device, mount_root / root.relative_to(target))
+        (
+            device,
+            translate_mount_root(mount_root, root.relative_to(target)),
+        )
         for device, mount_root, target in bases
         if len(target.parts) == deepest
     }
@@ -1147,14 +1212,19 @@ def mount_references_under(
     require(anchors, "runtime mount source anchors are absent")
     for device, source_prefix in anchors:
         require(
-            bool(device) and source_prefix.is_absolute(),
+            bool(device)
+            and (
+                source_prefix.is_absolute()
+                or OPAQUE_MOUNT_ROOT.fullmatch(str(source_prefix)) is not None
+            ),
             "runtime mount source anchor is invalid",
         )
     result: set[str] = set()
     for device, mount_root, target in records:
         target_reference = path_at_or_below(target, root)
         source_reference = any(
-            device == source_device and path_at_or_below(mount_root, source_prefix)
+            device == source_device
+            and mount_root_at_or_below(mount_root, source_prefix)
             for source_device, source_prefix in anchors
         )
         if target_reference or source_reference:
@@ -1211,12 +1281,17 @@ def _global_mount_roster_once(
         namespace = f"{before_stat.st_dev}:{before_stat.st_ino}"
         if namespace in seen:
             try:
+                targets = _mount_targets_for_namespace(pid, root, anchors)
                 after = os.stat(namespace_path)
             except OSError as error:
                 raise SupervisorError(f"mount namespace disappeared for pid {pid}") from error
             require(
                 (after.st_dev, after.st_ino) == (before_stat.st_dev, before_stat.st_ino),
                 f"mount namespace changed for pid {pid}",
+            )
+            require(
+                targets == seen[namespace],
+                f"mount namespace visibility differs across representatives: {namespace}",
             )
             continue
         try:
@@ -1246,20 +1321,420 @@ def stable_global_mount_targets(
     )
 
 
+def mount_namespace_key(value: object) -> str:
+    namespace = validate_namespace(value, "mount namespace")
+    return f"{namespace['device']}:{namespace['inode']}"
+
+
+def mount_source_anchor_document(anchor: tuple[str, Path]) -> dict[str, str]:
+    device, root = anchor
+    require(MOUNT_DEVICE_RE.fullmatch(device) is not None, "mount source device is invalid")
+    if root.is_absolute():
+        require(os.path.normpath(str(root)) == str(root), "mount source path is noncanonical")
+        kind = "absolute_path"
+    else:
+        require(
+            OPAQUE_MOUNT_ROOT.fullmatch(str(root)) is not None,
+            "opaque mount source identity is invalid",
+        )
+        kind = "opaque_nsfs_identity"
+    return {"kind": kind, "device": device, "root": str(root)}
+
+
+def mount_source_anchor_from_document(value: object) -> tuple[str, Path]:
+    document = exact_keys(
+        value,
+        {"kind", "device", "root"},
+        "task network namespace source anchor",
+    )
+    require(
+        isinstance(document["device"], str)
+        and MOUNT_DEVICE_RE.fullmatch(document["device"]) is not None,
+        "task network namespace source device is invalid",
+    )
+    require(isinstance(document["root"], str), "task network namespace source root is invalid")
+    root = Path(document["root"])
+    if document["kind"] == "absolute_path":
+        require(
+            root.is_absolute() and os.path.normpath(str(root)) == str(root),
+            "task network namespace source path is invalid",
+        )
+    else:
+        require(
+            document["kind"] == "opaque_nsfs_identity"
+            and not root.is_absolute()
+            and OPAQUE_MOUNT_ROOT.fullmatch(str(root)) is not None,
+            "task network namespace opaque source is invalid",
+        )
+    return document["device"], root
+
+
+def read_mountinfo_for_namespace(
+    expected_namespace: object,
+    *,
+    preferred_pids: tuple[int, ...] = (),
+) -> str | None:
+    expected = mount_namespace_key(expected_namespace)
+    candidates: list[int] = [os.getpid()]
+    candidates.extend(
+        plain_int(pid, "preferred namespace representative PID", positive=True)
+        for pid in preferred_pids
+    )
+    try:
+        candidates.extend(int(entry) for entry in sorted(os.listdir("/proc")) if entry.isdigit())
+    except OSError as error:
+        raise SupervisorError("mount namespace representative roster is unreadable") from error
+    seen: set[int] = set()
+    for pid in candidates:
+        if pid in seen:
+            continue
+        seen.add(pid)
+        namespace_path = f"/proc/{pid}/ns/mnt"
+        try:
+            before = os.stat(namespace_path)
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        except OSError as error:
+            raise SupervisorError(f"mount namespace is unreadable for pid {pid}") from error
+        if f"{before.st_dev}:{before.st_ino}" != expected:
+            continue
+        try:
+            raw = Path(f"/proc/{pid}/mountinfo").read_text(encoding="utf-8")
+            after = os.stat(namespace_path)
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        except OSError as error:
+            raise SupervisorError(f"mount namespace disappeared for pid {pid}") from error
+        require(
+            (after.st_dev, after.st_ino) == (before.st_dev, before.st_ino),
+            f"mount namespace changed for pid {pid}",
+        )
+        return raw
+    return None
+
+
+def runtime_netns_entry_roster(runtime: RuntimeIdentity) -> tuple[str, ...]:
+    runtime_fd = verify_runtime_root(runtime)
+    docker_exec_fd: int | None = None
+    netns_fd: int | None = None
+    try:
+        try:
+            docker_exec_fd = os.open(
+                "docker-exec",
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=runtime_fd,
+            )
+        except FileNotFoundError:
+            return ()
+        docker_exec = os.fstat(docker_exec_fd)
+        docker_exec_literal = os.stat(
+            "docker-exec", dir_fd=runtime_fd, follow_symlinks=False
+        )
+        require(
+            stat.S_ISDIR(docker_exec.st_mode)
+            and docker_exec.st_uid == 0
+            and docker_exec.st_gid == 0
+            and (docker_exec.st_dev, docker_exec.st_ino)
+            == (docker_exec_literal.st_dev, docker_exec_literal.st_ino),
+            "Docker execution root identity differs",
+        )
+        try:
+            netns_fd = os.open(
+                "netns",
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=docker_exec_fd,
+            )
+        except FileNotFoundError:
+            return ()
+        netns = os.fstat(netns_fd)
+        netns_literal = os.stat("netns", dir_fd=docker_exec_fd, follow_symlinks=False)
+        require(
+            stat.S_ISDIR(netns.st_mode)
+            and netns.st_uid == 0
+            and netns.st_gid == 0
+            and (netns.st_dev, netns.st_ino)
+            == (netns_literal.st_dev, netns_literal.st_ino),
+            "task network namespace root identity differs",
+        )
+        names = tuple(sorted(os.listdir(netns_fd)))
+        for name in names:
+            require(
+                TASK_NETNS_ENTRY_RE.fullmatch(name) is not None,
+                "task network namespace entry name is invalid",
+            )
+            value = os.stat(name, dir_fd=netns_fd, follow_symlinks=False)
+            require(
+                stat.S_ISREG(value.st_mode)
+                and value.st_uid == 0
+                and value.st_gid == 0,
+                f"task network namespace entry identity differs: {name}",
+            )
+        return names
+    finally:
+        if netns_fd is not None:
+            os.close(netns_fd)
+        if docker_exec_fd is not None:
+            os.close(docker_exec_fd)
+        os.close(runtime_fd)
+
+
+def build_task_netns_detach_manifest(
+    *,
+    runtime: RuntimeIdentity,
+    state_root: Path,
+    control_digest: str,
+    stopping_digest: str,
+    recorded_namespace: object,
+    preferred_pids: tuple[int, ...] = (),
+) -> dict[str, object]:
+    namespace = validate_namespace(recorded_namespace, "recorded supervisor mount namespace")
+    raw = read_mountinfo_for_namespace(namespace, preferred_pids=preferred_pids)
+    underlying_roster = runtime_netns_entry_roster(runtime)
+    if raw is None:
+        require(
+            not underlying_roster,
+            "task network namespace source has no live representative; admin recovery is required",
+        )
+        targets: tuple[Path, ...] = ()
+    else:
+        targets = task_netns_mounts(runtime.path, raw)
+        require(
+            tuple(sorted(target.name for target in targets)) == underlying_roster,
+            "task network namespace mount and entry rosters differ",
+        )
+    entries: list[dict[str, object]] = []
+    expected_namespace = mount_namespace_key(namespace)
+    for target in sorted(targets):
+        anchors = mount_source_anchors(raw, target) if raw is not None else ()
+        require(
+            len(anchors) == 1,
+            "task network namespace must have exactly one source coordinate",
+        )
+        require(
+            stable_global_mount_targets(target, source_anchors=anchors)
+            == ((expected_namespace, str(target)),),
+            "task network namespace mount has a foreign bind occurrence",
+        )
+        entries.append(
+            {
+                "target": str(target),
+                "fsType": "nsfs",
+                "sourceAnchor": mount_source_anchor_document(anchors[0]),
+            }
+        )
+    return {
+        "schema": NETNS_DETACH_SCHEMA,
+        "observedAt": utc_now(),
+        "bootId": current_boot_id(),
+        "stateRoot": str(state_root),
+        "runtimeRootIdentity": runtime.json(),
+        "rootControlSha256": control_digest,
+        "rootStoppingSha256": stopping_digest,
+        "mountNamespace": namespace,
+        "taskMounts": entries,
+    }
+
+
+def validate_task_netns_detach_manifest(
+    value: object,
+    *,
+    runtime: RuntimeIdentity,
+    state_root: Path,
+    control_digest: str,
+    stopping_digest: str,
+    recorded_namespace: object,
+) -> tuple[tuple[Path, tuple[tuple[str, Path], ...]], ...]:
+    manifest = exact_keys(
+        value,
+        {
+            "schema",
+            "observedAt",
+            "bootId",
+            "stateRoot",
+            "runtimeRootIdentity",
+            "rootControlSha256",
+            "rootStoppingSha256",
+            "mountNamespace",
+            "taskMounts",
+        },
+        "task network namespace detach manifest",
+    )
+    namespace = validate_namespace(recorded_namespace, "recorded supervisor mount namespace")
+    require(
+        manifest["schema"] == NETNS_DETACH_SCHEMA
+        and isinstance(manifest["observedAt"], str)
+        and manifest["bootId"] == current_boot_id()
+        and manifest["stateRoot"] == str(state_root)
+        and manifest["runtimeRootIdentity"] == runtime.json()
+        and manifest["rootControlSha256"] == control_digest
+        and manifest["rootStoppingSha256"] == stopping_digest
+        and manifest["mountNamespace"] == namespace
+        and isinstance(manifest["taskMounts"], list),
+        "task network namespace detach manifest binding differs",
+    )
+    assert isinstance(manifest["taskMounts"], list)
+    require(len(manifest["taskMounts"]) <= 4096, "task network namespace roster is too large")
+    parsed: list[tuple[Path, tuple[tuple[str, Path], ...]]] = []
+    prefix = runtime.path / "docker-exec" / "netns"
+    for item in manifest["taskMounts"]:
+        entry = exact_keys(
+            item,
+            {"target", "fsType", "sourceAnchor"},
+            "task network namespace detach entry",
+        )
+        require(
+            isinstance(entry["target"], str),
+            "task network namespace detach target is invalid",
+        )
+        target = Path(entry["target"])
+        require(
+            target.parent == prefix
+            and TASK_NETNS_ENTRY_RE.fullmatch(target.name) is not None
+            and entry["fsType"] == "nsfs",
+            "task network namespace detach target differs",
+        )
+        anchor = mount_source_anchor_from_document(entry["sourceAnchor"])
+        parsed.append((target, (anchor,)))
+    require(
+        parsed == sorted(parsed, key=lambda item: str(item[0]))
+        and len({target for target, _ in parsed}) == len(parsed),
+        "task network namespace detach roster is not canonical and unique",
+    )
+    return tuple(parsed)
+
+
+def ensure_task_netns_detach_manifest(
+    *,
+    runtime: RuntimeIdentity,
+    state_root: Path,
+    control_digest: str,
+    stopping_digest: str,
+    recorded_namespace: object,
+    preferred_pids: tuple[int, ...] = (),
+) -> tuple[str, tuple[tuple[Path, tuple[tuple[str, Path], ...]], ...]]:
+    value = read_root_manifest(runtime, ROOT_NETNS_DETACH_NAME)
+    if value is None:
+        value = build_task_netns_detach_manifest(
+            runtime=runtime,
+            state_root=state_root,
+            control_digest=control_digest,
+            stopping_digest=stopping_digest,
+            recorded_namespace=recorded_namespace,
+            preferred_pids=preferred_pids,
+        )
+        digest = write_root_manifest(runtime, ROOT_NETNS_DETACH_NAME, value)
+        value = read_root_manifest(runtime, ROOT_NETNS_DETACH_NAME)
+        require(value is not None, "task network namespace detach manifest disappeared")
+    else:
+        digest = canonical_document_digest(value)
+    parsed = validate_task_netns_detach_manifest(
+        value,
+        runtime=runtime,
+        state_root=state_root,
+        control_digest=control_digest,
+        stopping_digest=stopping_digest,
+        recorded_namespace=recorded_namespace,
+    )
+    require(digest == canonical_document_digest(value), "task network namespace digest differs")
+    return digest, parsed
+
+
+def settle_task_netns_detach_manifest(
+    *,
+    runtime: RuntimeIdentity,
+    recorded_namespace: object,
+    task_mounts: tuple[tuple[Path, tuple[tuple[str, Path], ...]], ...],
+    expected_children: set[int],
+) -> None:
+    namespace = validate_namespace(recorded_namespace, "recorded supervisor mount namespace")
+    current_namespace = mount_namespace()
+    current_raw = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
+    current_targets = set(task_netns_mounts(runtime.path, current_raw))
+    planned_targets = {target for target, _ in task_mounts}
+    require(
+        current_targets <= planned_targets,
+        "unplanned task network namespace mount appeared after detach publication",
+    )
+    for target, anchors in task_mounts:
+        if target in current_targets:
+            require(
+                current_namespace == namespace,
+                "task network namespace source is visible in an unexpected namespace",
+            )
+            require(
+                mount_source_anchors(current_raw, target) == anchors,
+                "task network namespace source coordinate changed",
+            )
+            require(
+                stable_global_mount_targets(target, source_anchors=anchors)
+                == ((mount_namespace_key(namespace), str(target)),),
+                "task network namespace mount has a foreign bind occurrence",
+            )
+            subprocess.run(
+                [str(UMOUNT), "--", str(target)],
+                check=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+                cwd="/",
+                env={"PATH": "/usr/bin:/bin", "LC_ALL": "C.UTF-8"},
+            )
+            require_exact_children(expected_children)
+        require(
+            not stable_global_mount_targets(target, source_anchors=anchors),
+            "task network namespace bind remained after source unmount",
+        )
+    remaining = task_netns_mounts(
+        runtime.path,
+        Path("/proc/self/mountinfo").read_text(encoding="utf-8"),
+    )
+    require(not remaining, "task network namespace mount remained after cleanup")
+    for target, anchors in task_mounts:
+        require(
+            not stable_global_mount_targets(target, source_anchors=anchors),
+            "task network namespace bind reappeared before runtime deletion",
+        )
+
+
 def _remove_tree_entry(directory_fd: int, name: str) -> None:
     value = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
     require(value.st_uid == 0, f"runtime cleanup entry owner differs: {name}")
     if stat.S_ISDIR(value.st_mode):
         child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd)
         try:
+            literal = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            observed = os.fstat(child)
+            require(
+                (literal.st_dev, literal.st_ino) == (observed.st_dev, observed.st_ino),
+                f"runtime cleanup directory binding differs: {name}",
+            )
             for nested in tuple(sorted(os.listdir(child))):
                 _remove_tree_entry(child, nested)
             os.fsync(child)
+            literal = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            require(
+                (literal.st_dev, literal.st_ino) == (observed.st_dev, observed.st_ino),
+                f"runtime cleanup directory changed before removal: {name}",
+            )
+            os.rmdir(name, dir_fd=directory_fd)
         finally:
             os.close(child)
-        os.rmdir(name, dir_fd=directory_fd)
     elif stat.S_ISREG(value.st_mode) or stat.S_ISSOCK(value.st_mode) or stat.S_ISLNK(value.st_mode):
-        os.unlink(name, dir_fd=directory_fd)
+        require(hasattr(os, "O_PATH"), "descriptor-only runtime cleanup is unavailable")
+        leaf = os.open(name, os.O_PATH | os.O_NOFOLLOW, dir_fd=directory_fd)
+        try:
+            observed = os.fstat(leaf)
+            literal = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            require(
+                observed.st_uid == 0
+                and (literal.st_dev, literal.st_ino) == (observed.st_dev, observed.st_ino)
+                and stat.S_IFMT(literal.st_mode) == stat.S_IFMT(observed.st_mode),
+                f"runtime cleanup leaf binding differs: {name}",
+            )
+            os.unlink(name, dir_fd=directory_fd)
+        finally:
+            os.close(leaf)
     else:
         raise SupervisorError(f"runtime cleanup entry type differs: {name}")
     os.fsync(directory_fd)
@@ -1429,28 +1904,40 @@ def remove_socket_root(
         roster = tuple(sorted(os.listdir(descriptor)))
         require(roster in ((), (SOCKET_NAME,)), "Docker API root contains a foreign entry")
         if roster:
-            observed = os.stat(SOCKET_NAME, dir_fd=descriptor, follow_symlinks=False)
-            require(
-                socket_identity is not None
-                and stat.S_ISSOCK(observed.st_mode)
-                and (
-                    observed.st_dev,
-                    observed.st_ino,
-                    observed.st_uid,
-                    observed.st_gid,
-                    stat.S_IMODE(observed.st_mode),
-                )
-                == (
-                    socket_identity.device,
-                    socket_identity.inode,
-                    0,
-                    caller_gid,
-                    0o660,
-                ),
-                "Docker API socket cannot be safely removed",
+            require(hasattr(os, "O_PATH"), "descriptor-only socket cleanup is unavailable")
+            socket_fd = os.open(
+                SOCKET_NAME,
+                os.O_PATH | os.O_NOFOLLOW,
+                dir_fd=descriptor,
             )
-            os.unlink(SOCKET_NAME, dir_fd=descriptor)
-            os.fsync(descriptor)
+            try:
+                observed = os.fstat(socket_fd)
+                literal = os.stat(SOCKET_NAME, dir_fd=descriptor, follow_symlinks=False)
+                require(
+                    socket_identity is not None
+                    and stat.S_ISSOCK(observed.st_mode)
+                    and (
+                        observed.st_dev,
+                        observed.st_ino,
+                        observed.st_uid,
+                        observed.st_gid,
+                        stat.S_IMODE(observed.st_mode),
+                    )
+                    == (
+                        socket_identity.device,
+                        socket_identity.inode,
+                        0,
+                        caller_gid,
+                        0o660,
+                    )
+                    and (literal.st_dev, literal.st_ino)
+                    == (observed.st_dev, observed.st_ino),
+                    "Docker API socket cannot be safely removed",
+                )
+                os.unlink(SOCKET_NAME, dir_fd=descriptor)
+                os.fsync(descriptor)
+            finally:
+                os.close(socket_fd)
         require(not os.listdir(descriptor), "Docker API root did not become empty")
         literal = os.stat(root.path.name, dir_fd=parent_fd, follow_symlinks=False)
         require(
@@ -1548,7 +2035,14 @@ def write_runtime_file(runtime_fd: int, name: str, content: str) -> tuple[Path, 
 
 def _root_manifest_pending(name: str) -> str:
     require(
-        name in (ROOT_CONTROL_NAME, ROOT_READY_NAME, ROOT_STOPPING_NAME, ROOT_STOP_NAME),
+        name
+        in (
+            ROOT_CONTROL_NAME,
+            ROOT_READY_NAME,
+            ROOT_STOPPING_NAME,
+            ROOT_NETNS_DETACH_NAME,
+            ROOT_STOP_NAME,
+        ),
         "root manifest name is invalid",
     )
     return f".{name}.pending"
@@ -1660,7 +2154,14 @@ def require_no_other_task_runtime(state_root: Path) -> None:
 
 def read_root_manifest(runtime_identity: RuntimeIdentity, name: str) -> dict[str, Any] | None:
     require(
-        name in (ROOT_CONTROL_NAME, ROOT_READY_NAME, ROOT_STOPPING_NAME, ROOT_STOP_NAME),
+        name
+        in (
+            ROOT_CONTROL_NAME,
+            ROOT_READY_NAME,
+            ROOT_STOPPING_NAME,
+            ROOT_NETNS_DETACH_NAME,
+            ROOT_STOP_NAME,
+        ),
         "root manifest name is invalid",
     )
     runtime_fd = verify_runtime_root(runtime_identity)
@@ -2140,6 +2641,7 @@ def invoke_storage_helper(
     namespace: dict[str, int],
     expected_outcome: str,
     expected_children: set[int],
+    runtime_lease_fd: int | None,
     allow_unpublished: bool = False,
 ) -> dict[str, object]:
     outcomes = {
@@ -2153,29 +2655,42 @@ def invoke_storage_helper(
         not allow_unpublished or command == "deactivate-private",
         "unpublished storage policy is invalid for this operation",
     )
+    mutating = command in ("activate-private", "deactivate-private")
+    require(
+        (mutating and runtime_lease_fd is not None and runtime_lease_fd >= 0)
+        or (not mutating and runtime_lease_fd is None),
+        "runtime lease descriptor policy differs",
+    )
+    if runtime_lease_fd is not None:
+        os.fstat(runtime_lease_fd)
     environment = {
         "PATH": "/usr/bin:/bin",
         "LC_ALL": "C.UTF-8",
         "SUDO_UID": str(caller_uid),
         "SUDO_GID": str(caller_gid),
     }
+    arguments = [
+        str(PYTHON),
+        "-I",
+        "-S",
+        "-B",
+        "-c",
+        PINNED_EXEC_LOADER,
+        str(helper),
+        STORAGE_LIFECYCLE_SHA256,
+        command,
+        str(state_root),
+        str(caller_uid),
+        str(caller_gid),
+        str(namespace["device"]),
+        str(namespace["inode"]),
+    ]
+    pass_fds: tuple[int, ...] = ()
+    if runtime_lease_fd is not None:
+        arguments.append(str(runtime_lease_fd))
+        pass_fds = (runtime_lease_fd,)
     process = subprocess.Popen(
-        [
-            str(PYTHON),
-            "-I",
-            "-S",
-            "-B",
-            "-c",
-            PINNED_EXEC_LOADER,
-            str(helper),
-            STORAGE_LIFECYCLE_SHA256,
-            command,
-            str(state_root),
-            str(caller_uid),
-            str(caller_gid),
-            str(namespace["device"]),
-            str(namespace["inode"]),
-        ],
+        arguments,
         cwd="/",
         env=environment,
         stdin=subprocess.DEVNULL,
@@ -2183,6 +2698,7 @@ def invoke_storage_helper(
         stderr=subprocess.PIPE,
         text=True,
         close_fds=True,
+        pass_fds=pass_fds,
     )
     try:
         stdout, stderr = process.communicate(timeout=600)
@@ -2700,6 +3216,74 @@ def canonical_document_digest(value: dict[str, object]) -> str:
     ).hexdigest()
 
 
+def stopping_authority_value(
+    *,
+    state_root: Path,
+    reason: str,
+    control_digest: str,
+    runtime: RuntimeIdentity,
+    cgroup: CgroupIdentity,
+    supervisor_identity: dict[str, object],
+) -> dict[str, object]:
+    require(bool(reason) and len(reason) <= 256, "runtime stopping reason is invalid")
+    require(SHA256_RE.fullmatch(control_digest) is not None, "root control digest is invalid")
+    return {
+        "schema": STOPPING_SCHEMA,
+        "outcome": "stopping",
+        "observedAt": utc_now(),
+        "bootId": current_boot_id(),
+        "stateRoot": str(state_root),
+        "reason": reason,
+        "rootControlSha256": control_digest,
+        "runtimeRootIdentity": runtime.json(),
+        "cgroup": cgroup.json(),
+        "supervisorProcessIdentity": supervisor_identity,
+    }
+
+
+def validate_stopping_authority(
+    value: object,
+    *,
+    state_root: Path,
+    control_digest: str,
+    runtime: RuntimeIdentity,
+    cgroup: CgroupIdentity,
+    supervisor_identity: dict[str, object],
+    boot_id: str,
+) -> dict[str, object]:
+    stopping = exact_keys(
+        value,
+        {
+            "schema",
+            "outcome",
+            "observedAt",
+            "bootId",
+            "stateRoot",
+            "reason",
+            "rootControlSha256",
+            "runtimeRootIdentity",
+            "cgroup",
+            "supervisorProcessIdentity",
+        },
+        "root runtime stopping authority",
+    )
+    require(
+        stopping["schema"] == STOPPING_SCHEMA
+        and stopping["outcome"] == "stopping"
+        and isinstance(stopping["observedAt"], str)
+        and stopping["bootId"] == boot_id
+        and stopping["stateRoot"] == str(state_root)
+        and isinstance(stopping["reason"], str)
+        and 0 < len(stopping["reason"]) <= 256
+        and stopping["rootControlSha256"] == control_digest
+        and stopping["runtimeRootIdentity"] == runtime.json()
+        and stopping["cgroup"] == cgroup.json()
+        and stopping["supervisorProcessIdentity"] == supervisor_identity,
+        "root stopping authority differs",
+    )
+    return stopping
+
+
 def _validate_snapshot_prefix(path: Path, expected: bytes) -> None:
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     try:
@@ -2869,20 +3453,8 @@ def remove_user_runtime_projections(state: StateAuthority) -> None:
         f".{STOP_RECEIPT_NAME}.pending",
     )
     for name in names:
-        try:
-            value = os.stat(name, dir_fd=state.evidence_fd, follow_symlinks=False)
-        except FileNotFoundError:
-            continue
-        require(
-            stat.S_ISREG(value.st_mode)
-            and value.st_uid == state.caller_uid
-            and value.st_gid == state.caller_gid
-            and stat.S_IMODE(value.st_mode) == 0o600
-            and value.st_nlink == 1,
-            f"runtime projection identity differs: {name}",
-        )
-        os.unlink(name, dir_fd=state.evidence_fd)
-        os.fsync(state.evidence_fd)
+        if state.exists(name):
+            state.unlink_regular(name)
 
 
 class RuntimeSupervisor:
@@ -2928,6 +3500,10 @@ class RuntimeSupervisor:
         self.root_control_digest: str | None = None
         self.root_ready_digest: str | None = None
         self.root_stopping_digest: str | None = None
+        self.root_netns_detach_digest: str | None = None
+        self.task_netns_detach_manifest: tuple[
+            tuple[Path, tuple[tuple[str, Path], ...]], ...
+        ] | None = None
         self.root_stop_digest: str | None = None
         self.arguments_sha256 = process_arguments_sha256()
 
@@ -2974,6 +3550,7 @@ class RuntimeSupervisor:
     ) -> dict[str, object]:
         require(self.namespace is not None, "supervisor namespace is absent")
         require(self.storage_helper_path is not None, "storage helper snapshot is absent")
+        require(self.lease is not None, "runtime lifecycle lease is absent")
         return invoke_storage_helper(
             helper=self.storage_helper_path,
             command=command,
@@ -2983,6 +3560,7 @@ class RuntimeSupervisor:
             namespace=self.namespace,
             expected_outcome=outcome,
             expected_children=self.expected_child_pids(),
+            runtime_lease_fd=self.lease.descriptor,
             allow_unpublished=allow_unpublished,
         )
 
@@ -3045,23 +3623,26 @@ class RuntimeSupervisor:
         require(self.root_control_digest is not None, "root control authority is absent")
         require(self.supervisor_identity is not None, "supervisor identity is absent")
         if self.root_stopping_digest is not None:
-            require(
-                read_root_manifest(self.runtime_identity, ROOT_STOPPING_NAME) is not None,
-                "root stopping authority disappeared",
+            existing = read_root_manifest(self.runtime_identity, ROOT_STOPPING_NAME)
+            require(existing is not None, "root stopping authority disappeared")
+            validate_stopping_authority(
+                existing,
+                state_root=self.state_root,
+                control_digest=self.root_control_digest,
+                runtime=self.runtime_identity,
+                cgroup=self.cgroup_identity,
+                supervisor_identity=self.supervisor_identity,
+                boot_id=current_boot_id(),
             )
             return
-        value: dict[str, object] = {
-            "schema": STOPPING_SCHEMA,
-            "outcome": "stopping",
-            "observedAt": utc_now(),
-            "bootId": current_boot_id(),
-            "stateRoot": str(self.state_root),
-            "reason": reason,
-            "rootControlSha256": self.root_control_digest,
-            "runtimeRootIdentity": self.runtime_identity.json(),
-            "cgroup": self.cgroup_identity.json(),
-            "supervisorProcessIdentity": self.supervisor_identity,
-        }
+        value = stopping_authority_value(
+            state_root=self.state_root,
+            reason=reason,
+            control_digest=self.root_control_digest,
+            runtime=self.runtime_identity,
+            cgroup=self.cgroup_identity,
+            supervisor_identity=self.supervisor_identity,
+        )
         self.root_stopping_digest = write_root_manifest(
             self.runtime_identity,
             ROOT_STOPPING_NAME,
@@ -3082,7 +3663,7 @@ class RuntimeSupervisor:
                 self.precontrol_source_directory,
             )
             if not orphaned:
-                remove_user_runtime_projections(self.state)  # type: ignore[arg-type]
+                remove_user_runtime_projections(writable_state_authority(self.state))
             return
 
         process_authority = load_process_authority(self.script_directory)
@@ -3095,7 +3676,7 @@ class RuntimeSupervisor:
                 self.precontrol_source_directory,
             )
             require(not orphaned, "orphaned pre-control runtime lacks durable caller authority")
-            remove_user_runtime_projections(self.state)  # type: ignore[arg-type]
+            remove_user_runtime_projections(writable_state_authority(self.state))
             return
         validated = validate_control_authority(
             control_value,
@@ -3116,36 +3697,19 @@ class RuntimeSupervisor:
             else None
         )
         stopping_value = read_root_manifest(runtime, ROOT_STOPPING_NAME)
+        stopping: dict[str, object] | None = None
         if stopping_value is not None:
-            stopping = exact_keys(
+            stopping = validate_stopping_authority(
                 stopping_value,
-                {
-                    "schema",
-                    "outcome",
-                    "observedAt",
-                    "bootId",
-                    "stateRoot",
-                    "reason",
-                    "rootControlSha256",
-                    "runtimeRootIdentity",
-                    "cgroup",
-                    "supervisorProcessIdentity",
-                },
-                "root runtime stopping authority",
-            )
-            require(
-                stopping["schema"] == STOPPING_SCHEMA
-                and stopping["outcome"] == "stopping"
-                and stopping["bootId"] == validated["control"]["bootId"]
-                and stopping["stateRoot"] == str(self.state_root)
-                and stopping["rootControlSha256"] == root_control_digest
-                and stopping["runtimeRootIdentity"] == runtime.json()
-                and stopping["cgroup"] == validated["cgroup"].json()
-                and stopping["supervisorProcessIdentity"]
-                == validated["supervisor"],
-                "root stopping authority differs",
+                state_root=self.state_root,
+                control_digest=root_control_digest,
+                runtime=runtime,
+                cgroup=validated["cgroup"],
+                supervisor_identity=validated["supervisor"],
+                boot_id=validated["control"]["bootId"],
             )
         stop_value = read_root_manifest(runtime, ROOT_STOP_NAME)
+        stop: dict[str, object] | None = None
         if stop_value is not None:
             stop = exact_keys(
                 stop_value,
@@ -3160,6 +3724,7 @@ class RuntimeSupervisor:
                     "runtimeRootIdentity",
                     "cgroup",
                     "rootStoppingSha256",
+                    "netnsDetachSha256",
                     "storageProjectionDigest",
                     "socketRootRemoved",
                     "externalFinalizationRequired",
@@ -3171,12 +3736,23 @@ class RuntimeSupervisor:
                 and stop["outcome"] == "quiesced"
                 and stop["bootId"] == validated["control"]["bootId"]
                 and stop["stateRoot"] == str(self.state_root)
+                and stopping is not None
+                and stop["reason"] == stopping["reason"]
                 and stop["runtimeRootIdentity"] == runtime.json()
                 and stop["cgroup"] == validated["cgroup"].json()
                 and isinstance(stop["rootStoppingSha256"], str)
                 and stopping_value is not None
                 and stop["rootStoppingSha256"]
                 == canonical_document_digest(stopping_value)
+                and isinstance(stop["netnsDetachSha256"], str)
+                and SHA256_RE.fullmatch(stop["netnsDetachSha256"]) is not None
+                and (
+                    stop["storageProjectionDigest"] is None
+                    or (
+                        isinstance(stop["storageProjectionDigest"], str)
+                        and SHA256_RE.fullmatch(stop["storageProjectionDigest"]) is not None
+                    )
+                )
                 and stop["socketRootRemoved"] is True
                 and stop["externalFinalizationRequired"] is True,
                 "root stop authority differs",
@@ -3201,8 +3777,58 @@ class RuntimeSupervisor:
             raise SupervisorError("runtime lease was free while its exact supervisor remained live")
 
         cgroup = validated["cgroup"]
+        if stopping_value is None:
+            stopping_value = stopping_authority_value(
+                state_root=self.state_root,
+                reason="dead_supervisor_recovery",
+                control_digest=root_control_digest,
+                runtime=runtime,
+                cgroup=cgroup,
+                supervisor_identity=validated["supervisor"],
+            )
+            root_stopping_digest = write_root_manifest(
+                runtime,
+                ROOT_STOPPING_NAME,
+                stopping_value,
+            )
+        else:
+            root_stopping_digest = canonical_document_digest(stopping_value)
+
+        existing_netns_detach = read_root_manifest(runtime, ROOT_NETNS_DETACH_NAME)
+        require(
+            stop is None or existing_netns_detach is not None,
+            "root stop authority lacks its task network namespace detach manifest",
+        )
+        preferred_pids = (
+            tuple(
+                identity["pid"]
+                for identity in (ready["docker"], ready["containerd"])
+                if isinstance(identity, dict)
+            )
+            if ready is not None
+            else ()
+        )
+        netns_detach_digest, task_mounts = ensure_task_netns_detach_manifest(
+            runtime=runtime,
+            state_root=self.state_root,
+            control_digest=root_control_digest,
+            stopping_digest=root_stopping_digest,
+            recorded_namespace=validated["control"]["mountNamespace"],
+            preferred_pids=preferred_pids,
+        )
+        require(
+            stop is None or stop["netnsDetachSha256"] == netns_detach_digest,
+            "root stop task network namespace digest differs",
+        )
+
         if cgroup_is_populated(cgroup):
             kill_cgroup_and_wait(cgroup, timeout=60)
+        settle_task_netns_detach_manifest(
+            runtime=runtime,
+            recorded_namespace=validated["control"]["mountNamespace"],
+            task_mounts=task_mounts,
+            expected_children=set(),
+        )
 
         socket_root = validated["socketRoot"]
         try:
@@ -3232,15 +3858,31 @@ class RuntimeSupervisor:
             self.runtime_identity = runtime
             self.storage_helper_path = helper
             self.storage_activation_attempted = True
+            self.root_control_digest = root_control_digest
+            self.root_stopping_digest = root_stopping_digest
+            self.root_netns_detach_digest = netns_detach_digest
+            self.task_netns_detach_manifest = task_mounts
             self.deactivated_storage = self.invoke_storage(
                 "deactivate-private",
                 "deactivated",
                 allow_unpublished=True,
             )
+            require(
+                stop is None
+                or stop["storageProjectionDigest"]
+                == self.deactivated_storage["projectionDigest"],
+                "root stop storage projection digest differs",
+            )
+        settle_task_netns_detach_manifest(
+            runtime=runtime,
+            recorded_namespace=validated["control"]["mountNamespace"],
+            task_mounts=task_mounts,
+            expected_children=set(),
+        )
         remove_runtime_root(runtime)
         remove_empty_cgroup(cgroup)
         if not orphaned:
-            remove_user_runtime_projections(self.state)  # type: ignore[arg-type]
+            remove_user_runtime_projections(writable_state_authority(self.state))
         self.runtime_identity = None
         self.storage_helper_path = None
         self.storage_activation_attempted = False
@@ -3855,54 +4497,46 @@ class RuntimeSupervisor:
         finally:
             os.close(pidfd)
 
-    def cleanup_task_netns(self) -> None:
+    def prepare_task_netns_detach(self) -> None:
         require(self.runtime_identity is not None, "runtime identity is absent")
         require(self.namespace is not None, "runtime mount namespace is absent")
-        raw = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
-        for target in task_netns_mounts(self.runtime_identity.path, raw):
-            current_mountinfo = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
+        require(self.root_control_digest is not None, "root control authority is absent")
+        require(self.root_stopping_digest is not None, "root stopping authority is absent")
+        if self.root_netns_detach_digest is not None:
             require(
-                target in task_netns_mounts(self.runtime_identity.path, current_mountinfo),
-                "task network namespace mount disappeared before global proof",
+                self.task_netns_detach_manifest is not None,
+                "task network namespace detach roster is absent",
             )
-            source_anchors = mount_source_anchors(current_mountinfo, target)
-            expected_occurrence = (
-                (
-                    f"{self.namespace['device']}:{self.namespace['inode']}",
-                    str(target),
-                ),
-            )
-            require(
-                stable_global_mount_targets(
-                    target,
-                    source_anchors=source_anchors,
-                )
-                == expected_occurrence,
-                "task network namespace mount has a foreign bind occurrence",
-            )
-            subprocess.run(
-                [str(UMOUNT), "--", str(target)],
-                check=True,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=30,
-                cwd="/",
-                env={"PATH": "/usr/bin:/bin", "LC_ALL": "C.UTF-8"},
-            )
-            require_exact_children(self.expected_child_pids())
-            require(
-                not stable_global_mount_targets(
-                    target,
-                    source_anchors=source_anchors,
-                ),
-                "task network namespace bind remained after source unmount",
-            )
-        remaining = task_netns_mounts(
-            self.runtime_identity.path,
-            Path("/proc/self/mountinfo").read_text(encoding="utf-8"),
+            return
+        digest, task_mounts = ensure_task_netns_detach_manifest(
+            runtime=self.runtime_identity,
+            state_root=self.state_root,
+            control_digest=self.root_control_digest,
+            stopping_digest=self.root_stopping_digest,
+            recorded_namespace=self.namespace,
+            preferred_pids=tuple(
+                process.pid
+                for process in (self.docker_process, self.containerd_process)
+                if process is not None
+            ),
         )
-        require(not remaining, "task network namespace mount remained after cleanup")
+        self.root_netns_detach_digest = digest
+        self.task_netns_detach_manifest = task_mounts
+
+    def cleanup_task_netns(self) -> None:
+        self.prepare_task_netns_detach()
+        require(self.runtime_identity is not None, "runtime identity is absent")
+        require(self.namespace is not None, "runtime mount namespace is absent")
+        require(
+            self.task_netns_detach_manifest is not None,
+            "task network namespace detach roster is absent",
+        )
+        settle_task_netns_detach_manifest(
+            runtime=self.runtime_identity,
+            recorded_namespace=self.namespace,
+            task_mounts=self.task_netns_detach_manifest,
+            expected_children=self.expected_child_pids(),
+        )
 
     def try_shutdown(self, reason: str) -> bool:
         require(self.state is not None, "state authority is absent")
@@ -3918,6 +4552,7 @@ class RuntimeSupervisor:
             self.terminate_daemon("dockerd", self.docker_process)
             self.terminate_daemon("containerd", self.containerd_process)
             wait_for_adopted_children(set())
+            self.prepare_task_netns_detach()
             if self.socket_root_identity is not None and not self.socket_root_removed:
                 remove_socket_root(
                     self.socket_root_identity,
@@ -3935,6 +4570,10 @@ class RuntimeSupervisor:
             require(self.runtime_identity is not None, "runtime identity is absent")
             require(self.cgroup_identity is not None, "runtime cgroup identity is absent")
             require(self.root_stopping_digest is not None, "root stopping authority is absent")
+            require(
+                self.root_netns_detach_digest is not None,
+                "task network namespace detach authority is absent",
+            )
             existing_stop = read_root_manifest(self.runtime_identity, ROOT_STOP_NAME)
             if existing_stop is None:
                 value: dict[str, object] = {
@@ -3948,6 +4587,7 @@ class RuntimeSupervisor:
                     "runtimeRootIdentity": self.runtime_identity.json(),
                     "cgroup": self.cgroup_identity.json(),
                     "rootStoppingSha256": self.root_stopping_digest,
+                    "netnsDetachSha256": self.root_netns_detach_digest,
                     "storageProjectionDigest": (
                         self.deactivated_storage["projectionDigest"]
                         if self.deactivated_storage is not None
@@ -3975,6 +4615,7 @@ class RuntimeSupervisor:
                         "runtimeRootIdentity",
                         "cgroup",
                         "rootStoppingSha256",
+                        "netnsDetachSha256",
                         "storageProjectionDigest",
                         "socketRootRemoved",
                         "externalFinalizationRequired",
@@ -3991,6 +4632,7 @@ class RuntimeSupervisor:
                     and value["runtimeRootIdentity"] == self.runtime_identity.json()
                     and value["cgroup"] == self.cgroup_identity.json()
                     and value["rootStoppingSha256"] == self.root_stopping_digest
+                    and value["netnsDetachSha256"] == self.root_netns_detach_digest
                     and value["socketRootRemoved"] is True
                     and value["externalFinalizationRequired"] is True,
                     "existing root stop authority differs",
