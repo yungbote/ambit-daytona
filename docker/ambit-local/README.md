@@ -347,7 +347,11 @@ root-owned-mode-0600, and root-owned-mode-0400 custody states, then durably
 enters `archive_intent_final`. It publishes and revalidates the deterministic
 root-owned terminal projection from an unnamed `O_TMPFILE` with
 `linkat(AT_EMPTY_PATH)`, so no caller-owned source name can be swapped into the
-publication. The immutable control retains the exact original receipt bytes.
+publication. The projection embeds the immutable control/authority, including
+the original state, evidence, config, persistent-root, process, mount, pidfile,
+and registry bindings; this lets reboot recovery reject a substituted
+caller-owned state tree. The immutable control retains the exact original
+receipt bytes.
 The reducer constructs the archive in a second root-owned unnamed file, links
 and fsyncs it first at the fixed hidden `*.prepared` recovery coordinate,
 descriptor-rewrites the old live inode to a deterministic non-legacy

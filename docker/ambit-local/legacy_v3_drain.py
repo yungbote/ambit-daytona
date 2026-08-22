@@ -1035,6 +1035,7 @@ def parse_unix_diag_datagram(
     raw: bytes,
     *,
     expected_sequence: int,
+    expected_port_id: int = 0,
 ) -> tuple[list[dict[str, object]], bool]:
     rows: list[dict[str, object]] = []
     complete = False
@@ -1051,7 +1052,10 @@ def parse_unix_diag_datagram(
             sequence == expected_sequence,
             "Unix diagnostic netlink sequence differs",
         )
-        require(sender == 0, "Unix diagnostic response was not sent by the kernel")
+        require(
+            sender == expected_port_id,
+            "Unix diagnostic response header port differs",
+        )
         require(
             flags & NLM_F_DUMP_INTR == 0,
             "Unix diagnostic dump was interrupted",
@@ -1062,6 +1066,11 @@ def parse_unix_diag_datagram(
         )
         payload = raw[offset + 16 : offset + length]
         if message_type == NLMSG_DONE:
+            if payload:
+                require(
+                    len(payload) >= 4 and struct.unpack_from("=i", payload)[0] == 0,
+                    "Unix diagnostic dump completed with an error",
+                )
             complete = True
         elif message_type == NLMSG_ERROR:
             require(len(payload) >= 4, "Unix diagnostic error record is truncated")
@@ -1144,6 +1153,7 @@ def unix_diag_records_once() -> tuple[dict[str, object], ...]:
     try:
         diagnostic.settimeout(5.0)
         diagnostic.bind((0, 0))
+        port_id = int(diagnostic.getsockname()[0])
         require(
             diagnostic.sendto(request, (0, 0)) == len(request),
             "Unix diagnostic request was short",
@@ -1171,6 +1181,7 @@ def unix_diag_records_once() -> tuple[dict[str, object], ...]:
             parsed, complete = parse_unix_diag_datagram(
                 datagram,
                 expected_sequence=sequence,
+                expected_port_id=port_id,
             )
             rows.extend(parsed)
     finally:
@@ -4571,6 +4582,7 @@ def terminal_projection_value(control: ControlAuthority) -> dict[str, object]:
         "legacyReceiptArchive": str(ARCHIVE_RECEIPT_PATH),
         "controlSha256": control.control_digest,
         "sourceSha256": control.control["sourceSha256"],
+        "control": control.control,
         "persistentDataPreserved": [str(path) for path in PERSISTENT_ROOTS],
         "legacyRuntimeRemoved": True,
         "cgroupMutationPerformed": False,
@@ -4606,14 +4618,27 @@ def read_projection(control: ControlAuthority) -> dict[str, object]:
         os.close(state_fd)
 
 
-def read_terminal_projection_without_control() -> dict[str, object]:
-    identity, raw = regular_identity(
-        PROJECTION_PATH,
-        expected_uid=0,
-        expected_gid=0,
-        expected_mode=0o400,
+def read_terminal_projection_without_control(
+    evidence_fd: int,
+) -> dict[str, object]:
+    stored = _read_regular_at(
+        evidence_fd,
+        PROJECTION_PATH.name,
+        maximum=MAX_JSON_BYTES,
     )
-    require(identity["links"] == 1, "legacy terminal projection link count differs")
+    require(stored is not None, "legacy terminal projection is absent")
+    assert stored is not None
+    descriptor, identity, raw = stored
+    try:
+        require(
+            identity.st_uid == 0
+            and identity.st_gid == 0
+            and stat.S_IMODE(identity.st_mode) == 0o400
+            and identity.st_nlink == 1,
+            "legacy terminal projection identity differs",
+        )
+    finally:
+        os.close(descriptor)
     value = exact_keys(
         parse_json_bytes(raw, "legacy terminal projection"),
         {
@@ -4626,6 +4651,7 @@ def read_terminal_projection_without_control() -> dict[str, object]:
             "legacyReceiptArchive",
             "controlSha256",
             "sourceSha256",
+            "control",
             "persistentDataPreserved",
             "legacyRuntimeRemoved",
             "cgroupMutationPerformed",
@@ -4634,6 +4660,20 @@ def read_terminal_projection_without_control() -> dict[str, object]:
         "legacy terminal projection",
     )
     source = globals().get("__legacy_pinned_source_bytes__")
+    stored_control = exact_keys(
+        value["control"],
+        {
+            "schema",
+            "observedAt",
+            "bootId",
+            "stateRoot",
+            "caller",
+            "verificationSha256",
+            "sourceSha256",
+            "authority",
+        },
+        "legacy recovery control",
+    )
     require(
         value["schema"] == PROJECTION_SCHEMA
         and value["outcome"] == "drained"
@@ -4646,8 +4686,18 @@ def read_terminal_projection_without_control() -> dict[str, object]:
         and value["legacyReceiptArchive"] == str(ARCHIVE_RECEIPT_PATH)
         and isinstance(value["controlSha256"], str)
         and SHA256_RE.fullmatch(value["controlSha256"]) is not None
+        and stored_control["schema"] == CONTROL_SCHEMA
+        and stored_control["bootId"] == value["bootId"]
+        and stored_control["stateRoot"] == str(EXPECTED_STATE_ROOT)
+        and stored_control["caller"] == {"uid": 1000, "gid": 1000}
+        and isinstance(stored_control["authority"], dict)
+        and stored_control["verificationSha256"]
+        == sha256_bytes(canonical_json(stored_control["authority"]))
+        and value["controlSha256"] == sha256_bytes(canonical_json(stored_control))
         and isinstance(source, bytes)
-        and value["sourceSha256"] == sha256_bytes(source)
+        and value["sourceSha256"]
+        == stored_control["sourceSha256"]
+        == sha256_bytes(source)
         and value["persistentDataPreserved"]
         == [str(path) for path in PERSISTENT_ROOTS]
         and value["legacyRuntimeRemoved"] is True
@@ -4712,18 +4762,76 @@ def complete_terminal_tombstone_without_control(
     )
 
 
+def require_recovery_state_binding(state_fd: int, evidence_fd: int) -> None:
+    state = os.fstat(state_fd)
+    evidence = os.fstat(evidence_fd)
+    literal_state = os.stat(EXPECTED_STATE_ROOT, follow_symlinks=False)
+    literal_evidence = os.stat(
+        "evidence",
+        dir_fd=state_fd,
+        follow_symlinks=False,
+    )
+    require(
+        (literal_state.st_dev, literal_state.st_ino)
+        == (state.st_dev, state.st_ino)
+        and (literal_evidence.st_dev, literal_evidence.st_ino)
+        == (evidence.st_dev, evidence.st_ino),
+        "legacy recovery state binding changed",
+    )
+
+
+def require_no_boot_recovery_related_processes() -> None:
+    own_namespace_tokens = {
+        f"{name}:[{os.stat(f'/proc/self/ns/{name}').st_ino}]"
+        for name in ("mnt", "net", "pid", "user")
+    }
+    related: list[int] = []
+    for entry in sorted(os.listdir("/proc")):
+        if not entry.isdigit():
+            continue
+        observation = process_reference_scan(
+            int(entry),
+            runtime_inodes=set(),
+            socket_inodes=set(),
+            private_namespace_tokens=set(),
+            admitted_namespace_tokens=own_namespace_tokens,
+        )
+        if observation is None:
+            continue
+        try:
+            relations = set(observation.row["relations"])
+            relations.discard("unclassifiedNamespaceFd")
+            if relations:
+                related.append(int(entry))
+        finally:
+            observation.close()
+    manual(
+        not related,
+        "a legacy-related process exists during boot-independent recovery: "
+        + ",".join(map(str, related)),
+    )
+
+
 def recover_terminal_archive_without_control() -> dict[str, object]:
     manual(
         not exists_nofollow(CONTROL_ROOT),
         "legacy control capsule appeared during boot-independent recovery",
     )
-    require_v5_absent(allow_global_lease=True, allow_legacy_absent=True)
+    v5_state = require_v5_absent(
+        allow_global_lease=True,
+        allow_legacy_absent=True,
+    )
+    manual(
+        v5_state["legacyRuntime"] is None
+        and not exists_nofollow(EXPECTED_RUNTIME_ROOT),
+        "legacy runtime root remains during boot-independent recovery",
+    )
     manual(
         all(not process_exists(int(value["pid"])) for value in EXPECTED_PROCESS_CANDIDATES.values()),
         "a recorded legacy PID exists during boot-independent recovery",
     )
+    require_no_boot_recovery_related_processes()
     require_registry_listener_absent()
-    projection = read_terminal_projection_without_control()
     state_fd = os.open(
         EXPECTED_STATE_ROOT,
         os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
@@ -4738,13 +4846,152 @@ def recover_terminal_archive_without_control() -> dict[str, object]:
     try:
         state = os.fstat(state_fd)
         evidence = os.fstat(evidence_fd)
+        require_recovery_state_binding(state_fd, evidence_fd)
+        projection = read_terminal_projection_without_control(evidence_fd)
+        stored_control = projection["control"]
+        assert isinstance(stored_control, dict)
+        authority = stored_control["authority"]
+        assert isinstance(authority, dict)
+        expected_state = authority["stateRootIdentity"]
+        expected_evidence = authority["evidenceRootIdentity"]
         require(
-            (state.st_uid, state.st_gid, stat.S_IMODE(state.st_mode))
-            == (1000, 1000, 0o700)
-            and (evidence.st_uid, evidence.st_gid, stat.S_IMODE(evidence.st_mode))
-            == (1000, 1000, 0o700),
+            (
+                state.st_dev,
+                state.st_ino,
+                state.st_uid,
+                state.st_gid,
+                stat.S_IMODE(state.st_mode),
+            )
+            == (
+                expected_state["device"],
+                expected_state["inode"],
+                expected_state["uid"],
+                expected_state["gid"],
+                expected_state["mode"],
+            )
+            and (
+                evidence.st_dev,
+                evidence.st_ino,
+                evidence.st_uid,
+                evidence.st_gid,
+                stat.S_IMODE(evidence.st_mode),
+            )
+            == (
+                expected_evidence["device"],
+                expected_evidence["inode"],
+                expected_evidence["uid"],
+                expected_evidence["gid"],
+                expected_evidence["mode"],
+            ),
             "legacy recovery state or evidence root differs",
         )
+        config_fd = os.open(
+            "config",
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=state_fd,
+        )
+        try:
+            config = os.fstat(config_fd)
+            expected_config = authority["configRootIdentity"]
+            require(
+                (
+                    config.st_dev,
+                    config.st_ino,
+                    config.st_uid,
+                    config.st_gid,
+                    stat.S_IMODE(config.st_mode),
+                )
+                == (
+                    expected_config["device"],
+                    expected_config["inode"],
+                    expected_config["uid"],
+                    expected_config["gid"],
+                    expected_config["mode"],
+                ),
+                "legacy recovery config root differs",
+            )
+            expected_pidfile = authority["configs"]["containerdPidfile"]
+            pidfile_value = _read_regular_at(
+                config_fd,
+                CONTAINERD_PIDFILE.name,
+                maximum=64,
+            )
+            require(pidfile_value is not None, "legacy recovery pidfile is absent")
+            assert pidfile_value is not None
+            try:
+                require_recorded_entry(
+                    pidfile_value[1],
+                    expected_pidfile,
+                    label="legacy recovery containerd pidfile",
+                )
+                require(
+                    pidfile_value[2].decode("ascii", "strict").strip()
+                    == str(expected_pidfile["expectedPid"])
+                    and sha256_bytes(pidfile_value[2])
+                    == expected_pidfile["sha256"],
+                    "legacy recovery pidfile bytes differ",
+                )
+            finally:
+                os.close(pidfile_value[0])
+        finally:
+            os.close(config_fd)
+        for path, expected in authority["persistentRoots"].items():
+            expected_path = Path(path)
+            require(
+                expected_path.parent == EXPECTED_STATE_ROOT,
+                "legacy recovery persistent root path differs",
+            )
+            persistent_fd = os.open(
+                expected_path.name,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=state_fd,
+            )
+            try:
+                observed = os.fstat(persistent_fd)
+                literal = os.stat(
+                    expected_path.name,
+                    dir_fd=state_fd,
+                    follow_symlinks=False,
+                )
+                require(
+                    (
+                        observed.st_dev,
+                        observed.st_ino,
+                        observed.st_uid,
+                        observed.st_gid,
+                        stat.S_IMODE(observed.st_mode),
+                    )
+                    == (
+                        expected["device"],
+                        expected["inode"],
+                        expected["uid"],
+                        expected["gid"],
+                        expected["mode"],
+                    )
+                    and (literal.st_dev, literal.st_ino)
+                    == (observed.st_dev, observed.st_ino),
+                    f"legacy recovery persistent root differs: {path}",
+                )
+            finally:
+                os.close(persistent_fd)
+        require(
+            registry_inventory() == authority["registryInventory"],
+            "legacy recovery registry inventory differs",
+        )
+        for key, root in (
+            ("runtime", EXPECTED_RUNTIME_ROOT),
+            ("outerDocker", EXPECTED_STATE_ROOT / "outer-docker"),
+            ("registry", EXPECTED_STATE_ROOT / "registry"),
+        ):
+            recorded_mounts = authority["mounts"][key]
+            observed_mounts = stable_global_mount_roster(
+                root,
+                anchors_from_document(recorded_mounts),
+            )
+            manual(
+                not observed_mounts["occurrences"],
+                f"legacy recovery mount remains: {key}",
+            )
         final = _read_regular_at(
             evidence_fd,
             ARCHIVE_RECEIPT_PATH.name,
@@ -4772,6 +5019,7 @@ def recover_terminal_archive_without_control() -> dict[str, object]:
             maximum=MAX_JSON_BYTES,
         )
         if prepared is None:
+            require_recovery_state_binding(state_fd, evidence_fd)
             live = _read_regular_at(
                 evidence_fd,
                 RECEIPT_PATH.name,
@@ -4815,7 +5063,9 @@ def recover_terminal_archive_without_control() -> dict[str, object]:
             and sha256_bytes(prepared_raw) == EXPECTED_RECEIPT_SHA256,
             "prepared legacy archive recovery identity differs",
         )
+        require_recovery_state_binding(state_fd, evidence_fd)
         complete_terminal_tombstone_without_control(evidence_fd, projection)
+        require_recovery_state_binding(state_fd, evidence_fd)
         link_tmpfile_noreplace_at(
             prepared_fd,
             evidence_fd,

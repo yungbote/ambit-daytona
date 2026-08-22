@@ -529,6 +529,7 @@ class MountAuthorityTest(unittest.TestCase):
 
     def test_unix_diag_parser_preserves_peer_and_pending_icons(self) -> None:
         sequence = 7
+        port_id = 55
         attributes = (
             struct.pack("=HHI", 8, MODULE.UNIX_DIAG_PEER, 42)
             + struct.pack("=HHII", 12, MODULE.UNIX_DIAG_ICONS, 43, 44)
@@ -541,10 +542,14 @@ class MountAuthorityTest(unittest.TestCase):
             MODULE.SOCK_DIAG_BY_FAMILY,
             MODULE.NLM_F_MULTI,
             sequence,
-            0,
+            port_id,
         ) + payload
-        done = struct.pack("=IHHII", 16, MODULE.NLMSG_DONE, 0, sequence, 0)
-        rows, complete = MODULE.parse_unix_diag_datagram(message + done, expected_sequence=sequence)
+        done = struct.pack("=IHHII", 16, MODULE.NLMSG_DONE, 0, sequence, port_id)
+        rows, complete = MODULE.parse_unix_diag_datagram(
+            message + done,
+            expected_sequence=sequence,
+            expected_port_id=port_id,
+        )
         self.assertTrue(complete)
         self.assertEqual(rows[0]["peer"], 42)
         self.assertEqual(rows[0]["icons"], [43, 44])
@@ -562,16 +567,36 @@ class MountAuthorityTest(unittest.TestCase):
         foreign = struct.pack(
             "=IHHII", 16, MODULE.NLMSG_DONE, 0, sequence, 123
         )
-        with self.assertRaisesRegex(MODULE.DrainError, "kernel"):
+        with self.assertRaisesRegex(MODULE.DrainError, "header port"):
             MODULE.parse_unix_diag_datagram(
                 foreign, expected_sequence=sequence
+            )
+
+    def test_unix_diag_done_status_must_be_zero_and_complete(self) -> None:
+        sequence = 7
+        zero = struct.pack("=IHHIIi", 20, MODULE.NLMSG_DONE, 0, sequence, 0, 0)
+        rows, complete = MODULE.parse_unix_diag_datagram(
+            zero, expected_sequence=sequence
+        )
+        self.assertEqual(rows, [])
+        self.assertTrue(complete)
+        failed = struct.pack("=IHHIIi", 20, MODULE.NLMSG_DONE, 0, sequence, 0, -5)
+        with self.assertRaisesRegex(MODULE.DrainError, "error"):
+            MODULE.parse_unix_diag_datagram(
+                failed, expected_sequence=sequence
+            )
+        truncated = struct.pack("=IHHII", 17, MODULE.NLMSG_DONE, 0, sequence, 0) + b"x\0\0\0"
+        with self.assertRaisesRegex(MODULE.DrainError, "error"):
+            MODULE.parse_unix_diag_datagram(
+                truncated, expected_sequence=sequence
             )
 
     def test_unix_diag_rejects_truncated_kernel_datagram(self) -> None:
         fake = mock.Mock()
         fake.sendto.side_effect = lambda request, _address: len(request)
+        fake.getsockname.return_value = (123, 0)
         sequence = 123
-        done = struct.pack("=IHHII", 16, MODULE.NLMSG_DONE, 0, sequence, 0)
+        done = struct.pack("=IHHII", 16, MODULE.NLMSG_DONE, 0, sequence, 123)
         fake.recvmsg.return_value = (done, [], socket.MSG_TRUNC, (0, 0))
         with mock.patch.object(MODULE.socket, "socket", return_value=fake), mock.patch.object(
             MODULE.os, "getpid", return_value=123
@@ -1015,6 +1040,7 @@ class DestructiveBoundaryTest(unittest.TestCase):
         second = MODULE.terminal_projection_value(control)
         self.assertEqual(MODULE.canonical_json(first), MODULE.canonical_json(second))
         self.assertEqual(first["observedAt"], control.state["observedAt"])
+        self.assertEqual(first["control"], control.control)
         source = MODULE_PATH.read_text(encoding="utf-8")
         archive = source[
             source.index("def archive_receipt")
@@ -1073,6 +1099,23 @@ class DestructiveBoundaryTest(unittest.TestCase):
         self.assertIn("link_tmpfile_noreplace_at", archive)
         self.assertNotIn("rename_noreplace_at(\n                evidence_fd,\n                RECEIPT_PATH.name", archive)
 
+    def test_reboot_recovery_is_bound_before_terminal_mutation(self) -> None:
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        recovery = source[
+            source.index("def recover_terminal_archive_without_control")
+            : source.index("def write_projection")
+        ]
+        self.assertLess(
+            recovery.index("state_fd = os.open("),
+            recovery.index("read_terminal_projection_without_control(evidence_fd)"),
+        )
+        self.assertIn('stored_control = projection["control"]', recovery)
+        self.assertIn('v5_state["legacyRuntime"] is None', recovery)
+        self.assertIn("registry_inventory() == authority", recovery)
+        self.assertIn("anchors_from_document(recorded_mounts)", recovery)
+        last_binding = recovery.rindex("require_recovery_state_binding")
+        self.assertLess(last_binding, recovery.index("link_tmpfile_noreplace_at(\n            prepared_fd"))
+
 
 class WrapperBoundaryTest(unittest.TestCase):
     def test_wrapper_exposes_only_verify_drain_resume(self) -> None:
@@ -1125,6 +1168,22 @@ class WrapperBoundaryTest(unittest.TestCase):
         exec(compile(module, "<loader-canonical>", "exec"), namespace, namespace)
         value = {"nested": {"b": 2}, "a": [1, True, None]}
         self.assertEqual(namespace["canonical"](value), MODULE.canonical_json(value))
+
+    def test_loader_phase_roster_matches_reducer_exactly(self) -> None:
+        source = WRAPPER.read_text(encoding="utf-8")
+        loader = source.split("read -r -d '' pinned_loader <<'PY' || true\n", 1)[1].split("\nPY\n", 1)[0]
+        tree = ast.parse(loader)
+        phase_assignment = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "phases"
+                for target in node.targets
+            )
+        )
+        self.assertEqual(ast.literal_eval(phase_assignment.value), set(MODULE.PHASES))
+        self.assertIn('"netnsMarkerIdentity"', loader)
 
     def test_verify_only_has_no_output_file_argument(self) -> None:
         source = WRAPPER.read_text(encoding="utf-8")
