@@ -229,7 +229,7 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         acquire.assert_called_once_with(STATE_ROOT)
         self.assertEqual(
             singleton.call_args_list,
-            [mock.call(STATE_ROOT), mock.call(STATE_ROOT)],
+            [mock.call(STATE_ROOT), mock.call(STATE_ROOT, lease=lease)],
         )
         lease.close.assert_called_once_with()
 
@@ -441,7 +441,7 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
                 [],
                 [],
             ),
-        ), mock.patch.object(MODULE, "require_legacy_v3_transition_terminal"):
+        ), mock.patch.object(MODULE, "observe_legacy_v3_transition"):
             with self.assertRaisesRegex(MODULE.SupervisorError, "another C16b runtime"):
                 MODULE.require_no_other_task_runtime(STATE_ROOT)
         with mock.patch.object(
@@ -454,7 +454,7 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
                 [],
                 ["ambit-c16b-docker-1577287b8182"],
             ),
-        ), mock.patch.object(MODULE, "require_legacy_v3_transition_terminal"):
+        ), mock.patch.object(MODULE, "observe_legacy_v3_transition"):
             with self.assertRaisesRegex(MODULE.SupervisorError, "legacy /tmp C16b runtime"):
                 MODULE.require_no_other_task_runtime(STATE_ROOT)
 
@@ -1207,6 +1207,7 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         supervisor = MODULE.RuntimeSupervisor(STATE_ROOT, 1000, 1000)
         supervisor.state = mock.Mock()
         supervisor.namespace = NAMESPACE
+        supervisor.lease = mock.Mock()
         events: list[str] = []
 
         def cgroup_is_populated(identity: MODULE.CgroupIdentity) -> bool:
@@ -1618,6 +1619,7 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
         value = MODULE.RuntimeSupervisor(STATE_ROOT, 1000, 1000)
         value.state = FakeState()
         value.namespace = NAMESPACE
+        value.lease = mock.Mock()
         value.storage = {"projectionDigest": DIGEST}
         value.storage_activation_attempted = True
         value.supervisor_identity = {"pid": 44}
@@ -2250,6 +2252,25 @@ class RuntimeSupervisorSourceBoundaryTest(unittest.TestCase):
             self.assertIn(name, snapshot_region)
 
 class LegacyV3TransitionBarrierTest(unittest.TestCase):
+    @staticmethod
+    def snapshot(
+        *,
+        source_present: bool = False,
+        source_exact: bool = False,
+        control_present: bool = False,
+        archive_present: bool = False,
+        prepared_present: bool = False,
+        terminal_archive_exact: bool = False,
+    ) -> dict[str, bool]:
+        return {
+            "sourcePresent": source_present,
+            "sourceExact": source_exact,
+            "controlPresent": control_present,
+            "archivePresent": archive_present,
+            "preparedPresent": prepared_present,
+            "terminalArchiveExact": terminal_archive_exact,
+        }
+
     def test_complete_truth_table(self) -> None:
         for source_present in (False, True):
             for source_exact in (False, True):
@@ -2285,44 +2306,45 @@ class LegacyV3TransitionBarrierTest(unittest.TestCase):
                                         ),
                                         expected,
                                     )
+        self.assertTrue(
+            MODULE._legacy_v3_snapshot_blocked(
+                self.snapshot(terminal_archive_exact=True)
+            )
+        )
+        self.assertTrue(
+            MODULE._legacy_v3_snapshot_blocked(
+                self.snapshot(source_exact=True)
+            )
+        )
 
     def test_observer_is_global_and_archive_is_the_only_control_handoff(self) -> None:
-        def present(path: Path) -> bool:
-            return path in {
-                MODULE.LEGACY_V3_LIVE_RECEIPT,
-                MODULE.LEGACY_V3_CONTROL_ROOT,
-            }
-
-        def exact(path: Path, *, require_terminal_identity: bool) -> bool:
-            return path == MODULE.LEGACY_V3_LIVE_RECEIPT and not require_terminal_identity
-
-        with mock.patch.object(MODULE, "path_exists_nofollow", side_effect=present), mock.patch.object(
-            MODULE, "_legacy_v3_regular_digest", side_effect=exact
-        ), self.assertRaisesRegex(MODULE.SupervisorError, "not terminally archived"):
-            MODULE.require_legacy_v3_transition_terminal()
         with mock.patch.object(
             MODULE,
-            "path_exists_nofollow",
-            side_effect=lambda path: path == MODULE.LEGACY_V3_TERMINAL_ARCHIVE,
-        ), mock.patch.object(
-            MODULE,
-            "_legacy_v3_regular_digest",
-            return_value=False,
+            "legacy_v3_transition_snapshot",
+            return_value=self.snapshot(
+                source_present=True,
+                source_exact=True,
+                control_present=True,
+            ),
         ), self.assertRaisesRegex(MODULE.SupervisorError, "not terminally archived"):
-            MODULE.require_legacy_v3_transition_terminal()
-
-        def terminal_present(path: Path) -> bool:
-            return path == MODULE.LEGACY_V3_CONTROL_ROOT
-
-        def terminal_exact(path: Path, *, require_terminal_identity: bool) -> bool:
-            return path == MODULE.LEGACY_V3_TERMINAL_ARCHIVE and require_terminal_identity
+            MODULE.observe_legacy_v3_transition()
+        with mock.patch.object(
+            MODULE,
+            "legacy_v3_transition_snapshot",
+            return_value=self.snapshot(archive_present=True),
+        ), self.assertRaisesRegex(MODULE.SupervisorError, "not terminally archived"):
+            MODULE.observe_legacy_v3_transition()
 
         with mock.patch.object(
-            MODULE, "path_exists_nofollow", side_effect=terminal_present
-        ), mock.patch.object(
-            MODULE, "_legacy_v3_regular_digest", side_effect=terminal_exact
+            MODULE,
+            "legacy_v3_transition_snapshot",
+            return_value=self.snapshot(
+                control_present=True,
+                archive_present=True,
+                terminal_archive_exact=True,
+            ),
         ):
-            MODULE.require_legacy_v3_transition_terminal()
+            MODULE.observe_legacy_v3_transition()
 
     def test_wrong_digest_or_malformed_source_is_not_the_singleton(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -2338,26 +2360,130 @@ class LegacyV3TransitionBarrierTest(unittest.TestCase):
                     )
         with mock.patch.object(
             MODULE,
-            "path_exists_nofollow",
-            side_effect=lambda path: path == MODULE.LEGACY_V3_LIVE_RECEIPT,
-        ), mock.patch.object(
-            MODULE,
-            "_legacy_v3_regular_digest",
-            return_value=False,
+            "legacy_v3_transition_snapshot",
+            return_value=self.snapshot(source_present=True),
         ), self.assertRaisesRegex(MODULE.SupervisorError, "not terminally archived"):
-            MODULE.require_legacy_v3_transition_terminal()
+            MODULE.observe_legacy_v3_transition()
 
     def test_terminal_archive_allows_a_later_nonlegacy_live_receipt(self) -> None:
         with mock.patch.object(
             MODULE,
-            "path_exists_nofollow",
-            side_effect=lambda path: path == MODULE.LEGACY_V3_LIVE_RECEIPT,
+            "legacy_v3_transition_snapshot",
+            return_value=self.snapshot(
+                source_present=True,
+                archive_present=True,
+                terminal_archive_exact=True,
+            ),
+        ):
+            MODULE.observe_legacy_v3_transition()
+
+    def test_terminal_unblock_settles_under_the_shared_lease(self) -> None:
+        visible = self.snapshot(
+            control_present=True,
+            archive_present=True,
+            prepared_present=True,
+            terminal_archive_exact=True,
+        )
+        lease = mock.Mock()
+        with mock.patch.object(
+            MODULE, "legacy_v3_transition_snapshot", return_value=visible
+        ), mock.patch.object(
+            MODULE, "settle_legacy_v3_terminal_archive", return_value=visible
+        ) as settle:
+            self.assertEqual(MODULE.observe_legacy_v3_transition(), visible)
+            settle.assert_not_called()
+            MODULE.require_legacy_v3_transition_terminal(lease=lease)
+        settle.assert_called_once_with(lease)
+
+    def test_cross_process_response_loss_is_fsynced_then_stably_reobserved(self) -> None:
+        terminal = self.snapshot(
+            control_present=True,
+            archive_present=True,
+            prepared_present=True,
+            terminal_archive_exact=True,
+        )
+        events: list[str] = []
+
+        def observe(evidence_fd: int | None = None) -> dict[str, bool]:
+            self.assertEqual(evidence_fd, 21)
+            events.append("snapshot")
+            return dict(terminal)
+
+        with mock.patch.object(
+            MODULE, "_require_runtime_lease_custody"
+        ), mock.patch.object(
+            MODULE.os, "open", side_effect=(20, 21)
+        ), mock.patch.object(
+            MODULE, "_require_legacy_v3_evidence_binding"
+        ) as binding, mock.patch.object(
+            MODULE.os,
+            "fsync",
+            side_effect=lambda descriptor: events.append(f"fsync:{descriptor}"),
+        ), mock.patch.object(
+            MODULE, "legacy_v3_transition_snapshot", side_effect=observe
+        ), mock.patch.object(MODULE.os, "close"):
+            self.assertEqual(
+                MODULE.settle_legacy_v3_terminal_archive(mock.Mock()),
+                terminal,
+            )
+        self.assertEqual(events, ["fsync:21", "snapshot", "snapshot"])
+        self.assertEqual(binding.call_count, 2)
+
+    def test_terminal_durability_requires_exact_shared_lease_custody(self) -> None:
+        identity = mock.Mock(
+            st_mode=stat.S_IFREG | 0o600,
+            st_uid=0,
+            st_gid=0,
+            st_nlink=1,
+            st_dev=1,
+            st_ino=2,
+        )
+        lease = MODULE.RuntimeLease(
+            MODULE.RUNTIME_PARENT / MODULE.GLOBAL_LEASE_NAME,
+            10,
+            11,
+            1,
+            2,
+        )
+        with mock.patch.object(
+            MODULE.os, "fstat", return_value=identity
+        ), mock.patch.object(
+            MODULE.os, "stat", return_value=identity
+        ), mock.patch.object(MODULE.fcntl, "flock") as flock:
+            MODULE._require_runtime_lease_custody(lease)
+        flock.assert_called_once_with(
+            11,
+            MODULE.fcntl.LOCK_EX | MODULE.fcntl.LOCK_NB,
+        )
+
+    def test_power_loss_regression_blocks_terminal_admission(self) -> None:
+        terminal = self.snapshot(
+            control_present=True,
+            archive_present=True,
+            prepared_present=True,
+            terminal_archive_exact=True,
+        )
+        regressed = self.snapshot(
+            control_present=True,
+            prepared_present=True,
+        )
+        with mock.patch.object(
+            MODULE, "_require_runtime_lease_custody"
+        ), mock.patch.object(
+            MODULE.os, "open", side_effect=(20, 21)
+        ), mock.patch.object(
+            MODULE, "_require_legacy_v3_evidence_binding"
+        ), mock.patch.object(
+            MODULE.os, "fsync"
         ), mock.patch.object(
             MODULE,
-            "_legacy_v3_regular_digest",
-            side_effect=lambda path, **_kwargs: path == MODULE.LEGACY_V3_TERMINAL_ARCHIVE,
+            "legacy_v3_transition_snapshot",
+            side_effect=(terminal, regressed),
+        ), mock.patch.object(MODULE.os, "close"), self.assertRaisesRegex(
+            MODULE.SupervisorError,
+            "changed while completing durability",
         ):
-            MODULE.require_legacy_v3_transition_terminal()
+            MODULE.settle_legacy_v3_terminal_archive(mock.Mock())
 
     def test_final_tombstone_identity_uses_ordinary_v5_projection_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -2397,12 +2523,15 @@ class LegacyV3TransitionBarrierTest(unittest.TestCase):
         self.assertNotIn("LEGACY_V3_DRAIN_ROOT_RE", source)
         for mutation in ("os.unlink", "os.rename", "os.replace", "os.write", "os.mkdir"):
             self.assertNotIn(mutation, region)
+        self.assertIn("os.fsync(evidence_fd)", region)
+        self.assertIn("_require_runtime_lease_custody(lease)", region)
+        self.assertIn("legacy_v3_transition_snapshot(evidence_fd)", region)
         self.assertNotIn("control.json", region)
         self.assertNotIn("state.json", region)
 
     def test_shared_observer_remains_central_to_all_runtime_routes(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
-        self.assertIn("require_legacy_v3_transition_terminal()", source)
+        self.assertIn("require_legacy_v3_transition_terminal(lease=lease)", source)
         for marker in (
             "def recover_existing_runtime",
             "def runtime_status",
@@ -2422,6 +2551,7 @@ class LegacyV3TransitionBarrierTest(unittest.TestCase):
             recover.index("require_no_other_task_runtime"),
             recover.index("reduce_runtime_removal_root"),
         )
+        self.assertIn("lease=self.lease", recover)
         status = source[source.index("def runtime_status") : source.index("def acquire_runtime_lease_until")]
         self.assertLess(
             status.index("require_no_other_task_runtime"),
@@ -2437,6 +2567,7 @@ class LegacyV3TransitionBarrierTest(unittest.TestCase):
             orphaned.index("require_no_other_task_runtime"),
             orphaned.index("remove_empty_cgroup"),
         )
+        self.assertIn("require_no_other_task_runtime(state_root, lease=lease)", orphaned)
 
     def test_all_three_launcher_pins_match_supervisor(self) -> None:
         digest = hashlib.sha256(SCRIPT.read_bytes()).hexdigest()

@@ -384,16 +384,22 @@ The v5 barrier is global across every requested v5 `STATE_ROOT`. V5 recognizes
 only the one literal audited live receipt path and digest, literal reserved
 control path, literal prepared archive, and literal root-owned terminal
 archive. Before a terminal archive, any occupied audited live, prepared, or
-control path blocks; the
-exact legacy digest always blocks even if an archive also exists. After the
+control path blocks; the exact legacy digest always blocks even if an archive
+also exists. After the
 terminal archive, the deterministic non-legacy tombstone or a later v5 receipt
 may occupy the live path without reviving legacy authority. The unnamed-file
-no-replace archive link is the final unblocking mutation. V5 does not parse,
-resume, repair, delete, or
-write legacy control/state, and regex-like sibling names do not become this
-singleton authority. The compatibility boundary can be deleted as a unit only
-after this local transition and its evidence-retention requirement are
-explicitly retired.
+no-replace archive link is the final unblocking namespace mutation. Before a
+v5 mutation may consume that visible handoff, the shared lifecycle-lease
+holder descriptor-binds the literal legacy state/evidence directories, fsyncs
+the evidence directory, and requires two identical FD-relative observations
+of the source/control/prepared/archive truth and exact root-owned archive.
+This closes response loss after `linkat` before directory fsync; a later
+power-loss regression blocks instead of being admitted. Read-only preflight
+does not claim durability. V5 does not parse, resume, repair, delete, or change
+legacy control/state names or bytes, and regex-like sibling names do not
+become this singleton authority. The compatibility boundary can be deleted as
+a unit only after this local transition and its evidence-retention requirement
+are explicitly retired.
 
 Runtime-tree deletion has its own crash classification boundary. Only after
 all runtime proofs pass does the reducer atomically rename the exact root to

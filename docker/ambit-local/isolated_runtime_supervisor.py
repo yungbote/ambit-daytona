@@ -28,7 +28,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, NoReturn
+from typing import Any, Callable, Mapping, NoReturn
 
 
 LIBC = ctypes.CDLL(None, use_errno=True)
@@ -2543,6 +2543,55 @@ def legacy_v3_transition_blocked(
     )
 
 
+def _legacy_v3_digest_from_bound_descriptor(
+    descriptor: int,
+    literal_reader: Callable[[], os.stat_result],
+    *,
+    require_terminal_identity: bool,
+) -> bool:
+    observed = os.fstat(descriptor)
+    if not (
+        stat.S_ISREG(observed.st_mode)
+        and 0 < observed.st_size <= 2 * 1024 * 1024
+    ):
+        return False
+    if require_terminal_identity and not (
+        observed.st_uid == 0
+        and observed.st_gid == 0
+        and stat.S_IMODE(observed.st_mode) == 0o400
+        and observed.st_nlink in (1, 2)
+    ):
+        return False
+    raw = _read_fd_all(descriptor, limit=2 * 1024 * 1024)
+    after = os.fstat(descriptor)
+    literal = literal_reader()
+    if not (
+        len(raw) == observed.st_size
+        and (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_uid,
+            after.st_gid,
+            stat.S_IMODE(after.st_mode),
+            after.st_nlink,
+        )
+        == (
+            observed.st_dev,
+            observed.st_ino,
+            observed.st_size,
+            observed.st_uid,
+            observed.st_gid,
+            stat.S_IMODE(observed.st_mode),
+            observed.st_nlink,
+        )
+        and (literal.st_dev, literal.st_ino)
+        == (observed.st_dev, observed.st_ino)
+    ):
+        return False
+    return hashlib.sha256(raw).hexdigest() == LEGACY_V3_RECEIPT_SHA256
+
+
 def _legacy_v3_regular_digest(
     path: Path,
     *,
@@ -2553,80 +2602,229 @@ def _legacy_v3_regular_digest(
     except (FileNotFoundError, OSError):
         return False
     try:
-        observed = os.fstat(descriptor)
-        if not (
-            stat.S_ISREG(observed.st_mode)
-            and 0 < observed.st_size <= 2 * 1024 * 1024
-        ):
-            return False
-        if require_terminal_identity and not (
-            observed.st_uid == 0
-            and observed.st_gid == 0
-            and stat.S_IMODE(observed.st_mode) == 0o400
-            and observed.st_nlink in (1, 2)
-        ):
-            return False
-        raw = _read_fd_all(descriptor, limit=2 * 1024 * 1024)
-        after = os.fstat(descriptor)
-        literal = os.stat(path, follow_symlinks=False)
-        if not (
-            len(raw) == observed.st_size
-            and (
-                after.st_dev,
-                after.st_ino,
-                after.st_size,
-                after.st_uid,
-                after.st_gid,
-                stat.S_IMODE(after.st_mode),
-                after.st_nlink,
-            )
-            == (
-                observed.st_dev,
-                observed.st_ino,
-                observed.st_size,
-                observed.st_uid,
-                observed.st_gid,
-                stat.S_IMODE(observed.st_mode),
-                observed.st_nlink,
-            )
-            and (literal.st_dev, literal.st_ino)
-            == (observed.st_dev, observed.st_ino)
-        ):
-            return False
-        return hashlib.sha256(raw).hexdigest() == LEGACY_V3_RECEIPT_SHA256
+        return _legacy_v3_digest_from_bound_descriptor(
+            descriptor,
+            lambda: os.stat(path, follow_symlinks=False),
+            require_terminal_identity=require_terminal_identity,
+        )
     except (OSError, SupervisorError):
         return False
     finally:
         os.close(descriptor)
 
 
-def require_legacy_v3_transition_terminal() -> None:
-    source_present = path_exists_nofollow(LEGACY_V3_LIVE_RECEIPT)
-    source_exact = _legacy_v3_regular_digest(
-        LEGACY_V3_LIVE_RECEIPT,
-        require_terminal_identity=False,
+def _legacy_v3_regular_digest_at(
+    directory_fd: int,
+    name: str,
+    *,
+    require_terminal_identity: bool,
+) -> bool:
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | os.O_NOFOLLOW,
+            dir_fd=directory_fd,
+        )
+    except (FileNotFoundError, OSError):
+        return False
+    try:
+        return _legacy_v3_digest_from_bound_descriptor(
+            descriptor,
+            lambda: os.stat(
+                name,
+                dir_fd=directory_fd,
+                follow_symlinks=False,
+            ),
+            require_terminal_identity=require_terminal_identity,
+        )
+    except (OSError, SupervisorError):
+        return False
+    finally:
+        os.close(descriptor)
+
+
+def _legacy_v3_entry_exists_at(directory_fd: int, name: str) -> bool:
+    try:
+        os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def legacy_v3_transition_snapshot(
+    evidence_fd: int | None = None,
+) -> dict[str, bool]:
+    if evidence_fd is None:
+        source_present = path_exists_nofollow(LEGACY_V3_LIVE_RECEIPT)
+        source_exact = _legacy_v3_regular_digest(
+            LEGACY_V3_LIVE_RECEIPT,
+            require_terminal_identity=False,
+        )
+        archive_present = path_exists_nofollow(LEGACY_V3_TERMINAL_ARCHIVE)
+        prepared_present = path_exists_nofollow(LEGACY_V3_PREPARED_ARCHIVE)
+        terminal_archive_exact = _legacy_v3_regular_digest(
+            LEGACY_V3_TERMINAL_ARCHIVE,
+            require_terminal_identity=True,
+        )
+    else:
+        source_present = _legacy_v3_entry_exists_at(
+            evidence_fd,
+            LEGACY_V3_LIVE_RECEIPT.name,
+        )
+        source_exact = _legacy_v3_regular_digest_at(
+            evidence_fd,
+            LEGACY_V3_LIVE_RECEIPT.name,
+            require_terminal_identity=False,
+        )
+        archive_present = _legacy_v3_entry_exists_at(
+            evidence_fd,
+            LEGACY_V3_TERMINAL_ARCHIVE.name,
+        )
+        prepared_present = _legacy_v3_entry_exists_at(
+            evidence_fd,
+            LEGACY_V3_PREPARED_ARCHIVE.name,
+        )
+        terminal_archive_exact = _legacy_v3_regular_digest_at(
+            evidence_fd,
+            LEGACY_V3_TERMINAL_ARCHIVE.name,
+            require_terminal_identity=True,
+        )
+    return {
+        "sourcePresent": source_present,
+        "sourceExact": source_exact,
+        "controlPresent": path_exists_nofollow(LEGACY_V3_CONTROL_ROOT),
+        "archivePresent": archive_present,
+        "preparedPresent": prepared_present,
+        "terminalArchiveExact": terminal_archive_exact,
+    }
+
+
+def _legacy_v3_snapshot_blocked(snapshot: Mapping[str, bool]) -> bool:
+    inconsistent = (
+        snapshot["sourceExact"] and not snapshot["sourcePresent"]
+    ) or (
+        snapshot["terminalArchiveExact"] and not snapshot["archivePresent"]
     )
-    control_present = path_exists_nofollow(LEGACY_V3_CONTROL_ROOT)
-    archive_present = path_exists_nofollow(LEGACY_V3_TERMINAL_ARCHIVE)
-    prepared_present = path_exists_nofollow(LEGACY_V3_PREPARED_ARCHIVE)
-    terminal_archive_exact = _legacy_v3_regular_digest(
-        LEGACY_V3_TERMINAL_ARCHIVE,
-        require_terminal_identity=True,
+    return inconsistent or legacy_v3_transition_blocked(
+        source_present=snapshot["sourcePresent"],
+        source_exact=snapshot["sourceExact"],
+        control_present=snapshot["controlPresent"],
+        archive_present=snapshot["archivePresent"],
+        prepared_present=snapshot["preparedPresent"],
+        terminal_archive_exact=snapshot["terminalArchiveExact"],
+    )
+
+
+def _require_legacy_v3_evidence_binding(
+    state_fd: int,
+    evidence_fd: int,
+) -> None:
+    state = os.fstat(state_fd)
+    evidence = os.fstat(evidence_fd)
+    literal_state = os.stat(LEGACY_V3_STATE_ROOT, follow_symlinks=False)
+    literal_evidence = os.stat(
+        "evidence",
+        dir_fd=state_fd,
+        follow_symlinks=False,
     )
     require(
-        not legacy_v3_transition_blocked(
-            source_present=source_present,
-            source_exact=source_exact,
-            control_present=control_present,
-            archive_present=archive_present,
-            prepared_present=prepared_present,
-            terminal_archive_exact=terminal_archive_exact,
-        ),
-        "exact legacy v3 runtime transition is not terminally archived",
+        stat.S_ISDIR(state.st_mode)
+        and (state.st_uid, state.st_gid, stat.S_IMODE(state.st_mode))
+        == (1000, 1000, 0o700)
+        and stat.S_ISDIR(evidence.st_mode)
+        and (evidence.st_uid, evidence.st_gid, stat.S_IMODE(evidence.st_mode))
+        == (1000, 1000, 0o700)
+        and evidence.st_dev == state.st_dev
+        and (literal_state.st_dev, literal_state.st_ino)
+        == (state.st_dev, state.st_ino)
+        and (literal_evidence.st_dev, literal_evidence.st_ino)
+        == (evidence.st_dev, evidence.st_ino),
+        "legacy v3 state or evidence directory binding differs",
     )
 
 
-def require_no_other_task_runtime(state_root: Path) -> None:
+def _require_runtime_lease_custody(lease: RuntimeLease) -> None:
+    require(
+        lease.path == RUNTIME_PARENT / GLOBAL_LEASE_NAME
+        and lease.parent_fd >= 0
+        and lease.descriptor >= 0,
+        "legacy transition durability requires the shared runtime lease",
+    )
+    observed = os.fstat(lease.descriptor)
+    literal = os.stat(
+        lease.path.name,
+        dir_fd=lease.parent_fd,
+        follow_symlinks=False,
+    )
+    require(
+        stat.S_ISREG(observed.st_mode)
+        and observed.st_uid == 0
+        and observed.st_gid == 0
+        and stat.S_IMODE(observed.st_mode) == 0o600
+        and observed.st_nlink == 1
+        and (observed.st_dev, observed.st_ino)
+        == (lease.device, lease.inode)
+        == (literal.st_dev, literal.st_ino),
+        "shared runtime lease custody differs",
+    )
+    try:
+        fcntl.flock(lease.descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as error:
+        raise SupervisorError("shared runtime lease custody was lost") from error
+
+
+def settle_legacy_v3_terminal_archive(lease: RuntimeLease) -> dict[str, bool]:
+    _require_runtime_lease_custody(lease)
+    state_fd = os.open(
+        LEGACY_V3_STATE_ROOT,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+    )
+    evidence_fd: int | None = None
+    try:
+        evidence_fd = os.open(
+            "evidence",
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=state_fd,
+        )
+        _require_legacy_v3_evidence_binding(state_fd, evidence_fd)
+        os.fsync(evidence_fd)
+        first = legacy_v3_transition_snapshot(evidence_fd)
+        second = legacy_v3_transition_snapshot(evidence_fd)
+        _require_legacy_v3_evidence_binding(state_fd, evidence_fd)
+        require(
+            first == second
+            and second["archivePresent"]
+            and second["terminalArchiveExact"]
+            and not _legacy_v3_snapshot_blocked(second),
+            "legacy v3 terminal archive changed while completing durability",
+        )
+        return second
+    finally:
+        if evidence_fd is not None:
+            os.close(evidence_fd)
+        os.close(state_fd)
+
+
+def observe_legacy_v3_transition() -> dict[str, bool]:
+    snapshot = legacy_v3_transition_snapshot()
+    require(
+        not _legacy_v3_snapshot_blocked(snapshot),
+        "exact legacy v3 runtime transition is not terminally archived",
+    )
+    return snapshot
+
+
+def require_legacy_v3_transition_terminal(*, lease: RuntimeLease) -> None:
+    snapshot = observe_legacy_v3_transition()
+    if snapshot["terminalArchiveExact"]:
+        settle_legacy_v3_terminal_archive(lease)
+
+
+def require_no_other_task_runtime(
+    state_root: Path,
+    *,
+    lease: RuntimeLease | None = None,
+) -> None:
     expected_runtime = runtime_root_for(state_root).name
     expected_removal = runtime_removal_root_for(state_root).name
     expected_socket = socket_root_for(state_root).name
@@ -2647,7 +2845,14 @@ def require_no_other_task_runtime(state_root: Path) -> None:
         "another C16b runtime authority exists; use its original STATE_ROOT binding: "
         + ",".join(sorted(foreign)),
     )
-    require_legacy_v3_transition_terminal()
+    # Lease-free callers perform only read-only routing (status or proof before
+    # acquiring/signaling an already-validated v5 singleton). Every route that
+    # can create, remove, or recover runtime state repeats this gate with its
+    # held global lease before the first such mutation.
+    if lease is None:
+        observe_legacy_v3_transition()
+    else:
+        require_legacy_v3_transition_terminal(lease=lease)
     legacy_tmp = tuple(
         sorted(
             str(Path("/tmp") / name)
@@ -4240,7 +4445,8 @@ class RuntimeSupervisor:
     def recover_existing_runtime(self, *, orphaned: bool = False) -> None:
         require(self.state is not None, "state authority is absent")
         require(self.namespace is not None, "recovery mount namespace is absent")
-        require_no_other_task_runtime(self.state_root)
+        require(self.lease is not None, "runtime lifecycle lease is absent")
+        require_no_other_task_runtime(self.state_root, lease=self.lease)
         runtime_path = runtime_root_for(self.state_root)
         removal_path = runtime_removal_root_for(self.state_root)
         require(
@@ -5658,7 +5864,7 @@ def ensure_orphaned_runtime_stopped(
                 not path_exists_nofollow(runtime_path),
                 "orphaned runtime appeared while acquiring the global lease; retry stop",
             )
-            require_no_other_task_runtime(state_root)
+            require_no_other_task_runtime(state_root, lease=lease)
             reduce_runtime_removal_root(state_root)
             require(
                 not path_exists_nofollow(runtime_removal_root_for(state_root)),
