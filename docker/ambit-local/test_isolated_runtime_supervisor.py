@@ -214,14 +214,16 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         with mock.patch.object(
             MODULE,
             "path_exists_nofollow",
-            side_effect=(False, False, False, False),
+            side_effect=(False, False, False, False, False),
         ), mock.patch.object(
             MODULE.RuntimeLease,
             "acquire",
             return_value=lease,
         ) as acquire, mock.patch.object(
             MODULE, "require_no_other_task_runtime"
-        ) as singleton:
+        ) as singleton, mock.patch.object(
+            MODULE, "reduce_runtime_removal_root", return_value=False
+        ):
             result = MODULE.ensure_orphaned_runtime_stopped(STATE_ROOT, 1000, 1000)
         self.assertEqual(result["outcome"], "passed")
         acquire.assert_called_once_with(STATE_ROOT)
@@ -415,14 +417,16 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
 
     def test_runtime_custody_socket_cgroup_and_lease_paths_are_distinct(self) -> None:
         runtime = MODULE.runtime_root_for(STATE_ROOT)
+        removal = MODULE.runtime_removal_root_for(STATE_ROOT)
         socket_root = MODULE.socket_root_for(STATE_ROOT)
         cgroup = MODULE.cgroup_path_for(STATE_ROOT)
         lease = MODULE.lease_path_for(STATE_ROOT)
         self.assertRegex(str(runtime), MODULE.RUNTIME_ROOT_RE)
+        self.assertRegex(str(removal), MODULE.RUNTIME_REMOVAL_ROOT_RE)
         self.assertRegex(str(socket_root), MODULE.SOCKET_ROOT_RE)
         self.assertRegex(str(cgroup), MODULE.CGROUP_PATH_RE)
         self.assertRegex(str(lease), MODULE.LEASE_PATH_RE)
-        self.assertEqual(len({runtime, socket_root, cgroup, lease}), 4)
+        self.assertEqual(len({runtime, removal, socket_root, cgroup, lease}), 5)
         self.assertEqual(
             lease,
             MODULE.lease_path_for(Path("/home/other/ambit-state")),
@@ -435,6 +439,7 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
                 [],
                 [],
                 [],
+                [],
             ),
         ):
             with self.assertRaisesRegex(MODULE.SupervisorError, "another C16b runtime"):
@@ -443,6 +448,7 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
             MODULE.os,
             "listdir",
             side_effect=(
+                [],
                 [],
                 [],
                 [],
@@ -585,6 +591,38 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
                 server.close()
             self.assertEqual(stat.S_IMODE(root.stat().st_mode), 0o750)
             self.assertEqual(stat.S_IMODE(endpoint.stat().st_mode), 0o660)
+
+    def test_stopping_recovery_admits_exact_empty_socket_root(self) -> None:
+        _, _, root, _ = control_authority()
+        expected = MODULE.SocketPathIdentity(
+            root.path / MODULE.SOCKET_NAME,
+            root.device,
+            24,
+            0,
+            1000,
+            0o660,
+        )
+        with mock.patch.object(MODULE.os, "stat", return_value=mock.Mock()), mock.patch.object(
+            MODULE, "verify_socket_root", return_value=31
+        ), mock.patch.object(MODULE.os, "listdir", return_value=[]), mock.patch.object(
+            MODULE.os, "close"
+        ):
+            self.assertEqual(
+                MODULE.classify_recovery_socket(
+                    root,
+                    expected,
+                    1000,
+                    absence_authorized=True,
+                ),
+                (True, None),
+            )
+            with self.assertRaisesRegex(MODULE.SupervisorError, "socket is absent"):
+                MODULE.classify_recovery_socket(
+                    root,
+                    expected,
+                    1000,
+                    absence_authorized=False,
+                )
 
     def test_task_cgroup_is_the_total_descendant_recovery_boundary(self) -> None:
         identity = MODULE.CgroupIdentity(
@@ -1067,6 +1105,118 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
                 "20 1 8:1 net:[4026533321] /outside rw - ext4 /dev/root rw\n"
             )
 
+    def test_runtime_removal_rename_makes_partial_cleanup_replayable(self) -> None:
+        runtime = MODULE.RuntimeIdentity(
+            MODULE.runtime_root_for(STATE_ROOT), 21, 22, 0, 0, 0o700
+        )
+        events: list[str] = []
+        with mock.patch.object(
+            MODULE, "verify_runtime_root", return_value=31
+        ), mock.patch.object(MODULE, "verify_runtime_entries"), mock.patch.object(
+            MODULE, "stable_global_mount_targets", return_value=()
+        ), mock.patch.object(
+            MODULE, "path_exists_nofollow", return_value=False
+        ), mock.patch.object(MODULE.os, "open", return_value=32), mock.patch.object(
+            MODULE.os,
+            "stat",
+            return_value=mock.Mock(st_dev=runtime.device, st_ino=runtime.inode),
+        ), mock.patch.object(
+            MODULE.os, "rename", side_effect=lambda *args, **kwargs: events.append("rename")
+        ), mock.patch.object(
+            MODULE.os, "fsync", side_effect=lambda *args: events.append("parent-fsync")
+        ), mock.patch.object(MODULE.os, "close"), mock.patch.object(
+            MODULE,
+            "reduce_runtime_removal_root",
+            side_effect=lambda *args: events.append("reduce") or True,
+        ):
+            MODULE.remove_runtime_root(runtime, STATE_ROOT)
+        self.assertLess(events.index("rename"), events.index("parent-fsync"))
+        self.assertLess(events.index("parent-fsync"), events.index("reduce"))
+
+        removal = MODULE.RuntimeIdentity(
+            MODULE.runtime_removal_root_for(STATE_ROOT), 21, 22, 0, 0, 0o700
+        )
+        reduced: list[str] = []
+        with mock.patch.object(
+            MODULE, "existing_runtime_identity", return_value=removal
+        ), mock.patch.object(
+            MODULE, "verify_runtime_root", return_value=31
+        ), mock.patch.object(MODULE, "verify_runtime_entries"), mock.patch.object(
+            MODULE, "stable_global_mount_targets", return_value=()
+        ), mock.patch.object(
+            MODULE.os, "listdir", side_effect=(("runtime-stop.json",), ())
+        ), mock.patch.object(
+            MODULE,
+            "_remove_tree_entry",
+            side_effect=lambda *args: reduced.append(args[1]),
+        ), mock.patch.object(MODULE.os, "open", return_value=32), mock.patch.object(
+            MODULE.os,
+            "stat",
+            return_value=mock.Mock(st_dev=removal.device, st_ino=removal.inode),
+        ), mock.patch.object(MODULE.os, "rmdir"), mock.patch.object(
+            MODULE.os, "fsync"
+        ), mock.patch.object(MODULE.os, "close"):
+            self.assertTrue(MODULE.reduce_runtime_removal_root(STATE_ROOT))
+        self.assertEqual(reduced, ["runtime-stop.json"])
+
+    def test_reduced_runtime_removal_settles_residual_cgroup_before_return(self) -> None:
+        supervisor = MODULE.RuntimeSupervisor(STATE_ROOT, 1000, 1000)
+        supervisor.state = mock.Mock()
+        supervisor.namespace = NAMESPACE
+        events: list[str] = []
+
+        def cgroup_is_populated(identity: MODULE.CgroupIdentity) -> bool:
+            self.assertEqual(identity.path, MODULE.cgroup_path_for(STATE_ROOT))
+            self.assertEqual((identity.device, identity.inode), (41, 42))
+            events.append("cgroup-proved-empty")
+            return False
+
+        def remove_cgroup(identity: MODULE.CgroupIdentity) -> None:
+            self.assertEqual(identity.path, MODULE.cgroup_path_for(STATE_ROOT))
+            self.assertEqual((identity.device, identity.inode), (41, 42))
+            events.append("cgroup-removed")
+
+        with mock.patch.object(
+            MODULE, "require_no_other_task_runtime"
+        ), mock.patch.object(
+            MODULE,
+            "path_exists_nofollow",
+            side_effect=lambda path: path == MODULE.runtime_removal_root_for(STATE_ROOT),
+        ), mock.patch.object(
+            MODULE,
+            "reduce_runtime_removal_root",
+            side_effect=lambda *args: events.append("runtime-removal-reduced") or True,
+        ), mock.patch.object(
+            MODULE,
+            "existing_runtime_identity",
+            side_effect=FileNotFoundError,
+        ), mock.patch.object(
+            MODULE.os,
+            "stat",
+            side_effect=(FileNotFoundError, mock.Mock(st_dev=41, st_ino=42)),
+        ), mock.patch.object(
+            MODULE, "cgroup_is_populated", side_effect=cgroup_is_populated
+        ), mock.patch.object(
+            MODULE, "remove_empty_cgroup", side_effect=remove_cgroup
+        ), mock.patch.object(
+            MODULE, "writable_state_authority", side_effect=lambda value: value
+        ), mock.patch.object(
+            MODULE,
+            "remove_user_runtime_projections",
+            side_effect=lambda *args: events.append("projections-removed"),
+        ):
+            supervisor.recover_existing_runtime()
+
+        self.assertEqual(
+            events,
+            [
+                "runtime-removal-reduced",
+                "cgroup-proved-empty",
+                "cgroup-removed",
+                "projections-removed",
+            ],
+        )
+
     def test_task_netns_cleanup_carries_source_anchors_across_unmount(self) -> None:
         supervisor = MODULE.RuntimeSupervisor(STATE_ROOT, 1000, 1000)
         supervisor.runtime_identity = MODULE.RuntimeIdentity(
@@ -1119,8 +1269,8 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         )
         target = runtime.path / "docker-exec/netns/task-1"
         anchor = ("0:42", Path("net:[4026533321]"))
-        ambient = (("7:7", "/run/docker/netns/default"),)
-        ambient_sources = ((anchor, ambient),)
+        ambient_targets = ("/run/docker/netns/default",)
+        ambient_sources = ((anchor, ambient_targets),)
         value = {
             "schema": MODULE.NETNS_DETACH_SCHEMA,
             "observedAt": "2026-08-21T12:00:00+00:00",
@@ -1159,13 +1309,19 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
             )
         self.assertEqual(
             plan,
-            ((target, (anchor,), ambient, (("4:19", str(target)),)),),
+            ((target, (anchor,), ambient_targets, (("4:19", str(target)),)),),
         )
         source_absent = "20 1 8:1 / / rw - ext4 /dev/root rw\n"
+        ambient_current = (
+            ("7:7", "/run/docker/netns/default"),
+            ("8:88", "/run/docker/netns/default"),
+        )
         with mock.patch.object(
             MODULE.Path, "read_text", side_effect=(source_absent, source_absent)
         ), mock.patch.object(
-            MODULE, "stable_global_mount_targets", side_effect=(ambient, ambient)
+            MODULE,
+            "stable_global_mount_targets",
+            side_effect=(ambient_current, ambient_current),
         ) as stable, mock.patch.object(MODULE.subprocess, "run") as run:
             MODULE.settle_task_netns_detach_manifest(
                 runtime=runtime,
@@ -1187,8 +1343,9 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
             f"22 21 0:42 net:[4026533321] {target} rw - nsfs nsfs rw\n"
         )
         anchor = ("0:42", Path("net:[4026533321]"))
-        ambient = (("7:7", "/run/docker/netns/default"),)
-        ambient_sources = ((anchor, ambient),)
+        ambient_occurrences = (("7:7", "/run/docker/netns/default"),)
+        ambient_targets = ("/run/docker/netns/default",)
+        ambient_sources = ((anchor, ambient_targets),)
         with mock.patch.object(
             MODULE, "current_boot_id", return_value=BOOT_ID
         ), mock.patch.object(
@@ -1198,7 +1355,9 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         ), mock.patch.object(
             MODULE,
             "stable_global_mount_targets",
-            return_value=tuple(sorted((*ambient, ("4:19", str(target))))),
+            return_value=tuple(
+                sorted((*ambient_occurrences, ("4:19", str(target))))
+            ),
         ):
             manifest = MODULE.build_task_netns_detach_manifest(
                 runtime=runtime,
@@ -1230,6 +1389,33 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
                 }
             ],
         )
+        foreign = tuple(
+            sorted(
+                (
+                    *ambient_occurrences,
+                    ("4:19", str(target)),
+                    ("9:99", "/outside/foreign-bind"),
+                )
+            )
+        )
+        with mock.patch.object(
+            MODULE, "current_boot_id", return_value=BOOT_ID
+        ), mock.patch.object(
+            MODULE, "read_mountinfo_for_namespace", return_value=mounted
+        ), mock.patch.object(
+            MODULE, "runtime_netns_entry_roster", return_value=("task-1",)
+        ), mock.patch.object(
+            MODULE, "stable_global_mount_targets", return_value=foreign
+        ), self.assertRaisesRegex(MODULE.SupervisorError, "neither ambient nor"):
+            MODULE.build_task_netns_detach_manifest(
+                runtime=runtime,
+                state_root=STATE_ROOT,
+                control_digest="a" * 64,
+                stopping_digest="b" * 64,
+                baseline_digest="d" * 64,
+                ambient_sources=ambient_sources,
+                recorded_namespace=NAMESPACE,
+            )
         digest = MODULE.canonical_document_digest(manifest)
         with mock.patch.object(
             MODULE,
@@ -1257,7 +1443,7 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         runtime = MODULE.RuntimeIdentity(
             MODULE.runtime_root_for(STATE_ROOT), 21, 22, 0, 0, 0o700
         )
-        ambient = (("7:7", "/run/docker/netns/default"),)
+        ambient_occurrences = (("7:7", "/run/docker/netns/default"),)
         namespace_stat = mock.Mock(
             st_dev=os.makedev(0, 4),
             st_ino=4026531833,
@@ -1267,7 +1453,7 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         ), mock.patch.object(
             MODULE.os, "stat", return_value=namespace_stat
         ), mock.patch.object(
-            MODULE, "stable_global_mount_targets", return_value=ambient
+            MODULE, "stable_global_mount_targets", return_value=ambient_occurrences
         ), mock.patch.object(MODULE, "current_boot_id", return_value=BOOT_ID):
             manifest = MODULE.build_netns_baseline_manifest(
                 runtime=runtime,
@@ -1284,7 +1470,7 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
             )
         self.assertEqual(
             parsed,
-            ((("0:4", Path("net:[4026531833]")), ambient),),
+            ((("0:4", Path("net:[4026531833]")), ("/run/docker/netns/default",)),),
         )
 
     def test_same_namespace_representative_visibility_must_agree(self) -> None:
@@ -1613,8 +1799,32 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
         supervisor.invoke_storage = lambda *args, **kwargs: (
             events.append("storage") or {"projectionDigest": None}
         )
-        with (
+        post_freeze_socket = MODULE.SocketPathIdentity(
+            socket_root.path / MODULE.SOCKET_NAME,
+            socket_root.device,
+            24,
+            0,
+            1000,
+            0o660,
+        )
+        socket_cutpoints = iter(((True, None), (True, post_freeze_socket)))
+
+        def classify_socket(*args: object, **kwargs: object):
+            events.append("socket-proof")
+            return next(socket_cutpoints)
+
+        def remove_socket(*args: object) -> None:
+            self.assertEqual(args[1], post_freeze_socket)
+            events.append("socket-remove")
+
+        patchers = (
             mock.patch.object(MODULE, "require_no_other_task_runtime"),
+            mock.patch.object(
+                MODULE,
+                "path_exists_nofollow",
+                side_effect=lambda path: path == runtime.path,
+            ),
+            mock.patch.object(MODULE, "reduce_runtime_removal_root", return_value=False),
             mock.patch.object(MODULE, "existing_runtime_identity", return_value=runtime),
             mock.patch.object(MODULE, "load_process_authority", return_value=process_authority),
             mock.patch.object(
@@ -1626,8 +1836,7 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
             mock.patch.object(
                 MODULE,
                 "classify_recovery_socket",
-                side_effect=lambda *args, **kwargs: events.append("socket-proof")
-                or (True, None),
+                side_effect=classify_socket,
             ),
             mock.patch.object(
                 MODULE,
@@ -1658,19 +1867,7 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
                 side_effect=lambda **kwargs: events.append("netns-settle"),
             ),
             mock.patch.object(MODULE.os, "stat", return_value=mock.Mock()),
-            mock.patch.object(
-                MODULE,
-                "capture_socket_identity",
-                return_value=MODULE.SocketPathIdentity(
-                    socket_root.path / MODULE.SOCKET_NAME,
-                    socket_root.device,
-                    24,
-                    0,
-                    1000,
-                    0o660,
-                ),
-            ),
-            mock.patch.object(MODULE, "remove_socket_root", side_effect=lambda *args: events.append("socket-remove")),
+            mock.patch.object(MODULE, "remove_socket_root", side_effect=remove_socket),
             mock.patch.object(MODULE, "read_pinned_source", return_value=b"source"),
             mock.patch.object(MODULE, "remove_runtime_root", side_effect=lambda *args: events.append("runtime-remove")),
             mock.patch.object(MODULE, "remove_empty_cgroup", side_effect=lambda *args: events.append("cgroup-remove")),
@@ -1678,7 +1875,10 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
                 MODULE, "writable_state_authority", side_effect=lambda value: value
             ),
             mock.patch.object(MODULE, "remove_user_runtime_projections", side_effect=lambda *args: events.append("projection-remove")),
-        ):
+        )
+        with contextlib.ExitStack() as stack:
+            for patcher in patchers:
+                stack.enter_context(patcher)
             supervisor.recover_existing_runtime()
         self.assertEqual(
             events,
@@ -1686,6 +1886,7 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
                 "socket-proof",
                 "stopping-intent",
                 "cgroup-freeze",
+                "socket-proof",
                 "netns-baseline",
                 "netns-plan",
                 "cgroup-kill",
@@ -1750,6 +1951,12 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
 
         common = (
             mock.patch.object(MODULE, "require_no_other_task_runtime"),
+            mock.patch.object(
+                MODULE,
+                "path_exists_nofollow",
+                side_effect=lambda path: path == runtime.path,
+            ),
+            mock.patch.object(MODULE, "reduce_runtime_removal_root", return_value=False),
             mock.patch.object(MODULE, "existing_runtime_identity", return_value=runtime),
             mock.patch.object(MODULE, "load_process_authority", return_value=process_authority),
             mock.patch.object(MODULE, "read_root_manifest", side_effect=read_manifest),
@@ -1834,6 +2041,12 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
             )
         with (
             mock.patch.object(MODULE, "require_no_other_task_runtime"),
+            mock.patch.object(
+                MODULE,
+                "path_exists_nofollow",
+                side_effect=lambda path: path == runtime.path,
+            ),
+            mock.patch.object(MODULE, "reduce_runtime_removal_root", return_value=False),
             mock.patch.object(MODULE, "existing_runtime_identity", return_value=runtime),
             mock.patch.object(MODULE, "load_process_authority", return_value={}),
             mock.patch.object(

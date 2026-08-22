@@ -49,10 +49,14 @@ MOUNT_TARGET = AUTHORITY_ROOT / "runner-docker"
 STORAGE_IMAGE = AUTHORITY_ROOT / "runner-docker.xfs"
 RUNTIME_PARENT = Path("/run")
 RUNTIME_PREFIX = "ambit-c16b-docker-"
+RUNTIME_REMOVAL_PREFIX = "ambit-c16b-docker-removing-"
 SOCKET_ROOT_PREFIX = "ambit-c16b-docker-api-"
 GLOBAL_LEASE_NAME = "ambit-c16b-docker-global.lock"
 STATE_ROOT_RE = re.compile(r"^/home/[^/]+/[A-Za-z0-9._/-]+$")
 RUNTIME_ROOT_RE = re.compile(r"^/run/ambit-c16b-docker-[0-9a-f]{12}$")
+RUNTIME_REMOVAL_ROOT_RE = re.compile(
+    r"^/run/ambit-c16b-docker-removing-[0-9a-f]{12}$"
+)
 SOCKET_ROOT_RE = re.compile(r"^/run/ambit-c16b-docker-api-[0-9a-f]{12}$")
 LEASE_PATH_RE = re.compile(r"^/run/ambit-c16b-docker-global\.lock$")
 CGROUP_PARENT = Path("/sys/fs/cgroup")
@@ -75,11 +79,11 @@ MAXIMUM_SANDBOXES = 2
 
 MountSourceAnchor = tuple[str, Path]
 MountOccurrence = tuple[str, str]
-AmbientNetnsSource = tuple[MountSourceAnchor, tuple[MountOccurrence, ...]]
+AmbientNetnsSource = tuple[MountSourceAnchor, tuple[str, ...]]
 TaskNetnsDetachEntry = tuple[
     Path,
     tuple[MountSourceAnchor, ...],
-    tuple[MountOccurrence, ...],
+    tuple[str, ...],
     tuple[MountOccurrence, ...],
 ]
 
@@ -94,7 +98,7 @@ PROCESS_IDENTITY_NAME = "isolated_process_identity.py"
 SUPERVISOR_SNAPSHOT_NAME = "isolated_runtime_supervisor.py"
 PROCESS_IDENTITY_SHA256 = "8dc76b554bc5dd7810f217a0c5b082ada500d3bb9d0c5afce46e5415ed983b2c"
 STORAGE_LIFECYCLE_NAME = "runner-storage-lifecycle.py"
-STORAGE_LIFECYCLE_SHA256 = "d65c17a34facf3072617b965c2d4447ee1749a54721668cb32ab26c5f25d8811"
+STORAGE_LIFECYCLE_SHA256 = "62472dcefdfee225b417eab16b31fcfc9d265d127574c8d8febb22ccbf1522fb"
 STORAGE_IDENTITY_VERIFIER_NAME = "verify-runner-storage.py"
 STORAGE_IDENTITY_VERIFIER_SHA256 = (
     "59c530e8c502c546689967c33c540217d2762ff9d3f8ef7424ba52462c554f0b"
@@ -760,6 +764,10 @@ def runtime_root_for(state_root: Path) -> Path:
     return RUNTIME_PARENT / f"{RUNTIME_PREFIX}{runtime_id_for(state_root)}"
 
 
+def runtime_removal_root_for(state_root: Path) -> Path:
+    return RUNTIME_PARENT / f"{RUNTIME_REMOVAL_PREFIX}{runtime_id_for(state_root)}"
+
+
 def socket_root_for(state_root: Path) -> Path:
     return RUNTIME_PARENT / f"{SOCKET_ROOT_PREFIX}{runtime_id_for(state_root)}"
 
@@ -1088,9 +1096,13 @@ def create_runtime_root(path: Path) -> RuntimeIdentity:
         os.close(descriptor)
 
 
-def verify_runtime_root(identity: RuntimeIdentity) -> int:
+def verify_runtime_root(
+    identity: RuntimeIdentity,
+    *,
+    path_pattern: re.Pattern[str] = RUNTIME_ROOT_RE,
+) -> int:
     require(
-        RUNTIME_ROOT_RE.fullmatch(str(identity.path)) is not None,
+        path_pattern.fullmatch(str(identity.path)) is not None,
         "runtime root path is invalid",
     )
     descriptor = os.open(identity.path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -1461,6 +1473,7 @@ def build_netns_baseline_manifest(
         runtime.path / ".ambient-netns-baseline",
         source_anchors=(anchor,),
     )
+    ambient_targets = tuple(sorted({target for _, target in occurrences}))
     return {
         "schema": NETNS_BASELINE_SCHEMA,
         "observedAt": utc_now(),
@@ -1472,9 +1485,7 @@ def build_netns_baseline_manifest(
         "ambientSources": [
             {
                 "sourceAnchor": mount_source_anchor_document(anchor),
-                "occurrences": [
-                    mount_occurrence_document(occurrence) for occurrence in occurrences
-                ],
+                "ambientTargets": list(ambient_targets),
             }
         ],
     }
@@ -1524,24 +1535,30 @@ def validate_netns_baseline_manifest(
     for item in manifest["ambientSources"]:
         source = exact_keys(
             item,
-            {"sourceAnchor", "occurrences"},
+            {"sourceAnchor", "ambientTargets"},
             "ambient network namespace source",
         )
         require(
-            isinstance(source["occurrences"], list),
-            "ambient occurrence roster is invalid",
+            isinstance(source["ambientTargets"], list),
+            "ambient target roster is invalid",
         )
-        assert isinstance(source["occurrences"], list)
+        assert isinstance(source["ambientTargets"], list)
         anchor = mount_source_anchor_from_document(source["sourceAnchor"])
-        occurrences = tuple(
-            mount_occurrence_from_document(occurrence)
-            for occurrence in source["occurrences"]
-        )
+        targets: list[str] = []
+        for target_value in source["ambientTargets"]:
+            require(isinstance(target_value, str), "ambient target is invalid")
+            target = Path(target_value)
+            require(
+                target.is_absolute() and os.path.normpath(str(target)) == str(target),
+                "ambient target is noncanonical",
+            )
+            targets.append(str(target))
+        ambient_targets = tuple(targets)
         require(
-            occurrences == tuple(sorted(set(occurrences))),
-            "ambient occurrence roster is not canonical and unique",
+            ambient_targets == tuple(sorted(set(ambient_targets))),
+            "ambient target roster is not canonical and unique",
         )
-        parsed.append((anchor, occurrences))
+        parsed.append((anchor, ambient_targets))
     require(
         parsed == sorted(parsed, key=lambda item: (item[0][0], str(item[0][1])))
         and len({anchor for anchor, _ in parsed}) == len(parsed),
@@ -1581,11 +1598,11 @@ def ensure_netns_baseline_manifest(
     return digest, parsed
 
 
-def ambient_occurrences_for_anchor(
+def ambient_targets_for_anchor(
     anchor: MountSourceAnchor,
     sources: tuple[AmbientNetnsSource, ...],
-) -> tuple[MountOccurrence, ...]:
-    matches = tuple(occurrences for candidate, occurrences in sources if candidate == anchor)
+) -> tuple[str, ...]:
+    matches = tuple(targets for candidate, targets in sources if candidate == anchor)
     require(len(matches) <= 1, "ambient source baseline is ambiguous")
     return () if not matches else matches[0]
 
@@ -1756,13 +1773,17 @@ def build_task_netns_detach_manifest(
             len(anchors) == 1,
             "task network namespace must have exactly one source coordinate",
         )
-        ambient = ambient_occurrences_for_anchor(anchors[0], ambient_sources)
+        ambient_targets = ambient_targets_for_anchor(anchors[0], ambient_sources)
         current = stable_global_mount_targets(target, source_anchors=anchors)
         require(
-            set(ambient) <= set(current),
-            "ambient network namespace occurrence disappeared before detach",
+            set(ambient_targets) <= {occurrence_target for _, occurrence_target in current},
+            "ambient network namespace target disappeared before detach",
         )
-        owned = tuple(occurrence for occurrence in current if occurrence not in ambient)
+        owned = tuple(
+            occurrence
+            for occurrence in current
+            if occurrence[1] not in ambient_targets
+        )
         require(
             bool(owned)
             and (expected_namespace, str(target)) in owned
@@ -1876,7 +1897,7 @@ def validate_task_netns_detach_manifest(
             (
                 target,
                 (anchor,),
-                ambient_occurrences_for_anchor(anchor, ambient_sources),
+                ambient_targets_for_anchor(anchor, ambient_sources),
                 owned,
             )
         )
@@ -1946,7 +1967,7 @@ def settle_task_netns_detach_manifest(
         current_targets <= planned_targets,
         "unplanned task network namespace mount appeared after detach publication",
     )
-    for target, anchors, ambient, owned in task_mounts:
+    for target, anchors, ambient_targets, owned in task_mounts:
         if target in current_targets:
             require(
                 current_namespace == namespace,
@@ -1958,8 +1979,11 @@ def settle_task_netns_detach_manifest(
             )
             current = stable_global_mount_targets(target, source_anchors=anchors)
             require(
-                set(ambient) <= set(current)
-                and set(current) - set(ambient) <= set(owned)
+                set(ambient_targets) <= {item_target for _, item_target in current}
+                and all(
+                    occurrence[1] in ambient_targets or occurrence in owned
+                    for occurrence in current
+                )
                 and (mount_namespace_key(namespace), str(target)) in current,
                 "task network namespace occurrence differs from its published cutoff",
             )
@@ -1975,18 +1999,30 @@ def settle_task_netns_detach_manifest(
             )
             require_exact_children(expected_children)
         require(
-            stable_global_mount_targets(target, source_anchors=anchors) == ambient,
-            "task network namespace occurrence did not return to its baseline",
+            {
+                occurrence_target
+                for _, occurrence_target in stable_global_mount_targets(
+                    target, source_anchors=anchors
+                )
+            }
+            == set(ambient_targets),
+            "task network namespace targets did not return to their baseline",
         )
     remaining = task_netns_mounts(
         runtime.path,
         Path("/proc/self/mountinfo").read_text(encoding="utf-8"),
     )
     require(not remaining, "task network namespace mount remained after cleanup")
-    for target, anchors, ambient, _ in task_mounts:
+    for target, anchors, ambient_targets, _ in task_mounts:
         require(
-            stable_global_mount_targets(target, source_anchors=anchors) == ambient,
-            "task network namespace occurrence drifted from baseline before deletion",
+            {
+                occurrence_target
+                for _, occurrence_target in stable_global_mount_targets(
+                    target, source_anchors=anchors
+                )
+            }
+            == set(ambient_targets),
+            "task network namespace targets drifted from baseline before deletion",
         )
 
 
@@ -2033,8 +2069,19 @@ def _remove_tree_entry(directory_fd: int, name: str) -> None:
     os.fsync(directory_fd)
 
 
-def remove_runtime_root(identity: RuntimeIdentity) -> None:
-    descriptor = verify_runtime_root(identity)
+def reduce_runtime_removal_root(state_root: Path) -> bool:
+    path = runtime_removal_root_for(state_root)
+    try:
+        identity = existing_runtime_identity(
+            path,
+            path_pattern=RUNTIME_REMOVAL_ROOT_RE,
+        )
+    except FileNotFoundError:
+        return False
+    descriptor = verify_runtime_root(
+        identity,
+        path_pattern=RUNTIME_REMOVAL_ROOT_RE,
+    )
     try:
         verify_runtime_entries(descriptor)
         require(not stable_global_mount_targets(identity.path), "runtime root retains a mount")
@@ -2054,6 +2101,40 @@ def remove_runtime_root(identity: RuntimeIdentity) -> None:
             os.close(parent_fd)
     finally:
         os.close(descriptor)
+    return True
+
+
+def remove_runtime_root(identity: RuntimeIdentity, state_root: Path) -> None:
+    require(identity.path == runtime_root_for(state_root), "runtime removal state path differs")
+    descriptor = verify_runtime_root(identity)
+    parent_fd = os.open(RUNTIME_PARENT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        verify_runtime_entries(descriptor)
+        require(not stable_global_mount_targets(identity.path), "runtime root retains a mount")
+        removal_path = runtime_removal_root_for(state_root)
+        require(
+            not path_exists_nofollow(removal_path),
+            "runtime removal authority already exists",
+        )
+        literal = os.stat(identity.path.name, dir_fd=parent_fd, follow_symlinks=False)
+        require(
+            (literal.st_dev, literal.st_ino) == (identity.device, identity.inode),
+            "runtime root entry changed before removal publication",
+        )
+        os.rename(
+            identity.path.name,
+            removal_path.name,
+            src_dir_fd=parent_fd,
+            dst_dir_fd=parent_fd,
+        )
+        os.fsync(parent_fd)
+    finally:
+        os.close(parent_fd)
+        os.close(descriptor)
+    require(
+        reduce_runtime_removal_root(state_root),
+        "runtime removal authority disappeared",
+    )
 
 
 def create_socket_root(path: Path, caller_gid: int) -> SocketPathIdentity:
@@ -2265,11 +2346,15 @@ def classify_recovery_socket(
         require(roster in ((), (SOCKET_NAME,)), "Docker API root contains a foreign entry")
     finally:
         os.close(descriptor)
+    if not roster:
+        require(
+            absence_authorized or expected_socket is None,
+            "Docker API socket is absent without durable stopping authority",
+        )
+        return True, None
     if expected_socket is not None:
         verify_socket_boundary(root, expected_socket, caller_gid)
         return True, expected_socket
-    if not roster:
-        return True, None
     return True, capture_socket_identity(root, caller_gid)
 
 
@@ -2444,11 +2529,13 @@ def path_exists_nofollow(path: Path) -> bool:
 
 def require_no_other_task_runtime(state_root: Path) -> None:
     expected_runtime = runtime_root_for(state_root).name
+    expected_removal = runtime_removal_root_for(state_root).name
     expected_socket = socket_root_for(state_root).name
     expected_cgroup = cgroup_path_for(state_root).name
     foreign: list[str] = []
     for parent, pattern, expected in (
         (RUNTIME_PARENT, RUNTIME_ROOT_RE, expected_runtime),
+        (RUNTIME_PARENT, RUNTIME_REMOVAL_ROOT_RE, expected_removal),
         (RUNTIME_PARENT, SOCKET_ROOT_RE, expected_socket),
         (CGROUP_PARENT, CGROUP_PATH_RE, expected_cgroup),
     ):
@@ -3167,8 +3254,9 @@ def existing_runtime_identity(
     path: Path,
     *,
     recoverable_modes: set[int] = {0o700},
+    path_pattern: re.Pattern[str] = RUNTIME_ROOT_RE,
 ) -> RuntimeIdentity:
-    require(RUNTIME_ROOT_RE.fullmatch(str(path)) is not None, "runtime root path is invalid")
+    require(path_pattern.fullmatch(str(path)) is not None, "runtime root path is invalid")
     descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         observed = os.fstat(descriptor)
@@ -3803,7 +3891,7 @@ def reduce_precontrol_runtime(
                 )
         finally:
             os.close(runtime_fd)
-        remove_runtime_root(runtime)
+        remove_runtime_root(runtime, state_root)
 
     try:
         socket_stat = os.stat(socket_path, follow_symlinks=False)
@@ -4054,6 +4142,20 @@ class RuntimeSupervisor:
         require(self.namespace is not None, "recovery mount namespace is absent")
         require_no_other_task_runtime(self.state_root)
         runtime_path = runtime_root_for(self.state_root)
+        removal_path = runtime_removal_root_for(self.state_root)
+        require(
+            not (
+                path_exists_nofollow(runtime_path)
+                and path_exists_nofollow(removal_path)
+            ),
+            "runtime and removal authorities coexist",
+        )
+        # A crash may leave the atomically renamed removal tree alongside an
+        # exact, already emptied cgroup.  Reduce the tree first, then flow
+        # through the same absent-runtime reducer that settles those residual
+        # boundaries.  This also makes a crash after the final rmdir
+        # indistinguishable from the ordinary absent-runtime replay state.
+        reduce_runtime_removal_root(self.state_root)
         try:
             runtime = existing_runtime_identity(runtime_path)
         except FileNotFoundError:
@@ -4162,6 +4264,23 @@ class RuntimeSupervisor:
         cgroup_was_populated = cgroup_is_populated(cgroup)
         if cgroup_was_populated:
             freeze_cgroup_and_wait(cgroup, timeout=60)
+        frozen_socket_present, frozen_expected_socket = classify_recovery_socket(
+            socket_root,
+            ready["socket"] if ready is not None else None,
+            self.caller_gid,
+            absence_authorized=True,
+        )
+        require(
+            socket_present or not frozen_socket_present,
+            "Docker API root reappeared after its admitted absent cutpoint",
+        )
+        if expected_socket is not None and frozen_socket_present:
+            require(
+                frozen_expected_socket in (None, expected_socket),
+                "Docker API socket identity changed before the frozen cutoff",
+            )
+        socket_present = frozen_socket_present
+        expected_socket = frozen_expected_socket
 
         existing_netns_baseline = read_root_manifest(runtime, ROOT_NETNS_BASELINE_NAME)
         require(
@@ -4259,7 +4378,7 @@ class RuntimeSupervisor:
             task_mounts=task_mounts,
             expected_children=set(),
         )
-        remove_runtime_root(runtime)
+        remove_runtime_root(runtime, self.state_root)
         remove_empty_cgroup(cgroup)
         if not orphaned:
             remove_user_runtime_projections(writable_state_authority(self.state))
@@ -5254,6 +5373,13 @@ def runtime_status(state_root: Path, caller_uid: int, caller_gid: int) -> dict[s
                 "stateRoot": str(state_root),
                 "error": str(error),
             }
+        if path_exists_nofollow(runtime_removal_root_for(state_root)):
+            return {
+                "schema": "ambit.local-daytona-isolated-docker-status/v1",
+                "outcome": "blocked",
+                "stateRoot": str(state_root),
+                "error": "runtime removal recovery is pending",
+            }
         try:
             _, validated, ready, process_authority = _validated_existing_authorities(
                 state,
@@ -5434,6 +5560,11 @@ def ensure_orphaned_runtime_stopped(
                 "orphaned runtime appeared while acquiring the global lease; retry stop",
             )
             require_no_other_task_runtime(state_root)
+            reduce_runtime_removal_root(state_root)
+            require(
+                not path_exists_nofollow(runtime_removal_root_for(state_root)),
+                "orphaned runtime removal authority remained",
+            )
             require(
                 not path_exists_nofollow(socket_path),
                 "orphaned socket root remains without root control authority",

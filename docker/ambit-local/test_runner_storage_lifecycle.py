@@ -1840,6 +1840,7 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
             MODULE.runtime_authority_paths(state_root),
             (
                 Path(f"/run/ambit-c16b-docker-{identifier}"),
+                Path(f"/run/ambit-c16b-docker-removing-{identifier}"),
                 Path(f"/run/ambit-c16b-docker-api-{identifier}"),
                 Path(f"/sys/fs/cgroup/ambit-c16b-docker-{identifier}"),
             ),

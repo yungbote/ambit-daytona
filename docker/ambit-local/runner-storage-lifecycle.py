@@ -40,11 +40,15 @@ RUNNER_DATA_NAME = "inner-runner"
 OUTER_DOCKER_NAME = "outer-docker"
 OUTER_CONTAINERD_NAME = "outer-containerd"
 RUNTIME_ROOT_PREFIX = Path("/run/ambit-c16b-docker-")
+RUNTIME_REMOVAL_ROOT_PREFIX = Path("/run/ambit-c16b-docker-removing-")
 SOCKET_ROOT_PREFIX = Path("/run/ambit-c16b-docker-api-")
 CGROUP_ROOT_PREFIX = Path("/sys/fs/cgroup/ambit-c16b-docker-")
 RUNTIME_PARENT = Path("/run")
 GLOBAL_RUNTIME_LEASE_NAME = "ambit-c16b-docker-global.lock"
 RUNTIME_ROOT_NAME = re.compile(r"^ambit-c16b-docker-[0-9a-f]{12}$")
+RUNTIME_REMOVAL_ROOT_NAME = re.compile(
+    r"^ambit-c16b-docker-removing-[0-9a-f]{12}$"
+)
 SOCKET_ROOT_NAME = re.compile(r"^ambit-c16b-docker-api-[0-9a-f]{12}$")
 CGROUP_ROOT_NAME = re.compile(r"^ambit-c16b-docker-[0-9a-f]{12}$")
 LEGACY_TMP_RUNTIME_NAME = re.compile(r"^ambit-c16b-docker-[0-9a-f]{12}$")
@@ -954,10 +958,11 @@ def user_projection_directory_fd(context: AuthorityContext) -> int | None:
     return context.evidence_fd
 
 
-def runtime_authority_paths(state_root: Path) -> tuple[Path, Path, Path]:
+def runtime_authority_paths(state_root: Path) -> tuple[Path, Path, Path, Path]:
     identifier = sha256_bytes(str(state_root).encode())[:12]
     return (
         Path(f"{RUNTIME_ROOT_PREFIX}{identifier}"),
+        Path(f"{RUNTIME_REMOVAL_ROOT_PREFIX}{identifier}"),
         Path(f"{SOCKET_ROOT_PREFIX}{identifier}"),
         Path(f"{CGROUP_ROOT_PREFIX}{identifier}"),
     )
@@ -1956,7 +1961,10 @@ def path_occurrences(path: Path) -> tuple[NamespaceOccurrence, ...]:
 def task_runtime_authority_roster() -> tuple[str, ...]:
     authorities: list[str] = []
     for parent, patterns in (
-        (RUNTIME_PARENT, (RUNTIME_ROOT_NAME, SOCKET_ROOT_NAME)),
+        (
+            RUNTIME_PARENT,
+            (RUNTIME_ROOT_NAME, RUNTIME_REMOVAL_ROOT_NAME, SOCKET_ROOT_NAME),
+        ),
         (Path("/sys/fs/cgroup"), (CGROUP_ROOT_NAME,)),
         (Path("/tmp"), (LEGACY_TMP_RUNTIME_NAME,)),
     ):

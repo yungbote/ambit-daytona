@@ -175,16 +175,20 @@ sandbox journeys.
 Runtime-root cleanup carries the supervisor namespace's source coordinates
 across every observed namespace as well. Before daemon start, immutable
 `runtime-netns-baseline.json` records the preexisting host-network-namespace
-source and its canonical ambient occurrences, including the normal host
-Docker's legitimate `default` bind. Shutdown first revokes new API admission,
+source and its canonical ambient target set, including the normal host
+Docker's legitimate `default` bind. Mount-namespace IDs remain observations,
+not durable ambient identity, so a freshly unshared stop helper may inherit an
+admitted target without changing authority. Shutdown first revokes new API admission,
 then publishes `runtime-netns-detach.json` before signaling either daemon. The
 detach authority binds baseline/control/stopping digests, boot,
-state/runtime/namespace identities, and each task target plus typed source
-coordinate. Before unmount, current occurrences must equal the stored ambient
-baseline plus the exact owned target; afterward they must return exactly to
-the baseline. Sources absent from the baseline retain the one-owned/zero-after
-rule. Same-process retry and external recovery consume the same stored anchors
-and repeat aggregate baseline equality immediately before runtime-tree deletion.
+state/runtime/namespace identities, each task target and typed source
+coordinate, plus every owned occurrence at that target. Before unmount, every
+occurrence target must belong to the stored ambient target set or the exact
+runtime target, and the recorded supervisor occurrence must exist; afterward
+only the ambient target set may remain. Sources absent from the baseline retain
+the owned-target/zero-after rule. Same-process retry and external recovery
+consume the same stored anchors and repeat aggregate target-set equality
+immediately before runtime-tree deletion.
 A surviving external bind therefore cannot disappear from the proof merely
 because its original source mount was removed. If an abrupt death leaves task
 entries but no live representative from which to author the first manifest,
@@ -230,8 +234,10 @@ root stopping intent, so every later daemon/socket/storage cutpoint is
 classifiable. Dead-supervisor recovery publishes the same stopping authority
 after exact death proof and before its first cgroup or socket mutation. It
 classifies the current socket first, freezes and proves a populated target
-cgroup, publishes or validates the baseline and detach authorities at that
-frozen cutoff, and only then uses `cgroup.kill`. Normal shutdown removes the
+cgroup, reclassifies the now-stable socket cutpoint, publishes or validates the
+baseline and detach authorities, and only then uses `cgroup.kill`. A stopping
+authority admits the reducer's exact intermediate empty socket root while a
+present socket still requires its recorded identity. Normal shutdown removes the
 caller socket, publishes the detach roster while source mounts still exist,
 drains dockerd and containerd, cleans task network namespaces, deactivates
 storage, writes a root stop
@@ -248,6 +254,17 @@ root receipt, image, target, outer daemon roots, and empty authority root, then
 remove the durable claim last. No boot unit,
 shared daemon config, global `/home` propagation mutation, or namespace bind
 pin is installed.
+
+Runtime-tree deletion has its own crash classification boundary. Only after
+all runtime proofs pass does the reducer atomically rename the exact root to
+`/run/ambit-c16b-docker-removing-<state-hash>` and fsync `/run`. Internal files
+may then disappear in any order: retry recognizes the one exact removing name
+and reduces any remaining admitted roster without depending on manifests it
+is deleting. Startup, stop, and storage deletion treat a removing root as live
+authority until its final parent-relative `rmdir` and fsync complete. The same
+recovery dispatch then classifies and settles the exact absent-runtime socket
+and cgroup boundaries before it can return, so a crash between the final tree
+removal and cgroup removal re-enters the ordinary pre-control reducer.
 
 The rendered Compose environment is a closed per-service key roster. Every
 network endpoint used by the API, proxy, or runner is pinned to loopback or an
