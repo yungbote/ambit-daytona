@@ -209,6 +209,7 @@ CGROUP_NAME_RE = re.compile(r"^ambit-c16b-docker-[0-9a-f]{12}$")
 LIBC = ctypes.CDLL(None, use_errno=True)
 RENAME_NOREPLACE = 1
 AT_EMPTY_PATH = 0x1000
+PIDFD_THREAD = os.O_EXCL
 NETLINK_SOCK_DIAG = 4
 SOCK_DIAG_BY_FAMILY = 20
 NLM_F_REQUEST = 0x1
@@ -631,6 +632,108 @@ def pidfd_exited(pidfd: int) -> bool:
     return bool(poller.poll(0))
 
 
+def process_task_coordinates_once() -> tuple[tuple[int, int], ...]:
+    """Enumerate every visible task, including non-leader Linux threads."""
+    result: set[tuple[int, int]] = set()
+    for entry in sorted(os.listdir("/proc")):
+        if not entry.isdigit():
+            continue
+        thread_group_id = int(entry)
+        task_root = Path("/proc") / entry / "task"
+        try:
+            task_ids = tuple(os.listdir(task_root))
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        except PermissionError as error:
+            raise ManualRecoveryRequired(
+                f"process task roster is unreadable: {thread_group_id}"
+            ) from error
+        for task in task_ids:
+            require(task.isdigit(), f"process task identifier is invalid: {task}")
+            result.add((thread_group_id, int(task)))
+    return tuple(sorted(result))
+
+
+@dataclass
+class CapturedTask:
+    thread_group_id: int
+    task_id: int
+    pidfd: int
+    process_fd: int
+    parent_pid: int
+    start_ticks: int
+
+    def close(self) -> None:
+        os.close(self.process_fd)
+        os.close(self.pidfd)
+
+
+def capture_task(thread_group_id: int, task_id: int) -> CapturedTask | None:
+    require(
+        thread_group_id > 0 and task_id > 0,
+        "process task coordinate is invalid",
+    )
+    require(hasattr(os, "pidfd_open"), "thread pidfd custody is unavailable")
+    try:
+        pidfd = os.pidfd_open(task_id, PIDFD_THREAD)
+    except OSError as error:
+        if error.errno == errno.ESRCH:
+            return None
+        raise
+    process_fd: int | None = None
+    keep = False
+    try:
+        if pidfd_exited(pidfd):
+            return None
+        task_path = Path("/proc") / str(thread_group_id) / "task" / str(task_id)
+        try:
+            process_fd = os.open(
+                task_path,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            )
+            observed = os.fstat(process_fd)
+            literal = os.stat(task_path, follow_symlinks=False)
+            status = read_at(process_fd, "status").decode("ascii", "strict")
+            fields = {
+                line.split(":", 1)[0]: line.split(":", 1)[1].strip()
+                for line in status.splitlines()
+                if ":" in line
+            }
+            parent_pid, start_ticks = stat_identity(read_at(process_fd, "stat"))
+        except (FileNotFoundError, ProcessLookupError):
+            if pidfd_exited(pidfd):
+                return None
+            raise ManualRecoveryRequired(
+                f"live process task disappeared: {thread_group_id}/{task_id}"
+            )
+        except PermissionError as error:
+            raise ManualRecoveryRequired(
+                f"live process task is unreadable: {thread_group_id}/{task_id}"
+            ) from error
+        require(
+            fields.get("Tgid") == str(thread_group_id)
+            and fields.get("Pid") == str(task_id)
+            and (literal.st_dev, literal.st_ino)
+            == (observed.st_dev, observed.st_ino)
+            and not pidfd_exited(pidfd),
+            f"process task identity changed: {thread_group_id}/{task_id}",
+        )
+        keep = True
+        return CapturedTask(
+            thread_group_id,
+            task_id,
+            pidfd,
+            process_fd,
+            parent_pid,
+            start_ticks,
+        )
+    finally:
+        if process_fd is not None and not keep:
+            os.close(process_fd)
+        if not keep:
+            os.close(pidfd)
+
+
 @dataclass(frozen=True)
 class CapturedProcess:
     authority: dict[str, object]
@@ -903,11 +1006,6 @@ def mount_references(
     )
 
 
-def mount_namespace_key(pid: int) -> str:
-    observed = os.stat(f"/proc/{pid}/ns/mnt")
-    return f"{observed.st_dev}:{observed.st_ino}"
-
-
 def global_mount_roster_once(
     root: Path,
     anchors: tuple[tuple[str, str], ...] | None = None,
@@ -916,43 +1014,45 @@ def global_mount_roster_once(
     tuple[tuple[str, str], ...],
     tuple[tuple[str, tuple[MountRecord, ...]], ...],
 ]:
-    own_pid = os.getpid()
     own_raw = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
     actual_anchors = source_anchors(own_raw, root) if anchors is None else anchors
     require(actual_anchors, f"mount source anchors are absent: {root}")
-    seen: dict[str, tuple[MountRecord, ...]] = {
-        mount_namespace_key(own_pid): mount_reference_records(
-            own_raw, root, actual_anchors, extra_targets
-        )
-    }
-    for entry in sorted(os.listdir("/proc")):
-        if not entry.isdigit():
+    seen: dict[str, tuple[MountRecord, ...]] = {}
+    for thread_group_id, task_id in process_task_coordinates_once():
+        task = capture_task(thread_group_id, task_id)
+        if task is None:
             continue
-        pid = int(entry)
-        if pid == own_pid:
-            continue
-        namespace_path = f"/proc/{pid}/ns/mnt"
         try:
-            before = os.stat(namespace_path)
-            raw = Path(f"/proc/{pid}/mountinfo").read_text(encoding="utf-8")
-            after = os.stat(namespace_path)
-        except (FileNotFoundError, ProcessLookupError):
-            continue
-        except PermissionError as error:
-            raise ManualRecoveryRequired(f"mount namespace is unreadable: {pid}") from error
-        require(
-            (before.st_dev, before.st_ino) == (after.st_dev, after.st_ino),
-            f"mount namespace changed during proof: {pid}",
-        )
-        namespace = f"{before.st_dev}:{before.st_ino}"
-        targets = mount_reference_records(raw, root, actual_anchors, extra_targets)
-        if namespace in seen:
-            manual(
-                seen[namespace] == targets,
-                f"mount namespace visibility differs across representatives: {namespace}",
+            before = namespace_identity(task.process_fd, "mnt")
+            raw = read_at(
+                task.process_fd,
+                "mountinfo",
+                maximum=16 * 1024 * 1024,
+            ).decode("utf-8", "strict")
+            after = namespace_identity(task.process_fd, "mnt")
+            require(
+                before == after and not pidfd_exited(task.pidfd),
+                "mount namespace changed during proof: "
+                f"{thread_group_id}/{task_id}",
             )
-        else:
-            seen[namespace] = targets
+            namespace = f"{before['device']}:{before['inode']}"
+            targets = mount_reference_records(
+                raw,
+                root,
+                actual_anchors,
+                extra_targets,
+            )
+            if namespace in seen:
+                manual(
+                    seen[namespace] == targets,
+                    "mount namespace visibility differs across representatives: "
+                    + namespace,
+                )
+            else:
+                seen[namespace] = targets
+        finally:
+            task.close()
+    require(seen, "no process task mount namespace was visible")
     return actual_anchors, tuple(sorted(seen.items()))
 
 
@@ -1241,32 +1341,75 @@ def related_unix_socket_inodes(
 
 def socket_inode_owners(inodes: set[int]) -> dict[int, tuple[int, ...]]:
     owners: dict[int, set[int]] = {inode: set() for inode in inodes}
-    for entry in sorted(os.listdir("/proc")):
-        if not entry.isdigit():
+    for thread_group_id, task_id in process_task_coordinates_once():
+        task = capture_task(thread_group_id, task_id)
+        if task is None:
             continue
-        pid = int(entry)
-        fd_root = Path("/proc") / entry / "fd"
         try:
-            names = tuple(os.listdir(fd_root))
-        except (FileNotFoundError, ProcessLookupError):
-            continue
-        except PermissionError as error:
-            raise ManualRecoveryRequired(f"process fd table is unreadable: {pid}") from error
-        for name in names:
             try:
-                target = os.readlink(fd_root / name)
+                fd_root = os.open(
+                    "fd",
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=task.process_fd,
+                )
             except (FileNotFoundError, ProcessLookupError):
-                continue
+                if pidfd_exited(task.pidfd):
+                    continue
+                raise ManualRecoveryRequired(
+                    "live process task FD table disappeared: "
+                    f"{thread_group_id}/{task_id}"
+                )
             except PermissionError as error:
                 raise ManualRecoveryRequired(
-                    f"process socket FD is unreadable: {pid}/{name}"
+                    "process task FD table is unreadable: "
+                    f"{thread_group_id}/{task_id}"
                 ) from error
-            match = re.fullmatch(r"socket:\[([1-9][0-9]*)\]", target)
-            if match is None:
-                continue
-            inode = int(match.group(1))
-            if inode in owners:
-                owners[inode].add(pid)
+            try:
+                for name in tuple(os.listdir(fd_root)):
+                    try:
+                        observed = os.stat(name, dir_fd=fd_root)
+                        target = os.readlink(name, dir_fd=fd_root)
+                    except (FileNotFoundError, ProcessLookupError):
+                        continue
+                    except PermissionError as error:
+                        raise ManualRecoveryRequired(
+                            "process task socket FD is unreadable: "
+                            f"{thread_group_id}/{task_id}/{name}"
+                        ) from error
+                    match = re.fullmatch(r"socket:\[([1-9][0-9]*)\]", target)
+                    if match is not None and int(match.group(1)) in owners:
+                        owners[int(match.group(1))].add(thread_group_id)
+                    try:
+                        stable = os.stat(name, dir_fd=fd_root)
+                    except (FileNotFoundError, ProcessLookupError):
+                        if pidfd_exited(task.pidfd):
+                            break
+                        raise ManualRecoveryRequired(
+                            "process task socket FD changed: "
+                            f"{thread_group_id}/{task_id}/{name}"
+                        )
+                    require(
+                        (
+                            stable.st_dev,
+                            stable.st_ino,
+                            stat.S_IFMT(stable.st_mode),
+                        )
+                        == (
+                            observed.st_dev,
+                            observed.st_ino,
+                            stat.S_IFMT(observed.st_mode),
+                        ),
+                        "process task socket FD changed: "
+                        f"{thread_group_id}/{task_id}/{name}",
+                    )
+            finally:
+                os.close(fd_root)
+            require(
+                not pidfd_exited(task.pidfd),
+                f"process task exited during socket ownership proof: {task_id}",
+            )
+        finally:
+            task.close()
     return {inode: tuple(sorted(values)) for inode, values in owners.items()}
 
 
@@ -1625,35 +1768,28 @@ def _structured_argument_relations(raw: bytes) -> set[str]:
 
 
 def process_reference_scan(
-    pid: int,
+    thread_group_id: int,
+    task_id: int | None = None,
     *,
     runtime_inodes: set[tuple[int, int]],
     socket_inodes: set[int],
     private_namespace_tokens: set[str],
     admitted_namespace_tokens: set[str],
 ) -> ProcessReferenceObservation | None:
-    try:
-        pidfd = os.pidfd_open(pid, 0)
-    except OSError as error:
-        if error.errno == errno.ESRCH:
-            return None
-        raise
-    process_fd: int | None = None
+    actual_task_id = thread_group_id if task_id is None else task_id
+    task = capture_task(thread_group_id, actual_task_id)
+    if task is None:
+        return None
     keep = False
     try:
-        if pidfd_exited(pidfd):
-            return None
         try:
-            process_fd = os.open(
-                Path("/proc") / str(pid),
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-            )
-            first_parent, first_start = stat_identity(read_at(process_fd, "stat"))
-            raw_arguments = read_at(process_fd, "cmdline")
-            cgroup = read_at(process_fd, "cgroup").decode("ascii", "strict")
+            first_parent = task.parent_pid
+            first_start = task.start_ticks
+            raw_arguments = read_at(task.process_fd, "cmdline")
+            cgroup = read_at(task.process_fd, "cgroup").decode("ascii", "strict")
             relations = _structured_argument_relations(raw_arguments)
             namespaces = {
-                name: namespace_identity(process_fd, name)
+                name: namespace_identity(task.process_fd, name)
                 for name in ("mnt", "net", "pid", "user")
             }
             namespace_tokens = {
@@ -1664,19 +1800,21 @@ def process_reference_scan(
                 relations.add("privateRuntimeNamespace")
             for label, name in (("cwd", "cwd"), ("root", "root"), ("exe", "exe")):
                 try:
-                    target = os.readlink(name, dir_fd=process_fd)
-                    observed = os.stat(name, dir_fd=process_fd)
+                    target = os.readlink(name, dir_fd=task.process_fd)
+                    observed = os.stat(name, dir_fd=task.process_fd)
                 except FileNotFoundError:
-                    if pidfd_exited(pidfd):
+                    if pidfd_exited(task.pidfd):
                         return None
                     if not raw_arguments:
                         continue
                     raise ManualRecoveryRequired(
-                        f"live process {label} edge disappeared: {pid}"
+                        "live process task edge disappeared: "
+                        f"{thread_group_id}/{actual_task_id}/{label}"
                     )
                 except PermissionError as error:
                     raise ManualRecoveryRequired(
-                        f"live process {label} edge is unreadable: {pid}"
+                        "live process task edge is unreadable: "
+                        f"{thread_group_id}/{actual_task_id}/{label}"
                     ) from error
                 normalized = target.removesuffix(" (deleted)")
                 if path_at_or_below(normalized, str(EXPECTED_RUNTIME_ROOT)):
@@ -1687,19 +1825,21 @@ def process_reference_scan(
                 fd_directory = os.open(
                     "fd",
                     os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                    dir_fd=process_fd,
+                    dir_fd=task.process_fd,
                 )
             except FileNotFoundError:
-                if pidfd_exited(pidfd):
+                if pidfd_exited(task.pidfd):
                     return None
                 if raw_arguments:
                     raise ManualRecoveryRequired(
-                        f"live process fd table disappeared: {pid}"
+                        "live process task FD table disappeared: "
+                        f"{thread_group_id}/{actual_task_id}"
                     )
                 fd_directory = None
             except PermissionError as error:
                 raise ManualRecoveryRequired(
-                    f"live process fd table is unreadable: {pid}"
+                    "live process task FD table is unreadable: "
+                    f"{thread_group_id}/{actual_task_id}"
                 ) from error
             if fd_directory is not None:
                 try:
@@ -1711,7 +1851,8 @@ def process_reference_scan(
                             continue
                         except PermissionError as error:
                             raise ManualRecoveryRequired(
-                                f"live process fd edge is unreadable: {pid}"
+                                "live process task FD edge is unreadable: "
+                                f"{thread_group_id}/{actual_task_id}"
                             ) from error
                         if (observed.st_dev, observed.st_ino) in runtime_inodes:
                             relations.add("runtimeFdInode")
@@ -1739,22 +1880,24 @@ def process_reference_scan(
                         try:
                             stable = os.stat(fd_name, dir_fd=fd_directory)
                         except (FileNotFoundError, ProcessLookupError):
-                            if pidfd_exited(pidfd):
+                            if pidfd_exited(task.pidfd):
                                 return None
                             raise ManualRecoveryRequired(
-                                f"live process fd edge changed: {pid}"
+                                "live process task FD edge changed: "
+                                f"{thread_group_id}/{actual_task_id}"
                             )
                         require(
                             (stable.st_dev, stable.st_ino, stat.S_IFMT(stable.st_mode))
                             == (observed.st_dev, observed.st_ino, stat.S_IFMT(observed.st_mode)),
-                            f"live process fd edge changed: {pid}",
+                            "live process task FD edge changed: "
+                            f"{thread_group_id}/{actual_task_id}",
                         )
                 finally:
                     os.close(fd_directory)
             try:
-                maps = read_at(process_fd, "maps", maximum=16 * 1024 * 1024)
+                maps = read_at(task.process_fd, "maps", maximum=16 * 1024 * 1024)
             except (FileNotFoundError, ProcessLookupError):
-                if pidfd_exited(pidfd):
+                if pidfd_exited(task.pidfd):
                     return None
                 maps = b""
             if str(EXPECTED_RUNTIME_ROOT).encode() in maps:
@@ -1766,30 +1909,36 @@ def process_reference_scan(
             }
             if EXPECTED_CONTAINER_ID in cgroup_components:
                 relations.add("containerCgroup")
-            second_parent, second_start = stat_identity(read_at(process_fd, "stat"))
+            second_parent, second_start = stat_identity(
+                read_at(task.process_fd, "stat")
+            )
             require(
                 (first_parent, first_start) == (second_parent, second_start)
-                and not pidfd_exited(pidfd),
-                f"process reference scan changed: {pid}",
+                and not pidfd_exited(task.pidfd),
+                "process task reference scan changed: "
+                f"{thread_group_id}/{actual_task_id}",
             )
             row = {
-                "pid": pid,
+                "pid": thread_group_id,
+                "taskId": actual_task_id,
                 "parentPid": first_parent,
                 "startTimeTicks": first_start,
                 "namespaces": namespaces,
                 "relations": sorted(relations),
             }
             keep = True
-            return ProcessReferenceObservation(row, pidfd, process_fd)
+            return ProcessReferenceObservation(
+                row,
+                task.pidfd,
+                task.process_fd,
+            )
         except (FileNotFoundError, ProcessLookupError):
-            if pidfd_exited(pidfd):
+            if pidfd_exited(task.pidfd):
                 return None
             raise
     finally:
-        if process_fd is not None and not keep:
-            os.close(process_fd)
         if not keep:
-            os.close(pidfd)
+            task.close()
 
 
 def _related_process_universe_once(
@@ -1825,11 +1974,10 @@ def _related_process_universe_once(
     admitted_namespace_tokens = recorded_namespace_tokens | own_namespace_tokens
     observations: list[ProcessReferenceObservation] = []
     try:
-        for entry in sorted(os.listdir("/proc")):
-            if not entry.isdigit():
-                continue
+        for thread_group_id, task_id in process_task_coordinates_once():
             observation = process_reference_scan(
-                int(entry),
+                thread_group_id,
+                task_id,
                 runtime_inodes=runtime_inodes,
                 socket_inodes=socket_inodes,
                 private_namespace_tokens=private_namespace_tokens,
@@ -1837,17 +1985,23 @@ def _related_process_universe_once(
             )
             if observation is not None:
                 observations.append(observation)
-        rows = {int(value.row["pid"]): value.row for value in observations}
-        require(len(rows) == len(observations), "process census contains duplicate PIDs")
-        known_by_pid = {
+        rows = {
+            (int(value.row["pid"]), int(value.row["taskId"])): value.row
+            for value in observations
+        }
+        require(
+            len(rows) == len(observations),
+            "process task census contains a duplicate coordinate",
+        )
+        known_by_tgid = {
             int(value["pid"]): role for role, value in processes.items()
         }
         require(
-            len(known_by_pid) == len(processes),
+            len(known_by_tgid) == len(processes),
             "recorded process authority reuses a PID",
         )
-        for pid, role in known_by_pid.items():
-            row = rows.get(pid)
+        for thread_group_id, role in known_by_tgid.items():
+            row = rows.get((thread_group_id, thread_group_id))
             if row is None:
                 continue
             recorded = processes[role]
@@ -1857,37 +2011,55 @@ def _related_process_universe_once(
                 f"recorded legacy process PID was reused: {role}",
             )
         related = {
-            pid
-            for pid, row in rows.items()
-            if row["relations"] or pid in known_by_pid
+            coordinate
+            for coordinate, row in rows.items()
+            if row["relations"] or coordinate[0] in known_by_tgid
         }
         unclassified_namespaces = sorted(
-            pid
-            for pid, row in rows.items()
+            coordinate
+            for coordinate, row in rows.items()
             if "unclassifiedNamespaceFd" in row["relations"]
         )
         manual(
             not unclassified_namespaces,
-            "an unclassified process-held namespace can hide a mount occurrence: "
-            + ",".join(map(str, unclassified_namespaces)),
+            "an unclassified task-held namespace can hide a mount occurrence: "
+            + ",".join(
+                f"{thread_group_id}/{task_id}"
+                for thread_group_id, task_id in unclassified_namespaces
+            ),
         )
         changed = True
         while changed:
             changed = False
-            for pid, row in rows.items():
-                if int(row["parentPid"]) in related and pid not in related:
-                    related.add(pid)
-                    row["relations"] = sorted((*row["relations"], "descendant"))
+            related_groups = {coordinate[0] for coordinate in related}
+            for coordinate, row in rows.items():
+                same_group = coordinate[0] in related_groups
+                descendant = int(row["parentPid"]) in related_groups
+                if (same_group or descendant) and coordinate not in related:
+                    related.add(coordinate)
+                    relation = "threadGroup" if same_group else "descendant"
+                    row["relations"] = sorted((*row["relations"], relation))
                     changed = True
-        allowed_pids = {int(processes[role]["pid"]) for role in allowed_roles}
-        unknown = sorted(related - allowed_pids)
+        allowed_tgids = {int(processes[role]["pid"]) for role in allowed_roles}
+        unknown = sorted(
+            coordinate
+            for coordinate in related
+            if coordinate[0] not in allowed_tgids
+        )
         manual(
             not unknown,
-            "unrecognized legacy-related process: " + ",".join(map(str, unknown)),
+            "unrecognized legacy-related task: "
+            + ",".join(
+                f"{thread_group_id}/{task_id}"
+                for thread_group_id, task_id in unknown
+            ),
         )
         for role in allowed_roles:
-            pid = int(processes[role]["pid"])
-            manual(pid in rows, f"recorded legacy process is not visible: {role}")
+            thread_group_id = int(processes[role]["pid"])
+            manual(
+                (thread_group_id, thread_group_id) in rows,
+                f"recorded legacy process leader is not visible: {role}",
+            )
         for observation in observations:
             parent_pid, start_ticks = stat_identity(
                 read_at(observation.process_fd, "stat")
@@ -1899,26 +2071,33 @@ def _related_process_universe_once(
                     observation.row["startTimeTicks"],
                 )
                 and not pidfd_exited(observation.pidfd),
-                f"process changed before census commit: {observation.row['pid']}",
+                "process task changed before census commit: "
+                f"{observation.row['pid']}/{observation.row['taskId']}",
             )
-        for pid in sorted(related):
+        for thread_group_id, task_id in sorted(related):
             repeated = process_reference_scan(
-                pid,
+                thread_group_id,
+                task_id,
                 runtime_inodes=runtime_inodes,
                 socket_inodes=socket_inodes,
                 private_namespace_tokens=private_namespace_tokens,
                 admitted_namespace_tokens=admitted_namespace_tokens,
             )
-            manual(repeated is not None, f"related process disappeared during edge reproof: {pid}")
+            manual(
+                repeated is not None,
+                "related process task disappeared during edge reproof: "
+                f"{thread_group_id}/{task_id}",
+            )
             assert repeated is not None
             try:
                 require(
-                    repeated.row == rows[pid],
-                    f"related process edge roster changed before census commit: {pid}",
+                    repeated.row == rows[(thread_group_id, task_id)],
+                    "related process task edge roster changed before census commit: "
+                    f"{thread_group_id}/{task_id}",
                 )
             finally:
                 repeated.close()
-        proof = [rows[pid] for pid in sorted(related)]
+        proof = [rows[coordinate] for coordinate in sorted(related)]
         return {
             "allowedRoles": sorted(allowed_roles),
             "related": proof,
@@ -3113,37 +3292,47 @@ def hold_related_process_cutoff(
         control,
         allowed_roles=allowed_roles,
     )
-    held: list[int] = []
+    held: list[CapturedTask] = []
     try:
-        for role in sorted(allowed_roles):
-            recorded = process_authority(control, role)
-            pid = int(recorded["pid"])
-            try:
-                descriptor = os.pidfd_open(pid, 0)
-            except OSError as error:
-                if error.errno == errno.ESRCH:
-                    raise ManualRecoveryRequired(
-                        f"recorded legacy process left the action cutoff: {role}"
-                    ) from error
-                raise
-            held.append(descriptor)
+        for row in proof["related"]:
+            thread_group_id = int(row["pid"])
+            task_id = int(row["taskId"])
+            task = capture_task(thread_group_id, task_id)
             manual(
-                exact_process_status(recorded) == "exact" and not pidfd_exited(descriptor),
-                f"recorded legacy process changed at the action cutoff: {role}",
+                task is not None,
+                "recorded legacy task left the action cutoff: "
+                f"{thread_group_id}/{task_id}",
             )
-        require_related_process_cutoff(
+            assert task is not None
+            held.append(task)
+            manual(
+                (task.parent_pid, task.start_ticks)
+                == (row["parentPid"], row["startTimeTicks"])
+                and not pidfd_exited(task.pidfd),
+                "recorded legacy task changed at the action cutoff: "
+                f"{thread_group_id}/{task_id}",
+            )
+        committed = require_related_process_cutoff(
             control,
             allowed_roles=allowed_roles,
         )
+        require(
+            committed == proof,
+            "related task universe changed while entering the action cutoff",
+        )
         yield proof
         if revalidate_after:
-            require_related_process_cutoff(
+            final = require_related_process_cutoff(
                 control,
                 allowed_roles=allowed_roles,
             )
+            require(
+                final == proof,
+                "related task universe changed across the action cutoff",
+            )
     finally:
-        for descriptor in held:
-            os.close(descriptor)
+        for task in held:
+            task.close()
 
 
 def exact_process_status(recorded: Mapping[str, object]) -> str:
@@ -4117,6 +4306,11 @@ def _read_regular_at(
         raise
 
 
+def settle_linked_publication_replay(directory_fd: int) -> None:
+    """Make a response-lost directory link durable before FD-relative reproof."""
+    os.fsync(directory_fd)
+
+
 def rename_noreplace_at(
     source_directory_fd: int,
     source_name: str,
@@ -4259,6 +4453,10 @@ def legacy_receipt_state(
     live: tuple[int, os.stat_result, bytes] | None = None
     archive: tuple[int, os.stat_result, bytes] | None = None
     try:
+        # A linked entry may be visible after response loss but not yet durable.
+        # Rebinding this recorded parent, fsyncing it, and only then rereading
+        # makes every archived replay complete the publication before advance.
+        settle_linked_publication_replay(evidence_fd)
         live = _read_regular_at(
             evidence_fd,
             RECEIPT_PATH.name,
@@ -4421,6 +4619,8 @@ def open_or_publish_prepared_archive(
     assert isinstance(authority, dict)
     expected = authority["legacyReceipt"]
     raw = recorded_legacy_receipt_bytes(control)
+    # Complete a prior linkat response-loss cutpoint before trusting the name.
+    settle_linked_publication_replay(evidence_fd)
     existing = _read_regular_at(
         evidence_fd,
         PREPARED_ARCHIVE_PATH.name,
@@ -4450,7 +4650,7 @@ def open_or_publish_prepared_archive(
             evidence_fd,
             PREPARED_ARCHIVE_PATH.name,
         )
-        os.fsync(evidence_fd)
+        settle_linked_publication_replay(evidence_fd)
         prepared = _read_regular_at(
             evidence_fd,
             PREPARED_ARCHIVE_PATH.name,
@@ -4596,6 +4796,7 @@ def read_projection(control: ControlAuthority) -> dict[str, object]:
     state_fd, evidence_fd = recorded_evidence_descriptors(control.control)
     value: tuple[int, os.stat_result, bytes] | None = None
     try:
+        settle_linked_publication_replay(evidence_fd)
         value = _read_regular_at(
             evidence_fd,
             PROJECTION_PATH.name,
@@ -4621,6 +4822,7 @@ def read_projection(control: ControlAuthority) -> dict[str, object]:
 def read_terminal_projection_without_control(
     evidence_fd: int,
 ) -> dict[str, object]:
+    settle_linked_publication_replay(evidence_fd)
     stored = _read_regular_at(
         evidence_fd,
         PROJECTION_PATH.name,
@@ -5014,7 +5216,7 @@ def recover_terminal_archive_without_control() -> dict[str, object]:
                         evidence_fd,
                         PREPARED_ARCHIVE_PATH.name,
                     )
-                    os.fsync(evidence_fd)
+                    settle_linked_publication_replay(evidence_fd)
                 finally:
                     os.close(temporary)
             finally:
@@ -5042,7 +5244,7 @@ def recover_terminal_archive_without_control() -> dict[str, object]:
             evidence_fd,
             ARCHIVE_RECEIPT_PATH.name,
         )
-        os.fsync(evidence_fd)
+        settle_linked_publication_replay(evidence_fd)
         final = _read_regular_at(
             evidence_fd,
             ARCHIVE_RECEIPT_PATH.name,
@@ -5078,6 +5280,8 @@ def write_projection(control: ControlAuthority) -> dict[str, object]:
     temporary_fd: int | None = None
     final_fd: int | None = None
     try:
+        # This also completes an already-visible projection link after a crash.
+        settle_linked_publication_replay(evidence_fd)
         final = _read_regular_at(
             evidence_fd,
             PROJECTION_PATH.name,
@@ -5107,7 +5311,7 @@ def write_projection(control: ControlAuthority) -> dict[str, object]:
         except OSError as error:
             if error.errno != errno.EEXIST:
                 raise
-        os.fsync(evidence_fd)
+        settle_linked_publication_replay(evidence_fd)
         final = _read_regular_at(
             evidence_fd,
             PROJECTION_PATH.name,
@@ -5151,6 +5355,7 @@ def archive_receipt(control: ControlAuthority) -> dict[str, object]:
     temporary_fd: int | None = None
     archived_fd: int | None = None
     try:
+        settle_linked_publication_replay(evidence_fd)
         existing = _read_regular_at(
             evidence_fd,
             ARCHIVE_RECEIPT_PATH.name,
@@ -5193,7 +5398,7 @@ def archive_receipt(control: ControlAuthority) -> dict[str, object]:
             raise ManualRecoveryRequired(
                 "legacy receipt archive destination appeared without replacement"
             ) from error
-        os.fsync(evidence_fd)
+        settle_linked_publication_replay(evidence_fd)
         archived = _read_regular_at(
             evidence_fd,
             ARCHIVE_RECEIPT_PATH.name,

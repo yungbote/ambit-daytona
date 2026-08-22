@@ -278,7 +278,9 @@ resume /home/bote/m/.local/ambit-daytona-c16b/state
 
 `verify-only` writes nothing and authorizes no mutation. It performs two
 stable root-level passes over the exact receipt/config/runtime identities,
-pidfd-stabilized daemon/wrapper/shim/task graph, structured argv/cgroup
+pidfd-stabilized daemon/wrapper/shim/task graph and every visible
+`/proc/<tgid>/task/<tid>` Linux task (including non-leader threads with
+unshared FD or mount-namespace authority), structured argv/cgroup
 relations, runtime paths, mapped files, namespace and socket FDs, descendants,
 Unix socket owners and the netlink Unix-diagnostic peer/pending-client graph
 (including pathless endpoints), every observable mount
@@ -297,7 +299,8 @@ deliberately not a fallback.
 
 The pidfd/edge, socket, and mount rosters are deterministic stable-sample
 proofs, not a claim that Linux freezes every root-capable actor between two
-syscalls. The reducer retains admitted role pidfds, repeats full edge proofs
+syscalls. The reducer retains admitted pidfds for every thread in each
+admitted role's thread group, repeats full edge proofs
 immediately before and after non-signal actions, closes the caller's path
 ingress through root custody, and fails closed on post-action drift. A
 concurrent privileged actor could still create and release a transient edge
@@ -364,8 +367,12 @@ the final authority mutation, followed only by evidence-directory fsync and
 read-only destination reproof. A destination collision is never overwritten;
 an exact legacy digest at both live and archive paths is a manual blocker.
 Archive response loss returns the already stored terminal bytes without
-rewriting state or projection. If a reboot clears the `/run` capsule after the
-projection/prepared boundary, `resume` enters the pinned repository bytes,
+rewriting state or projection, but first rebinds and fsyncs the recorded
+evidence directory and then reproves the exact archive and live-digest
+absence. The same settle-before-reproof rule covers response loss after the
+projection and prepared links, including boot replay. If a reboot clears the
+`/run` capsule after the projection/prepared boundary, `resume` enters the
+pinned repository bytes,
 revalidates the root-owned projection plus prepared original bytes and the
 absent legacy runtime/PIDs, completes the caller-owned tombstone if necessary,
 and performs the same final no-replace link. With a live capsule, `resume` uses
