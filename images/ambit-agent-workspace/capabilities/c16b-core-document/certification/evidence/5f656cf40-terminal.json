@@ -1,0 +1,167 @@
+{
+  "schema": "ambit.runtime-pack-terminal-evidence-index/v1",
+  "classification": "candidate_policy_passed_not_promoted",
+  "packRef": "ambit.runtime-pack/core-document@4",
+  "platform": "linux/amd64",
+  "source": {
+    "repository": "https://github.com/yungbote/ambit-daytona",
+    "revision": "5f656cf40e5d37fb67af8d134ed791187b813211",
+    "tree": "6d29e6d3c5a62252ab3279fd650fa5dddd92da12",
+    "packTree": "db4118b86fde1524bf78114a0a41ed8cbf3df757",
+    "archiveSha256": "4ed7463ba3d8488ce147485076ba1107e5b0d2eb1081ffbacca747dcebfa57f4"
+  },
+  "artifactPacket": {
+    "absolutePath": "/home/bote/m/.artifacts/c17-core-document-pack-20260822/candidate-5f656cf40",
+    "evidenceManifestEntries": 175,
+    "evidenceManifestSha256": "f34f4c6b97361e19fb4969b3c10aadb2754a0d9dc121a917bd2ecc09e45069e1",
+    "evidenceManifestVerification": "passed"
+  },
+  "ociIdentity": {
+    "providerPullIndexDigest": "sha256:57542e34fb60f23add49f7fdb7559ffbfa79bd79ecb97739facf4aab2c9bf4d2",
+    "runtimeCapabilityPackRevisionArtifactDigest": "sha256:a71ac9bcb773a81670c18b1dfdd73bc050f506cdbef7be4f066d0ed8f448379f",
+    "runtimeConfigDigest": "sha256:7b00fb6a1d3e420716cd7e62d7484fd4eebea8d4c1a0f5c9f165e905da4e945c",
+    "attestationManifestDigest": "sha256:389abe9347ba3c084aaa9ab80a0d86ab84e246d446cb011551c0f8dfb94b330b",
+    "sbomLayerDigest": "sha256:dda96a3d0c7a188422403836f3279f70c47a3378c09fc9d61b5d7bdc349c0f6f",
+    "provenanceLayerDigest": "sha256:c465dfd0f1b503d93f53cbb4bfaefa2c86b55d035938df1cea0bf82a66edb852"
+  },
+  "completeOciLayout": {
+    "outcome": "passed",
+    "blobCount": 24,
+    "blobBytes": 45507815,
+    "inheritedDeclaredBaseLayers": 11,
+    "packOwnedRuntimeLayers": 7,
+    "layoutTreeSha256": "1a114e09d145b78039b0d8447e68b814e62fa01f23990a1bd1d98a12b5d125b0",
+    "receiptSha256": "639f4ea9b941aa6cedab79c8cdba0a1286a854913698c894075ebbbabd465f53",
+    "verificationSha256": "1f31b7f169ee41ecb8f0797459e439ce07833f05980205669a5078c3f116c2e1",
+    "declaredBaseManifestDigest": "sha256:df3f0bac868b88029d6071734ea42cd3073d6d99aa840671cbf30af609aadc5d",
+    "recursiveDigestSizeAndReachabilityVerification": "passed",
+    "unreachableOrMissingBlobCount": 0
+  },
+  "reproducibility": {
+    "outcome": "passed",
+    "twoNoCacheBuildsSameRuntimeManifest": true,
+    "receiptSha256": "e0207f56a6616c456aaf572dd0f655a8bde91cd0e37ebba17a819fbbdd66560a"
+  },
+  "helper": {
+    "backendRevision": "6d60ac6cfc1fa6ac8de433972e5be6defd656d81",
+    "backendTree": "a9e546be90ea1e16d2728ddf19af13e4d722a855",
+    "sourceArchiveSha256": "af8db17dc5d7b2266444efc4911661659fdaf23035b7dde0172f29d9e55374ca",
+    "binarySha256": "sha256:8d4405a1bd8f5d9d65be0860e52cab75cc9b7f5f659e510b4932347e0c6008e5",
+    "fileProtocolSha256": "sha256:1274e0bb27dfb15d9d7564d71fc02a7117631b405de73d84f39defb415a5f7ad",
+    "treeProtocolSha256": "sha256:2c3e58eedfa0d268c9844c038baa49d2f896c4f42de783a5d3ee1762d5828e4d",
+    "license": "LicenseRef-Ambit-Proprietary",
+    "providerImplementationOnly": true,
+    "advertisedRuntimeCapability": false
+  },
+  "conformance": {
+    "outcome": "passed",
+    "receiptSha256": "0c018bee141a79c09f1113952bcfa2cb38e4a4a0e1e026c740f07b6cfd3231de",
+    "materializerReceiptSha256": "b1265b16a3bc8ac91cf107a51315c47a51c4ede3ed1bd14ba6b1521386125883",
+    "artifactReceiptSha256": "0386b60eaf89dc4ce94dd1900082703ee8c15d83006b3843159d3c2ae11376b7",
+    "pythonRuntimeReceiptSha256": "64cd0943877d77a281252f3c84df5f64d4d996bc2fd3ed677f05bcbc5b0b8b42",
+    "network": "none",
+    "privilege": "non_root",
+    "linuxCapabilities": "none",
+    "noNewPrivileges": true,
+    "packRoot": "read_only",
+    "workspaceFilesystem": "tmpfs",
+    "full32MiBFramedChannel": "passed",
+    "treeEntryCount": 4096,
+    "treeCrashStagedBytes": 143360,
+    "treeRecoverableResumeFinal": "passed",
+    "treeIntentXattr": "passed",
+    "treeRenameNoReplace": "passed",
+    "derivedHtmlPreview": "diagnostic_non_layout_authoritative"
+  },
+  "providerTransport": {
+    "daytonaPtyReceiptSha256": "01a6d5e9c596cb88ae34df3f6ae4d3871dbb6af2df3cfce1457acf200f423c4e",
+    "backendProviderAuthorityRevision": "c40ccce7ede55320a74961dd438f26fbff66dba4",
+    "backendProviderTestedRevision": "6d60ac6cfc1fa6ac8de433972e5be6defd656d81",
+    "providerAdapterReceiptRef": "provider-adapter-execution-receipt:sha256:5298a0993dadc20040c5db4d17a0d55038b47008dad51a787fe6b201a1a826b2",
+    "providerAdapterReceiptSha256": "43a72f0b6e90174298aafdcd8e4cd1372e4e7ca2e780b9c2bbc65f8e679d03c7",
+    "providerAdapterVerificationSha256": "5a3887de3a3b6339cec7254452c152f34cf5f53b556aafbd5dbcc9b16c1e540f",
+    "testSuites": 9,
+    "tests": 210,
+    "outcome": "passed"
+  },
+  "candidateProviderLiveGate": {
+    "outcome": "passed",
+    "harnessSha256": "f9eb795c42e1e4e794979e4c72048af767d4eee7508f49e635a97618d230bf4d",
+    "receiptSha256": "3f6dc132e616ffeffc25a52249c37a35ad9478e2ee341b7af8890029ec33fa4c",
+    "stagedPrefixBytesBeforeAbort": 17408,
+    "priorHelperQuiesced": true,
+    "sessionCount": 5,
+    "finalFileCount": 4096,
+    "nestedMountNoXdev": "passed",
+    "containerAndWorkspaceResidue": "absent"
+  },
+  "supplyChainPolicy": {
+    "outcome": "passed",
+    "policyReceiptSha256": "87d80c436d6d94d8e1c6d4a5d7dc4a9728cc4394e9277bd040d932b6c264c80b",
+    "sbomPackages": 55,
+    "rawLicenseNoAssertion": 4,
+    "reviewedLicenseResolutions": 3,
+    "aggregateExclusions": 1,
+    "effectiveUnknownLicenses": 0,
+    "deniedLicenses": 0,
+    "rawVulnerabilities": {
+      "Critical": 2,
+      "High": 8,
+      "Medium": 6
+    },
+    "verifiedVexDispositions": 10,
+    "effectiveVulnerabilities": {
+      "Critical": 0,
+      "High": 0,
+      "Medium": 6,
+      "Unknown": 0
+    },
+    "vulnerabilityReportSha256": "5b7510c6df452f7552ba142feea660648fd1ac0d1084400263a71f2927dbaee9",
+    "vexEvidenceVerificationSha256": "7b27925926b6a404099ff60923fd413f92883337dd4105e543add7de5a08afe4",
+    "grypeDatabaseReceiptSha256": "b0e51e61b470df52c6ad5eb897598e3ad8ee0893071feec0aaf8a694ffa5a208",
+    "imageLayerSecretScanSha256": "bf34e88ebe13fd09998b6ec42ca4df7e62a8ba0e30fe7418749bffcafd5805fd",
+    "imageLayerSecretFindings": 0
+  },
+  "negativeGates": {
+    "rootRuntimeReceiptSha256": "d53a05a64330b00c78804caa10ab0f29e9d57075dae40812952b119ab9a39e04",
+    "hostSocketReceiptSha256": "0c6214cd34d62589435f5ef070c6e4f699672d81dd10365784b1bed8df3309a1",
+    "secretEnvironmentReceiptSha256": "1c128b8c4569be9db209331b653e87cc05b4ba8a7d8e7eec67d95a15e3623f1f",
+    "installerScriptReceiptSha256": "b43c6eed0319ab0463ad4d7defa44cbf3cf2223fb47b76458c61367abebf09a9",
+    "outcome": "passed"
+  },
+  "signature": {
+    "algorithm": "Ed25519",
+    "meaning": "ephemeral local evidence content binding only; not a production publisher identity",
+    "bindingSha256": "d0168dc9275388f3d06a7c0ce763e88b9aa8369acabf982037517776addf8bb4",
+    "signatureSha256": "6d35f66ccdb921dac34f0774f1ee141914fb2e653d8010596ac24760ef8790d4",
+    "verificationReceiptSha256": "416e7aa105bbf2c4969a3172fe739e2a91400d66ec951cf22474ea29f936d79c",
+    "publicKeyPemSha256": "40421160fb373322c60e39a3917c69a12b59a3475da74ff1fa0a3561ed6dba40",
+    "publicKeyDerSha256": "c06b54989f8bb5304ca84b4f033b8acd4eb66f7d82ad4d3b745ed7ab9c99dc00",
+    "verification": "passed",
+    "privateKeyPersisted": false
+  },
+  "releaseDisposition": {
+    "promotionPerformed": false,
+    "mutableTagPublished": false,
+    "runtimeCapabilityPackRevisionRegistered": false,
+    "workspaceRuntimeProfileRevisionRegistered": false,
+    "certifiedDocumentProfileActive": false,
+    "documentSkillV1Active": false,
+    "documentRenderV1Available": false,
+    "candidateCoreAndStructuralDocxQualification": "passed"
+  },
+  "limitations": [
+    "candidate workspace conformance used tmpfs; real Daytona/XFS readiness remains separate",
+    "candidate provider gate used the production framed adapter over a local Docker PTY, not Daytona SDK/WebSocket",
+    "backend full-image profile revision and pack registration are absent",
+    "document.render@1 and CertifiedDocumentProfile remain unavailable until C19 renderer composition",
+    "durable absent outcome-unknown lifecycle quiescence proof remains absent",
+    "load, cache, and checkpoint SLOs remain unmeasured"
+  ],
+  "predecessor": {
+    "packRef": "ambit.runtime-pack/core-document@3",
+    "terminalEvidenceSha256": "058fcb69f5bc8edbbfe21440ff6056a2029447ad44bd7c3d35f47cdef1e6458d",
+    "providerPullIndexDigest": "sha256:2f83db61b3a73aba3ffe3532be796f0922661f3a2643fc0142484ffa37861d99",
+    "disposition": "preserved_immutable_historical_candidate"
+  }
+}
