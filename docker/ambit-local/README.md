@@ -295,6 +295,17 @@ separate v5-owned, exact-empty reconciliation before this drain; teaching the
 legacy reducer to adopt it would cross the authority boundary and is
 deliberately not a fallback.
 
+The pidfd/edge, socket, and mount rosters are deterministic stable-sample
+proofs, not a claim that Linux freezes every root-capable actor between two
+syscalls. The reducer retains admitted role pidfds, repeats full edge proofs
+immediately before and after non-signal actions, closes the caller's path
+ingress through root custody, and fails closed on post-action drift. A
+concurrent privileged actor could still create and release a transient edge
+inside that interval; excluding that requires cgroup freeze or a broader host
+quiescence authority, both deliberately outside this no-cgroup compatibility
+tool. The eventual live drain gate must therefore measure that no such actor
+is running; static tests do not turn this concurrency assumption into a proof.
+
 `drain` recomputes that proof under the same boot-global lease used by v5 and
 requires the caller-supplied verification digest. Its sanitized in-sudo loader
 reads, hashes, compiles, and executes one exact source byte buffer; that same
@@ -337,24 +348,32 @@ enters `archive_intent_final`. It publishes and revalidates the deterministic
 root-owned terminal projection from an unnamed `O_TMPFILE` with
 `linkat(AT_EMPTY_PATH)`, so no caller-owned source name can be swapped into the
 publication. The immutable control retains the exact original receipt bytes.
-The reducer constructs the archive in a second root-owned unnamed file,
+The reducer constructs the archive in a second root-owned unnamed file, links
+and fsyncs it first at the fixed hidden `*.prepared` recovery coordinate,
 descriptor-rewrites the old live inode to a deterministic non-legacy
-tombstone (including partial-tombstone replay), proves that the live path no
-longer has the legacy digest, and links the unnamed exact bytes to
+tombstone (including partial-tombstone replay), returns that tombstone to the
+ordinary caller-owned mode-0600 projection identity accepted by v5 cleanup,
+proves that the live path no longer has the legacy digest, and hard-links the
+held prepared inode to
 `outer-docker-receipt.legacy-v3-c7b6f7f5f77ae556.json`. That no-replace link is
 the final authority mutation, followed only by evidence-directory fsync and
 read-only destination reproof. A destination collision is never overwritten;
 an exact legacy digest at both live and archive paths is a manual blocker.
 Archive response loss returns the already stored terminal bytes without
-rewriting state or projection. `resume` uses the loader-held control-root FD
-and executes the already-read snapshot bytes in-process, never an admitted
-pathname. A timeout or foreign state stops for an explicit manual route; the
-default tool has no force path.
+rewriting state or projection. If a reboot clears the `/run` capsule after the
+projection/prepared boundary, `resume` enters the pinned repository bytes,
+revalidates the root-owned projection plus prepared original bytes and the
+absent legacy runtime/PIDs, completes the caller-owned tombstone if necessary,
+and performs the same final no-replace link. With a live capsule, `resume` uses
+the loader-held control-root FD and executes the already-read snapshot bytes
+in-process, never an admitted pathname. A timeout or foreign state stops for an
+explicit manual route; the default tool has no force path.
 
 The v5 barrier is global across every requested v5 `STATE_ROOT`. V5 recognizes
 only the one literal audited live receipt path and digest, literal reserved
-control path, and literal root-owned terminal archive. Before a terminal
-archive, any occupied audited live path or reserved control path blocks; the
+control path, literal prepared archive, and literal root-owned terminal
+archive. Before a terminal archive, any occupied audited live, prepared, or
+control path blocks; the
 exact legacy digest always blocks even if an archive also exists. After the
 terminal archive, the deterministic non-legacy tombstone or a later v5 receipt
 may occupy the live path without reviving legacy authority. The unnamed-file
