@@ -44,7 +44,7 @@ class AttestationVerifierTest(unittest.TestCase):
         extra_material: bool = False,
         extra_ambit_label: bool = False,
     ) -> dict[str, str]:
-        expected_labels = {"io.ambit.runtime-pack": "ambit.runtime-pack/core-document@3"}
+        expected_labels = {"io.ambit.runtime-pack": "ambit.runtime-pack/core-document@4"}
         actual_labels = dict(expected_labels)
         if extra_ambit_label:
             actual_labels["io.ambit.document.render"] = "document.render@1"

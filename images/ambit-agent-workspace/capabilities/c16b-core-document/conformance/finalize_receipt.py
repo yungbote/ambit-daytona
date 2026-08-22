@@ -68,6 +68,7 @@ receipt = {
         "node_typescript_and_language_intelligence_are_not_in_this_pack",
         "runtime_dependency_installation_is_not_admitted",
         "load_and_checkpoint_slos_not_exercised_by_local_pack_conformance",
+        "real_daytona_xfs_workspace_and_provider_readiness_require_separate_gate",
     ],
 }
 (root / "conformance-receipt.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")

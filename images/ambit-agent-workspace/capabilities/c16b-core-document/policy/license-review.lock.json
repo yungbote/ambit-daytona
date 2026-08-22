@@ -30,8 +30,8 @@
       "disposition": "concluded",
       "concludedLicense": "LicenseRef-Ambit-Proprietary",
       "evidence": {
-        "backendRevision": "03fd4463d84c5236bab9d5d9141af7537a51afe9",
-        "backendTree": "4e2dead7bd994f3783cf8b54428374e26367b21a",
+        "backendRevision": "6d60ac6cfc1fa6ac8de433972e5be6defd656d81",
+        "backendTree": "a9e546be90ea1e16d2728ddf19af13e4d722a855",
         "licenseLockSha256": "710d581169c105538897e9b6a719c47d437ceaeb980784e7996f8227264cc89c",
         "noticeSha256": "ebda4883114f2939d766c552df33881f40da5710f6af5abbfe31a92c73070aff"
       }
@@ -46,7 +46,7 @@
       "disposition": "concluded",
       "concludedLicense": "BSD-3-Clause",
       "evidence": {
-        "backendRevision": "03fd4463d84c5236bab9d5d9141af7537a51afe9",
+        "backendRevision": "6d60ac6cfc1fa6ac8de433972e5be6defd656d81",
         "licenseLockSha256": "710d581169c105538897e9b6a719c47d437ceaeb980784e7996f8227264cc89c",
         "moduleSum": "h1:vz/seA0lnX87Othu2f/0L24RcgrXD9/YFTSuGjj3rH8=",
         "licenseTextSha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"

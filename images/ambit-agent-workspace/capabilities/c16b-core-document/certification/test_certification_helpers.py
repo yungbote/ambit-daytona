@@ -21,6 +21,8 @@ PROVIDER_SUITES = [
     "src/agent-workspaces/runtime-capabilities/runtime-capability-full-image-materialization.authority.spec.ts",
     "src/agent-workspaces/daytona/daytona-agent-workspace.provider.spec.ts",
     "src/agent-workspaces/agent-workspace-runtime.module.spec.ts",
+    "src/skills/runtime/skill-workspace-materialization.service.spec.ts",
+    "src/skills/runtime/skill-runtime.service.spec.ts",
 ]
 PROVIDER_COVERAGE = {
     name: True
@@ -38,6 +40,10 @@ PROVIDER_COVERAGE = {
         "preReadyNoiseBounded",
         "sequential64KiBChunks",
         "timeouts",
+        "treeClosedWorld",
+        "treeCrashRecovery",
+        "treeHelperQuiescence",
+        "treeReadOnlyActivation",
         "truncation",
         "zeroEcho",
     )
@@ -186,6 +192,7 @@ class ProviderAdapterReceiptTest(unittest.TestCase):
         self.output = self.root / "verification.json"
         self.helper_binary = "1" * 64
         self.protocol = "2" * 64
+        self.tree_protocol = "3" * 64
         self.helper_lock.write_text(
             json.dumps(
                 {
@@ -193,11 +200,12 @@ class ProviderAdapterReceiptTest(unittest.TestCase):
                     "tree": self.trees[0],
                     "binary": {"sha256": self.helper_binary},
                     "protocolSha256": self.protocol,
+                    "treeProtocolSha256": self.tree_protocol,
                 }
             )
         )
         self.write_toolchain(current=self.commits[4])
-        self.raw_log.write_text("Test Suites: 7 passed, 7 total\nTests:       145 passed, 145 total\n")
+        self.raw_log.write_text("Test Suites: 9 passed, 9 total\nTests:       210 passed, 210 total\n")
         self.write_receipt()
 
     def tearDown(self) -> None:
@@ -209,9 +217,9 @@ class ProviderAdapterReceiptTest(unittest.TestCase):
                 {
                     "atomicMaterializer": {
                         "protocolAuthorityCommit": self.commits[1],
-                        "providerAdapterBaselineCommit": self.commits[2],
+                        "providerAdapterAuthorityCommit": self.commits[2],
                         "admissionFenceCommit": self.commits[3],
-                        "providerAdapterCommit": current,
+                        "providerTestedSourceCommit": current,
                     }
                 }
             )
@@ -234,25 +242,27 @@ class ProviderAdapterReceiptTest(unittest.TestCase):
             "helper": {
                 "binarySha256": f"sha256:{self.helper_binary}",
                 "protocolSha256": f"sha256:{self.protocol}",
+                "treeProtocolSha256": f"sha256:{self.tree_protocol}",
                 "revision": self.commits[0],
                 "tree": self.trees[0],
             },
             "kind": "provider_adapter_execution_receipt",
             "outcome": "passed",
-            "providerAdapterRevision": self.commits[4],
+            "providerAdapterAuthorityRevision": self.commits[2],
+            "providerTestedSourceRevision": self.commits[4],
             "rawLog": {
                 "bytes": self.raw_log.stat().st_size,
                 "name": self.raw_log.name,
                 "sha256": f"sha256:{hashlib.sha256(self.raw_log.read_bytes()).hexdigest()}",
             },
-            "schema": "ambit.provider-adapter-execution-receipt/v1",
+            "schema": "ambit.provider-adapter-execution-receipt/v2",
             "sourceRepository": "github.com/yungbote/m-backend",
             "sourceRevision": self.commits[4],
             "sourceTree": self.trees[4],
             "suiteRoster": PROVIDER_SUITES,
-            "testCount": 145,
-            "testSuiteCount": 7,
-            "version": 1,
+            "testCount": 210,
+            "testSuiteCount": 9,
+            "version": 2,
         }
         canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
         body["receiptRef"] = (
@@ -307,7 +317,7 @@ class ProviderAdapterReceiptTest(unittest.TestCase):
         self.write_toolchain(current=self.commits[2])
         result = self.run_verifier()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("does not select provider successor", result.stderr)
+        self.assertIn("does not select tested provider source", result.stderr)
 
 
 if __name__ == "__main__":

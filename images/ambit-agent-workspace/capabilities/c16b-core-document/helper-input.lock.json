@@ -1,29 +1,30 @@
 {
-  "schema": "ambit.runtime-pack-helper-input-lock/v1",
+  "schema": "ambit.runtime-pack-helper-input-lock/v2",
   "repository": "https://github.com/yungbote/m-backend",
-  "revision": "03fd4463d84c5236bab9d5d9141af7537a51afe9",
-  "tree": "4e2dead7bd994f3783cf8b54428374e26367b21a",
+  "revision": "6d60ac6cfc1fa6ac8de433972e5be6defd656d81",
+  "tree": "a9e546be90ea1e16d2728ddf19af13e4d722a855",
   "path": "runtime/agent-workspace-atomic-materializer",
   "modulePath": "github.com/yungbote/m-backend/runtime/agent-workspace-atomic-materializer",
   "archive": {
     "layout": "commit-scoped-full-path",
-    "command": "git archive --format=tar 03fd4463d84c5236bab9d5d9141af7537a51afe9 -- runtime/agent-workspace-atomic-materializer",
-    "sha256": "700f38a8f0b6ea02b9761e8dd1547bdf93fd2a7e1420e2a482f7b89ce8a0425b"
+    "command": "git archive --format=tar 6d60ac6cfc1fa6ac8de433972e5be6defd656d81 -- runtime/agent-workspace-atomic-materializer",
+    "sha256": "af8db17dc5d7b2266444efc4911661659fdaf23035b7dde0172f29d9e55374ca"
   },
   "inputs": {
-    "sourceManifestSha256": "90cb7ec58bcdeb6f7b4f7ae769caeaa4957e7d3f4cc1b5ad7bde3f0aaec8e0c6",
-    "buildLockSha256": "bb183c43dde9142e29173068adf8a91978a44c2a62a41c1212d01ce32c848ab1",
-    "binaryManifestSha256": "bcbe8216844868bf9c5801342e0d4f1799abecfb0bae4851a5bf6819cf245263",
+    "sourceManifestSha256": "b19d59ac0c0c35108ab7c6cf410c53815b56926976ab3be0d6cc400730d971b4",
+    "buildLockSha256": "4648877e3408f215960c99a1f5dd971cb08290202c59389cd4157f52133b87ec",
+    "binaryManifestSha256": "ff0d0200b99a6e1ba9f2f2ca75815304c1bc929d4fe1ff1c8eb255270ac0f9ab",
     "licenseLockSha256": "710d581169c105538897e9b6a719c47d437ceaeb980784e7996f8227264cc89c",
     "noticeSha256": "ebda4883114f2939d766c552df33881f40da5710f6af5abbfe31a92c73070aff"
   },
   "binary": {
-    "bytes": 2314388,
-    "sha256": "09e0d936c23d7625af9f67c09b703ed41135b185c3822a98f1f62cd401ded3ed"
+    "bytes": 2568340,
+    "sha256": "8d4405a1bd8f5d9d65be0860e52cab75cc9b7f5f659e510b4932347e0c6008e5"
   },
   "license": {
     "packageLicenseField": "UNLICENSED",
     "spdxLicenseExpression": "LicenseRef-Ambit-Proprietary"
   },
-  "protocolSha256": "1274e0bb27dfb15d9d7564d71fc02a7117631b405de73d84f39defb415a5f7ad"
+  "protocolSha256": "1274e0bb27dfb15d9d7564d71fc02a7117631b405de73d84f39defb415a5f7ad",
+  "treeProtocolSha256": "2c3e58eedfa0d268c9844c038baa49d2f896c4f42de783a5d3ee1762d5828e4d"
 }

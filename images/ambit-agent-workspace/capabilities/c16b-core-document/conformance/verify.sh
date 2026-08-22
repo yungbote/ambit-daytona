@@ -47,12 +47,13 @@ ps --version | grep -F 'procps-ng 4.0.7' >/dev/null
 sed --version | grep -F 'sed (GNU sed) 4.10' >/dev/null
 test "$(command -v ambit-atomic-materialize)" = "${pack_root}/bin/ambit-atomic-materialize"
 
-python3 - "${pack_root}" "${output_root}/python-runtime-receipt.json" "${helper_source_root}" <<'PY'
+python3 - "${pack_root}" "${output_root}/python-runtime-receipt.json" "${helper_source_root}" "${source_root}" <<'PY'
 import hashlib
 import importlib.metadata
 import importlib.util
 import json
 import pathlib
+import stat
 import sys
 
 from lxml import etree
@@ -60,9 +61,20 @@ from lxml import etree
 pack_root = pathlib.Path(sys.argv[1])
 receipt_path = pathlib.Path(sys.argv[2])
 helper_source_root = pathlib.Path(sys.argv[3])
+pack_source_root = pathlib.Path(sys.argv[4])
 lock = json.loads((helper_source_root / "materializer.lock.json").read_text())
+toolchain = json.loads((pack_source_root / "toolchain-manifest.json").read_text())
 helper = pack_root / "bin" / "ambit-atomic-materialize"
+helper_metadata = helper.lstat()
+assert stat.S_ISREG(helper_metadata.st_mode) and not helper.is_symlink()
+assert stat.S_IMODE(helper_metadata.st_mode) == 0o555
+assert helper_metadata.st_uid == 0 and helper_metadata.st_gid == 0
+assert helper_metadata.st_nlink == 1
 assert hashlib.sha256(helper.read_bytes()).hexdigest() == lock["binary"]["sha256"]
+materializer = toolchain["atomicMaterializer"]
+assert materializer["binarySha256"] == lock["binary"]["sha256"]
+assert materializer["protocolDigest"] == lock["protocol"]["digest"]
+assert materializer["treeProtocolDigest"] == lock["protocol"]["treeDigest"]
 versions = {
     name: importlib.metadata.version(name)
     for name in ("cobble", "lxml", "mammoth", "python-docx", "typing-extensions")
@@ -89,6 +101,14 @@ receipt_path.write_text(
             },
             "runtimeInstallers": "absent",
             "helperSha256": lock["binary"]["sha256"],
+            "helperProtocolDigest": materializer["protocolDigest"],
+            "helperTreeProtocolDigest": materializer["treeProtocolDigest"],
+            "helperIdentity": {
+                "mode": "0555",
+                "uid": helper_metadata.st_uid,
+                "gid": helper_metadata.st_gid,
+                "linkCount": helper_metadata.st_nlink,
+            },
         },
         indent=2,
         sort_keys=True,

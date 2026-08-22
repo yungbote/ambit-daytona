@@ -49,12 +49,12 @@ exact Git archive; no Daytona duplicate or repository-wide relicensing remains.
 
 `/opt/ambit/runtime-pack/core-document/bin/ambit-atomic-materialize` is a
 deterministic, statically linked Go 1.25.13 helper. It is built from backend
-commit `03fd4463d84c5236bab9d5d9141af7537a51afe9`, subtree
-`4e2dead7bd994f3783cf8b54428374e26367b21a`, and exact commit-scoped
+commit `6d60ac6cfc1fa6ac8de433972e5be6defd656d81`, subtree
+`a9e546be90ea1e16d2728ddf19af13e4d722a855`, and exact commit-scoped
 full-path archive
-`sha256:700f38a8f0b6ea02b9761e8dd1547bdf93fd2a7e1420e2a482f7b89ce8a0425b`.
+`sha256:af8db17dc5d7b2266444efc4911661659fdaf23035b7dde0172f29d9e55374ca`.
 The expected binary digest is
-`sha256:09e0d936c23d7625af9f67c09b703ed41135b185c3822a98f1f62cd401ded3ed`.
+`sha256:8d4405a1bd8f5d9d65be0860e52cab75cc9b7f5f659e510b4932347e0c6008e5`.
 The final image contains neither Go nor a compiler. Unicode NFC validation
 uses checksum-locked `golang.org/x/text` v0.41.0. The scoped package license is
 `LicenseRef-Ambit-Proprietary` / `UNLICENSED`; its exact license lock and
@@ -63,7 +63,7 @@ broader license.
 
 The backend/provider starts an exact raw, no-echo PTY session and uses the
 content-addressed `framed_binary_stream_v1` protocol frozen at backend commit
-`2120aa9b31209fb765e0ac15367cd3aab27f9ae3` (protocol digest
+`ac750bbd4aa965b597fb241c16b0ca5c26cb5d8c` (file protocol digest
 `sha256:1274e0bb27dfb15d9d7564d71fc02a7117631b405de73d84f39defb415a5f7ad`).
 Its READY nonce, canonical header and header digest ACK, 64 KiB DATA frames,
 cumulative ACKs, and END length/digest frame preserve arbitrary bytes with
@@ -71,6 +71,18 @@ application-level backpressure. Artifact bytes never travel through argv,
 shell text, environment variables, or a workspace staging path. The helper
 verifies the complete framed input and its own no-follow-opened executable
 before touching the destination.
+
+Tree header v2 carries one canonical, closed-world archive over the same
+transport. Its protocol digest is
+`sha256:2c3e58eedfa0d268c9844c038baa49d2f896c4f42de783a5d3ee1762d5828e4d`.
+One fixed preparation name and one fixed stage name bound crash residue per
+target parent. Exact prefixes resume only for the same target/archive digest;
+complete trees publish with one same-parent
+`renameat2(RENAME_NOREPLACE)`. The Linux `user.*` marker is helper-internal,
+same-UID-tamperable, and grants no authority: exact content, recursive roster,
+path, inode, mode, owner, link, device, and ancestor reproof remain decisive.
+Unsupported `openat2`, `renameat2`, or user-xattr behavior fails unavailable
+without a weaker fallback.
 
 Missing parents are created only for `create_or_verify`, through held
 `O_DIRECTORY|O_NOFOLLOW` dirfds. New content is written to an unnamed
@@ -86,9 +98,9 @@ mismatch, and 5 I/O or durability failure.
 C17 deliberately admits a narrower 16 MiB caller-side limit. That is an
 adapter constraint, not a second helper protocol. The baseline frame adapter
 is frozen at backend commit
-`4a50200dd4862d67171ab324c05c22551bd76cf1`; current provider/image/grant
-reinspection is backend commit
-`dfb17776f58c853b5cab7edd5dde2076ceb279b7`. The Daytona WebSocket-to-PTY
+`c40ccce7ede55320a74961dd438f26fbff66dba4`; current provider/image/grant,
+tree recovery, and durable absence behavior are tested at backend commit
+`6d60ac6cfc1fa6ac8de433972e5be6defd656d81`. The Daytona WebSocket-to-PTY
 boundary and short-write correction are frozen at Daytona commit `eca35fc52`.
 Shell interpolation, environment transport, base64 substitution, and workspace
 staging are not acceptable fallbacks.

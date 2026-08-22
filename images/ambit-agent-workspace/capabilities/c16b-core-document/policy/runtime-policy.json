@@ -1,5 +1,5 @@
 {
-  "schema": "ambit.runtime-pack-policy/v1",
+  "schema": "ambit.runtime-pack-policy/v2",
   "runtimeUser": "daytona",
   "rootEscalation": "denied",
   "hostSocketMounts": "denied",
@@ -12,7 +12,19 @@
   "packRoot": "/opt/ambit/runtime-pack/core-document",
   "packRootMutability": "read-only",
   "secretsInImage": "denied",
-  "atomicMaterializer": "provider-implementation-not-runtime-capability",
+  "atomicMaterializer": {
+    "role": "provider-implementation-not-runtime-capability",
+    "authority": "none",
+    "helperSha256": "8d4405a1bd8f5d9d65be0860e52cab75cc9b7f5f659e510b4932347e0c6008e5",
+    "fileProtocolSha256": "1274e0bb27dfb15d9d7564d71fc02a7117631b405de73d84f39defb415a5f7ad",
+    "treeProtocolSha256": "2c3e58eedfa0d268c9844c038baa49d2f896c4f42de783a5d3ee1762d5828e4d",
+    "filesystemRequirements": [
+      "openat2",
+      "renameat2_RENAME_NOREPLACE",
+      "user_xattr"
+    ],
+    "unsupportedDisposition": "materialization-unavailable-no-weaker-fallback"
+  },
   "derivedHtmlPreview": "diagnostic-non-layout-authoritative",
   "documentRenderCapability": "unavailable-until-C19-paginated-renderer"
 }

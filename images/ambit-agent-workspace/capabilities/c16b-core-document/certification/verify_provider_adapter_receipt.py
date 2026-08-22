@@ -19,6 +19,8 @@ SUITES = [
     "src/agent-workspaces/runtime-capabilities/runtime-capability-full-image-materialization.authority.spec.ts",
     "src/agent-workspaces/daytona/daytona-agent-workspace.provider.spec.ts",
     "src/agent-workspaces/agent-workspace-runtime.module.spec.ts",
+    "src/skills/runtime/skill-workspace-materialization.service.spec.ts",
+    "src/skills/runtime/skill-runtime.service.spec.ts",
 ]
 COVERAGE = {
     "abort",
@@ -34,6 +36,10 @@ COVERAGE = {
     "preReadyNoiseBounded",
     "sequential64KiBChunks",
     "timeouts",
+    "treeClosedWorld",
+    "treeCrashRecovery",
+    "treeHelperQuiescence",
+    "treeReadOnlyActivation",
     "truncation",
     "zeroEcho",
 }
@@ -101,7 +107,8 @@ exact_keys(
         "helper",
         "kind",
         "outcome",
-        "providerAdapterRevision",
+        "providerAdapterAuthorityRevision",
+        "providerTestedSourceRevision",
         "rawLog",
         "receiptRef",
         "schema",
@@ -115,9 +122,9 @@ exact_keys(
     },
     "provider adapter receipt",
 )
-require(receipt["schema"] == "ambit.provider-adapter-execution-receipt/v1", "provider receipt schema is invalid")
+require(receipt["schema"] == "ambit.provider-adapter-execution-receipt/v2", "provider receipt schema is invalid")
 require(receipt["kind"] == "provider_adapter_execution_receipt", "provider receipt kind is invalid")
-require(receipt["version"] == 1 and receipt["outcome"] == "passed", "provider adapter execution did not pass")
+require(receipt["version"] == 2 and receipt["outcome"] == "passed", "provider adapter execution did not pass")
 
 body = dict(receipt)
 receipt_ref = str(body.pop("receiptRef"))
@@ -136,15 +143,15 @@ require(raw_log["name"] == args.raw_log.name, "provider raw-log name mismatch")
 require(raw_log["bytes"] == args.raw_log.stat().st_size, "provider raw-log byte count mismatch")
 require(raw_log["sha256"] == f"sha256:{sha256(args.raw_log)}", "provider raw-log digest mismatch")
 raw_text = args.raw_log.read_text()
-require("Test Suites: 7 passed, 7 total" in raw_text, "provider raw log lacks exact suite result")
-require("Tests:       145 passed, 145 total" in raw_text, "provider raw log lacks exact test result")
+require("Test Suites: 9 passed, 9 total" in raw_text, "provider raw log lacks exact suite result")
+require("Tests:       210 passed, 210 total" in raw_text, "provider raw log lacks exact test result")
 
 source_revision = receipt["sourceRevision"]
 source_tree = receipt["sourceTree"]
 require(
     isinstance(source_revision, str)
     and COMMIT_RE.fullmatch(source_revision)
-    and receipt["providerAdapterRevision"] == source_revision,
+    and receipt["providerTestedSourceRevision"] == source_revision,
     "provider source revision is invalid",
 )
 require(isinstance(source_tree, str) and COMMIT_RE.fullmatch(source_tree), "provider source tree is invalid")
@@ -162,17 +169,33 @@ materializer = toolchain.get("atomicMaterializer", {})
 require(isinstance(materializer, dict), "toolchain materializer input is invalid")
 helper = receipt["helper"]
 require(isinstance(helper, dict), "provider helper receipt is invalid")
-exact_keys(helper, {"binarySha256", "protocolSha256", "revision", "tree"}, "provider helper receipt")
+exact_keys(
+    helper,
+    {"binarySha256", "protocolSha256", "revision", "tree", "treeProtocolSha256"},
+    "provider helper receipt",
+)
 require(helper["revision"] == helper_lock.get("revision"), "provider helper revision mismatch")
 require(helper["tree"] == helper_lock.get("tree"), "provider helper tree mismatch")
 require(helper["binarySha256"] == f"sha256:{helper_lock.get('binary', {}).get('sha256')}", "provider helper binary mismatch")
 require(helper["protocolSha256"] == f"sha256:{helper_lock.get('protocolSha256')}", "provider protocol mismatch")
-require(materializer.get("providerAdapterCommit") == source_revision, "toolchain does not select provider successor")
+require(
+    helper["treeProtocolSha256"] == f"sha256:{helper_lock.get('treeProtocolSha256')}",
+    "provider tree protocol mismatch",
+)
+require(
+    materializer.get("providerTestedSourceCommit") == source_revision,
+    "toolchain does not select tested provider source",
+)
+require(
+    receipt["providerAdapterAuthorityRevision"]
+    == materializer.get("providerAdapterAuthorityCommit"),
+    "provider adapter authority mismatch",
+)
 
 ancestry = {
     "helperRevision": str(helper_lock["revision"]),
     "protocolAuthorityCommit": str(materializer["protocolAuthorityCommit"]),
-    "providerAdapterBaselineCommit": str(materializer["providerAdapterBaselineCommit"]),
+    "providerAdapterAuthorityCommit": str(materializer["providerAdapterAuthorityCommit"]),
     "admissionFenceCommit": str(materializer["admissionFenceCommit"]),
 }
 for name, commit in ancestry.items():
@@ -196,13 +219,13 @@ require(
 require(argv[4:] == SUITES, "provider test argv suite roster differs")
 require(receipt["suiteRoster"] == SUITES, "provider suite roster differs")
 require(receipt["testSuiteCount"] == len(SUITES), "provider suite count differs")
-require(receipt["testCount"] == 145, "provider test count differs")
+require(receipt["testCount"] == 210, "provider test count differs")
 coverage = receipt["coverage"]
 require(isinstance(coverage, dict), "provider coverage receipt is invalid")
 require(set(coverage) == COVERAGE and all(coverage.values()), "provider coverage roster is incomplete")
 
 verification = {
-    "schema": "ambit.provider-adapter-execution-verification/v1",
+    "schema": "ambit.provider-adapter-execution-verification/v2",
     "outcome": "passed",
     "receipt": pin(args.receipt),
     "receiptRef": receipt_ref,

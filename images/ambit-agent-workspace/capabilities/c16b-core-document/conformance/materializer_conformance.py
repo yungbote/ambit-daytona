@@ -23,6 +23,8 @@ OUTPUT = Path(sys.argv[1]).resolve()
 MAXIMUM_BYTES = 33_554_432
 MAXIMUM_CHUNK = 65_536
 MAXIMUM_PRE_READY = 65_536
+TREE_DIRECTORY_MODE = 0o555
+TREE_MAGIC = b"AMATTRE1"
 HELPER_SHA256 = f"sha256:{hashlib.sha256(HELPER.read_bytes()).hexdigest()}"
 MAGICS = {
     "ready": b"AMATRDY1",
@@ -51,6 +53,24 @@ def canonical(value: object) -> bytes:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode()
 
 
+def tree_archive(files: list[tuple[str, int, bytes]]) -> bytes:
+    ordered = sorted(files, key=lambda entry: entry[0].encode("utf-8"))
+    payload = bytearray(TREE_MAGIC + struct.pack(">I", len(ordered)))
+    previous = b""
+    for relative_path, mode, content in ordered:
+        encoded_path = relative_path.encode("utf-8")
+        assert encoded_path > previous
+        assert mode in (0o444, 0o555)
+        previous = encoded_path
+        payload.extend(struct.pack(">I", len(encoded_path)))
+        payload.extend(encoded_path)
+        payload.extend(struct.pack(">I", mode))
+        payload.extend(struct.pack(">Q", len(content)))
+        payload.extend(hashlib.sha256(content).digest())
+        payload.extend(content)
+    return bytes(payload)
+
+
 def frame_header(
     relative_path: str,
     payload: bytes,
@@ -60,19 +80,30 @@ def frame_header(
     expected_sha256: str | None = None,
     expected_helper_sha256: str | None = None,
     expected_bytes: int | None = None,
+    artifact_kind: str = "file",
+    expected_entry_count: int = 0,
 ) -> bytes:
-    return canonical(
-        {
-            "expectedBytes": len(payload) if expected_bytes is None else expected_bytes,
-            "expectedHelperSha256": expected_helper_sha256 or HELPER_SHA256,
-            "expectedSha256": expected_sha256 or digest(payload),
-            "mode": mode,
-            "operation": operation,
-            "relativePath": relative_path,
-            "version": 1,
-            "workspaceRoot": "/workspace",
-        }
-    )
+    header = {
+        "expectedBytes": len(payload) if expected_bytes is None else expected_bytes,
+        "expectedHelperSha256": expected_helper_sha256 or HELPER_SHA256,
+        "expectedSha256": expected_sha256 or digest(payload),
+        "mode": mode,
+        "operation": operation,
+        "relativePath": relative_path,
+        "version": 1,
+        "workspaceRoot": "/workspace",
+    }
+    if artifact_kind == "tree":
+        header.update(
+            {
+                "artifactKind": "tree",
+                "expectedEntryCount": expected_entry_count,
+                "version": 2,
+            }
+        )
+    else:
+        assert artifact_kind == "file" and expected_entry_count == 0
+    return canonical(header)
 
 
 class Session:
@@ -188,6 +219,9 @@ def invoke(
     reattach: bool = False,
     inspect_after_bytes: int | None = None,
     after_end: Callable[[Session], None] | None = None,
+    artifact_kind: str = "file",
+    expected_entry_count: int = 0,
+    stop_after_end: bool = False,
 ) -> FramedResult:
     session = Session(output_prefix=output_prefix)
     header = frame_header(
@@ -198,6 +232,8 @@ def invoke(
         expected_sha256=expected_sha256,
         expected_helper_sha256=expected_helper_sha256,
         expected_bytes=expected_bytes,
+        artifact_kind=artifact_kind,
+        expected_entry_count=expected_entry_count,
     )
     request = MAGICS["request"] + struct.pack(">I", len(header)) + header
     if header_split is None:
@@ -251,6 +287,10 @@ def invoke(
             session.process.wait(timeout=5)
             session.close()
             raise
+    if stop_after_end:
+        status = session.process.wait(timeout=10)
+        session.close()
+        return FramedResult(status, b"", b"")
     return session.response_from_magic(session.read_exact(8))
 
 
@@ -262,15 +302,21 @@ def assert_success(
     mode: int,
     operation: str,
     outcome: str,
+    artifact_kind: str = "file",
+    expected_entry_count: int = 0,
 ) -> dict[str, object]:
     assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
     assert result.stderr == b""
     receipt = json.loads(result.stdout)
     assert result.stdout == canonical(receipt)
-    expected_body = {
+    expected_body: dict[str, object] = {
         "bytes": len(payload),
         "helperSha256": HELPER_SHA256,
-        "kind": "ambit_atomic_materialization_receipt",
+        "kind": (
+            "ambit_atomic_tree_materialization_receipt"
+            if artifact_kind == "tree"
+            else "ambit_atomic_materialization_receipt"
+        ),
         "mode": mode,
         "operation": operation,
         "outcome": outcome,
@@ -278,10 +324,19 @@ def assert_success(
         "sha256": digest(payload),
         "version": 1,
     }
+    if artifact_kind == "tree":
+        expected_body["entries"] = expected_entry_count
+    else:
+        assert expected_entry_count == 0
     body = {key: value for key, value in receipt.items() if key != "receiptRef"}
     assert body == expected_body
     body_digest = hashlib.sha256(canonical(expected_body)).hexdigest()
-    assert receipt["receiptRef"] == f"atomic-materialization-receipt:sha256:{body_digest}"
+    receipt_prefix = (
+        "atomic-tree-materialization-receipt"
+        if artifact_kind == "tree"
+        else "atomic-materialization-receipt"
+    )
+    assert receipt["receiptRef"] == f"{receipt_prefix}:sha256:{body_digest}"
     return receipt
 
 
@@ -555,6 +610,127 @@ assert truncated_session.process.wait(timeout=10) == 3
 assert not (WORKSPACE / "framing/truncated.bin").exists()
 cases.append("truncated_abort_no_mutation")
 
+tree_parent = WORKSPACE / "trees"
+tree_parent.mkdir(mode=0o755)
+tree_files = [
+    (
+        f"files/{index:04d}.bin",
+        0o444,
+        hashlib.sha256(str(index).encode()).digest() * 128,
+    )
+    for index in range(4096)
+]
+tree_payload = tree_archive(tree_files)
+tree_path = "trees/provider-crash"
+tree_stage = tree_parent / ".ambit-tree-stage-v1"
+tree_prep = tree_parent / ".ambit-tree-stage-prep-v1"
+tree_target = WORKSPACE / tree_path
+tree_crash_observation: dict[str, int] = {}
+
+
+def kill_after_positive_tree_prefix(session: Session) -> None:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        assert not tree_target.exists(), "tree published before crash injection"
+        if tree_stage.is_dir():
+            staged_bytes = sum(
+                child.stat().st_size
+                for child in tree_stage.rglob("*")
+                if child.is_file()
+            )
+            if staged_bytes > 0:
+                tree_crash_observation["stagedBytes"] = staged_bytes
+                session.process.kill()
+                return
+        time.sleep(0.0005)
+    raise AssertionError("tree stage did not expose a positive crash prefix")
+
+
+crashed_tree = invoke(
+    tree_path,
+    tree_payload,
+    mode=TREE_DIRECTORY_MODE,
+    artifact_kind="tree",
+    expected_entry_count=len(tree_files),
+    after_end=kill_after_positive_tree_prefix,
+    stop_after_end=True,
+)
+assert crashed_tree.returncode < 0, crashed_tree
+assert tree_crash_observation["stagedBytes"] > 0
+assert tree_stage.is_dir() and not tree_target.exists()
+recoverable_tree = invoke(
+    tree_path,
+    tree_payload,
+    mode=TREE_DIRECTORY_MODE,
+    operation="verify_only",
+    artifact_kind="tree",
+    expected_entry_count=len(tree_files),
+)
+assert_success(
+    recoverable_tree,
+    relative_path=tree_path,
+    payload=tree_payload,
+    mode=TREE_DIRECTORY_MODE,
+    operation="verify_only",
+    outcome="recoverable_stage",
+    artifact_kind="tree",
+    expected_entry_count=len(tree_files),
+)
+resumed_tree = invoke(
+    tree_path,
+    tree_payload,
+    mode=TREE_DIRECTORY_MODE,
+    artifact_kind="tree",
+    expected_entry_count=len(tree_files),
+)
+assert_success(
+    resumed_tree,
+    relative_path=tree_path,
+    payload=tree_payload,
+    mode=TREE_DIRECTORY_MODE,
+    operation="create_or_verify",
+    outcome="created",
+    artifact_kind="tree",
+    expected_entry_count=len(tree_files),
+)
+verified_tree = invoke(
+    tree_path,
+    tree_payload,
+    mode=TREE_DIRECTORY_MODE,
+    operation="verify_only",
+    artifact_kind="tree",
+    expected_entry_count=len(tree_files),
+)
+assert_success(
+    verified_tree,
+    relative_path=tree_path,
+    payload=tree_payload,
+    mode=TREE_DIRECTORY_MODE,
+    operation="verify_only",
+    outcome="already_identical",
+    artifact_kind="tree",
+    expected_entry_count=len(tree_files),
+)
+assert len(list((tree_target / "files").iterdir())) == len(tree_files)
+assert not tree_stage.exists() and not tree_prep.exists()
+expected_tree_intent = hashlib.sha256(
+    ("ambit-atomic-tree-intent/v1\n" + tree_path + "\n" + digest(tree_payload)).encode()
+).digest()
+assert os.getxattr(tree_target, "user.ambit.tree-intent-v1") == expected_tree_intent
+workspace_mount = next(
+    line.rstrip("\n")
+    for line in Path("/proc/self/mountinfo").read_text().splitlines()
+    if len(line.split()) > 4 and line.split()[4] == "/workspace"
+)
+cases.extend(
+    [
+        "tree_closed_world_4096_files",
+        "tree_sigkill_positive_prefix_recovery",
+        "tree_user_xattr_actual_filesystem",
+        "tree_renameat2_noreplace_actual_filesystem",
+    ]
+)
+
 transport_path = "transport/max-channel.bin"
 marker = b"AMBIT_PAYLOAD_NOT_IN_ARGV_ENV_OR_STAGING_01234567"
 transport_payload = marker + b"M" * (MAXIMUM_BYTES - len(marker))
@@ -570,7 +746,7 @@ cases.append("full_32mib_framed_pty_no_argv_env_staging")
 (OUTPUT / "materializer-receipt.json").write_text(
     json.dumps(
         {
-            "schema": "ambit.atomic-materializer-conformance.v1",
+            "schema": "ambit.atomic-materializer-conformance.v2",
             "outcome": "passed",
             "helperPath": str(HELPER),
             "helperSha256": HELPER_SHA256,
@@ -578,7 +754,12 @@ cases.append("full_32mib_framed_pty_no_argv_env_staging")
             "maximumChunkBytes": MAXIMUM_CHUNK,
             "maximumPreReadyBytes": MAXIMUM_PRE_READY,
             "protocolDigest": "sha256:1274e0bb27dfb15d9d7564d71fc02a7117631b405de73d84f39defb415a5f7ad",
+            "treeProtocolDigest": "sha256:2c3e58eedfa0d268c9844c038baa49d2f896c4f42de783a5d3ee1762d5828e4d",
             "publication": "O_TMPFILE_linkat_AT_EMPTY_PATH_no_replace",
+            "treePublication": "complete_staged_tree_renameat2_RENAME_NOREPLACE",
+            "treeCrashStagedBytes": tree_crash_observation["stagedBytes"],
+            "treeEntryCount": len(tree_files),
+            "workspaceMountInfo": workspace_mount,
             "workspaceRoot": "/workspace",
             "reconnect": "never_replay_reconcile_with_new_verify_only",
             "postEndLostResponseProcessStatus": unknown_process_status,

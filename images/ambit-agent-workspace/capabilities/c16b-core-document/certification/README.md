@@ -43,9 +43,13 @@ The pipeline then:
    offline before its receipt enters the signature;
 5. pulls and executes the exact runtime manifest under non-root,
    capability-none, no-new-privileges, read-only, network-none controls;
-6. runs the full framed atomic materializer and structural DOCX suite from an
-   external read-only source mount, plus root, host-socket, secret-environment,
-   installer-script, egress, race, link, path, and input-frame negative gates;
+6. runs the full framed file and closed-world tree atomic materializer plus
+   structural DOCX suite from an external read-only source mount. Tree
+   conformance kills the installed helper after a positive staged prefix,
+   proves `recoverable_stage`, exact resume, final roster/xattr identity, and
+   actual `/workspace` filesystem metadata. Root, host-socket,
+   secret-environment, installer-script, egress, race, link, path, and
+   input-frame negative gates remain required;
 7. uses a Docker save archive only as a squashed/historical layer secret-scan
    input; that archive is never an OCI artifact identity or publication
    object because Docker rewrites compressed layer representation;
@@ -73,6 +77,12 @@ is not a production publisher identity. The provider pull identity is the OCI
 index digest; the `RuntimeCapabilityPackRevision` artifact identity is the
 linux/amd64 runtime-manifest digest. Both are recorded explicitly so consumers
 never substitute a config/image ID.
+
+The helper-bearing successor is `ambit.runtime-pack/core-document@4`. The
+signed `@3` terminal packet remains immutable historical evidence. This local
+pipeline still does not register or activate the @4 pack/profile in backend;
+real Daytona/XFS provider readiness and the evidence-derived full-image
+profile revision are subsequent gates.
 
 Expected VEX snapshot filenames under `VEX_EVIDENCE_DIR` are:
 

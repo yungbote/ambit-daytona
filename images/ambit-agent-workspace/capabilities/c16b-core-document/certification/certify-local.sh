@@ -215,9 +215,34 @@ helper_binary_sha256=$(jq -er '.binary.sha256' "${helper_lock}")
 helper_license_lock_sha256=$(jq -er '.inputs.licenseLockSha256' "${helper_lock}")
 helper_notice_sha256=$(jq -er '.inputs.noticeSha256' "${helper_lock}")
 helper_protocol_sha256=$(jq -er '.protocolSha256' "${helper_lock}")
+helper_tree_protocol_sha256=$(jq -er '.treeProtocolSha256' "${helper_lock}")
 helper_protocol_authority=$(jq -er '.atomicMaterializer.protocolAuthorityCommit' "${archived_pack_dir}/toolchain-manifest.json")
-helper_provider_adapter=$(jq -er '.atomicMaterializer.providerAdapterCommit' "${archived_pack_dir}/toolchain-manifest.json")
+helper_provider_adapter_authority=$(jq -er '.atomicMaterializer.providerAdapterAuthorityCommit' "${archived_pack_dir}/toolchain-manifest.json")
+helper_provider_tested_source=$(jq -er '.atomicMaterializer.providerTestedSourceCommit' "${archived_pack_dir}/toolchain-manifest.json")
 helper_admission_fence=$(jq -er '.atomicMaterializer.admissionFenceCommit' "${archived_pack_dir}/toolchain-manifest.json")
+runtime_pack_ref=$(jq -er '.pack' "${archived_pack_dir}/toolchain-manifest.json")
+jq -e \
+  --arg revision "${helper_revision}" --arg tree "${helper_tree}" \
+  --arg archive "${helper_archive_sha256}" --arg binary "${helper_binary_sha256}" \
+  --arg protocol "${helper_protocol_sha256}" --arg tree_protocol "${helper_tree_protocol_sha256}" \
+  '.schema == "ambit.runtime-pack-helper-input-lock/v2" and
+   .revision == $revision and .tree == $tree and .archive.sha256 == $archive and
+   .binary.sha256 == $binary and .protocolSha256 == $protocol and
+   .treeProtocolSha256 == $tree_protocol' "${helper_lock}" >/dev/null
+jq -e \
+  --arg pack "${runtime_pack_ref}" --arg revision "${helper_revision}" \
+  --arg tree "${helper_tree}" --arg archive "${helper_archive_sha256}" \
+  --arg binary "${helper_binary_sha256}" --arg protocol "sha256:${helper_protocol_sha256}" \
+  --arg tree_protocol "sha256:${helper_tree_protocol_sha256}" \
+  '.schema == "ambit.runtime-pack-toolchain/v2" and
+   .pack == $pack and .pack == "ambit.runtime-pack/core-document@4" and
+   .atomicMaterializer.sourceRevision == $revision and
+   .atomicMaterializer.sourceTree == $tree and
+   .atomicMaterializer.sourceArchiveSha256 == $archive and
+   .atomicMaterializer.binarySha256 == $binary and
+   .atomicMaterializer.protocolDigest == $protocol and
+   .atomicMaterializer.treeProtocolDigest == $tree_protocol' \
+  "${archived_pack_dir}/toolchain-manifest.json" >/dev/null
 
 expected_build_args=${artifact_root}/expected-build-args.json
 jq -n -S \
@@ -239,9 +264,13 @@ jq -n -S \
   --arg helper_binary "${helper_binary_sha256}" \
   --arg helper_license "${helper_license_lock_sha256}" \
   --arg helper_notice "${helper_notice_sha256}" \
+  --arg helper_protocol "${helper_protocol_sha256}" \
+  --arg helper_tree_protocol "${helper_tree_protocol_sha256}" \
   --arg protocol_authority "${helper_protocol_authority}" \
-  --arg provider_adapter "${helper_provider_adapter}" \
+  --arg provider_adapter_authority "${helper_provider_adapter_authority}" \
+  --arg provider_tested_source "${helper_provider_tested_source}" \
   --arg admission_fence "${helper_admission_fence}" \
+  --arg runtime_pack_ref "${runtime_pack_ref}" \
   '{
     "build-arg:SOURCE_DATE_EPOCH":$source_date_epoch,
     "build-arg:BUILD_SOURCE_REVISION":$source_revision,
@@ -259,11 +288,15 @@ jq -n -S \
     "build-arg:BUILD_HELPER_BUILD_LOCK_SHA256":$helper_build_lock,
     "build-arg:BUILD_HELPER_BINARY_MANIFEST_SHA256":$helper_binary_manifest,
     "build-arg:BUILD_HELPER_BINARY_SHA256":$helper_binary,
+    "build-arg:BUILD_HELPER_PROTOCOL_SHA256":$helper_protocol,
+    "build-arg:BUILD_HELPER_TREE_PROTOCOL_SHA256":$helper_tree_protocol,
     "build-arg:BUILD_HELPER_LICENSE_LOCK_SHA256":$helper_license,
     "build-arg:BUILD_HELPER_NOTICE_SHA256":$helper_notice,
     "build-arg:BUILD_HELPER_PROTOCOL_AUTHORITY_REVISION":$protocol_authority,
-    "build-arg:BUILD_HELPER_PROVIDER_ADAPTER_REVISION":$provider_adapter,
-    "build-arg:BUILD_HELPER_ADMISSION_FENCE_REVISION":$admission_fence
+    "build-arg:BUILD_HELPER_PROVIDER_ADAPTER_AUTHORITY_REVISION":$provider_adapter_authority,
+    "build-arg:BUILD_HELPER_PROVIDER_TESTED_SOURCE_REVISION":$provider_tested_source,
+    "build-arg:BUILD_HELPER_ADMISSION_FENCE_REVISION":$admission_fence,
+    "build-arg:BUILD_RUNTIME_PACK_REF":$runtime_pack_ref
   }' > "${expected_build_args}"
 
 expected_labels=${artifact_root}/expected-labels.json
@@ -277,8 +310,10 @@ jq -n -S \
   --arg helper_build_lock "${helper_build_lock_sha256}" --arg helper_binary_manifest "${helper_binary_manifest_sha256}" \
   --arg helper_binary "${helper_binary_sha256}" --arg helper_license "${helper_license_lock_sha256}" \
   --arg helper_notice "${helper_notice_sha256}" --arg protocol_authority "${helper_protocol_authority}" \
-  --arg provider_adapter "${helper_provider_adapter}" --arg admission_fence "${helper_admission_fence}" \
-  --arg helper_protocol "${helper_protocol_sha256}" \
+  --arg provider_adapter_authority "${helper_provider_adapter_authority}" \
+  --arg provider_tested_source "${helper_provider_tested_source}" --arg admission_fence "${helper_admission_fence}" \
+  --arg helper_protocol "${helper_protocol_sha256}" --arg helper_tree_protocol "${helper_tree_protocol_sha256}" \
+  --arg runtime_pack_ref "${runtime_pack_ref}" \
   '{
     "org.opencontainers.image.revision":$source_revision,
     "io.ambit.source-date-epoch":$source_date_epoch,
@@ -296,15 +331,18 @@ jq -n -S \
     "io.ambit.helper-build-lock-sha256":$helper_build_lock,
     "io.ambit.helper-binary-manifest-sha256":$helper_binary_manifest,
     "io.ambit.helper-binary-sha256":$helper_binary,
+    "io.ambit.helper-tree-protocol-sha256":$helper_tree_protocol,
     "io.ambit.helper-license-lock-sha256":$helper_license,
     "io.ambit.helper-notice-sha256":$helper_notice,
     "io.ambit.helper-protocol-authority-revision":$protocol_authority,
-    "io.ambit.helper-provider-adapter-revision":$provider_adapter,
+    "io.ambit.helper-provider-adapter-authority-revision":$provider_adapter_authority,
+    "io.ambit.helper-provider-tested-source-revision":$provider_tested_source,
     "io.ambit.helper-admission-fence-revision":$admission_fence,
-    "io.ambit.runtime-pack":"ambit.runtime-pack/core-document@3",
+    "io.ambit.runtime-pack":$runtime_pack_ref,
     "io.ambit.atomic-materializer-sha256":("sha256:" + $helper_binary),
     "io.ambit.atomic-materializer-license":"LicenseRef-Ambit-Proprietary",
-    "io.ambit.atomic-materializer-protocol":("sha256:" + $helper_protocol)
+    "io.ambit.atomic-materializer-protocol":("sha256:" + $helper_protocol),
+    "io.ambit.atomic-tree-materializer-protocol":("sha256:" + $helper_tree_protocol)
   }' > "${expected_labels}"
 
 tools_lock=${archived_cert_dir}/tools.lock.json
@@ -730,7 +768,9 @@ jq -n -S \
   --arg source_archive "${source_archive_sha256}" --arg helper_revision "${helper_revision}" \
   --arg helper_tree "${helper_tree}" --arg helper_archive "${helper_archive_sha256}" \
   --arg helper_binary "${helper_binary_sha256}" --arg protocol "${helper_protocol_sha256}" \
-  --arg adapter "${helper_provider_adapter}" --arg admission_fence "${helper_admission_fence}" \
+  --arg tree_protocol "${helper_tree_protocol_sha256}" --arg runtime_pack_ref "${runtime_pack_ref}" \
+  --arg adapter_authority "${helper_provider_adapter_authority}" \
+  --arg provider_tested_source "${helper_provider_tested_source}" --arg admission_fence "${helper_admission_fence}" \
   --arg index "${index_digest}" --arg manifest "${runtime_manifest}" --arg config "${config_digest}" \
   --arg attestation_manifest "${attestation_manifest}" --arg sbom_layer "${sbom_layer}" \
   --arg provenance_layer "${provenance_layer}" \
@@ -774,11 +814,11 @@ jq -n -S \
   --arg host_tools "$(sha256_file "${artifact_root}/certification-host-tools.json")" \
   --arg public_der "${public_der_sha256}" \
   '{
-    schema:"ambit.runtime-pack-evidence-binding/v3",
+    schema:"ambit.runtime-pack-evidence-binding/v4",
     outcome:(if $outcome == "passed" then "candidate_policy_passed" else "candidate_policy_failed" end),
-    packRef:"ambit.runtime-pack/core-document@3",platform:"linux/amd64",
+    packRef:$runtime_pack_ref,platform:"linux/amd64",
     identity:{providerPullDigest:$index,runtimeCapabilityPackRevisionArtifactDigest:$manifest,configDigest:$config},
-    source:{daytona:{revision:$source_revision,tree:$source_tree,packTree:$source_pack_tree,archiveSha256:$source_archive,dockerfileSha256:$dockerfile,lockSetSha256:$locks,conformanceSetSha256:$conformance_set,policySetSha256:$policy_set},backendHelper:{revision:$helper_revision,tree:$helper_tree,archiveSha256:$helper_archive,binarySha256:$helper_binary,protocolSha256:$protocol,providerAdapterRevision:$adapter,admissionFenceRevision:$admission_fence}},
+    source:{daytona:{revision:$source_revision,tree:$source_tree,packTree:$source_pack_tree,archiveSha256:$source_archive,dockerfileSha256:$dockerfile,lockSetSha256:$locks,conformanceSetSha256:$conformance_set,policySetSha256:$policy_set},backendHelper:{revision:$helper_revision,tree:$helper_tree,archiveSha256:$helper_archive,binarySha256:$helper_binary,protocolSha256:$protocol,treeProtocolSha256:$tree_protocol,providerAdapterAuthorityRevision:$adapter_authority,providerTestedSourceRevision:$provider_tested_source,admissionFenceRevision:$admission_fence}},
     attestations:{manifestDigest:$attestation_manifest,sbomLayerDigest:$sbom_layer,provenanceLayerDigest:$provenance_layer,sbomSpdxSha256:$sbom,provenanceStatementSha256:$provenance},
     verification:{attestationReceiptSha256:$attestation,completeOciLayoutReceiptSha256:$complete_oci_layout,completeOciLayoutVerificationSha256:$complete_oci_verification,helperInputReceiptSha256:$helper_input_verification,reproducibilityReceiptSha256:$reproducibility,conformanceReceiptSha256:$conformance,materializerReceiptSha256:$materializer,artifactReceiptSha256:$artifacts,daytonaPtyReceiptSha256:$daemon,providerAdapterReceiptSha256:$provider,providerAdapterRawLogSha256:$provider_log,providerAdapterVerificationSha256:$provider_verification,vexEvidenceReceiptSha256:$vex_verification,vulnerabilityReportSha256:$vulnerability,grypeDatabaseReceiptSha256:$db,imageSecretScanSha256:$secret_scan,negativeRootReceiptSha256:$negative_root,negativeSocketReceiptSha256:$negative_socket,negativeSecretEnvReceiptSha256:$negative_secret,negativeInstallScriptReceiptSha256:$negative_install,policyReceiptSha256:$policy},
     sourceContracts:{apkDirectLockSha256:$apk_direct,apkClosureLockSha256:$apk_closure,pythonLockSha256:$python_lock,helperInputLockSha256:$helper_input_lock,helperInputManifestSha256:$helper_input_manifest,toolchainManifestSha256:$toolchain},
@@ -786,7 +826,7 @@ jq -n -S \
     signingKey:{algorithm:"Ed25519",publicKeyPemSha256:$public_pem,publicKeyDerSha256:$public_der},
     signatureMeaning:"ephemeral local evidence content binding only; not a production publisher identity",
     promotion:"separate-and-not-performed",
-    limitations:["document.render@1 unavailable until C19 paginated renderer composes","CertifiedDocumentProfile and Document Skill v1 remain inactive","load cache and checkpoint SLOs not measured"]
+    limitations:["document.render@1 unavailable until C19 paginated renderer composes","CertifiedDocumentProfile and Document Skill v1 remain inactive","real Daytona/XFS workspace and provider readiness not proved","backend full-image profile revision and pack registration absent","durable absent outcome-unknown lifecycle quiescence proof absent","load cache and checkpoint SLOs not measured"]
   }' > "${artifact_root}/evidence-binding.json"
 
 openssl pkeyutl -sign -rawin -inkey "${private_key}" -in "${artifact_root}/evidence-binding.json" \
