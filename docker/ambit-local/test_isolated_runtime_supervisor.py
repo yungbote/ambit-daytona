@@ -482,6 +482,50 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
             with self.assertRaises(MODULE.SupervisorError):
                 MODULE.classify_precontrol_roster(invalid)
 
+    def test_runtime_creation_failure_leaves_an_exact_reducible_prefix(self) -> None:
+        runtime_path = MODULE.runtime_root_for(STATE_ROOT)
+        created: list[object] = []
+
+        class InjectedCrash(RuntimeError):
+            pass
+
+        def mkdir(name: object, mode: int, *, dir_fd: int | None = None) -> None:
+            if dir_fd is None:
+                self.assertEqual((name, mode), (runtime_path, 0o700))
+                created.append(name)
+                return
+            self.assertEqual(dir_fd, 31)
+            if name == "containerd-state":
+                created.append(name)
+                return
+            self.assertEqual(name, "docker-exec")
+            raise InjectedCrash("response lost during runtime creation")
+
+        parent = mock.Mock(st_mode=stat.S_IFDIR | 0o755, st_uid=0, st_gid=0)
+        root = mock.Mock(
+            st_mode=stat.S_IFDIR | 0o700,
+            st_uid=0,
+            st_gid=0,
+            st_dev=21,
+            st_ino=22,
+        )
+        with mock.patch.object(MODULE.os, "stat", return_value=parent), mock.patch.object(
+            MODULE.os, "mkdir", side_effect=mkdir
+        ), mock.patch.object(MODULE.os, "open", return_value=31), mock.patch.object(
+            MODULE.os, "fstat", return_value=root
+        ), mock.patch.object(
+            MODULE.os, "listdir", return_value=("containerd-state",)
+        ), mock.patch.object(MODULE.os, "close"), mock.patch.object(
+            MODULE, "_remove_tree_entry"
+        ) as remove_entry, mock.patch.object(MODULE.os, "rmdir") as rmdir:
+            with self.assertRaisesRegex(InjectedCrash, "response lost"):
+                MODULE.create_runtime_root(runtime_path)
+
+        self.assertEqual(created, [runtime_path, "containerd-state"])
+        self.assertEqual(MODULE.classify_precontrol_roster({"containerd-state"}), 1)
+        remove_entry.assert_not_called()
+        rmdir.assert_not_called()
+
     def test_legacy_v4_caller_receipts_cannot_authorize_signal_or_kill(self) -> None:
         runtime = MODULE.RuntimeIdentity(
             MODULE.runtime_root_for(STATE_ROOT), 1, 2, 0, 0, 0o700
@@ -1782,11 +1826,13 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
         class ProcessGone(RuntimeError):
             pass
 
+        def prove_supervisor_dead(*args: object, **kwargs: object) -> None:
+            events.append("supervisor-death-proof")
+            raise ProcessGone("gone")
+
         process_authority = {
             "ProcessIdentityError": ProcessGone,
-            "verify_recorded_process": lambda *args, **kwargs: (_ for _ in ()).throw(
-                ProcessGone("gone")
-            ),
+            "verify_recorded_process": prove_supervisor_dead,
         }
         validated = {
             "control": control,
@@ -1807,9 +1853,17 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
             1000,
             0o660,
         )
+        ready = {
+            "socket": post_freeze_socket,
+            "docker": None,
+            "containerd": None,
+            "netnsBaselineSha256": "d" * 64,
+        }
         socket_cutpoints = iter(((True, None), (True, post_freeze_socket)))
 
         def classify_socket(*args: object, **kwargs: object):
+            self.assertTrue(kwargs["absence_authorized"])
+            self.assertEqual(args[1], post_freeze_socket)
             events.append("socket-proof")
             return next(socket_cutpoints)
 
@@ -1830,9 +1884,17 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
             mock.patch.object(
                 MODULE,
                 "read_root_manifest",
-                side_effect=(control, None, None, None, None, None),
+                side_effect=(
+                    control,
+                    {"ready": True},
+                    None,
+                    None,
+                    {"baseline": True},
+                    None,
+                ),
             ),
             mock.patch.object(MODULE, "validate_control_authority", return_value=validated),
+            mock.patch.object(MODULE, "validate_ready_authority", return_value=ready),
             mock.patch.object(
                 MODULE,
                 "classify_recovery_socket",
@@ -1883,8 +1945,9 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
         self.assertEqual(
             events,
             [
-                "socket-proof",
+                "supervisor-death-proof",
                 "stopping-intent",
+                "socket-proof",
                 "cgroup-freeze",
                 "socket-proof",
                 "netns-baseline",
@@ -2022,6 +2085,16 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
     def test_substituted_socket_root_blocks_before_cgroup_kill(self) -> None:
         supervisor = self.supervisor()
         control, runtime, socket_root, cgroup = control_authority()
+
+        class ProcessGone(RuntimeError):
+            pass
+
+        process_authority = {
+            "ProcessIdentityError": ProcessGone,
+            "verify_recorded_process": lambda *args, **kwargs: (_ for _ in ()).throw(
+                ProcessGone("gone")
+            ),
+        }
         validated = {
             "control": control,
             "runtime": runtime,
@@ -2048,7 +2121,9 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
             ),
             mock.patch.object(MODULE, "reduce_runtime_removal_root", return_value=False),
             mock.patch.object(MODULE, "existing_runtime_identity", return_value=runtime),
-            mock.patch.object(MODULE, "load_process_authority", return_value={}),
+            mock.patch.object(
+                MODULE, "load_process_authority", return_value=process_authority
+            ),
             mock.patch.object(
                 MODULE,
                 "read_root_manifest",

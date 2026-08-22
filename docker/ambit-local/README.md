@@ -232,9 +232,9 @@ socket, cgroup, or legacy `/tmp` authority before any process signal or cgroup
 kill. Before draining anything the admitted supervisor durably publishes a
 root stopping intent, so every later daemon/socket/storage cutpoint is
 classifiable. Dead-supervisor recovery publishes the same stopping authority
-after exact death proof and before its first cgroup or socket mutation. It
-classifies the current socket first, freezes and proves a populated target
-cgroup, reclassifies the now-stable socket cutpoint, publishes or validates the
+after exact death proof and before its first cgroup or socket observation or
+mutation. It then classifies the current socket, freezes and proves a populated
+target cgroup, reclassifies the now-stable socket cutpoint, publishes or validates the
 baseline and detach authorities, and only then uses `cgroup.kill`. A stopping
 authority admits the reducer's exact intermediate empty socket root while a
 present socket still requires its recorded identity. Normal shutdown removes the
@@ -264,7 +264,9 @@ is deleting. Startup, stop, and storage deletion treat a removing root as live
 authority until its final parent-relative `rmdir` and fsync complete. The same
 recovery dispatch then classifies and settles the exact absent-runtime socket
 and cgroup boundaries before it can return, so a crash between the final tree
-removal and cgroup removal re-enters the ordinary pre-control reducer.
+removal and cgroup removal re-enters the ordinary pre-control reducer. A
+runtime-root creation error never starts a separate deletion loop: it leaves
+the exact forward creation prefix for that same recovery transition.
 
 The rendered Compose environment is a closed per-service key roster. Every
 network endpoint used by the API, proxy, or runner is pinned to loopback or an

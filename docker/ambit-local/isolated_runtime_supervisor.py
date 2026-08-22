@@ -1081,17 +1081,6 @@ def create_runtime_root(path: Path) -> RuntimeIdentity:
             os.mkdir(name, 0o700, dir_fd=descriptor)
         os.fsync(descriptor)
         return identity
-    except BaseException:
-        if descriptor is not None:
-            for name in tuple(sorted(os.listdir(descriptor))):
-                _remove_tree_entry(descriptor, name)
-        parent_fd = os.open(RUNTIME_PARENT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        try:
-            os.rmdir(path.name, dir_fd=parent_fd)
-            os.fsync(parent_fd)
-        finally:
-            os.close(parent_fd)
-        raise
     finally:
         os.close(descriptor)
 
@@ -4223,14 +4212,6 @@ class RuntimeSupervisor:
                 supervisor_identity=validated["supervisor"],
                 boot_id=validated["control"]["bootId"],
             )
-        socket_root = validated["socketRoot"]
-        socket_present, expected_socket = classify_recovery_socket(
-            socket_root,
-            ready["socket"] if ready is not None else None,
-            self.caller_gid,
-            absence_authorized=stop_value is not None or stopping_value is not None,
-        )
-
         process_error = process_authority["ProcessIdentityError"]
         try:
             process_authority["verify_recorded_process"](
@@ -4261,6 +4242,13 @@ class RuntimeSupervisor:
         else:
             root_stopping_digest = canonical_document_digest(stopping_value)
 
+        socket_root = validated["socketRoot"]
+        socket_present, expected_socket = classify_recovery_socket(
+            socket_root,
+            ready["socket"] if ready is not None else None,
+            self.caller_gid,
+            absence_authorized=True,
+        )
         cgroup_was_populated = cgroup_is_populated(cgroup)
         if cgroup_was_populated:
             freeze_cgroup_and_wait(cgroup, timeout=60)
