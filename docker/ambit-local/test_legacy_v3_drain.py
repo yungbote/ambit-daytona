@@ -14,6 +14,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Callable
 from unittest import mock
 
 
@@ -116,6 +117,10 @@ def captured_process(
             "pidNamespace": {"device": 4, "inode": 21},
             "userNamespace": {"device": 4, "inode": 22},
             "cgroup": "/user.slice/task.scope",
+            "credentialProfile": "root-runtime-full-capability",
+            "credentials": json.loads(
+                json.dumps(MODULE.ROOT_RUNTIME_CREDENTIALS)
+            ),
         },
         observed_proc_inode=proc_inode,
     )
@@ -299,6 +304,185 @@ class ProcessAuthorityTest(unittest.TestCase):
         source = MODULE_PATH.read_text(encoding="utf-8")
         self.assertIn('"cgroupMutationAuthorized": False', source)
         self.assertIn('"forbidden_shared_66_process_observation"', source)
+
+
+class ProcessCredentialAuthorityTest(unittest.TestCase):
+    @staticmethod
+    def contract(value: object) -> dict[str, object]:
+        return json.loads(json.dumps(value))
+
+    @classmethod
+    def status(
+        cls,
+        value: object,
+        *,
+        omit: str | None = None,
+        duplicate: str | None = None,
+        raw_override: dict[str, str] | None = None,
+    ) -> str:
+        contract = cls.contract(value)
+        uids = contract["uids"]
+        gids = contract["gids"]
+        capabilities = contract["capabilities"]
+        assert isinstance(uids, dict) and isinstance(gids, dict)
+        assert isinstance(capabilities, dict)
+        fields = {
+            "Uid": "\t".join(
+                str(uids[name])
+                for name in ("real", "effective", "saved", "filesystem")
+            ),
+            "Gid": "\t".join(
+                str(gids[name])
+                for name in ("real", "effective", "saved", "filesystem")
+            ),
+            "Groups": " ".join(
+                str(value) for value in contract["supplementaryGroups"]
+            ),
+            "CapInh": str(capabilities["inheritable"]),
+            "CapPrm": str(capabilities["permitted"]),
+            "CapEff": str(capabilities["effective"]),
+            "CapBnd": str(capabilities["bounding"]),
+            "CapAmb": str(capabilities["ambient"]),
+            "NoNewPrivs": str(contract["noNewPrivileges"]),
+            "Seccomp": str(contract["seccompMode"]),
+            "Seccomp_filters": str(contract["seccompFilterCount"]),
+        }
+        fields.update(raw_override or {})
+        lines = ["Name:\ttest"]
+        for name, raw in fields.items():
+            if name == omit:
+                continue
+            lines.append(f"{name}:\t{raw}")
+            if name == duplicate:
+                lines.append(f"{name}:\t{raw}")
+        return "\n".join(lines) + "\n"
+
+    def test_every_recorded_role_has_its_explicit_measured_profile(self) -> None:
+        expected_profiles = {
+            "containerdWrapperOuter": "sudo-wrapper-caller-real-root-effective",
+            "containerdWrapperInner": "sudo-wrapper-caller-real-root-effective",
+            "containerd": "root-runtime-full-capability",
+            "dockerdWrapperOuter": "sudo-wrapper-caller-real-root-effective",
+            "dockerdWrapperInner": "sudo-wrapper-caller-real-root-effective",
+            "dockerd": "root-runtime-full-capability",
+            "registryShim": "root-runtime-full-capability",
+            "registryTask": "registry-task-container-security",
+        }
+        self.assertEqual(
+            {
+                role: candidate["credentialProfile"]
+                for role, candidate in MODULE.EXPECTED_PROCESS_CANDIDATES.items()
+            },
+            expected_profiles,
+        )
+        for role, candidate in MODULE.EXPECTED_PROCESS_CANDIDATES.items():
+            with self.subTest(role=role):
+                profile, observed = MODULE.require_expected_process_credentials(
+                    candidate,
+                    self.status(candidate["credentials"]),
+                )
+                self.assertEqual(profile, expected_profiles[role])
+                self.assertEqual(observed, candidate["credentials"])
+
+    def test_sudo_wrapper_real_uid_is_caller_but_gid_tuple_is_independent(self) -> None:
+        candidate = MODULE.EXPECTED_PROCESS_CANDIDATES["containerdWrapperOuter"]
+        profile, observed = MODULE.require_expected_process_credentials(
+            candidate,
+            self.status(MODULE.SUDO_WRAPPER_CREDENTIALS),
+        )
+        self.assertEqual(profile, "sudo-wrapper-caller-real-root-effective")
+        self.assertEqual(observed["uids"], {
+            "real": 1000,
+            "effective": 0,
+            "saved": 0,
+            "filesystem": 0,
+        })
+        self.assertEqual(set(observed["gids"].values()), {0})
+        with self.assertRaisesRegex(MODULE.DrainError, "security state differ"):
+            MODULE.require_expected_process_credentials(
+                candidate,
+                self.status(MODULE.ROOT_RUNTIME_CREDENTIALS),
+            )
+
+    def test_uid_gid_group_capability_and_security_substitutions_reject(self) -> None:
+        candidate = MODULE.EXPECTED_PROCESS_CANDIDATES["containerdWrapperOuter"]
+        mutations: list[tuple[str, Callable[[dict[str, object]], None]]] = [
+            ("real_uid", lambda value: value["uids"].__setitem__("real", 999)),
+            ("effective_uid", lambda value: value["uids"].__setitem__("effective", 1000)),
+            ("saved_uid", lambda value: value["uids"].__setitem__("saved", 1000)),
+            ("filesystem_uid", lambda value: value["uids"].__setitem__("filesystem", 1000)),
+            ("real_gid", lambda value: value["gids"].__setitem__("real", 1000)),
+            ("groups", lambda value: value["supplementaryGroups"].append(1000)),
+            (
+                "capability",
+                lambda value: value["capabilities"].__setitem__(
+                    "effective", "0000000000000000"
+                ),
+            ),
+            ("no_new_privileges", lambda value: value.__setitem__("noNewPrivileges", 1)),
+            ("seccomp", lambda value: value.__setitem__("seccompMode", 2)),
+            ("seccomp_filters", lambda value: value.__setitem__("seccompFilterCount", 1)),
+        ]
+        for label, mutate in mutations:
+            value = self.contract(MODULE.SUDO_WRAPPER_CREDENTIALS)
+            mutate(value)
+            with self.subTest(label=label), self.assertRaisesRegex(
+                MODULE.DrainError,
+                "security state differ",
+            ):
+                MODULE.require_expected_process_credentials(
+                    candidate,
+                    self.status(value),
+                )
+
+    def test_registry_task_duplicate_group_and_reduced_security_contract_is_exact(self) -> None:
+        candidate = MODULE.EXPECTED_PROCESS_CANDIDATES["registryTask"]
+        _, observed = MODULE.require_expected_process_credentials(
+            candidate,
+            self.status(MODULE.REGISTRY_TASK_CREDENTIALS),
+        )
+        self.assertEqual(
+            observed["supplementaryGroups"],
+            [0, 0, 1, 2, 3, 4, 6, 10, 11, 20, 26, 27],
+        )
+        self.assertEqual(observed["seccompMode"], 2)
+        self.assertEqual(observed["seccompFilterCount"], 1)
+        with self.assertRaisesRegex(MODULE.DrainError, "security state differ"):
+            MODULE.require_expected_process_credentials(
+                candidate,
+                self.status(MODULE.ROOT_RUNTIME_CREDENTIALS),
+            )
+
+    def test_missing_duplicate_and_malformed_status_fields_reject(self) -> None:
+        candidate = MODULE.EXPECTED_PROCESS_CANDIDATES["dockerd"]
+        for label, kwargs in (
+            ("missing", {"omit": "Uid"}),
+            ("duplicate", {"duplicate": "Gid"}),
+            ("uid", {"raw_override": {"Uid": "00\t0\t0\t0"}}),
+            ("capability", {"raw_override": {"CapEff": "ABC"}}),
+            ("security", {"raw_override": {"Seccomp": "-1"}}),
+        ):
+            with self.subTest(label=label), self.assertRaises(MODULE.DrainError):
+                MODULE.require_expected_process_credentials(
+                    candidate,
+                    self.status(MODULE.ROOT_RUNTIME_CREDENTIALS, **kwargs),
+                )
+
+    def test_credentials_are_persisted_and_reproved_inside_pidfd_cutoffs(self) -> None:
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        capture = source[
+            source.index("def capture_process")
+            : source.index("def validate_receipt_process")
+        ]
+        cutoff = source[
+            source.index("def hold_related_process_cutoff")
+            : source.index("def exact_process_status")
+        ]
+        self.assertIn('"credentialProfile": credential_profile', capture)
+        self.assertIn('"credentials": credentials', capture)
+        self.assertGreaterEqual(cutoff.count("exact_process_status"), 2)
+
+
 class ProcessUniverseTest(unittest.TestCase):
     def test_structured_arguments_do_not_use_substring_authority(self) -> None:
         exact = (
@@ -387,6 +571,10 @@ class ProcessUniverseTest(unittest.TestCase):
             side_effect=tasks,
         ), mock.patch.object(
             MODULE, "pidfd_exited", return_value=False
+        ), mock.patch.object(
+            MODULE, "process_authority", return_value={}
+        ), mock.patch.object(
+            MODULE, "exact_process_status", return_value="exact"
         ):
             with MODULE.hold_related_process_cutoff(
                 {"authority": {}}, allowed_roles=roles
@@ -415,12 +603,44 @@ class ProcessUniverseTest(unittest.TestCase):
             MODULE, "capture_task", return_value=task
         ), mock.patch.object(
             MODULE, "pidfd_exited", return_value=False
+        ), mock.patch.object(
+            MODULE, "process_authority", return_value={}
+        ), mock.patch.object(
+            MODULE, "exact_process_status", return_value="exact"
         ), self.assertRaisesRegex(MODULE.DrainError, "entering the action cutoff"):
             with MODULE.hold_related_process_cutoff(
                 {"authority": {}},
                 allowed_roles={"dockerd"},
             ):
                 self.fail("a changed task roster reached the action")
+        task.close.assert_called_once_with()
+
+    def test_action_cutoff_rejects_credential_drift(self) -> None:
+        proof = {
+            "related": [
+                {"pid": 1, "taskId": 1, "parentPid": 0, "startTimeTicks": 10}
+            ]
+        }
+        task = mock.Mock(parent_pid=0, start_ticks=10, pidfd=31)
+        with mock.patch.object(
+            MODULE, "require_related_process_cutoff", return_value=proof
+        ), mock.patch.object(
+            MODULE, "capture_task", return_value=task
+        ), mock.patch.object(
+            MODULE, "pidfd_exited", return_value=False
+        ), mock.patch.object(
+            MODULE, "process_authority", return_value={}
+        ), mock.patch.object(
+            MODULE, "exact_process_status", side_effect=("exact", "foreign")
+        ), self.assertRaisesRegex(
+            MODULE.ManualRecoveryRequired,
+            "changed across the action cutoff",
+        ):
+            with MODULE.hold_related_process_cutoff(
+                {"authority": {}},
+                allowed_roles={"dockerd"},
+            ):
+                pass
         task.close.assert_called_once_with()
 
     def test_task_roster_includes_nonleader_threads(self) -> None:

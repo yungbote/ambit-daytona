@@ -135,6 +135,47 @@ EXPECTED_REGISTRY_MANIFESTS = {
     },
 }
 
+FULL_ROOT_CAPABILITIES = {
+    "inheritable": "0000000000000000",
+    "permitted": "000001ffffffffff",
+    "effective": "000001ffffffffff",
+    "bounding": "000001ffffffffff",
+    "ambient": "0000000000000000",
+}
+SUDO_WRAPPER_CREDENTIALS = {
+    "uids": {"real": 1000, "effective": 0, "saved": 0, "filesystem": 0},
+    "gids": {"real": 0, "effective": 0, "saved": 0, "filesystem": 0},
+    "supplementaryGroups": [0],
+    "capabilities": {**FULL_ROOT_CAPABILITIES},
+    "noNewPrivileges": 0,
+    "seccompMode": 0,
+    "seccompFilterCount": 0,
+}
+ROOT_RUNTIME_CREDENTIALS = {
+    "uids": {"real": 0, "effective": 0, "saved": 0, "filesystem": 0},
+    "gids": {"real": 0, "effective": 0, "saved": 0, "filesystem": 0},
+    "supplementaryGroups": [0],
+    "capabilities": {**FULL_ROOT_CAPABILITIES},
+    "noNewPrivileges": 0,
+    "seccompMode": 0,
+    "seccompFilterCount": 0,
+}
+REGISTRY_TASK_CREDENTIALS = {
+    "uids": {"real": 0, "effective": 0, "saved": 0, "filesystem": 0},
+    "gids": {"real": 0, "effective": 0, "saved": 0, "filesystem": 0},
+    "supplementaryGroups": [0, 0, 1, 2, 3, 4, 6, 10, 11, 20, 26, 27],
+    "capabilities": {
+        "inheritable": "0000000000000000",
+        "permitted": "00000000a80425fb",
+        "effective": "00000000a80425fb",
+        "bounding": "00000000a80425fb",
+        "ambient": "0000000000000000",
+    },
+    "noNewPrivileges": 0,
+    "seccompMode": 2,
+    "seccompFilterCount": 1,
+}
+
 EXPECTED_PROCESS_CANDIDATES: dict[str, dict[str, object]] = {
     "containerdWrapperOuter": {
         "pid": 960164,
@@ -142,6 +183,8 @@ EXPECTED_PROCESS_CANDIDATES: dict[str, dict[str, object]] = {
         "startTimeTicks": 80959891,
         "argumentsSha256": "77a7164e53355538b75586d1318d4eefef81e4b64137337435a9af9cd86e7f08",
         "executableName": "sudo",
+        "credentialProfile": "sudo-wrapper-caller-real-root-effective",
+        "credentials": SUDO_WRAPPER_CREDENTIALS,
     },
     "containerdWrapperInner": {
         "pid": 960165,
@@ -149,6 +192,8 @@ EXPECTED_PROCESS_CANDIDATES: dict[str, dict[str, object]] = {
         "startTimeTicks": 80959891,
         "argumentsSha256": "77a7164e53355538b75586d1318d4eefef81e4b64137337435a9af9cd86e7f08",
         "executableName": "sudo",
+        "credentialProfile": "sudo-wrapper-caller-real-root-effective",
+        "credentials": SUDO_WRAPPER_CREDENTIALS,
     },
     "containerd": {
         "pid": 960166,
@@ -156,6 +201,8 @@ EXPECTED_PROCESS_CANDIDATES: dict[str, dict[str, object]] = {
         "startTimeTicks": 80959891,
         "argumentsSha256": "7d4abe5345d3526b66e897aad0bd6d3b84f817d103a76529aec0e3edfd3c417f",
         "executable": "/usr/bin/containerd",
+        "credentialProfile": "root-runtime-full-capability",
+        "credentials": ROOT_RUNTIME_CREDENTIALS,
     },
     "dockerdWrapperOuter": {
         "pid": 960213,
@@ -163,6 +210,8 @@ EXPECTED_PROCESS_CANDIDATES: dict[str, dict[str, object]] = {
         "startTimeTicks": 80959925,
         "argumentsSha256": "1f282ab869478c3a7b8d1ad0d892bec6baa27e7f85a0a6a97aff5f464ee4e3dd",
         "executableName": "sudo",
+        "credentialProfile": "sudo-wrapper-caller-real-root-effective",
+        "credentials": SUDO_WRAPPER_CREDENTIALS,
     },
     "dockerdWrapperInner": {
         "pid": 960215,
@@ -170,6 +219,8 @@ EXPECTED_PROCESS_CANDIDATES: dict[str, dict[str, object]] = {
         "startTimeTicks": 80959925,
         "argumentsSha256": "1f282ab869478c3a7b8d1ad0d892bec6baa27e7f85a0a6a97aff5f464ee4e3dd",
         "executableName": "sudo",
+        "credentialProfile": "sudo-wrapper-caller-real-root-effective",
+        "credentials": SUDO_WRAPPER_CREDENTIALS,
     },
     "dockerd": {
         "pid": 960217,
@@ -177,6 +228,8 @@ EXPECTED_PROCESS_CANDIDATES: dict[str, dict[str, object]] = {
         "startTimeTicks": 80959925,
         "argumentsSha256": "a87b194399f06a9490236a24fb13dbf96131962bf08dada03f58267415335b58",
         "executable": "/usr/bin/dockerd",
+        "credentialProfile": "root-runtime-full-capability",
+        "credentials": ROOT_RUNTIME_CREDENTIALS,
     },
     "registryShim": {
         "pid": 964659,
@@ -184,6 +237,8 @@ EXPECTED_PROCESS_CANDIDATES: dict[str, dict[str, object]] = {
         "startTimeTicks": 80963614,
         "argumentsSha256": "a834f2563fa09c5aebc409149a9c88a9c82e39e54d47786cbb223cd981d74414",
         "executable": "/usr/bin/containerd-shim-runc-v2",
+        "credentialProfile": "root-runtime-full-capability",
+        "credentials": ROOT_RUNTIME_CREDENTIALS,
     },
     "registryTask": {
         "pid": 964683,
@@ -191,6 +246,8 @@ EXPECTED_PROCESS_CANDIDATES: dict[str, dict[str, object]] = {
         "startTimeTicks": 80963617,
         "argumentsSha256": "082d432bf472c0fa581000acecffc36a2bd3bc4e02774eb4745eca5c5a86de7f",
         "executableName": "registry",
+        "credentialProfile": "registry-task-container-security",
+        "credentials": REGISTRY_TASK_CREDENTIALS,
     },
 }
 
@@ -753,11 +810,101 @@ class CapturedProcess:
     observed_proc_inode: int
 
 
-def capture_process(
+def normalize_process_credentials(status: str) -> dict[str, object]:
+    required = (
+        "Uid",
+        "Gid",
+        "Groups",
+        "CapInh",
+        "CapPrm",
+        "CapEff",
+        "CapBnd",
+        "CapAmb",
+        "NoNewPrivs",
+        "Seccomp",
+        "Seccomp_filters",
+    )
+    values: dict[str, list[str]] = {name: [] for name in required}
+    for line in status.splitlines():
+        if ":" not in line:
+            continue
+        name, raw = line.split(":", 1)
+        if name in values:
+            values[name].append(raw.strip())
+    require(
+        all(len(values[name]) == 1 for name in required),
+        "candidate process credential status shape differs",
+    )
+
+    def decimal(raw: str, label: str) -> int:
+        require(
+            re.fullmatch(r"(?:0|[1-9][0-9]*)", raw) is not None,
+            f"candidate process {label} is invalid",
+        )
+        return int(raw)
+
+    uid_values = values["Uid"][0].split()
+    gid_values = values["Gid"][0].split()
+    require(
+        len(uid_values) == 4 and len(gid_values) == 4,
+        "candidate process UID or GID tuple differs",
+    )
+    uids = [decimal(value, "UID") for value in uid_values]
+    gids = [decimal(value, "GID") for value in gid_values]
+    groups = [
+        decimal(value, "supplementary group")
+        for value in values["Groups"][0].split()
+    ]
+    capability_fields = {
+        "inheritable": "CapInh",
+        "permitted": "CapPrm",
+        "effective": "CapEff",
+        "bounding": "CapBnd",
+        "ambient": "CapAmb",
+    }
+    capabilities: dict[str, str] = {}
+    for name, field in capability_fields.items():
+        raw = values[field][0]
+        require(
+            re.fullmatch(r"[0-9a-f]{16}", raw) is not None,
+            f"candidate process capability field differs: {field}",
+        )
+        capabilities[name] = raw
+    return {
+        "uids": dict(zip(("real", "effective", "saved", "filesystem"), uids)),
+        "gids": dict(zip(("real", "effective", "saved", "filesystem"), gids)),
+        "supplementaryGroups": groups,
+        "capabilities": capabilities,
+        "noNewPrivileges": decimal(values["NoNewPrivs"][0], "NoNewPrivs"),
+        "seccompMode": decimal(values["Seccomp"][0], "Seccomp"),
+        "seccompFilterCount": decimal(
+            values["Seccomp_filters"][0],
+            "Seccomp_filters",
+        ),
+    }
+
+
+def require_expected_process_credentials(
     candidate: Mapping[str, object],
-    *,
-    expected_uid: int = 0,
-) -> CapturedProcess:
+    status: str,
+) -> tuple[str, dict[str, object]]:
+    profile = candidate.get("credentialProfile")
+    expected = candidate.get("credentials")
+    require(
+        isinstance(profile, str)
+        and 0 < len(profile) <= 128
+        and isinstance(expected, dict),
+        "candidate process credential contract is absent",
+    )
+    observed = normalize_process_credentials(status)
+    require(
+        observed == expected,
+        "candidate process credentials or security state differ",
+    )
+    return profile, observed
+
+
+def capture_process(candidate: Mapping[str, object]) -> CapturedProcess:
     pid = plain_int(candidate.get("pid"), "candidate process pid", positive=True)
     require(hasattr(os, "pidfd_open"), "pidfd custody is unavailable")
     try:
@@ -801,17 +948,9 @@ def capture_process(
         require(raw_arguments.endswith(b"\0"), f"candidate argv is invalid: {pid}")
         arguments_sha = sha256_bytes(raw_arguments)
         status = read_at(process_fd, "status").decode("ascii", "strict")
-        uid_line = next((line for line in status.splitlines() if line.startswith("Uid:")), "")
-        gid_line = next((line for line in status.splitlines() if line.startswith("Gid:")), "")
-        uid_values = uid_line.split()[1:]
-        gid_values = gid_line.split()[1:]
-        require(
-            len(uid_values) == 4
-            and len(gid_values) == 4
-            and all(value.isdigit() for value in (*uid_values, *gid_values))
-            and all(int(value) == expected_uid for value in uid_values)
-            and all(int(value) == expected_uid for value in gid_values),
-            f"candidate process credentials differ: {pid}",
+        credential_profile, credentials = require_expected_process_credentials(
+            candidate,
+            status,
         )
         cgroup_lines = read_at(process_fd, "cgroup").decode("ascii", "strict").splitlines()
         require(
@@ -871,6 +1010,8 @@ def capture_process(
                 "pidNamespace": pid_namespace,
                 "userNamespace": user_namespace,
                 "cgroup": cgroup_lines[0][3:],
+                "credentialProfile": credential_profile,
+                "credentials": credentials,
             },
             observed_proc_inode=process_dir.st_ino,
         )
@@ -3322,6 +3463,11 @@ def hold_related_process_cutoff(
                 "recorded legacy task changed at the action cutoff: "
                 f"{thread_group_id}/{task_id}",
             )
+        for role in sorted(allowed_roles):
+            manual(
+                exact_process_status(process_authority(control, role)) == "exact",
+                f"recorded legacy role changed at the action cutoff: {role}",
+            )
         committed = require_related_process_cutoff(
             control,
             allowed_roles=allowed_roles,
@@ -3340,6 +3486,12 @@ def hold_related_process_cutoff(
                 final == proof,
                 "related task universe changed across the action cutoff",
             )
+            for role in sorted(allowed_roles):
+                manual(
+                    exact_process_status(process_authority(control, role))
+                    == "exact",
+                    f"recorded legacy role changed across the action cutoff: {role}",
+                )
     finally:
         for task in held:
             task.close()
@@ -3357,7 +3509,7 @@ def exact_process_status(recorded: Mapping[str, object]) -> str:
         raise ManualRecoveryRequired(f"recorded PID has a foreign identity: {pid}") from error
     manual(
         observed.authority == dict(recorded),
-        f"recorded PID changed namespace or cgroup identity: {pid}",
+        f"recorded PID changed process authority: {pid}",
     )
     return "exact"
 

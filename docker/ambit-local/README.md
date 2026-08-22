@@ -289,6 +289,16 @@ registry binds, persistent roots, and the complete local registry blob
 inventory. The legacy `procInode` values remain visible as
 `ignored_unstable_procfs_dentry` observations; PID, start ticks, executable,
 argv digest, credentials, namespace, cgroup, and topology remain mandatory.
+Credentials are not collapsed to one UID: each recorded role freezes all four
+real/effective/saved/filesystem UID and GID slots, supplementary groups,
+inheritable/permitted/effective/bounding/ambient capabilities, NoNewPrivs, and
+seccomp mode/filter count. The four setuid `sudo` wrapper processes retain the
+authenticated caller as real UID 1000 while their other UID slots and all GID
+slots are root; containerd, dockerd, and the shim use the measured full-root
+profile; the registry task uses its measured container groups, reduced
+capability mask, and seccomp filter. Those normalized fields are persisted in
+process authority and re-proved while the full thread-group pidfd cutoff is
+held before and after each non-signal action.
 Any unreadable namespace, foreign client/process/source target, substituted
 path, unknown runtime entry, changed registry blob, residual v5 cgroup, or
 coexisting v5 authority is a manual blocker. The legacy tool observes but
