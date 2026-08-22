@@ -48,11 +48,11 @@ STORAGE_IMAGE = AUTHORITY_ROOT / "runner-docker.xfs"
 RUNTIME_PARENT = Path("/run")
 RUNTIME_PREFIX = "ambit-c16b-docker-"
 SOCKET_ROOT_PREFIX = "ambit-c16b-docker-api-"
-LEASE_SUFFIX = ".lock"
+GLOBAL_LEASE_NAME = "ambit-c16b-docker-global.lock"
 STATE_ROOT_RE = re.compile(r"^/home/[^/]+/[A-Za-z0-9._/-]+$")
 RUNTIME_ROOT_RE = re.compile(r"^/run/ambit-c16b-docker-[0-9a-f]{12}$")
 SOCKET_ROOT_RE = re.compile(r"^/run/ambit-c16b-docker-api-[0-9a-f]{12}$")
-LEASE_PATH_RE = re.compile(r"^/run/ambit-c16b-docker-[0-9a-f]{12}\.lock$")
+LEASE_PATH_RE = re.compile(r"^/run/ambit-c16b-docker-global\.lock$")
 CGROUP_PARENT = Path("/sys/fs/cgroup")
 CGROUP_PREFIX = "ambit-c16b-docker-"
 CGROUP_EXECUTION_NAME = "runtime"
@@ -77,9 +77,9 @@ UMOUNT = Path("/usr/bin/umount")
 
 PROCESS_IDENTITY_NAME = "isolated_process_identity.py"
 SUPERVISOR_SNAPSHOT_NAME = "isolated_runtime_supervisor.py"
-PROCESS_IDENTITY_SHA256 = "f22094f90f8797ee54ed439ee53e7f464ab59eff060cfbf252c6b8daa968a131"
+PROCESS_IDENTITY_SHA256 = "8dc76b554bc5dd7810f217a0c5b082ada500d3bb9d0c5afce46e5415ed983b2c"
 STORAGE_LIFECYCLE_NAME = "runner-storage-lifecycle.py"
-STORAGE_LIFECYCLE_SHA256 = "ecb7376d91031227bd5bd8514f2b68910449443f120a738e5c310543bad6f4eb"
+STORAGE_LIFECYCLE_SHA256 = "7301c32705fb6f5c459f98a96d07b9ae0b50092f6ad0cdcbf53f72d6fc313918"
 STORAGE_IDENTITY_VERIFIER_NAME = "verify-runner-storage.py"
 STORAGE_IDENTITY_VERIFIER_SHA256 = (
     "59c530e8c502c546689967c33c540217d2762ff9d3f8ef7424ba52462c554f0b"
@@ -120,6 +120,7 @@ LEGACY_V4_DIAGNOSTIC = (
     "legacy v4 runtime has no root control/supervisor snapshot; "
     "use the exact frozen v4 stop source or explicit root-admin cleanup"
 )
+LEGACY_TMP_RUNTIME_RE = re.compile(r"^/tmp/ambit-c16b-docker-[0-9a-f]{12}$")
 
 CONTROL_RECEIPT_NAME = "outer-docker-control.json"
 START_RECEIPT_NAME = "outer-docker-receipt.json"
@@ -726,7 +727,8 @@ def socket_root_for(state_root: Path) -> Path:
 
 
 def lease_path_for(state_root: Path) -> Path:
-    return RUNTIME_PARENT / f"{RUNTIME_PREFIX}{runtime_id_for(state_root)}{LEASE_SUFFIX}"
+    require(state_root.is_absolute(), "runtime lease state path is invalid")
+    return RUNTIME_PARENT / GLOBAL_LEASE_NAME
 
 
 def cgroup_path_for(state_root: Path) -> Path:
@@ -1572,6 +1574,18 @@ def require_no_other_task_runtime(state_root: Path) -> None:
         not foreign,
         "another C16b runtime authority exists; use its original STATE_ROOT binding: "
         + ",".join(sorted(foreign)),
+    )
+    legacy_tmp = tuple(
+        sorted(
+            str(Path("/tmp") / name)
+            for name in os.listdir("/tmp")
+            if LEGACY_TMP_RUNTIME_RE.fullmatch(str(Path("/tmp") / name)) is not None
+        )
+    )
+    require(
+        not legacy_tmp,
+        "legacy /tmp C16b runtime must be drained under its exact old authority before v5: "
+        + ",".join(legacy_tmp),
     )
 
 
@@ -2988,11 +3002,11 @@ class RuntimeSupervisor:
     def recover_existing_runtime(self, *, orphaned: bool = False) -> None:
         require(self.state is not None, "state authority is absent")
         require(self.namespace is not None, "recovery mount namespace is absent")
+        require_no_other_task_runtime(self.state_root)
         runtime_path = runtime_root_for(self.state_root)
         try:
             runtime = existing_runtime_identity(runtime_path)
         except FileNotFoundError:
-            require_no_other_task_runtime(self.state_root)
             reduce_precontrol_runtime(
                 self.state_root,
                 self.caller_gid,
@@ -4068,6 +4082,15 @@ def _validated_orphaned_authorities(
 def runtime_status(state_root: Path, caller_uid: int, caller_gid: int) -> dict[str, object]:
     with StateAuthority.open(state_root, caller_uid, caller_gid) as state:
         try:
+            require_no_other_task_runtime(state_root)
+        except SupervisorError as error:
+            return {
+                "schema": "ambit.local-daytona-isolated-docker-status/v1",
+                "outcome": "blocked",
+                "stateRoot": str(state_root),
+                "error": str(error),
+            }
+        try:
             _, validated, ready, process_authority = _validated_existing_authorities(
                 state,
                 Path(__file__).resolve(strict=True).parent,
@@ -4077,6 +4100,15 @@ def runtime_status(state_root: Path, caller_uid: int, caller_gid: int) -> dict[s
                 "schema": "ambit.local-daytona-isolated-docker-status/v1",
                 "outcome": "absent",
                 "stateRoot": str(state_root),
+            }
+        except SupervisorError as error:
+            if str(error) != LEGACY_V4_DIAGNOSTIC:
+                raise
+            return {
+                "schema": "ambit.local-daytona-isolated-docker-status/v1",
+                "outcome": "blocked",
+                "stateRoot": str(state_root),
+                "error": str(error),
             }
         process_authority["verify_recorded_process"](
             validated["supervisor"],
@@ -4222,29 +4254,37 @@ def ensure_orphaned_runtime_stopped(
     socket_path = socket_root_for(state_root)
     cgroup_path = cgroup_path_for(state_root)
     if not path_exists_nofollow(runtime_path):
-        require_no_other_task_runtime(state_root)
-        require(
-            not path_exists_nofollow(socket_path),
-            "orphaned socket root remains without root control authority",
-        )
-        if path_exists_nofollow(cgroup_path):
-            value = os.stat(cgroup_path, follow_symlinks=False)
-            identity = CgroupIdentity(cgroup_path, value.st_dev, value.st_ino)
+        lease = RuntimeLease.acquire(state_root)
+        try:
             require(
-                not cgroup_is_populated(identity),
-                "orphaned cgroup remains populated without root control authority",
+                not path_exists_nofollow(runtime_path),
+                "orphaned runtime appeared while acquiring the global lease; retry stop",
             )
-            remove_empty_cgroup(identity)
-        return {
-            "schema": STOP_SCHEMA,
-            "outcome": "passed",
-            "observedAt": utc_now(),
-            "bootId": current_boot_id(),
-            "stateRoot": str(state_root),
-            "runtimeRootRemoved": True,
-            "socketRootRemoved": True,
-            "cgroupRemoved": True,
-        }
+            require_no_other_task_runtime(state_root)
+            require(
+                not path_exists_nofollow(socket_path),
+                "orphaned socket root remains without root control authority",
+            )
+            if path_exists_nofollow(cgroup_path):
+                value = os.stat(cgroup_path, follow_symlinks=False)
+                identity = CgroupIdentity(cgroup_path, value.st_dev, value.st_ino)
+                require(
+                    not cgroup_is_populated(identity),
+                    "orphaned cgroup remains populated without root control authority",
+                )
+                remove_empty_cgroup(identity)
+            return {
+                "schema": STOP_SCHEMA,
+                "outcome": "passed",
+                "observedAt": utc_now(),
+                "bootId": current_boot_id(),
+                "stateRoot": str(state_root),
+                "runtimeRootRemoved": True,
+                "socketRootRemoved": True,
+                "cgroupRemoved": True,
+            }
+        finally:
+            lease.close()
     state, _, validated, _, process_authority = _validated_orphaned_authorities(
         state_root,
         caller_uid,

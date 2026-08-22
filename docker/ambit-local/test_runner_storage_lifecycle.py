@@ -112,11 +112,10 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
         expected = f"{MODULE.CLAIM_PREFIX}{'a' * 64}"
         expected_size = 128
         authority = MODULE.NodeFacts("directory", 0, 0, 0o700, 47, 71, 0)
-        claim_partial = MODULE.NodeFacts("regular", 0, 0, 0o600, 47, 72, 0, 1)
         claim = MODULE.NodeFacts("regular", 0, 0, 0o600, 47, 72, expected_size, 1)
         cases = (
             (MODULE.absent_node(), MODULE.absent_node(), (), False, True, "absent_unclaimed"),
-            (MODULE.absent_node(), claim_partial, (expected,), False, True, "claim_only"),
+            (MODULE.absent_node(), claim, (expected,), False, True, "claim_only"),
             (authority, claim, (expected,), False, False, "claimed_authority"),
             (authority, MODULE.absent_node(), (), True, True, "legacy_empty_authority"),
         )
@@ -140,6 +139,7 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
             (authority, MODULE.absent_node(), (), True, False),
             (authority, claim, (f"{MODULE.CLAIM_PREFIX}{'b' * 64}",), False, False),
             (authority, claim, (expected, f"{MODULE.CLAIM_PREFIX}{'b' * 64}"), False, False),
+            (MODULE.absent_node(), replace(claim, size=0), (expected,), False, True),
         ]
         rejected.extend(
             (replace(authority, **{field: value}), claim, (expected,), False, False)
@@ -192,9 +192,16 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
             opening.index("os.open(HOME_ROOT"),
         )
         self.assertLess(opening.index("create_claim(home_fd"), opening.index("os.mkdir(AUTHORITY_NAME"))
-        claim_creation = helper[helper.index("def create_claim"):helper.index("@dataclass\nclass AuthorityContext")]
+        claim_creation = helper[
+            helper.index("def create_claim") : helper.index("def directory_identity_from_document")
+        ]
+        self.assertIn("CLAIM_PENDING_NAME", claim_creation)
         self.assertLess(claim_creation.index("os.write("), claim_creation.index("os.fsync(descriptor)"))
-        self.assertLess(claim_creation.index("os.fsync(descriptor)"), claim_creation.index("os.fsync(home_fd)"))
+        self.assertLess(claim_creation.index("os.fsync(descriptor)"), claim_creation.index("os.replace("))
+        self.assertLess(claim_creation.index("os.replace("), claim_creation.index("os.fsync(home_fd)"))
+        seal = helper[helper.index("def seal_claim") : helper.index("def directory_identity_from_document")]
+        self.assertLess(seal.index("os.fsync(descriptor)"), seal.index("os.fsync(home_fd)"))
+        self.assertNotIn("ftruncate", claim_creation)
         removal = helper[
             helper.index("def _remove_authority_locked") : helper.index("def parser")
         ]
@@ -210,12 +217,102 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
         self.assertLess(mkfs, image_fsync)
         self.assertLess(image_fsync, root_fsync)
 
+    def test_abandoned_claim_pending_reducer_requires_global_absence(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="runner-claim-pending-", dir=temporary_parent()
+        ) as directory:
+            home_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+            pending = Path(directory) / MODULE.CLAIM_PENDING_NAME
+            pending.write_bytes(b"partial")
+            pending.chmod(0o600)
+            real_fstat = os.fstat
+
+            def root_owned_regular(descriptor: int):
+                value = real_fstat(descriptor)
+                if descriptor == home_fd or not stat.S_ISREG(value.st_mode):
+                    return value
+                return mock.Mock(
+                    st_mode=stat.S_IFREG | 0o600,
+                    st_uid=0,
+                    st_gid=0,
+                    st_dev=value.st_dev,
+                    st_ino=value.st_ino,
+                    st_nlink=value.st_nlink,
+                    st_size=value.st_size,
+                )
+
+            try:
+                with mock.patch.object(MODULE.os, "fstat", side_effect=root_owned_regular), mock.patch.object(
+                    MODULE, "task_runtime_authority_roster", return_value=()
+                ), mock.patch.object(MODULE, "path_occurrences", return_value=()):
+                    self.assertTrue(MODULE.reduce_abandoned_claim_pending(home_fd))
+                self.assertFalse(pending.exists())
+
+                pending.write_bytes(b"partial")
+                pending.chmod(0o600)
+                with mock.patch.object(MODULE.os, "fstat", side_effect=root_owned_regular), mock.patch.object(
+                    MODULE, "task_runtime_authority_roster", return_value=("/run/runtime",)
+                ), self.assertRaisesRegex(
+                    MODULE.RunnerStorageLifecycleError,
+                    "task runtime authority",
+                ):
+                    MODULE.reduce_abandoned_claim_pending(home_fd)
+                self.assertTrue(pending.exists())
+
+                with mock.patch.object(MODULE.os, "fstat", side_effect=root_owned_regular), mock.patch.object(
+                    MODULE, "task_runtime_authority_roster", return_value=()
+                ), mock.patch.object(
+                    MODULE,
+                    "path_occurrences",
+                    return_value=(mock.Mock(),),
+                ), self.assertRaisesRegex(
+                    MODULE.RunnerStorageLifecycleError,
+                    "observable storage mount",
+                ):
+                    MODULE.reduce_abandoned_claim_pending(home_fd)
+                self.assertTrue(pending.exists())
+
+                authority = Path(directory) / MODULE.AUTHORITY_NAME
+                authority.mkdir()
+                with mock.patch.object(MODULE.os, "fstat", side_effect=root_owned_regular), self.assertRaisesRegex(
+                    MODULE.RunnerStorageLifecycleError,
+                    "storage authority",
+                ):
+                    MODULE.reduce_abandoned_claim_pending(home_fd)
+                self.assertTrue(pending.exists())
+            finally:
+                os.close(home_fd)
+
+    def test_remove_reduces_unbound_pending_before_path_discovery(self) -> None:
+        lease = mock.MagicMock()
+        lease.__enter__.return_value = lease
+        with mock.patch.object(
+            MODULE, "acquire_runtime_deletion_lease", return_value=lease
+        ), mock.patch.object(
+            MODULE, "reduce_abandoned_pending_for_remove", return_value=True
+        ) as reduce_pending, mock.patch.object(
+            MODULE, "discover_remove_binding_path"
+        ) as discover:
+            result = MODULE.remove_authority(
+                argparse_namespace(
+                    state_root=Path("/home/example/deleted-state"),
+                    caller_uid=1000,
+                    caller_gid=1000,
+                )
+            )
+        self.assertEqual(result["outcome"], "removed")
+        reduce_pending.assert_called_once_with()
+        discover.assert_not_called()
+
     def test_legacy_v2_has_an_explicit_remove_only_migration(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         migration = source[
             source.index("def migrate_legacy_v2_for_removal") : source.index("def remove_legacy_v2_authority")
         ]
         self.assertLess(migration.index("create_claim("), migration.index("os.unlink(RECEIPT_NAME"))
+        self.assertIn("seal_claim(home_fd, claim_name, claim_bytes)", migration)
+        self.assertIn("remove_legacy_receipt_temporaries(root_fd)", migration)
+        self.assertIn("unpublished pending claim; admin recovery is required", migration)
         self.assertIn("remove-legacy-v2-authority", source)
         wrapper = SCRIPT.with_name("remove-runner-storage.sh").read_text(encoding="utf-8")
         self.assertIn("--legacy-v2", wrapper)
@@ -268,6 +365,40 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
                     root_stat=root_stat,
                     image_stat=image_stat,
                 )
+
+    def test_legacy_v2_random_receipt_temporary_is_a_typed_reducible_prefix(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="runner-legacy-receipt-temp-", dir=temporary_parent()
+        ) as directory:
+            root_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+            temporary = Path(directory) / ".storage-receipt.json.123.0123456789abcdef"
+            temporary.write_bytes(b"partial")
+            temporary.chmod(0o600)
+            foreign = Path(directory) / ".storage-receipt.json.bad"
+            foreign.write_bytes(b"preserve")
+            real_fstat = os.fstat
+
+            def root_owned_regular(descriptor: int):
+                value = real_fstat(descriptor)
+                if descriptor == root_fd or not stat.S_ISREG(value.st_mode):
+                    return value
+                return mock.Mock(
+                    st_mode=stat.S_IFREG | 0o600,
+                    st_uid=0,
+                    st_gid=0,
+                    st_dev=value.st_dev,
+                    st_ino=value.st_ino,
+                    st_nlink=value.st_nlink,
+                    st_size=value.st_size,
+                )
+
+            try:
+                with mock.patch.object(MODULE.os, "fstat", side_effect=root_owned_regular):
+                    MODULE.remove_legacy_receipt_temporaries(root_fd)
+            finally:
+                os.close(root_fd)
+            self.assertFalse(temporary.exists())
+            self.assertTrue(foreign.exists())
 
     def test_absolute_directory_walk_rejects_parent_and_leaf_symlinks(self) -> None:
         with tempfile.TemporaryDirectory(
@@ -559,21 +690,162 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
                 "namespace roster changed",
             ):
                 MODULE.stable_namespace_pair()
+        base = MODULE.MountRecord("8:1", "/", (), "/")
+        unmounted = MODULE.NamespaceObservation("1:1", 1, (base,))
         mounted = MODULE.NamespaceObservation(
             "1:1",
             1,
-            (MODULE.MountRecord("7:7", str(MODULE.AUTHORITY_ROOT / "runner-docker"), ()),),
+            (
+                base,
+                MODULE.MountRecord(
+                    "7:7",
+                    str(MODULE.AUTHORITY_ROOT / "runner-docker"),
+                    (),
+                    "/",
+                ),
+            ),
         )
-        with mock.patch.object(
+        with mock.patch.object(MODULE, "namespace_id", return_value="1:1"), mock.patch.object(
             MODULE,
             "read_namespace_roster_once",
-            side_effect=((mounted,), (first,)),
+            side_effect=((mounted,), (unmounted,)),
         ):
             with self.assertRaisesRegex(
                 MODULE.RunnerStorageLifecycleError,
-                "occurrence roster changed",
+                "(backing anchors|occurrence roster) changed",
             ):
                 MODULE.target_occurrences()
+
+    def test_mountinfo_parser_preserves_decoded_source_root(self) -> None:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as mountinfo:
+            mountinfo.write(
+                "20 1 8:2 /tenant\\040home /home rw shared:1 - ext4 /dev/root rw\n"
+            )
+            mountinfo.flush()
+            self.assertEqual(
+                MODULE.read_mount_records(mountinfo.name),
+                (
+                    MODULE.MountRecord(
+                        "8:2",
+                        "/home",
+                        ("shared:1",),
+                        "/tenant home",
+                    ),
+                ),
+            )
+
+    def test_storage_mount_scan_detects_bind_sources_outside_authority_tree(self) -> None:
+        path = MODULE.AUTHORITY_ROOT / MODULE.OUTER_DOCKER_NAME
+        own = MODULE.NamespaceObservation(
+            "1:1",
+            1,
+            (MODULE.MountRecord("8:1", "/", (), "/"),),
+        )
+        foreign = MODULE.NamespaceObservation(
+            "2:2",
+            2,
+            (
+                MODULE.MountRecord("0:42", "/", (), "/"),
+                MODULE.MountRecord("8:1", "/outside/docker-data", (), str(path)),
+            ),
+        )
+        snapshots = ((own, foreign), (own, foreign))
+        with mock.patch.object(MODULE, "namespace_id", return_value="1:1"), mock.patch.object(
+            MODULE,
+            "read_namespace_roster_once",
+            side_effect=snapshots,
+        ):
+            self.assertEqual(
+                tuple(item.target for item in MODULE.path_occurrences(path)),
+                ("/outside/docker-data",),
+            )
+
+    def test_storage_mount_scan_translates_separate_home_source_coordinate(self) -> None:
+        path = MODULE.AUTHORITY_ROOT / MODULE.OUTER_CONTAINERD_NAME
+        own = MODULE.NamespaceObservation(
+            "1:1",
+            1,
+            (
+                MODULE.MountRecord("8:1", "/", (), "/"),
+                MODULE.MountRecord("8:2", "/home", (), "/tenant-home"),
+            ),
+        )
+        foreign = MODULE.NamespaceObservation(
+            "2:2",
+            2,
+            (
+                MODULE.MountRecord("0:42", "/", (), "/"),
+                MODULE.MountRecord(
+                    "8:2",
+                    "/outside/containerd-data",
+                    (),
+                    "/tenant-home/.ambit-c16b-runner-storage/outer-containerd",
+                ),
+            ),
+        )
+        with mock.patch.object(MODULE, "namespace_id", return_value="1:1"), mock.patch.object(
+            MODULE,
+            "read_namespace_roster_once",
+            side_effect=((own, foreign), (own, foreign)),
+        ):
+            self.assertEqual(
+                tuple(item.target for item in MODULE.path_occurrences(path)),
+                ("/outside/containerd-data",),
+            )
+
+    def test_storage_mount_scan_carries_descendant_filesystem_anchors(self) -> None:
+        target = MODULE.AUTHORITY_ROOT / MODULE.TARGET_NAME
+        own = MODULE.NamespaceObservation(
+            "1:1",
+            1,
+            (
+                MODULE.MountRecord("8:1", "/", (), "/"),
+                MODULE.MountRecord("7:7", str(target), (), "/"),
+            ),
+        )
+        foreign = MODULE.NamespaceObservation(
+            "2:2",
+            2,
+            (
+                MODULE.MountRecord("0:42", "/", (), "/"),
+                MODULE.MountRecord("7:7", "/var/lib/docker", (), "/inner-runner"),
+            ),
+        )
+        with mock.patch.object(MODULE, "namespace_id", return_value="1:1"), mock.patch.object(
+            MODULE,
+            "read_namespace_roster_once",
+            side_effect=((own, foreign), (own, foreign)),
+        ):
+            self.assertEqual(
+                {item.target for item in MODULE.path_occurrences(MODULE.AUTHORITY_ROOT)},
+                {str(target), "/var/lib/docker"},
+            )
+
+    def test_storage_mount_scan_rejects_lexical_source_siblings(self) -> None:
+        path = MODULE.AUTHORITY_ROOT / MODULE.OUTER_DOCKER_NAME
+        own = MODULE.NamespaceObservation(
+            "1:1",
+            1,
+            (MODULE.MountRecord("8:1", "/", (), "/"),),
+        )
+        sibling = MODULE.NamespaceObservation(
+            "2:2",
+            2,
+            (
+                MODULE.MountRecord(
+                    "8:1",
+                    "/outside",
+                    (),
+                    f"{path}-old",
+                ),
+            ),
+        )
+        with mock.patch.object(MODULE, "namespace_id", return_value="1:1"), mock.patch.object(
+            MODULE,
+            "read_namespace_roster_once",
+            side_effect=((own, sibling), (own, sibling)),
+        ):
+            self.assertEqual(MODULE.path_occurrences(path), ())
 
     def test_foreign_target_blocks_image_absent_remove(self) -> None:
         foreign = MODULE.NamespaceOccurrence(
@@ -590,6 +862,8 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
         lease.__enter__.return_value = lease
         with mock.patch.object(
             MODULE, "acquire_runtime_deletion_lease", return_value=lease
+        ), mock.patch.object(
+            MODULE, "reduce_abandoned_pending_for_remove", return_value=False
         ), mock.patch.object(
             MODULE,
             "discover_remove_binding_path",
@@ -926,6 +1200,72 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
         self.assertIn("RECEIPT_PENDING_NAME", helper)
         self.assertIn("PROJECTION_PENDING_NAME", helper)
 
+    def test_relocated_projection_cleanup_uses_only_the_pinned_evidence_inode(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="runner-relocated-projection-", dir=temporary_parent()
+        ) as directory:
+            parent = Path(directory)
+            evidence = parent / "evidence"
+            evidence.mkdir(mode=0o700)
+            projection = evidence / MODULE.USER_PROJECTION_NAME
+            projection.write_text("{}\n", encoding="utf-8")
+            projection.chmod(0o600)
+            evidence_fd = os.open(evidence, os.O_RDONLY | os.O_DIRECTORY)
+            observed = os.fstat(evidence_fd)
+            original = parent / "original-state/evidence"
+            identity = MODULE.DirectoryIdentity(
+                original,
+                observed.st_dev,
+                observed.st_ino,
+                observed.st_uid,
+                observed.st_gid,
+                stat.S_IMODE(observed.st_mode),
+            )
+            relocated_again = parent / "relocated-again"
+            evidence.rename(relocated_again)
+            context = mock.Mock(
+                orphaned_binding=True,
+                state_fd=None,
+                evidence_fd=None,
+                projection_evidence_fd=evidence_fd,
+                evidence_identity=identity,
+                caller_uid=os.getuid(),
+                caller_gid=os.getgid(),
+            )
+            try:
+                MODULE.require_directory_identity_stat(os.fstat(evidence_fd), identity)
+                with mock.patch.object(MODULE, "require_context_binding"):
+                    MODULE.remove_user_projection(context)
+                self.assertFalse((relocated_again / MODULE.USER_PROJECTION_NAME).exists())
+            finally:
+                os.close(evidence_fd)
+
+    def test_deleted_orphan_projection_cleanup_is_an_exact_noop(self) -> None:
+        context = mock.Mock(
+            orphaned_binding=True,
+            state_fd=None,
+            evidence_fd=None,
+            projection_evidence_fd=None,
+        )
+        with mock.patch.object(MODULE, "require_context_binding") as binding, mock.patch.object(
+            MODULE, "lstat_at"
+        ) as observed, mock.patch.object(MODULE.os, "unlink") as unlink:
+            MODULE.remove_user_projection(context)
+        binding.assert_called_once_with(context)
+        observed.assert_not_called()
+        unlink.assert_not_called()
+
+    def test_relocated_binding_transfers_only_projection_cleanup_descriptor(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        opening = source[source.index("def open_authority(") : source.index("def require_trusted_parent_chain")]
+        transfer = opening.index("projection_evidence_fd = evidence_fd")
+        self.assertLess(opening.index("os.close(state_fd)"), transfer)
+        self.assertLess(transfer, opening.index("evidence_fd = None", transfer))
+        self.assertIn("projection_evidence_fd=projection_evidence_fd", opening)
+        binding = source[source.index("def require_context_binding") : source.index("def runtime_authority_paths")]
+        self.assertIn("require_directory_identity_stat(", binding)
+        self.assertIn("os.fstat(context.projection_evidence_fd)", binding)
+
     def test_descriptor_relative_outer_tree_removal_never_follows_symlinks(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="runner-tree-", dir=temporary_parent()
@@ -969,6 +1309,10 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
                 Path(f"/sys/fs/cgroup/ambit-c16b-docker-{identifier}"),
             ),
         )
+        self.assertEqual(
+            MODULE.runtime_lease_path(state_root),
+            MODULE.runtime_lease_path(Path("/home/other/state")),
+        )
         context = mock.Mock()
         context.state_identity.path = state_root
         with mock.patch.object(MODULE.os, "stat", return_value=mock.Mock()):
@@ -977,14 +1321,18 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
                 "runtime authority must be removed",
             ):
                 MODULE.require_runtime_absent(context)
+        self.assertIn(
+            "not task_runtime_authority_roster()",
+            SCRIPT.read_text(encoding="utf-8"),
+        )
         source = SCRIPT.read_text(encoding="utf-8")
         remove = source[source.index("def remove_authority") : source.index("def validate_legacy_v2")]
         self.assertLess(
-            remove.index("discover_remove_binding_path("),
             remove.index("acquire_runtime_deletion_lease("),
+            remove.index("discover_remove_binding_path("),
         )
         self.assertLess(
-            remove.index("acquire_runtime_deletion_lease("),
+            remove.index("discover_remove_binding_path("),
             remove.index("_remove_authority_locked(args)"),
         )
 
@@ -1047,6 +1395,14 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
                 validate.assert_called_once_with(receipt, context)
                 self.assertFalse(pending.exists())
                 self.assertTrue((root / MODULE.RECEIPT_NAME).is_file())
+                source = SCRIPT.read_text(encoding="utf-8")
+                reconcile = source[
+                    source.index("def reconcile_receipt_pending") : source.index("def write_bytes_atomic")
+                ]
+                self.assertLess(
+                    reconcile.index("os.fsync(pending_fd)"),
+                    reconcile.index("os.replace("),
+                )
 
                 (root / MODULE.RECEIPT_NAME).unlink()
                 pending.write_text("{}\n")

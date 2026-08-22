@@ -40,7 +40,6 @@ def recorded_process(
     return {
         "pid": pid,
         "parentPid": parent_pid,
-        "procInode": 1000 + pid,
         "startTimeTicks": 2000 + pid,
         "executable": executable,
         "argumentsSha256": f"{pid % 16:x}" * 64,
@@ -208,6 +207,41 @@ def storage_operation(outcome: str = "activated") -> dict[str, object]:
 
 
 class RuntimeSupervisorPureContractTest(unittest.TestCase):
+    def test_orphan_absent_cleanup_is_serialized_by_the_global_lease(self) -> None:
+        lease = mock.Mock()
+        with mock.patch.object(
+            MODULE,
+            "path_exists_nofollow",
+            side_effect=(False, False, False, False),
+        ), mock.patch.object(
+            MODULE.RuntimeLease,
+            "acquire",
+            return_value=lease,
+        ) as acquire, mock.patch.object(
+            MODULE, "require_no_other_task_runtime"
+        ) as singleton:
+            result = MODULE.ensure_orphaned_runtime_stopped(STATE_ROOT, 1000, 1000)
+        self.assertEqual(result["outcome"], "passed")
+        acquire.assert_called_once_with(STATE_ROOT)
+        singleton.assert_called_once_with(STATE_ROOT)
+        lease.close.assert_called_once_with()
+
+        competing = mock.Mock()
+        with mock.patch.object(
+            MODULE,
+            "path_exists_nofollow",
+            side_effect=(False, True),
+        ), mock.patch.object(
+            MODULE.RuntimeLease,
+            "acquire",
+            return_value=competing,
+        ), self.assertRaisesRegex(
+            MODULE.SupervisorError,
+            "appeared while acquiring the global lease",
+        ):
+            MODULE.ensure_orphaned_runtime_stopped(STATE_ROOT, 1000, 1000)
+        competing.close.assert_called_once_with()
+
     def test_root_control_binds_boot_state_runtime_socket_cgroup_and_sources(self) -> None:
         value, runtime, socket_root, cgroup = control_authority()
         authority = {"validate_recorded_identity": lambda candidate: candidate}
@@ -381,6 +415,10 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         self.assertRegex(str(cgroup), MODULE.CGROUP_PATH_RE)
         self.assertRegex(str(lease), MODULE.LEASE_PATH_RE)
         self.assertEqual(len({runtime, socket_root, cgroup, lease}), 4)
+        self.assertEqual(
+            lease,
+            MODULE.lease_path_for(Path("/home/other/ambit-state")),
+        )
         with mock.patch.object(
             MODULE.os,
             "listdir",
@@ -388,9 +426,22 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
                 ["ambit-c16b-docker-deadbeef0000"],
                 [],
                 [],
+                [],
             ),
         ):
             with self.assertRaisesRegex(MODULE.SupervisorError, "another C16b runtime"):
+                MODULE.require_no_other_task_runtime(STATE_ROOT)
+        with mock.patch.object(
+            MODULE.os,
+            "listdir",
+            side_effect=(
+                [],
+                [],
+                [],
+                ["ambit-c16b-docker-1577287b8182"],
+            ),
+        ):
+            with self.assertRaisesRegex(MODULE.SupervisorError, "legacy /tmp C16b runtime"):
                 MODULE.require_no_other_task_runtime(STATE_ROOT)
 
     def test_every_precontrol_runtime_roster_is_an_exact_creation_prefix(self) -> None:
@@ -1108,6 +1159,7 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
             events.append("storage") or {"projectionDigest": None}
         )
         with (
+            mock.patch.object(MODULE, "require_no_other_task_runtime"),
             mock.patch.object(MODULE, "existing_runtime_identity", return_value=runtime),
             mock.patch.object(MODULE, "load_process_authority", return_value=process_authority),
             mock.patch.object(
@@ -1165,6 +1217,7 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
             "supervisor": control["supervisorProcessIdentity"],
         }
         with (
+            mock.patch.object(MODULE, "require_no_other_task_runtime"),
             mock.patch.object(MODULE, "existing_runtime_identity", return_value=runtime),
             mock.patch.object(MODULE, "load_process_authority", return_value={}),
             mock.patch.object(
@@ -1256,6 +1309,8 @@ class RuntimeSupervisorSourceBoundaryTest(unittest.TestCase):
         self.assertIn("self.precontrol_source_directory", recovery)
         self.assertNotIn("/docker.sock", str(MODULE.runtime_root_for(STATE_ROOT)))
         self.assertIn("recover_existing_runtime(orphaned=True)", SCRIPT.read_text())
+        self.assertIn("legacy /tmp C16b runtime", SCRIPT.read_text())
+        self.assertIn("blocked:", start)
 
     def test_pinned_support_sources_match_the_frozen_storage_base(self) -> None:
         identity = SCRIPT.with_name(MODULE.PROCESS_IDENTITY_NAME)

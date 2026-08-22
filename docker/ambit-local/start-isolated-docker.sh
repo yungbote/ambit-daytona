@@ -43,7 +43,7 @@ evidence_root=${state_root}/evidence
 
 script_dir=$(cd "$(/usr/bin/dirname -- "${BASH_SOURCE[0]}")" && /usr/bin/pwd -P)
 supervisor=${script_dir}/isolated_runtime_supervisor.py
-supervisor_sha256=2b4bb856179d34336ef640079f26649fbbc1e8540ebaaa8764739cac01aa26aa
+supervisor_sha256=0160a3562835a09b485bf6dd3986f0502f8873a11e6bd38a2dbe624395be4f9f
 
 read -r -d '' pinned_loader <<'PY' || true
 import hashlib
@@ -213,8 +213,13 @@ expected_state, expected_socket = sys.argv[1:]
 value = json.load(sys.stdin)
 if not isinstance(value, dict) or value.get("schema") != "ambit.local-daytona-isolated-docker-status/v1":
     raise SystemExit(66)
-if value.get("stateRoot") != expected_state or value.get("outcome") not in ("absent", "starting", "ready"):
+if value.get("stateRoot") != expected_state or value.get("outcome") not in ("absent", "starting", "ready", "blocked"):
     raise SystemExit(66)
+if value["outcome"] == "blocked":
+    if set(value) != {"schema", "outcome", "stateRoot", "error"} or not isinstance(value["error"], str):
+        raise SystemExit(66)
+    print("blocked:" + value["error"])
+    raise SystemExit(0)
 if value["outcome"] != "ready":
     print(value["outcome"])
     raise SystemExit(0)
@@ -240,6 +245,10 @@ if status_value=$(invoke_supervisor status 2>/dev/null); then
   if [[ ${parsed} == "${socket}" ]]; then
     printf 'export DOCKER_HOST=unix://%s\n' "${socket}"
     exit 0
+  fi
+  if [[ ${parsed} == blocked:* ]]; then
+    echo "${parsed#blocked:}" >&2
+    exit 65
   fi
 fi
 
@@ -285,6 +294,10 @@ for _ in $(/usr/bin/seq 1 1800); do
       printf 'export DOCKER_HOST=unix://%s\n' "${socket}"
       exit 0
     fi
+    if [[ ${parsed} == blocked:* ]]; then
+      echo "${parsed#blocked:}" >&2
+      exit 65
+    fi
   elif [[ ${launcher_active} == false ]]; then
     /usr/bin/sleep 0.5
     launch_runtime
@@ -301,6 +314,10 @@ for _ in $(/usr/bin/seq 1 1800); do
         exec {supervisor_log_fd}>&-
         printf 'export DOCKER_HOST=unix://%s\n' "${socket}"
         exit 0
+      fi
+      if [[ ${parsed} == blocked:* ]]; then
+        echo "${parsed#blocked:}" >&2
+        exit 65
       fi
       if [[ ${parsed} == absent ]]; then
         echo "isolated runtime supervisor exited before readiness (status ${status})" >&2

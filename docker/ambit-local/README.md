@@ -61,9 +61,11 @@ driver and the empty boundary as `cgroup-parent`, so provider workloads are
 siblings of the runtime leaf but descendants of the same `cgroup.kill`
 authority. It is the direct parent of the dedicated containerd and dockerd.
 All three process identities bind
-exact executable, full argument digest, process start/proc inode, and mount
+exact executable, full argument digest, process start ticks, and mount
 namespace device/inode plus exact cgroup path. Parent PID remains a live-
-topology assertion rather than immutable recovery identity. Provider containers correctly have separate
+topology assertion rather than immutable recovery identity; procfs directory
+inodes are deliberately excluded because the kernel can reinstantiate them for
+the same long-lived process. Provider containers correctly have separate
 child namespaces; their storage acceptance is the exact XFS device/UUID
 exposed at the runner's `/var/lib/docker`, not namespace-inode equality.
 
@@ -72,7 +74,13 @@ unrenameable authority `/home/.ambit-c16b-runner-storage`. Before that root can
 exist, the helper durably publishes a domain-separated, hash-named, root-owned
 claim directly below `/home`; the filename and durably stored canonical bytes
 bind the exact caller, `STATE_ROOT`, and evidence-directory
-device/inode/owner/group/mode. The flock on the pinned
+device/inode/owner/group/mode. Claim bytes are first written and file-fsynced
+under one fixed admitted pending name, then atomically renamed to the final
+hash name and followed by a `/home` fsync, so a published final claim is never
+partial. A prepublication pending node is reducible only while the final claim,
+storage authority, every task runtime/cgroup, and every source- or target-side
+storage mount are all absent. A pending node beside an authority is deliberate
+fail-closed admin evidence, not guessed or discarded. The flock on the pinned
 `/home` descriptor is the sole lifecycle lock, so there is no crash-prone lock
 file. That flock is advisory under the explicit single-user local-host model:
 an unrelated holder can cause the bounded availability timeout, but cannot
@@ -102,14 +110,21 @@ receipt is file-fsynced, atomically renamed, and followed by an
 authority-directory fsync before success; its user projection receives the
 same durable ordering. Random crash-temp names are not admitted. Old receipt
 versions are never reinterpreted as v3. `remove-runner-storage.sh --legacy-v2`
-is a separate remove-only transition: it re-proves the exact existing v2
-state/image/receipt, publishes the v3 claim before mutation, then removes the
-legacy lock and receipt before using the ordinary reducer. Normal activation
-never adopts legacy state. If the caller renames or deletes `STATE_ROOT`, the
+is a separate remove-only transition for a fully published v2 authority: it
+re-proves the exact existing state/image/receipt, retains the old lifecycle
+flock, publishes the v3 claim before mutation, reduces only the historical
+fixed-shape random receipt temporaries, then removes the legacy lock and receipt
+before using the ordinary reducer. A prepublication/partial-image v2 authority
+or a migration pending claim beside an authority remains explicit admin
+recovery rather than being silently rebound. Normal activation never adopts
+legacy state. If the caller renames or deletes `STATE_ROOT`, the
 root claim and root runtime control retain the original binding: stop can be
 invoked with the absent original path, and storage removal can use either that
 original spelling or a relocated directory with the same immutable identity.
-Neither route republishes or adopts the authority under a new normal path.
+Neither route republishes or adopts the authority under a new normal path. A
+relocated evidence directory contributes only its descriptor-pinned capability
+to delete the nonauthoritative user projection; it never becomes receipt,
+runtime, or root-storage authority.
 
 The dedicated containerd configuration uses schema v3, so the supervisor
 preflights and requires containerd 2.x or later before launching it. The
@@ -122,8 +137,12 @@ exact no-receipt startup-abort state. Only exact target length can format or
 recover. Startup/deactivation response loss is idempotent, without fabricating
 receipt authority. Teardown scans two stable passes of every mount namespace
 observable through `/proc`, rejecting unreadable, changing, second, nested, or
-foreign loop/target occurrences. The provider and daemon children must stop
-before private unmount/detach. A namespace pinned without a live `/proc`
+foreign loop/target occurrences. Storage-tree checks translate the trusted
+namespace path into device plus filesystem-root coordinates and carry nested
+filesystem anchors, so a bind source below the authority mounted at an
+unrelated target is also a blocking occurrence. The provider and daemon
+children must stop before private unmount/detach. A namespace pinned without a
+live `/proc`
 representative remains outside the source proof; choosing one representative
 also inherits that process's mountinfo/chroot visibility. These are explicit
 live acceptance limits, not a claimed global proof. Static tests establish reducer and authority logic only; they
@@ -137,6 +156,9 @@ first authorized live candidate; if an operator has independently run an older
 v4 prototype, they must stop it with that exact frozen source (or perform an
 explicit root-admin purge) before using the v5 launcher. Persistent v2 storage
 has the separate authenticated `--legacy-v2` remove-only path described above.
+The v5 status/start/absent-stop path also rejects any legacy
+`/tmp/ambit-c16b-docker-*` runtime directory with a precise drain diagnostic;
+caller-writable old receipts never authorize a signal or cgroup kill.
 
 The supervisor first publishes root-owned, canonical control v2 and ready v5
 manifests; caller-owned control/start files are projections only and never

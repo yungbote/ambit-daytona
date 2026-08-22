@@ -58,7 +58,6 @@ class IsolatedProcessIdentityTest(unittest.TestCase):
         self.assertEqual(receipt["pid"], self.process.pid)
         self.assertEqual(receipt["parentPid"], os.getpid())
         self.assertEqual(receipt["executable"], str(self.executable))
-        self.assertGreater(receipt["procInode"], 0)
         self.assertGreater(receipt["startTimeTicks"], 0)
         own_namespace = os.stat("/proc/self/ns/mnt")
         self.assertEqual(
@@ -126,7 +125,7 @@ class IsolatedProcessIdentityTest(unittest.TestCase):
         mutations: list[tuple[str, object]] = []
 
         missing = copy.deepcopy(valid)
-        del missing["procInode"]
+        del missing["startTimeTicks"]
         mutations.append(("missing field", missing))
 
         extra = copy.deepcopy(valid)
@@ -136,7 +135,6 @@ class IsolatedProcessIdentityTest(unittest.TestCase):
         field_values = {
             "pid": False,
             "parentPid": 0,
-            "procInode": 0,
             "startTimeTicks": -1,
             "executable": "usr/bin/sleep",
             "argumentsSha256": "A" * 64,
@@ -190,7 +188,6 @@ class IsolatedProcessIdentityTest(unittest.TestCase):
         mutations: list[tuple[str, object]] = [
             ("pid", os.getpid()),
             ("parentPid", recorded["parentPid"] + 1),
-            ("procInode", recorded["procInode"] + 1),
             ("startTimeTicks", recorded["startTimeTicks"] + 1),
             ("executable", str(Path("/usr/bin/true").resolve(strict=True))),
             ("argumentsSha256", "0" * 64),
@@ -232,7 +229,7 @@ class IsolatedProcessIdentityTest(unittest.TestCase):
     def test_pid_reuse_after_pidfd_open_is_modeled_as_no_signal(self) -> None:
         recorded = self.recorded_identity()
         replacement = copy.deepcopy(recorded)
-        replacement["procInode"] = recorded["procInode"] + 1
+        replacement["startTimeTicks"] = recorded["startTimeTicks"] + 1
         read_fd, write_fd = os.pipe()
         self.addCleanup(os.close, write_fd)
         events: list[str] = []
@@ -251,7 +248,7 @@ class IsolatedProcessIdentityTest(unittest.TestCase):
             mock.patch.object(MODULE, "verify_process", side_effect=observe_reused_pid),
             mock.patch.object(MODULE.signal, "pidfd_send_signal") as sender,
         ):
-            with self.assertRaisesRegex(MODULE.ProcessIdentityError, "procInode differs"):
+            with self.assertRaisesRegex(MODULE.ProcessIdentityError, "startTimeTicks differs"):
                 MODULE.signal_recorded_process(
                     recorded,
                     expected_uid=os.geteuid(),
@@ -507,7 +504,6 @@ class IsolatedProcessIdentityTest(unittest.TestCase):
                 {
                     "pid": self.process.pid,
                     "parentPid": os.getpid(),
-                    "procInode": 1,
                     "startTimeTicks": 1,
                     "executable": str(self.executable),
                     "argumentsSha256": "0" * 64,

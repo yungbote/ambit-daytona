@@ -42,7 +42,6 @@ ARGUMENTS_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RECORDED_PROCESS_FIELDS = {
     "pid",
     "parentPid",
-    "procInode",
     "startTimeTicks",
     "executable",
     "argumentsSha256",
@@ -228,7 +227,6 @@ def verify_process(
         return {
             "pid": pid,
             "parentPid": first_parent_pid,
-            "procInode": directory_stat.st_ino,
             "startTimeTicks": first_start_time,
             "executable": str(expected_executable),
             "argumentsSha256": arguments_sha256,
@@ -272,12 +270,6 @@ def validate_recorded_identity(value: object) -> dict[str, object]:
             "recorded parent process id",
             positive=True,
             maximum=MAX_PID,
-        ),
-        "procInode": _plain_int(
-            value["procInode"],
-            "recorded process directory inode",
-            positive=True,
-            maximum=MAX_KERNEL_IDENTITY,
         ),
         "startTimeTicks": _plain_int(
             value["startTimeTicks"],
