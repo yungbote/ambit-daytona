@@ -92,43 +92,13 @@ script_source=${BASH_SOURCE[0]}
 script_source=$(/usr/bin/realpath -e -- "${script_source}")
 script_dir=${script_source%/*}
 supervisor=${script_dir}/isolated_runtime_supervisor.py
-supervisor_sha256=69138beedc9ff533ba5f86bcd9bc982cd3147f865e428c838a6c13053005643c
+supervisor_sha256=b2218fae7e5b63c8baab79367e133151c8073bfc115f28271b7aba025080eec9
 observed_supervisor_sha=$(/usr/bin/sha256sum -- "${supervisor}")
 observed_supervisor_sha=${observed_supervisor_sha%% *}
 [[ ${observed_supervisor_sha} == "${supervisor_sha256}" ]] || {
   echo 'isolated runtime supervisor source digest differs' >&2
   exit 66
 }
-
-read -r -d '' pinned_loader <<'PY' || true
-import hashlib
-import hmac
-import os
-import stat
-import sys
-
-path, expected, *arguments = sys.argv[1:]
-descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-try:
-    identity = os.fstat(descriptor)
-    if not stat.S_ISREG(identity.st_mode) or not 0 < identity.st_size <= 2 * 1024 * 1024:
-        raise SystemExit("pinned Python source identity is invalid")
-    source = bytearray()
-    while True:
-        block = os.read(descriptor, 1024 * 1024)
-        if not block:
-            break
-        source.extend(block)
-finally:
-    os.close(descriptor)
-if not hmac.compare_digest(hashlib.sha256(source).hexdigest(), expected):
-    raise SystemExit("pinned Python source digest differs")
-sys.argv = [path, *arguments]
-globals()["__file__"] = path
-globals()["__package__"] = None
-globals()["__verified_source_sha256__"] = expected
-exec(compile(source, path, "exec"), globals(), globals())
-PY
 
 read -r -d '' runtime_snapshot_loader <<'PY' || true
 import hashlib
@@ -171,9 +141,10 @@ if descriptor is None:
     descriptor = os.open(fallback_path, os.O_RDONLY | os.O_NOFOLLOW)
 try:
     identity = os.fstat(descriptor)
-    if not stat.S_ISREG(identity.st_mode) or not 0 < identity.st_size <= 2 * 1024 * 1024:
+    if (not stat.S_ISREG(identity.st_mode) or identity.st_size > 2 * 1024 * 1024
+            or (identity.st_size == 0 and (chosen == fallback_path or control_present))):
         raise SystemExit("runtime supervisor source identity is invalid")
-    if chosen != fallback_path and not (identity.st_uid == 0 and identity.st_gid == 0 and stat.S_IMODE(identity.st_mode) == 0o400):
+    if chosen != fallback_path and not (identity.st_uid == 0 and identity.st_gid == 0 and identity.st_nlink == 1 and identity.st_dev == root.st_dev and stat.S_IMODE(identity.st_mode) == 0o400):
         raise SystemExit("runtime supervisor snapshot authority differs")
     source = bytearray()
     while True:
@@ -207,6 +178,7 @@ sys.argv = [chosen, *arguments]
 globals()["__file__"] = chosen
 globals()["__package__"] = None
 globals()["__verified_source_sha256__"] = actual
+globals()["__fallback_script_directory__"] = os.path.dirname(fallback_path)
 exec(compile(source, chosen, "exec"), globals(), globals())
 PY
 
@@ -229,6 +201,8 @@ first_status=$(invoke_status)
   .ready.storage.lifecycleSchema == "ambit.local-daytona-runner-storage-operation/v3" and
   .ready.storage.receiptSchema == "ambit.local-daytona-runner-storage/v3" and
   .ready.storage.innerRunnerDataRoot.path == "/home/.ambit-c16b-runner-storage/runner-docker/inner-runner" and
+  (.ready.workloadCgroupParent | test("^/ambit-c16b-docker-[0-9a-f]{12}$")) and
+  .ready.cgroup.path == ("/sys/fs/cgroup" + .ready.workloadCgroupParent) and
   .ready.dataRoot == "/home/.ambit-c16b-runner-storage/outer-docker" and
   .ready.containerd.root == "/home/.ambit-c16b-runner-storage/outer-containerd"
 ' <<<"${first_status}" >/dev/null || { echo 'root runtime status authority is invalid' >&2; exit 66; }
@@ -265,7 +239,10 @@ os.environ.update({"HOME":"/root","LC_ALL":"C.UTF-8","PATH":"/usr/bin:/bin","SUD
 descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
 try:
     identity = os.fstat(descriptor)
-    if not (stat.S_ISREG(identity.st_mode) and identity.st_uid == 0 and identity.st_gid == 0 and stat.S_IMODE(identity.st_mode) == 0o400 and 0 < identity.st_size <= 2 * 1024 * 1024):
+    root = os.stat(os.path.dirname(path), follow_symlinks=False)
+    if not (stat.S_ISDIR(root.st_mode) and root.st_uid == 0 and root.st_gid == 0 and stat.S_IMODE(root.st_mode) == 0o700):
+        raise SystemExit("runtime storage snapshot root differs")
+    if not (stat.S_ISREG(identity.st_mode) and identity.st_uid == 0 and identity.st_gid == 0 and identity.st_nlink == 1 and identity.st_dev == root.st_dev and stat.S_IMODE(identity.st_mode) == 0o400 and 0 < identity.st_size <= 2 * 1024 * 1024):
         raise SystemExit("runtime storage helper snapshot identity differs")
     source = bytearray()
     while True:
@@ -310,16 +287,71 @@ expected_storage_digest=$(/usr/bin/jq -er '.storage.projectionDigest' <<<"${read
   .receipt.innerRunnerDataRoot.path == "/home/.ambit-c16b-runner-storage/runner-docker/inner-runner"
 ' <<<"${storage_operation}" >/dev/null || { echo 'private namespace storage observation is invalid' >&2; exit 66; }
 
-projection=${evidence_root}/runner-docker-storage.json
-[[ $(/usr/bin/stat -c '%u:%g:%a:%F' -- "${projection}") == "${caller_uid}:${caller_gid}:600:regular file" ]] || {
-  echo 'runner storage projection authority differs' >&2
+projection_digests=$(
+  /usr/bin/python3 -I -S -B -c '
+import hashlib, json, os, stat, sys
+evidence_path, expected_digest, expected_uid, expected_gid = sys.argv[1:]
+parent = os.open(evidence_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+try:
+    parent_identity = os.fstat(parent)
+    if not (stat.S_ISDIR(parent_identity.st_mode) and parent_identity.st_uid == int(expected_uid)
+            and parent_identity.st_gid == int(expected_gid) and stat.S_IMODE(parent_identity.st_mode) == 0o700):
+        raise SystemExit(66)
+    descriptor = os.open("runner-docker-storage.json", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+    try:
+        identity = os.fstat(descriptor)
+        literal = os.stat("runner-docker-storage.json", dir_fd=parent, follow_symlinks=False)
+        if not (stat.S_ISREG(identity.st_mode) and identity.st_uid == int(expected_uid)
+                and identity.st_gid == int(expected_gid) and stat.S_IMODE(identity.st_mode) == 0o600
+                and identity.st_nlink == 1 and identity.st_dev == parent_identity.st_dev
+                and (identity.st_dev, identity.st_ino) == (literal.st_dev, literal.st_ino)
+                and 0 < identity.st_size <= 1024 * 1024):
+            raise SystemExit(66)
+        raw = bytearray()
+        while True:
+            block = os.read(descriptor, 64 * 1024)
+            if not block:
+                break
+            raw.extend(block)
+    finally:
+        os.close(descriptor)
+finally:
+    os.close(parent)
+def object_no_duplicates(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON key")
+        value[key] = item
+    return value
+document = json.loads(raw, object_pairs_hook=object_no_duplicates)
+if (not isinstance(document, dict)
+        or set(document) != {"schema", "authorityReceiptSha256", "receipt"}
+        or document.get("schema") != "ambit.local-daytona-runner-storage-projection/v2"
+        or document.get("authorityReceiptSha256") != expected_digest
+        or not isinstance(document.get("receipt"), dict)
+        or document["receipt"].get("schema") != "ambit.local-daytona-runner-storage/v3"):
+    raise SystemExit(66)
+whole_canonical = (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode()
+if raw != whole_canonical:
+    raise SystemExit(66)
+canonical = (json.dumps(document["receipt"], sort_keys=True, separators=(",", ":")) + "\n").encode()
+receipt_digest = hashlib.sha256(canonical).hexdigest()
+if receipt_digest != expected_digest:
+    raise SystemExit(66)
+print(receipt_digest, hashlib.sha256(raw).hexdigest())
+' "${evidence_root}" "${expected_storage_digest}" "${caller_uid}" "${caller_gid}"
+)
+projection_receipt_digest=${projection_digests%% *}
+projection_file_digest=${projection_digests#* }
+[[ ${projection_receipt_digest} =~ ^[0-9a-f]{64}$ && ${projection_file_digest} =~ ^[0-9a-f]{64}$ ]] || {
+  echo 'runner storage projection digest output is invalid' >&2
   exit 66
 }
-/usr/bin/jq -e --arg digest "${expected_storage_digest}" '
-  .schema == "ambit.local-daytona-runner-storage-projection/v2" and
-  .authorityReceiptSha256 == $digest and
-  .receipt.schema == "ambit.local-daytona-runner-storage/v3"
-' "${projection}" >/dev/null || { echo 'runner storage projection differs from root authority' >&2; exit 66; }
+[[ ${projection_receipt_digest} == "${expected_storage_digest}" ]] || {
+  echo 'runner storage projection payload digest differs from root authority' >&2
+  exit 66
+}
 
 socket=$(/usr/bin/jq -er '.socket' <<<"${ready}")
 [[ ${socket} == "${expected_socket}" ]] || { echo 'root ready API socket differs from derived authority' >&2; exit 66; }
@@ -377,7 +409,8 @@ trap 'exit 143' TERM
   --arg stateRoot "${state_root}" --arg dockerHost "${DOCKER_HOST}" \
   --arg dockerRoot "${docker_root}" --arg dockerServerId "${docker_server_id}" \
   --arg rootReadySha256 "$(/usr/bin/jq -er '.rootReadySha256' <<<"${first_status}")" \
-  --arg projectionSha256 "$({ /usr/bin/sha256sum -- "${projection}"; } | /usr/bin/awk '{print $1}')" \
+  --arg cgroupParent "$(/usr/bin/jq -er '.workloadCgroupParent' <<<"${ready}")" \
+  --arg projectionSha256 "${projection_file_digest}" \
   --argjson cpu "${cpu_count}" --argjson memory "${memory_available_bytes}" \
   --argjson storage "${storage_available_bytes}" --argjson reasons "${reasons_json}" \
   --argjson namespace "${namespace}" \
@@ -401,7 +434,8 @@ trap 'exit 143' TERM
     isolatedDaemon:{
       dockerHost:$dockerHost,dockerRoot:$dockerRoot,serverId:$dockerServerId,
       mountNamespace:$namespace,supervisor:$supervisor,containerd:$containerd,dockerd:$dockerd,
-      socketRootIdentity:$socketRoot,socketIdentity:$socketIdentity,rootReadySha256:$rootReadySha256
+      socketRootIdentity:$socketRoot,socketIdentity:$socketIdentity,rootReadySha256:$rootReadySha256,
+      workloadCgroupParent:$cgroupParent
     },
     runnerStorage:$runnerStorage,
     runnerStorageProjectionSha256:$projectionSha256,

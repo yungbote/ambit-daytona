@@ -45,6 +45,7 @@ def recorded_process(
         "executable": executable,
         "argumentsSha256": f"{pid % 16:x}" * 64,
         "mountNamespace": namespace,
+        "cgroup": f"/{MODULE.cgroup_path_for(STATE_ROOT).name}/{MODULE.CGROUP_EXECUTION_NAME}",
     }
 
 
@@ -247,6 +248,28 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
                             process_authority=authority,
                         )
 
+    def test_root_control_authorizes_remove_only_orphaned_state_recovery(self) -> None:
+        control, _, _, _ = control_authority()
+        stored = MODULE._stored_state_authority_from_control(
+            control,
+            STATE_ROOT,
+            1000,
+            1000,
+        )
+        self.assertEqual(stored.path, STATE_ROOT)
+        self.assertEqual(stored.identity_json()["stateRoot"], control["stateRootIdentity"])
+        for wrong_path, wrong_uid in (
+            (Path("/home/example/other"), 1000),
+            (STATE_ROOT, 1001),
+        ):
+            with self.assertRaises(MODULE.SupervisorError):
+                MODULE._stored_state_authority_from_control(
+                    control,
+                    wrong_path,
+                    wrong_uid,
+                    1000,
+                )
+
     def test_root_ready_separates_outer_daemon_roots_from_inner_runner_xfs(self) -> None:
         control, runtime, socket_root, cgroup = control_authority()
         socket_identity = MODULE.SocketPathIdentity(
@@ -273,6 +296,7 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
             "supervisorProcessIdentity": control["supervisorProcessIdentity"],
             "mountNamespace": control["mountNamespace"],
             "cgroup": cgroup.json(),
+            "workloadCgroupParent": f"/{cgroup.path.name}",
             "storage": MODULE.normalize_storage_operation(
                 storage_operation(),
                 expected_outcome="activated",
@@ -382,6 +406,26 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
             with self.assertRaises(MODULE.SupervisorError):
                 MODULE.classify_precontrol_roster(invalid)
 
+    def test_legacy_v4_caller_receipts_cannot_authorize_signal_or_kill(self) -> None:
+        runtime = MODULE.RuntimeIdentity(
+            MODULE.runtime_root_for(STATE_ROOT), 1, 2, 0, 0, 0o700
+        )
+        with mock.patch.object(MODULE, "verify_runtime_root", return_value=31), mock.patch.object(
+            MODULE.os,
+            "listdir",
+            return_value=["dockerd.json", "docker.sock", MODULE.STORAGE_LIFECYCLE_NAME],
+        ), mock.patch.object(MODULE.os, "close"):
+            with self.assertRaisesRegex(MODULE.SupervisorError, "legacy v4 runtime"):
+                MODULE.reject_legacy_v4_runtime_roster(runtime)
+        source = SCRIPT.read_text(encoding="utf-8")
+        ensure = source[source.index("def ensure_runtime_stopped") : source.index("def ensure_orphaned_runtime_stopped")]
+        validated = ensure.index("_validated_existing_authorities(")
+        signal_call = ensure.index('process_authority["signal_recorded_process"]')
+        cgroup_kill = ensure.index("kill_cgroup_and_wait(")
+        self.assertLess(validated, signal_call)
+        self.assertLess(validated, cgroup_kill)
+        self.assertNotIn("CONTROL_RECEIPT_NAME", ensure[:signal_call])
+
     def test_real_docker_daemon_id_contract_is_bounded_and_opaque(self) -> None:
         production = "EKHL:QDUU:QZ7U:MKGD:VDXK:S27Q:GIPU:24B7:R7VT:DGN6:QCSF:2UBX"
         self.assertEqual(MODULE.validate_docker_daemon_id(production), production)
@@ -397,23 +441,56 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
                 with self.assertRaises(MODULE.SupervisorError):
                     MODULE.validate_docker_daemon_id(candidate)
 
+    def test_containerd_v3_config_requires_a_v2_or_later_binary(self) -> None:
+        observed = "containerd github.com/containerd/containerd/v2 v2.2.2 deadbeef"
+        self.assertEqual(MODULE.require_containerd_v2_or_later(observed), observed)
+        with self.assertRaises(MODULE.SupervisorError):
+            MODULE.require_containerd_v2_or_later(
+                "containerd github.com/containerd/containerd v1.7.27 deadbeef"
+            )
+        installed = subprocess.run(
+            ["/usr/bin/containerd", "--version"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        ).stdout.strip()
+        self.assertEqual(MODULE.require_containerd_v2_or_later(installed), installed)
+
     def test_docker_config_uses_exact_caller_group_and_split_socket(self) -> None:
-        value = json.loads(
-            MODULE.docker_config(
+        encoded = MODULE.docker_config(
                 data_root=MODULE.AUTHORITY_ROOT / "outer-docker",
                 exec_root=Path("/run/ambit-c16b-docker-0123456789ab/docker-exec"),
                 pidfile=Path("/run/ambit-c16b-docker-0123456789ab/docker.pid"),
                 socket=Path("/run/ambit-c16b-docker-api-0123456789ab/docker.sock"),
                 socket_gid=1000,
                 containerd_socket=Path("/run/ambit-c16b-docker-0123456789ab/containerd.sock"),
+                cgroup_parent="/ambit-c16b-docker-0123456789ab",
             )
-        )
+        value = json.loads(encoded)
         self.assertEqual(value["group"], "1000")
         self.assertEqual(
             value["hosts"],
             ["unix:///run/ambit-c16b-docker-api-0123456789ab/docker.sock"],
         )
         self.assertEqual(value["data-root"], str(MODULE.AUTHORITY_ROOT / "outer-docker"))
+        self.assertEqual(value["cgroup-parent"], "/ambit-c16b-docker-0123456789ab")
+        self.assertEqual(value["exec-opts"], ["native.cgroupdriver=cgroupfs"])
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            prefix="ambit-dockerd-config-",
+            suffix=".json",
+        ) as config:
+            config.write(encoded)
+            config.flush()
+            completed = subprocess.run(
+                ["/usr/bin/dockerd", "--validate", "--config-file", config.name],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_nonroot_caller_can_traverse_and_connect_to_split_api_socket(self) -> None:
         self.assertNotEqual(os.geteuid(), 0, "permission proof must run as the caller")
@@ -458,8 +535,30 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         self.assertLess(enter_cgroup, control)
         self.assertLess(control, first_child)
         self.assertIn('"cgroup.kill"', source)
-        self.assertNotIn("cgroup.subtree_control", source)
+        self.assertIn('"cgroup.subtree_control"', source)
+        self.assertIn('{"cpu", "memory", "pids"}', source)
+        self.assertIn("CGROUP_EXECUTION_NAME", source)
+        creation = source[source.index("def create_cgroup") : source.index("def open_cgroup")]
+        self.assertLess(
+            creation.index('"cgroup.subtree_control"'),
+            creation.index("os.mkdir(CGROUP_EXECUTION_NAME"),
+        )
+        cleanup = source[
+            source.index("def remove_empty_cgroup_children") : source.index("def create_runtime_root")
+        ]
+        self.assertLess(
+            cleanup.index("remove_empty_cgroup_children(child)"),
+            cleanup.index("os.rmdir(name"),
+        )
         self.assertNotIn("systemctl", source)
+        installed_controllers = set(
+            Path("/sys/fs/cgroup/cgroup.controllers").read_text(encoding="ascii").split()
+        )
+        delegated_controllers = set(
+            Path("/sys/fs/cgroup/cgroup.subtree_control").read_text(encoding="ascii").split()
+        )
+        self.assertTrue({"cpu", "memory", "pids"} <= installed_controllers)
+        self.assertTrue({"cpu", "memory", "pids"} <= delegated_controllers)
 
     def test_boot_lifetime_lease_is_never_unlinked_or_inherited(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
@@ -491,6 +590,11 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         recovery = source[source.index("def recover_existing_runtime") : source.index("def setup")]
         self.assertIn("read_root_manifest(runtime, ROOT_CONTROL_NAME)", recovery)
         self.assertNotIn("CONTROL_RECEIPT_NAME", recovery)
+        shutdown = source[source.index("def try_shutdown") : source.index("def run(self)")]
+        self.assertLess(
+            shutdown.index("self.write_shutdown_intent(reason)"),
+            shutdown.index('self.terminate_daemon("dockerd"'),
+        )
 
     def test_daemon_preexec_sets_parent_death_signal_and_closes_fork_race(self) -> None:
         libc = mock.Mock()
@@ -694,14 +798,24 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         ):
             with self.assertRaises(MODULE.SupervisorError):
                 MODULE.task_netns_mounts(runtime_root, candidate)
-        other = runtime_root / "containerd-state/residual"
-        mixed = (
-            f"42 36 0:35 / {target} rw - nsfs nsfs rw\n"
-            f"43 36 0:36 / {other} rw - tmpfs tmpfs rw\n"
+    def test_runtime_cleanup_detects_bind_sources_mounted_elsewhere(self) -> None:
+        runtime = Path("/run/ambit-c16b-docker-0123456789ab")
+        root_backed = (
+            "20 1 8:1 / / rw - ext4 /dev/root rw\n"
+            f"21 20 8:1 {runtime}/isolated_runtime_supervisor.py /outside/snapshot.py rw - ext4 /dev/root rw\n"
         )
         self.assertEqual(
-            MODULE.mount_targets_below(runtime_root, mixed),
-            (target, other),
+            MODULE.mount_references_under(root_backed, runtime),
+            ("/outside/snapshot.py",),
+        )
+        run_backed = (
+            "20 1 8:1 / / rw - ext4 /dev/root rw\n"
+            "21 20 0:31 / /run rw - tmpfs tmpfs rw\n"
+            f"22 21 0:31 /{runtime.name}/docker.sock /outside/docker.sock rw - tmpfs tmpfs rw\n"
+        )
+        self.assertEqual(
+            MODULE.mount_references_under(run_backed, runtime),
+            ("/outside/docker.sock",),
         )
 
     def test_pinned_loader_ignores_hostile_cwd_and_pythonpath(self) -> None:
@@ -789,6 +903,10 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
             0o660,
         )
         value.root_control_digest = DIGEST
+        value.root_stopping_digest = None
+        value.write_shutdown_intent = lambda reason: setattr(
+            value, "root_stopping_digest", "e" * 64
+        )
         return value
 
     def test_shutdown_order_keeps_storage_until_daemons_and_netns_are_gone(self) -> None:
@@ -796,6 +914,10 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
         events: list[str] = []
         supervisor.write_control_receipt = lambda outcome="active": events.append(
             f"control-{outcome}"
+        )
+        supervisor.write_shutdown_intent = lambda reason: (
+            events.append("root-stopping"),
+            setattr(supervisor, "root_stopping_digest", "e" * 64),
         )
         supervisor.terminate_daemon = lambda name, process: events.append(name)
         supervisor.cleanup_task_netns = lambda: events.append("netns")
@@ -812,6 +934,7 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
                 lambda expected: events.append("reaped"),
             ),
             mock.patch.object(MODULE, "remove_socket_root", lambda *args: events.append("socket")),
+            mock.patch.object(MODULE, "read_root_manifest", return_value=None),
             mock.patch.object(MODULE, "write_root_manifest", return_value="c" * 64),
             mock.patch.object(MODULE, "current_boot_id", return_value="12345678-1234-1234-1234-123456789abc"),
         ):
@@ -819,6 +942,7 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
         self.assertEqual(
             events,
             [
+                "root-stopping",
                 "control-stopping",
                 "dockerd",
                 "containerd",
@@ -897,6 +1021,7 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
         with (
             mock.patch.object(MODULE, "wait_for_adopted_children"),
             mock.patch.object(MODULE, "remove_socket_root"),
+            mock.patch.object(MODULE, "read_root_manifest", return_value=None),
             mock.patch.object(MODULE, "write_root_manifest", write_manifest),
             mock.patch.object(
                 MODULE,
@@ -925,6 +1050,7 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
         with (
             mock.patch.object(MODULE, "wait_for_adopted_children"),
             mock.patch.object(MODULE, "remove_socket_root", lambda *args: events.append("socket")),
+            mock.patch.object(MODULE, "read_root_manifest", return_value=None),
             mock.patch.object(MODULE, "write_root_manifest", return_value="c" * 64),
             mock.patch.object(
                 MODULE,
@@ -976,7 +1102,7 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
             mock.patch.object(
                 MODULE,
                 "read_root_manifest",
-                side_effect=(control, None, None),
+                side_effect=(control, None, None, None),
             ),
             mock.patch.object(MODULE, "validate_control_authority", return_value=validated),
             mock.patch.object(MODULE, "verify_socket_root", side_effect=lambda *args: events.append("socket-proof") or 31),
@@ -1030,7 +1156,11 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
         with (
             mock.patch.object(MODULE, "existing_runtime_identity", return_value=runtime),
             mock.patch.object(MODULE, "load_process_authority", return_value={}),
-            mock.patch.object(MODULE, "read_root_manifest", side_effect=(control, None, None)),
+            mock.patch.object(
+                MODULE,
+                "read_root_manifest",
+                side_effect=(control, None, None, None),
+            ),
             mock.patch.object(MODULE, "validate_control_authority", return_value=validated),
             mock.patch.object(
                 MODULE,
@@ -1075,13 +1205,14 @@ class RuntimeSupervisorSourceBoundaryTest(unittest.TestCase):
             return source.split(prefix, 1)[1].split("\nPY\n", 1)[0]
 
         self.assertEqual(loader(start), MODULE.PINNED_EXEC_LOADER)
-        self.assertEqual(loader(stop), MODULE.PINNED_EXEC_LOADER)
+        self.assertNotIn("read -r -d '' pinned_loader", stop)
         self.assertIn("/usr/bin/unshare --mount --propagation private", start)
         self.assertIn("/usr/bin/python3 -I -S -B -c", start)
         self.assertNotIn("/usr/bin/env -i", start)
         self.assertIn('os.environ.get("SUDO_UID") == args.caller_uid', SCRIPT.read_text())
         self.assertNotIn("sudo -b", start)
         self.assertIn("ensure-stopped", stop)
+        self.assertIn("ensure-stopped-orphaned", stop)
         self.assertNotIn("signal-exact", stop)
         self.assertNotIn("signal-recorded", stop)
         self.assertNotIn("kill -TERM", stop)
@@ -1106,7 +1237,14 @@ class RuntimeSupervisorSourceBoundaryTest(unittest.TestCase):
         self.assertIn('os.open("isolated_runtime_supervisor.py"', start)
         self.assertIn("control_present", start)
         self.assertIn("fallback_source.startswith(source)", start)
+        self.assertIn("identity.st_size == 0 and (chosen == fallback_path or control_present)", start)
+        self.assertIn('__fallback_script_directory__', start)
+        recovery = SCRIPT.read_text()[
+            SCRIPT.read_text().index("def recover_existing_runtime") : SCRIPT.read_text().index("def setup")
+        ]
+        self.assertIn("self.precontrol_source_directory", recovery)
         self.assertNotIn("/docker.sock", str(MODULE.runtime_root_for(STATE_ROOT)))
+        self.assertIn("recover_existing_runtime(orphaned=True)", SCRIPT.read_text())
 
     def test_pinned_support_sources_match_the_frozen_storage_base(self) -> None:
         identity = SCRIPT.with_name(MODULE.PROCESS_IDENTITY_NAME)

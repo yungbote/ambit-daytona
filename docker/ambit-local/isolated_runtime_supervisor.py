@@ -36,6 +36,7 @@ LIBC = ctypes.CDLL(None, use_errno=True)
 START_SCHEMA = "ambit.local-daytona-isolated-docker/v5"
 CONTROL_SCHEMA = "ambit.local-daytona-isolated-docker-control/v2"
 STOP_SCHEMA = "ambit.local-daytona-isolated-docker-stop/v2"
+STOPPING_SCHEMA = "ambit.local-daytona-isolated-docker-stopping/v1"
 CONTROL_PROJECTION_SCHEMA = "ambit.local-daytona-isolated-docker-control-projection/v1"
 READY_PROJECTION_SCHEMA = "ambit.local-daytona-isolated-docker-ready-projection/v1"
 STORAGE_OPERATION_SCHEMA = "ambit.local-daytona-runner-storage-operation/v3"
@@ -54,12 +55,14 @@ SOCKET_ROOT_RE = re.compile(r"^/run/ambit-c16b-docker-api-[0-9a-f]{12}$")
 LEASE_PATH_RE = re.compile(r"^/run/ambit-c16b-docker-[0-9a-f]{12}\.lock$")
 CGROUP_PARENT = Path("/sys/fs/cgroup")
 CGROUP_PREFIX = "ambit-c16b-docker-"
+CGROUP_EXECUTION_NAME = "runtime"
 CGROUP_PATH_RE = re.compile(r"^/sys/fs/cgroup/ambit-c16b-docker-[0-9a-f]{12}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 )
 DOCKER_DAEMON_ID_RE = re.compile(r"^[A-Z2-7]{4}(?::[A-Z2-7]{4}){11}$")
+CONTAINERD_VERSION_RE = re.compile(r"\bv([0-9]+)\.[0-9]+\.[0-9]+(?:[-+][^\s]+)?\b")
 LOOP_DEVICE_RE = re.compile(r"^/dev/loop[0-9]+$")
 IMAGE_BYTES = 60 * 1024**3
 SANDBOX_BYTES = 20 * 1024**3
@@ -74,9 +77,9 @@ UMOUNT = Path("/usr/bin/umount")
 
 PROCESS_IDENTITY_NAME = "isolated_process_identity.py"
 SUPERVISOR_SNAPSHOT_NAME = "isolated_runtime_supervisor.py"
-PROCESS_IDENTITY_SHA256 = "b0885ef7a573ff9c0e489d986f992933357c896d4e2d5ad63470af42a0a233f5"
+PROCESS_IDENTITY_SHA256 = "f22094f90f8797ee54ed439ee53e7f464ab59eff060cfbf252c6b8daa968a131"
 STORAGE_LIFECYCLE_NAME = "runner-storage-lifecycle.py"
-STORAGE_LIFECYCLE_SHA256 = "d3c6ff3293a3524da1f1a07fdc15bec8c57530b7ae99380678da1ecd5f241ffe"
+STORAGE_LIFECYCLE_SHA256 = "ecb7376d91031227bd5bd8514f2b68910449443f120a738e5c310543bad6f4eb"
 STORAGE_IDENTITY_VERIFIER_NAME = "verify-runner-storage.py"
 STORAGE_IDENTITY_VERIFIER_SHA256 = (
     "59c530e8c502c546689967c33c540217d2762ff9d3f8ef7424ba52462c554f0b"
@@ -92,17 +95,31 @@ RUNTIME_REGULAR_ENTRIES = {
     STORAGE_IDENTITY_VERIFIER_NAME,
     "runtime-control.json",
     "runtime-ready.json",
+    "runtime-stopping.json",
     "runtime-stop.json",
     ".runtime-control.json.pending",
     ".runtime-ready.json.pending",
+    ".runtime-stopping.json.pending",
     ".runtime-stop.json.pending",
 }
 RUNTIME_SOCKET_ENTRIES = {"containerd.sock", "containerd.sock.ttrpc"}
 
 ROOT_CONTROL_NAME = "runtime-control.json"
 ROOT_READY_NAME = "runtime-ready.json"
+ROOT_STOPPING_NAME = "runtime-stopping.json"
 ROOT_STOP_NAME = "runtime-stop.json"
 SOCKET_NAME = "docker.sock"
+LEGACY_V4_RUNTIME_MARKERS = {
+    "dockerd.json",
+    "containerd.toml",
+    "docker.sock",
+    "docker.pid",
+    "containerd.sock",
+}
+LEGACY_V4_DIAGNOSTIC = (
+    "legacy v4 runtime has no root control/supervisor snapshot; "
+    "use the exact frozen v4 stop source or explicit root-admin cleanup"
+)
 
 CONTROL_RECEIPT_NAME = "outer-docker-control.json"
 START_RECEIPT_NAME = "outer-docker-receipt.json"
@@ -138,6 +155,7 @@ sys.argv = [path, *arguments]
 globals()["__file__"] = path
 globals()["__package__"] = None
 globals()["__verified_source_sha256__"] = expected
+globals()["__fallback_script_directory__"] = os.path.dirname(path)
 exec(compile(source, path, "exec"), globals(), globals())
 '''.strip()
 
@@ -180,6 +198,14 @@ def verified_supervisor_source_sha256() -> str:
     return value
 
 
+def fallback_script_directory() -> Path:
+    value = globals().get("__fallback_script_directory__")
+    if value is None:
+        return Path(__file__).resolve(strict=True).parent
+    require(isinstance(value, str) and value.startswith("/"), "fallback source directory is invalid")
+    return Path(value)
+
+
 def require_root_credentials() -> None:
     status = Path("/proc/self/status").read_text(encoding="ascii")
     for label in ("Uid:", "Gid:"):
@@ -217,6 +243,13 @@ def validate_docker_daemon_id(value: object) -> str:
         and DOCKER_DAEMON_ID_RE.fullmatch(value) is not None,
         "isolated Docker server identity is invalid",
     )
+    return value
+
+
+def require_containerd_v2_or_later(value: str) -> str:
+    require(isinstance(value, str) and 0 < len(value) <= 512, "containerd version is invalid")
+    matches = CONTAINERD_VERSION_RE.findall(value)
+    require(matches and int(matches[-1]) >= 2, "containerd 2.x or later is required")
     return value
 
 
@@ -544,6 +577,21 @@ class StateAuthority:
 
 
 @dataclass(frozen=True)
+class StoredStateAuthority:
+    path: Path
+    caller_uid: int
+    caller_gid: int
+    state_identity: dict[str, object]
+    evidence_identity: dict[str, object]
+
+    def identity_json(self) -> dict[str, object]:
+        return {
+            "stateRoot": self.state_identity,
+            "evidenceRoot": self.evidence_identity,
+        }
+
+
+@dataclass(frozen=True)
 class RuntimeIdentity:
     path: Path
     device: int
@@ -685,6 +733,10 @@ def cgroup_path_for(state_root: Path) -> Path:
     return CGROUP_PARENT / f"{CGROUP_PREFIX}{runtime_id_for(state_root)}"
 
 
+def execution_cgroup_path(identity: CgroupIdentity) -> str:
+    return f"/{identity.path.name}/{CGROUP_EXECUTION_NAME}"
+
+
 def _read_fd_all(descriptor: int, *, limit: int = 64 * 1024) -> bytes:
     chunks: list[bytes] = []
     total = 0
@@ -729,9 +781,10 @@ def create_cgroup(state_root: Path) -> CgroupIdentity:
             and stat.S_IMODE(parent.st_mode) & 0o022 == 0,
             "runtime cgroup parent authority differs",
         )
+        parent_controllers = set(_read_at(parent_fd, "cgroup.controllers").split())
         require(
-            _read_at(parent_fd, "cgroup.controllers").strip() is not None,
-            "unified cgroup v2 authority is absent",
+            {"cpu", "memory", "pids"} <= parent_controllers,
+            "required cgroup v2 controllers are unavailable",
         )
         os.mkdir(path.name, 0o700, dir_fd=parent_fd)
         descriptor = os.open(
@@ -753,9 +806,45 @@ def create_cgroup(state_root: Path) -> CgroupIdentity:
             value = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
             require(stat.S_ISREG(value.st_mode), f"runtime cgroup control is absent: {name}")
         require(_read_at(descriptor, "cgroup.type").strip() == "domain", "runtime cgroup type differs")
+        available = set(_read_at(descriptor, "cgroup.controllers").split())
+        require(
+            {"cpu", "memory", "pids"} <= available,
+            "task cgroup controllers are unavailable",
+        )
+        _write_at(
+            descriptor,
+            "cgroup.subtree_control",
+            b"+cpu +memory +pids\n",
+        )
+        enabled = set(_read_at(descriptor, "cgroup.subtree_control").split())
+        require(
+            {"cpu", "memory", "pids"} <= enabled,
+            "task cgroup controllers were not enabled",
+        )
+        os.mkdir(CGROUP_EXECUTION_NAME, 0o700, dir_fd=descriptor)
+        execution_fd = os.open(
+            CGROUP_EXECUTION_NAME,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=descriptor,
+        )
+        try:
+            execution = os.fstat(execution_fd)
+            require(
+                stat.S_ISDIR(execution.st_mode)
+                and execution.st_uid == 0
+                and execution.st_gid == 0
+                and stat.S_IMODE(execution.st_mode) == 0o700,
+                "runtime execution cgroup identity differs",
+            )
+        finally:
+            os.close(execution_fd)
         return CgroupIdentity(path, observed.st_dev, observed.st_ino)
     except BaseException:
         if descriptor is not None:
+            try:
+                os.rmdir(CGROUP_EXECUTION_NAME, dir_fd=descriptor)
+            except OSError:
+                pass
             os.close(descriptor)
             descriptor = None
         try:
@@ -790,13 +879,37 @@ def current_cgroup_path() -> str:
     return records[0][3:]
 
 
+def open_execution_cgroup(identity: CgroupIdentity) -> int:
+    root_fd = open_cgroup(identity)
+    try:
+        descriptor = os.open(
+            CGROUP_EXECUTION_NAME,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=root_fd,
+        )
+        observed = os.fstat(descriptor)
+        require(
+            stat.S_ISDIR(observed.st_mode)
+            and observed.st_uid == 0
+            and observed.st_gid == 0
+            and stat.S_IMODE(observed.st_mode) == 0o700,
+            "runtime execution cgroup identity changed",
+        )
+        return descriptor
+    finally:
+        os.close(root_fd)
+
+
 def enter_cgroup(identity: CgroupIdentity) -> None:
-    descriptor = open_cgroup(identity)
+    descriptor = open_execution_cgroup(identity)
     try:
         _write_at(descriptor, "cgroup.procs", f"{os.getpid()}\n".encode("ascii"))
     finally:
         os.close(descriptor)
-    require(current_cgroup_path() == f"/{identity.path.name}", "supervisor did not enter task cgroup")
+    require(
+        current_cgroup_path() == execution_cgroup_path(identity),
+        "supervisor did not enter task execution cgroup",
+    )
 
 
 def cgroup_is_populated(identity: CgroupIdentity) -> bool:
@@ -829,6 +942,11 @@ def kill_cgroup_and_wait(identity: CgroupIdentity, *, timeout: float = 30.0) -> 
 
 def remove_empty_cgroup(identity: CgroupIdentity) -> None:
     require(not cgroup_is_populated(identity), "runtime cgroup is still populated")
+    root_fd = open_cgroup(identity)
+    try:
+        remove_empty_cgroup_children(root_fd)
+    finally:
+        os.close(root_fd)
     parent_fd = os.open(CGROUP_PARENT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         literal = os.stat(identity.path.name, dir_fd=parent_fd, follow_symlinks=False)
@@ -839,6 +957,31 @@ def remove_empty_cgroup(identity: CgroupIdentity) -> None:
         os.rmdir(identity.path.name, dir_fd=parent_fd)
     finally:
         os.close(parent_fd)
+
+
+def remove_empty_cgroup_children(directory_fd: int) -> None:
+    for name in tuple(sorted(os.listdir(directory_fd))):
+        value = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        if not stat.S_ISDIR(value.st_mode):
+            continue
+        require(
+            value.st_uid == 0
+            and value.st_gid == 0
+            and stat.S_IMODE(value.st_mode) & 0o022 == 0,
+            f"child cgroup authority differs: {name}",
+        )
+        child = os.open(
+            name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=directory_fd,
+        )
+        try:
+            remove_empty_cgroup_children(child)
+            events = _read_at(child, "cgroup.events")
+            require("populated 0" in events.splitlines(), "child cgroup is populated")
+        finally:
+            os.close(child)
+        os.rmdir(name, dir_fd=directory_fd)
 
 
 def create_runtime_root(path: Path) -> RuntimeIdentity:
@@ -927,17 +1070,62 @@ def verify_runtime_entries(descriptor: int) -> None:
         )
 
 
-def _mount_targets_for_namespace(pid: int, root: Path) -> tuple[str, ...]:
-    mountinfo = Path(f"/proc/{pid}/mountinfo").read_text(encoding="utf-8")
-    prefix = f"{root}/"
-    result: list[str] = []
-    for line in mountinfo.splitlines():
+def reject_legacy_v4_runtime_roster(runtime_identity: RuntimeIdentity) -> None:
+    descriptor = verify_runtime_root(runtime_identity)
+    try:
+        roster = set(os.listdir(descriptor))
+    finally:
+        os.close(descriptor)
+    if (
+        ROOT_CONTROL_NAME not in roster
+        and SUPERVISOR_SNAPSHOT_NAME not in roster
+        and roster & LEGACY_V4_RUNTIME_MARKERS
+    ):
+        raise SupervisorError(LEGACY_V4_DIAGNOSTIC)
+
+
+def mount_references_under(raw_mountinfo: str, root: Path) -> tuple[str, ...]:
+    records: list[tuple[str, Path, Path]] = []
+    for line in raw_mountinfo.splitlines():
         fields = line.split()
         require("-" in fields and len(fields) >= 10, "mountinfo record is invalid")
-        target = decode_mount_path(fields[4])
-        if target == str(root) or target.startswith(prefix):
-            result.append(target)
+        mount_root = Path(decode_mount_path(fields[3]))
+        target = Path(decode_mount_path(fields[4]))
+        require(mount_root.is_absolute() and target.is_absolute(), "mountinfo path is not absolute")
+        records.append((fields[2], mount_root, target))
+    bases: list[tuple[str, Path, Path]] = []
+    for record in records:
+        try:
+            root.relative_to(record[2])
+            bases.append(record)
+        except ValueError:
+            continue
+    require(bases, "runtime mount backing record is absent")
+    base_device, base_root, base_target = max(bases, key=lambda item: len(item[2].parts))
+    source_prefix = base_root / root.relative_to(base_target)
+    result: set[str] = set()
+    for device, mount_root, target in records:
+        target_reference = False
+        source_reference = False
+        try:
+            target.relative_to(root)
+            target_reference = True
+        except ValueError:
+            pass
+        if device == base_device:
+            try:
+                mount_root.relative_to(source_prefix)
+                source_reference = True
+            except ValueError:
+                pass
+        if target_reference or source_reference:
+            result.add(str(target))
     return tuple(sorted(result))
+
+
+def _mount_targets_for_namespace(pid: int, root: Path) -> tuple[str, ...]:
+    mountinfo = Path(f"/proc/{pid}/mountinfo").read_text(encoding="utf-8")
+    return mount_references_under(mountinfo, root)
 
 
 def _global_mount_roster_once(root: Path) -> tuple[tuple[str, tuple[str, ...]], ...]:
@@ -1236,6 +1424,7 @@ def ensure_storage_directory(
         )
     finally:
         os.close(descriptor)
+    os.fsync(parent_fd)
     return parent_path / name
 
 
@@ -1287,7 +1476,10 @@ def write_runtime_file(runtime_fd: int, name: str, content: str) -> tuple[Path, 
 
 
 def _root_manifest_pending(name: str) -> str:
-    require(name in (ROOT_CONTROL_NAME, ROOT_READY_NAME, ROOT_STOP_NAME), "root manifest name is invalid")
+    require(
+        name in (ROOT_CONTROL_NAME, ROOT_READY_NAME, ROOT_STOPPING_NAME, ROOT_STOP_NAME),
+        "root manifest name is invalid",
+    )
     return f".{name}.pending"
 
 
@@ -1354,8 +1546,19 @@ def _entry_exists(directory_fd: int, name: str) -> bool:
         return False
 
 
+def path_exists_nofollow(path: Path) -> bool:
+    try:
+        os.stat(path, follow_symlinks=False)
+        return True
+    except FileNotFoundError:
+        return False
+
+
 def read_root_manifest(runtime_identity: RuntimeIdentity, name: str) -> dict[str, Any] | None:
-    require(name in (ROOT_CONTROL_NAME, ROOT_READY_NAME, ROOT_STOP_NAME), "root manifest name is invalid")
+    require(
+        name in (ROOT_CONTROL_NAME, ROOT_READY_NAME, ROOT_STOPPING_NAME, ROOT_STOP_NAME),
+        "root manifest name is invalid",
+    )
     runtime_fd = verify_runtime_root(runtime_identity)
     try:
         if not _entry_exists(runtime_fd, name):
@@ -1913,7 +2116,12 @@ def docker_config(
     socket: Path,
     socket_gid: int,
     containerd_socket: Path,
+    cgroup_parent: str,
 ) -> str:
+    require(
+        re.fullmatch(r"/ambit-c16b-docker-[0-9a-f]{12}", cgroup_parent) is not None,
+        "Docker cgroup parent is invalid",
+    )
     value = {
         "data-root": str(data_root),
         "exec-root": str(exec_root),
@@ -1923,6 +2131,8 @@ def docker_config(
         "containerd": str(containerd_socket),
         "containerd-namespace": "ambit-c16b",
         "containerd-plugins-namespace": "ambit-c16b-plugins",
+        "exec-opts": ["native.cgroupdriver=cgroupfs"],
+        "cgroup-parent": cgroup_parent,
         "bridge": "none",
         "default-address-pools": [{"base": "172.30.0.0/16", "size": 24}],
         "iptables": False,
@@ -2003,21 +2213,6 @@ def task_netns_mounts(runtime_root: Path, raw_mountinfo: str) -> tuple[Path, ...
         require(filesystem == "nsfs", "task network namespace mount type differs")
         found.append(target)
     require(len(found) == len(set(found)), "task network namespace mount is duplicated")
-    return tuple(sorted(found, key=lambda item: len(item.parts), reverse=True))
-
-
-def mount_targets_below(root: Path, raw_mountinfo: str) -> tuple[Path, ...]:
-    found: list[Path] = []
-    for line in raw_mountinfo.splitlines():
-        fields = line.split()
-        require("-" in fields and len(fields) >= 10, "mountinfo record is invalid")
-        target = Path(decode_mount_path(fields[4]))
-        try:
-            target.relative_to(root)
-        except ValueError:
-            continue
-        found.append(target)
-    require(len(found) == len(set(found)), "runtime mount target is duplicated")
     return tuple(sorted(found, key=lambda item: len(item.parts), reverse=True))
 
 
@@ -2105,7 +2300,7 @@ def cgroup_identity_from_json(value: object, state_root: Path) -> CgroupIdentity
 def validate_control_authority(
     value: object,
     *,
-    state: StateAuthority,
+    state: StateAuthority | StoredStateAuthority,
     runtime_identity: RuntimeIdentity,
     process_authority: dict[str, Any],
 ) -> dict[str, object]:
@@ -2167,6 +2362,10 @@ def validate_control_authority(
         control["supervisorProcessIdentity"]
     )
     require(recorded_process["mountNamespace"] == namespace, "root control process namespace differs")
+    require(
+        recorded_process["cgroup"] == execution_cgroup_path(cgroup),
+        "root control process cgroup differs",
+    )
     return {
         "control": control,
         "runtime": recorded_runtime,
@@ -2202,6 +2401,7 @@ def validate_ready_authority(
             "supervisorProcessIdentity",
             "mountNamespace",
             "cgroup",
+            "workloadCgroupParent",
             "storage",
             "socket",
             "socketRootIdentity",
@@ -2239,6 +2439,11 @@ def validate_ready_authority(
         require(ready[field] == control[field], f"root ready control field differs: {field}")
     require(ready["rootControlSha256"] == root_control_digest, "root ready control digest differs")
     state_root = Path(str(control["stateRoot"]))
+    ready_cgroup = cgroup_identity_from_json(ready["cgroup"], state_root)
+    require(
+        ready["workloadCgroupParent"] == f"/{ready_cgroup.path.name}",
+        "root ready workload cgroup parent differs",
+    )
     caller = exact_keys(control["caller"], {"uid", "gid"}, "root control caller")
     caller_gid = plain_int(caller["gid"], "root control caller group")
     socket_root = socket_identity_from_json(
@@ -2368,7 +2573,12 @@ def validate_ready_authority(
         docker_identity["parentPid"] == supervisor_identity["pid"]
         and containerd_identity["parentPid"] == supervisor_identity["pid"]
         and docker_identity["mountNamespace"] == ready["mountNamespace"]
-        and containerd_identity["mountNamespace"] == ready["mountNamespace"],
+        and containerd_identity["mountNamespace"] == ready["mountNamespace"]
+        and supervisor_identity["cgroup"] == execution_cgroup_path(
+            ready_cgroup
+        )
+        and docker_identity["cgroup"] == supervisor_identity["cgroup"]
+        and containerd_identity["cgroup"] == supervisor_identity["cgroup"],
         "root ready daemon topology differs",
     )
     return {
@@ -2577,13 +2787,14 @@ class RuntimeSupervisor:
         self.caller_uid = caller_uid
         self.caller_gid = caller_gid
         self.script_directory = Path(__file__).resolve(strict=True).parent
+        self.precontrol_source_directory = fallback_script_directory()
         self.lease: RuntimeLease | None = None
         self.cgroup_identity: CgroupIdentity | None = None
         self.namespace: dict[str, int] | None = None
         self.runtime_identity: RuntimeIdentity | None = None
         self.socket_root_identity: SocketPathIdentity | None = None
         self.socket_identity: SocketPathIdentity | None = None
-        self.state: StateAuthority | None = None
+        self.state: StateAuthority | StoredStateAuthority | None = None
         self.storage: dict[str, object] | None = None
         self.deactivated_storage: dict[str, object] | None = None
         self.runtime_removed = False
@@ -2612,6 +2823,8 @@ class RuntimeSupervisor:
         self.containerd_version: str | None = None
         self.root_control_digest: str | None = None
         self.root_ready_digest: str | None = None
+        self.root_stopping_digest: str | None = None
+        self.root_stop_digest: str | None = None
         self.arguments_sha256 = process_arguments_sha256()
 
     def expected_child_pids(self) -> set[int]:
@@ -2620,6 +2833,10 @@ class RuntimeSupervisor:
             if process is not None and process.poll() is None:
                 result.add(process.pid)
         return result
+
+    def expected_execution_cgroup(self) -> str:
+        require(self.cgroup_identity is not None, "runtime cgroup identity is absent")
+        return execution_cgroup_path(self.cgroup_identity)
 
     def request_stop(self, signum: int, _: object) -> None:
         if signum == signal.SIGTERM:
@@ -2640,6 +2857,7 @@ class RuntimeSupervisor:
             expected_uid=0,
             expected_arguments_sha256=expected_digest,
             expected_mount_namespace=self.namespace,
+            expected_cgroup=self.expected_execution_cgroup(),
         )
         return identity
 
@@ -2717,7 +2935,36 @@ class RuntimeSupervisor:
             },
         )
 
-    def recover_existing_runtime(self) -> None:
+    def write_shutdown_intent(self, reason: str) -> None:
+        require(self.runtime_identity is not None, "runtime identity is absent")
+        require(self.cgroup_identity is not None, "runtime cgroup identity is absent")
+        require(self.root_control_digest is not None, "root control authority is absent")
+        require(self.supervisor_identity is not None, "supervisor identity is absent")
+        if self.root_stopping_digest is not None:
+            require(
+                read_root_manifest(self.runtime_identity, ROOT_STOPPING_NAME) is not None,
+                "root stopping authority disappeared",
+            )
+            return
+        value: dict[str, object] = {
+            "schema": STOPPING_SCHEMA,
+            "outcome": "stopping",
+            "observedAt": utc_now(),
+            "bootId": current_boot_id(),
+            "stateRoot": str(self.state_root),
+            "reason": reason,
+            "rootControlSha256": self.root_control_digest,
+            "runtimeRootIdentity": self.runtime_identity.json(),
+            "cgroup": self.cgroup_identity.json(),
+            "supervisorProcessIdentity": self.supervisor_identity,
+        }
+        self.root_stopping_digest = write_root_manifest(
+            self.runtime_identity,
+            ROOT_STOPPING_NAME,
+            value,
+        )
+
+    def recover_existing_runtime(self, *, orphaned: bool = False) -> None:
         require(self.state is not None, "state authority is absent")
         require(self.namespace is not None, "recovery mount namespace is absent")
         runtime_path = runtime_root_for(self.state_root)
@@ -2727,20 +2974,23 @@ class RuntimeSupervisor:
             reduce_precontrol_runtime(
                 self.state_root,
                 self.caller_gid,
-                self.script_directory,
+                self.precontrol_source_directory,
             )
-            remove_user_runtime_projections(self.state)
+            if not orphaned:
+                remove_user_runtime_projections(self.state)  # type: ignore[arg-type]
             return
 
         process_authority = load_process_authority(self.script_directory)
         control_value = read_root_manifest(runtime, ROOT_CONTROL_NAME)
         if control_value is None:
+            reject_legacy_v4_runtime_roster(runtime)
             reduce_precontrol_runtime(
                 self.state_root,
                 self.caller_gid,
-                self.script_directory,
+                self.precontrol_source_directory,
             )
-            remove_user_runtime_projections(self.state)
+            require(not orphaned, "orphaned pre-control runtime lacks durable caller authority")
+            remove_user_runtime_projections(self.state)  # type: ignore[arg-type]
             return
         validated = validate_control_authority(
             control_value,
@@ -2760,6 +3010,36 @@ class RuntimeSupervisor:
             if ready_value is not None
             else None
         )
+        stopping_value = read_root_manifest(runtime, ROOT_STOPPING_NAME)
+        if stopping_value is not None:
+            stopping = exact_keys(
+                stopping_value,
+                {
+                    "schema",
+                    "outcome",
+                    "observedAt",
+                    "bootId",
+                    "stateRoot",
+                    "reason",
+                    "rootControlSha256",
+                    "runtimeRootIdentity",
+                    "cgroup",
+                    "supervisorProcessIdentity",
+                },
+                "root runtime stopping authority",
+            )
+            require(
+                stopping["schema"] == STOPPING_SCHEMA
+                and stopping["outcome"] == "stopping"
+                and stopping["bootId"] == validated["control"]["bootId"]
+                and stopping["stateRoot"] == str(self.state_root)
+                and stopping["rootControlSha256"] == root_control_digest
+                and stopping["runtimeRootIdentity"] == runtime.json()
+                and stopping["cgroup"] == validated["cgroup"].json()
+                and stopping["supervisorProcessIdentity"]
+                == validated["supervisor"],
+                "root stopping authority differs",
+            )
         stop_value = read_root_manifest(runtime, ROOT_STOP_NAME)
         if stop_value is not None:
             stop = exact_keys(
@@ -2774,6 +3054,7 @@ class RuntimeSupervisor:
                     "supervisorProcessIdentity",
                     "runtimeRootIdentity",
                     "cgroup",
+                    "rootStoppingSha256",
                     "storageProjectionDigest",
                     "socketRootRemoved",
                     "externalFinalizationRequired",
@@ -2787,11 +3068,15 @@ class RuntimeSupervisor:
                 and stop["stateRoot"] == str(self.state_root)
                 and stop["runtimeRootIdentity"] == runtime.json()
                 and stop["cgroup"] == validated["cgroup"].json()
+                and isinstance(stop["rootStoppingSha256"], str)
+                and stopping_value is not None
+                and stop["rootStoppingSha256"]
+                == canonical_document_digest(stopping_value)
                 and stop["socketRootRemoved"] is True
                 and stop["externalFinalizationRequired"] is True,
                 "root stop authority differs",
             )
-        if stop_value is None:
+        if stop_value is None and stopping_value is None:
             socket_root_fd = verify_socket_root(
                 validated["socketRoot"],
                 self.caller_gid,
@@ -2832,23 +3117,25 @@ class RuntimeSupervisor:
                         os.close(descriptor)
             remove_socket_root(socket_root, expected_socket, self.caller_gid)
 
-        helper = runtime.path / STORAGE_LIFECYCLE_NAME
-        read_pinned_source(helper, STORAGE_LIFECYCLE_SHA256)
-        read_pinned_source(
-            runtime.path / STORAGE_IDENTITY_VERIFIER_NAME,
-            STORAGE_IDENTITY_VERIFIER_SHA256,
-        )
-        self.runtime_identity = runtime
-        self.storage_helper_path = helper
-        self.storage_activation_attempted = True
-        self.deactivated_storage = self.invoke_storage(
-            "deactivate-private",
-            "deactivated",
-            allow_unpublished=True,
-        )
+        if not orphaned:
+            helper = runtime.path / STORAGE_LIFECYCLE_NAME
+            read_pinned_source(helper, STORAGE_LIFECYCLE_SHA256)
+            read_pinned_source(
+                runtime.path / STORAGE_IDENTITY_VERIFIER_NAME,
+                STORAGE_IDENTITY_VERIFIER_SHA256,
+            )
+            self.runtime_identity = runtime
+            self.storage_helper_path = helper
+            self.storage_activation_attempted = True
+            self.deactivated_storage = self.invoke_storage(
+                "deactivate-private",
+                "deactivated",
+                allow_unpublished=True,
+            )
         remove_runtime_root(runtime)
         remove_empty_cgroup(cgroup)
-        remove_user_runtime_projections(self.state)
+        if not orphaned:
+            remove_user_runtime_projections(self.state)  # type: ignore[arg-type]
         self.runtime_identity = None
         self.storage_helper_path = None
         self.storage_activation_attempted = False
@@ -2970,6 +3257,7 @@ class RuntimeSupervisor:
     def prepare_daemon_configuration(self) -> None:
         require(self.runtime_identity is not None, "runtime identity is absent")
         require(self.storage is not None, "storage activation is absent")
+        require(self.cgroup_identity is not None, "runtime cgroup authority is absent")
         target_fd = os.open(MOUNT_TARGET, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             target = os.fstat(target_fd)
@@ -3060,6 +3348,7 @@ class RuntimeSupervisor:
                 socket=self.socket,
                 socket_gid=self.caller_gid,
                 containerd_socket=self.containerd_socket,
+                cgroup_parent=f"/{self.cgroup_identity.path.name}",
             )
             containerd_value = containerd_config(
                 root=self.containerd_root,
@@ -3091,6 +3380,18 @@ class RuntimeSupervisor:
         require(self.socket_root_identity is not None, "Docker API root is absent")
         environment = self.daemon_environment()
         parent_pid = os.getpid()
+        self.containerd_version = require_containerd_v2_or_later(
+            subprocess.run(
+                [str(CONTAINERD), "--version"],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd="/",
+                env=environment,
+            ).stdout.strip()
+        )
+        require_exact_children(set())
         self.containerd_process = subprocess.Popen(
             [
                 str(CONTAINERD),
@@ -3122,14 +3423,8 @@ class RuntimeSupervisor:
             expected_uid=0,
             expected_parent_pid=os.getpid(),
             expected_mount_namespace=self.namespace,
+            expected_cgroup=self.expected_execution_cgroup(),
         )
-        self.containerd_version = subprocess.run(
-            [str(CONTAINERD), "--version"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        ).stdout.strip()
         require_exact_children({self.containerd_process.pid})
 
         self.docker_process = subprocess.Popen(
@@ -3161,6 +3456,7 @@ class RuntimeSupervisor:
             expected_uid=0,
             expected_parent_pid=os.getpid(),
             expected_mount_namespace=self.namespace,
+            expected_cgroup=self.expected_execution_cgroup(),
         )
         verify_socket_boundary(
             self.socket_root_identity,
@@ -3199,6 +3495,7 @@ class RuntimeSupervisor:
             expected_uid=0,
             expected_parent_pid=os.getpid(),
             expected_mount_namespace=self.namespace,
+            expected_cgroup=self.expected_execution_cgroup(),
         )
         second_docker = self.process_verifier(
             self.docker_process.pid,
@@ -3207,6 +3504,7 @@ class RuntimeSupervisor:
             expected_uid=0,
             expected_parent_pid=os.getpid(),
             expected_mount_namespace=self.namespace,
+            expected_cgroup=self.expected_execution_cgroup(),
         )
         require(first_containerd == second_containerd, "containerd identity changed during startup")
         require(first_docker == second_docker, "dockerd identity changed during startup")
@@ -3236,6 +3534,7 @@ class RuntimeSupervisor:
             expected_uid=0,
             expected_parent_pid=os.getpid(),
             expected_mount_namespace=self.namespace,
+            expected_cgroup=self.expected_execution_cgroup(),
         )
         docker_identity = self.process_verifier(
             self.docker_process.pid,
@@ -3244,6 +3543,7 @@ class RuntimeSupervisor:
             expected_uid=0,
             expected_parent_pid=os.getpid(),
             expected_mount_namespace=self.namespace,
+            expected_cgroup=self.expected_execution_cgroup(),
         )
         require(
             containerd_identity == self.containerd_identity
@@ -3325,6 +3625,7 @@ class RuntimeSupervisor:
             "supervisorProcessIdentity": self.supervisor_identity,
             "mountNamespace": self.namespace,
             "cgroup": self.cgroup_identity.json(),
+            "workloadCgroupParent": f"/{self.cgroup_identity.path.name}",
             "storage": self.storage,
             "socket": str(self.socket),
             "socketRootIdentity": self.socket_root_identity.json(),
@@ -3437,6 +3738,7 @@ class RuntimeSupervisor:
                 expected_uid=0,
                 expected_parent_pid=os.getpid(),
                 expected_mount_namespace=self.namespace,
+                expected_cgroup=self.expected_execution_cgroup(),
             )
             require(expected_identity is not None, f"{name} recorded identity is absent")
             require(observed_identity == expected_identity, f"{name} identity changed before stop")
@@ -3474,7 +3776,9 @@ class RuntimeSupervisor:
         first_attempt = not self.shutdown_started
         self.shutdown_started = True
         try:
-            if first_attempt and self.state.exists(CONTROL_RECEIPT_NAME):
+            if self.root_stopping_digest is None:
+                self.write_shutdown_intent(reason)
+            if first_attempt:
                 self.write_control_receipt("stopping")
             # Docker owns running containers; it must drain before its dedicated
             # containerd.  The storage mount stays alive until both are reaped.
@@ -3497,34 +3801,74 @@ class RuntimeSupervisor:
                 )
             require(self.runtime_identity is not None, "runtime identity is absent")
             require(self.cgroup_identity is not None, "runtime cgroup identity is absent")
-            value: dict[str, object] = {
-                "schema": STOP_SCHEMA,
-                "outcome": "quiesced",
-                "observedAt": utc_now(),
-                "bootId": current_boot_id(),
-                "stateRoot": str(self.state_root),
-                "reason": reason,
-                "supervisorProcessIdentity": self.supervisor_identity,
-                "runtimeRootIdentity": self.runtime_identity.json(),
-                "cgroup": self.cgroup_identity.json(),
-                "storageProjectionDigest": (
-                    self.deactivated_storage["projectionDigest"]
-                    if self.deactivated_storage is not None
-                    else None
-                ),
-                "socketRootRemoved": True,
-                "externalFinalizationRequired": True,
-            }
-            root_stop_digest = write_root_manifest(
-                self.runtime_identity,
-                ROOT_STOP_NAME,
-                value,
-            )
+            require(self.root_stopping_digest is not None, "root stopping authority is absent")
+            existing_stop = read_root_manifest(self.runtime_identity, ROOT_STOP_NAME)
+            if existing_stop is None:
+                value: dict[str, object] = {
+                    "schema": STOP_SCHEMA,
+                    "outcome": "quiesced",
+                    "observedAt": utc_now(),
+                    "bootId": current_boot_id(),
+                    "stateRoot": str(self.state_root),
+                    "reason": reason,
+                    "supervisorProcessIdentity": self.supervisor_identity,
+                    "runtimeRootIdentity": self.runtime_identity.json(),
+                    "cgroup": self.cgroup_identity.json(),
+                    "rootStoppingSha256": self.root_stopping_digest,
+                    "storageProjectionDigest": (
+                        self.deactivated_storage["projectionDigest"]
+                        if self.deactivated_storage is not None
+                        else None
+                    ),
+                    "socketRootRemoved": True,
+                    "externalFinalizationRequired": True,
+                }
+                self.root_stop_digest = write_root_manifest(
+                    self.runtime_identity,
+                    ROOT_STOP_NAME,
+                    value,
+                )
+            else:
+                value = exact_keys(
+                    existing_stop,
+                    {
+                        "schema",
+                        "outcome",
+                        "observedAt",
+                        "bootId",
+                        "stateRoot",
+                        "reason",
+                        "supervisorProcessIdentity",
+                        "runtimeRootIdentity",
+                        "cgroup",
+                        "rootStoppingSha256",
+                        "storageProjectionDigest",
+                        "socketRootRemoved",
+                        "externalFinalizationRequired",
+                    },
+                    "existing root stop authority",
+                )
+                require(
+                    value["schema"] == STOP_SCHEMA
+                    and value["outcome"] == "quiesced"
+                    and value["bootId"] == current_boot_id()
+                    and value["stateRoot"] == str(self.state_root)
+                    and value["reason"] == reason
+                    and value["supervisorProcessIdentity"] == self.supervisor_identity
+                    and value["runtimeRootIdentity"] == self.runtime_identity.json()
+                    and value["cgroup"] == self.cgroup_identity.json()
+                    and value["rootStoppingSha256"] == self.root_stopping_digest
+                    and value["socketRootRemoved"] is True
+                    and value["externalFinalizationRequired"] is True,
+                    "existing root stop authority differs",
+                )
+                self.root_stop_digest = canonical_document_digest(value)
+            require(self.root_stop_digest is not None, "root stop digest is absent")
             self.state.write_json(
                 STOP_RECEIPT_NAME,
                 {
                     "schema": "ambit.local-daytona-isolated-docker-stop-projection/v1",
-                    "rootStopSha256": root_stop_digest,
+                    "rootStopSha256": self.root_stop_digest,
                     "stop": value,
                 },
             )
@@ -3577,6 +3921,8 @@ def _validated_existing_authorities(
     runtime = existing_runtime_identity(runtime_root_for(state.path))
     process_authority = load_process_authority(script_directory)
     control_value = read_root_manifest(runtime, ROOT_CONTROL_NAME)
+    if control_value is None:
+        reject_legacy_v4_runtime_roster(runtime)
     require(control_value is not None, "root runtime control authority is absent")
     validated = validate_control_authority(
         control_value,
@@ -3596,6 +3942,105 @@ def _validated_existing_authorities(
         else None
     )
     return runtime, validated, ready, process_authority
+
+
+def _stored_state_authority_from_control(
+    control: object,
+    state_root: Path,
+    caller_uid: int,
+    caller_gid: int,
+) -> StoredStateAuthority:
+    require(isinstance(control, dict), "orphaned root control is not an object")
+    assert isinstance(control, dict)
+    require(
+        control.get("schema") == CONTROL_SCHEMA
+        and control.get("stateRoot") == str(state_root)
+        and control.get("caller") == {"uid": caller_uid, "gid": caller_gid},
+        "orphaned root control caller or state path differs",
+    )
+    state_identity = exact_keys(
+        control.get("stateRootIdentity"),
+        {"path", "device", "inode", "uid", "gid", "mode"},
+        "orphaned state identity",
+    )
+    evidence_identity = exact_keys(
+        control.get("evidenceRootIdentity"),
+        {"path", "device", "inode", "uid", "gid", "mode"},
+        "orphaned evidence identity",
+    )
+    require(
+        state_identity["path"] == str(state_root)
+        and evidence_identity["path"] == str(state_root / "evidence")
+        and (state_identity["uid"], state_identity["gid"], state_identity["mode"])
+        == (caller_uid, caller_gid, 0o700)
+        and (evidence_identity["uid"], evidence_identity["gid"], evidence_identity["mode"])
+        == (caller_uid, caller_gid, 0o700),
+        "orphaned stored identity differs",
+    )
+    for label, identity in (
+        ("state", state_identity),
+        ("evidence", evidence_identity),
+    ):
+        plain_int(identity["device"], f"orphaned {label} device")
+        plain_int(identity["inode"], f"orphaned {label} inode", positive=True)
+        plain_int(identity["uid"], f"orphaned {label} owner")
+        plain_int(identity["gid"], f"orphaned {label} group")
+        plain_int(identity["mode"], f"orphaned {label} mode")
+    require(
+        state_identity["device"] == evidence_identity["device"],
+        "orphaned state and evidence backing differ",
+    )
+    return StoredStateAuthority(
+        state_root,
+        caller_uid,
+        caller_gid,
+        state_identity,
+        evidence_identity,
+    )
+
+
+def _validated_orphaned_authorities(
+    state_root: Path,
+    caller_uid: int,
+    caller_gid: int,
+    script_directory: Path,
+) -> tuple[
+    StoredStateAuthority,
+    RuntimeIdentity,
+    dict[str, object],
+    dict[str, object] | None,
+    dict[str, Any],
+]:
+    runtime = existing_runtime_identity(runtime_root_for(state_root))
+    process_authority = load_process_authority(script_directory)
+    control_value = read_root_manifest(runtime, ROOT_CONTROL_NAME)
+    if control_value is None:
+        reject_legacy_v4_runtime_roster(runtime)
+    require(control_value is not None, "orphaned root control authority is absent")
+    state = _stored_state_authority_from_control(
+        control_value,
+        state_root,
+        caller_uid,
+        caller_gid,
+    )
+    validated = validate_control_authority(
+        control_value,
+        state=state,
+        runtime_identity=runtime,
+        process_authority=process_authority,
+    )
+    ready_value = read_root_manifest(runtime, ROOT_READY_NAME)
+    ready = (
+        validate_ready_authority(
+            ready_value,
+            control=validated["control"],
+            root_control_digest=canonical_document_digest(control_value),
+            process_authority=process_authority,
+        )
+        if ready_value is not None
+        else None
+    )
+    return state, runtime, validated, ready, process_authority
 
 
 def runtime_status(state_root: Path, caller_uid: int, caller_gid: int) -> dict[str, object]:
@@ -3712,7 +4157,7 @@ def ensure_runtime_stopped(
                     expected_uid=0,
                     signum=signal.SIGTERM,
                     relax_parent_for_recovery=True,
-                    exit_timeout_seconds=90.0,
+                    exit_timeout_seconds=720.0,
                 )
             except process_authority["ProcessIdentityError"]:
                 # The immutable cgroup, rather than a recycled numeric PID, is
@@ -3745,9 +4190,95 @@ def ensure_runtime_stopped(
         state.close()
 
 
+def ensure_orphaned_runtime_stopped(
+    state_root: Path,
+    caller_uid: int,
+    caller_gid: int,
+) -> dict[str, object]:
+    script_directory = Path(__file__).resolve(strict=True).parent
+    runtime_path = runtime_root_for(state_root)
+    socket_path = socket_root_for(state_root)
+    cgroup_path = cgroup_path_for(state_root)
+    if not path_exists_nofollow(runtime_path):
+        require(
+            not path_exists_nofollow(socket_path),
+            "orphaned socket root remains without root control authority",
+        )
+        if path_exists_nofollow(cgroup_path):
+            value = os.stat(cgroup_path, follow_symlinks=False)
+            identity = CgroupIdentity(cgroup_path, value.st_dev, value.st_ino)
+            require(
+                not cgroup_is_populated(identity),
+                "orphaned cgroup remains populated without root control authority",
+            )
+            remove_empty_cgroup(identity)
+        return {
+            "schema": STOP_SCHEMA,
+            "outcome": "passed",
+            "observedAt": utc_now(),
+            "bootId": current_boot_id(),
+            "stateRoot": str(state_root),
+            "runtimeRootRemoved": True,
+            "socketRootRemoved": True,
+            "cgroupRemoved": True,
+        }
+    state, _, validated, _, process_authority = _validated_orphaned_authorities(
+        state_root,
+        caller_uid,
+        caller_gid,
+        script_directory,
+    )
+    lease: RuntimeLease | None = None
+    try:
+        try:
+            lease = RuntimeLease.acquire(state_root)
+        except SupervisorError as error:
+            require(str(error) == "runtime lifecycle lease is busy", str(error))
+            try:
+                process_authority["signal_recorded_process"](
+                    validated["supervisor"],
+                    expected_uid=0,
+                    signum=signal.SIGTERM,
+                    relax_parent_for_recovery=True,
+                    exit_timeout_seconds=720.0,
+                )
+            except process_authority["ProcessIdentityError"]:
+                kill_cgroup_and_wait(validated["cgroup"], timeout=60.0)
+            lease = acquire_runtime_lease_until(state_root, timeout=60.0)
+        state, _, _, _, _ = _validated_orphaned_authorities(
+            state_root,
+            caller_uid,
+            caller_gid,
+            script_directory,
+        )
+        supervisor = RuntimeSupervisor(state_root, caller_uid, caller_gid)
+        supervisor.lease = lease
+        supervisor.state = state
+        supervisor.namespace = prove_private_namespace(os.getppid())
+        supervisor.process_verifier = load_process_verifier(script_directory)
+        set_child_subreaper()
+        supervisor.recover_existing_runtime(orphaned=True)
+        return {
+            "schema": STOP_SCHEMA,
+            "outcome": "passed",
+            "observedAt": utc_now(),
+            "bootId": current_boot_id(),
+            "stateRoot": str(state_root),
+            "runtimeRootRemoved": True,
+            "socketRootRemoved": True,
+            "cgroupRemoved": True,
+        }
+    finally:
+        if lease is not None:
+            lease.close()
+
+
 def parser() -> argparse.ArgumentParser:
     value = argparse.ArgumentParser()
-    value.add_argument("operation", choices=("supervise", "status", "ensure-stopped"))
+    value.add_argument(
+        "operation",
+        choices=("supervise", "status", "ensure-stopped", "ensure-stopped-orphaned"),
+    )
     value.add_argument("state_root", type=Path)
     value.add_argument("caller_uid")
     value.add_argument("caller_gid")
@@ -3778,8 +4309,14 @@ def main() -> None:
         raise SystemExit(supervisor.run())
     if args.operation == "status":
         result = runtime_status(args.state_root, caller_uid, caller_gid)
-    else:
+    elif args.operation == "ensure-stopped":
         result = ensure_runtime_stopped(args.state_root, caller_uid, caller_gid)
+    else:
+        result = ensure_orphaned_runtime_stopped(
+            args.state_root,
+            caller_uid,
+            caller_gid,
+        )
     print(json.dumps(result, sort_keys=True, separators=(",", ":")))
 
 

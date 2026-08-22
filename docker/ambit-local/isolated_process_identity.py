@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import math
@@ -46,6 +47,7 @@ RECORDED_PROCESS_FIELDS = {
     "executable",
     "argumentsSha256",
     "mountNamespace",
+    "cgroup",
 }
 MAX_RECORDED_IDENTITY_JSON_BYTES = 8 * 1024
 MAX_EXECUTABLE_BYTES = 4 * 1024
@@ -102,6 +104,24 @@ def _validate_mount_namespace(value: object) -> dict[str, int]:
     return {"device": device, "inode": inode}
 
 
+def _validate_cgroup(value: object) -> str:
+    _require(isinstance(value, str), "process cgroup is invalid")
+    try:
+        encoded = value.encode("ascii", "strict")
+    except UnicodeError as error:
+        raise ProcessIdentityError("process cgroup is invalid") from error
+    _require(0 < len(encoded) <= 4096, "process cgroup is invalid")
+    _require(value.startswith("/") and os.path.normpath(value) == value, "process cgroup is invalid")
+    _require(all(0x20 <= byte <= 0x7E for byte in encoded), "process cgroup is invalid")
+    return value
+
+
+def _cgroup(directory_fd: int) -> str:
+    records = _read_at(directory_fd, "cgroup").decode("ascii", "strict").splitlines()
+    _require(len(records) == 1 and records[0].startswith("0::/"), "process cgroup v2 record differs")
+    return _validate_cgroup(records[0][3:])
+
+
 def verify_process(
     pid: int,
     executable: Path,
@@ -111,6 +131,7 @@ def verify_process(
     expected_arguments_sha256: str | None = None,
     expected_parent_pid: int | None = None,
     expected_mount_namespace: dict[str, int] | None = None,
+    expected_cgroup: str | None = None,
 ) -> dict[str, object]:
     _require(pid > 0, "process id is invalid")
     _require(
@@ -135,6 +156,8 @@ def verify_process(
         )
     if expected_mount_namespace is not None:
         expected_mount_namespace = _validate_mount_namespace(expected_mount_namespace)
+    if expected_cgroup is not None:
+        expected_cgroup = _validate_cgroup(expected_cgroup)
     expected_executable = executable.resolve(strict=True)
     process_directory = Path("/proc") / str(pid)
     directory_fd = os.open(process_directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -144,6 +167,7 @@ def verify_process(
         first_stat = _read_at(directory_fd, "stat")
         first_parent_pid, first_start_time = _stat_identity(first_stat)
         first_namespace = _mount_namespace(directory_fd)
+        first_cgroup = _cgroup(directory_fd)
         actual_executable = Path(os.readlink("exe", dir_fd=directory_fd)).resolve(strict=True)
         _require(actual_executable == expected_executable, "process executable differs")
         executable_identity = actual_executable.stat()
@@ -182,6 +206,7 @@ def verify_process(
             "process owner differs",
         )
         second_namespace = _mount_namespace(directory_fd)
+        second_cgroup = _cgroup(directory_fd)
         second_stat = _read_at(directory_fd, "stat")
         second_parent_pid, second_start_time = _stat_identity(second_stat)
         _require(
@@ -193,10 +218,13 @@ def verify_process(
             first_namespace == second_namespace,
             "process mount namespace changed during proof",
         )
+        _require(first_cgroup == second_cgroup, "process cgroup changed during proof")
         if expected_parent_pid is not None:
             _require(first_parent_pid == expected_parent_pid, "process parent differs")
         if expected_mount_namespace is not None:
             _require(first_namespace == expected_mount_namespace, "process mount namespace differs")
+        if expected_cgroup is not None:
+            _require(first_cgroup == expected_cgroup, "process cgroup differs")
         return {
             "pid": pid,
             "parentPid": first_parent_pid,
@@ -205,6 +233,7 @@ def verify_process(
             "executable": str(expected_executable),
             "argumentsSha256": arguments_sha256,
             "mountNamespace": first_namespace,
+            "cgroup": first_cgroup,
         }
     finally:
         os.close(directory_fd)
@@ -259,6 +288,7 @@ def validate_recorded_identity(value: object) -> dict[str, object]:
         "executable": _validate_executable(value["executable"]),
         "argumentsSha256": arguments_sha256,
         "mountNamespace": _validate_mount_namespace(value["mountNamespace"]),
+        "cgroup": _validate_cgroup(value["cgroup"]),
     }
 
 
@@ -351,21 +381,39 @@ def _prove_recorded_process(
     relax_parent_for_recovery: bool,
 ) -> dict[str, object]:
     expected_parent_pid = None if relax_parent_for_recovery else recorded_identity["parentPid"]
-    observed = verify_process(
-        recorded_identity["pid"],
-        Path(recorded_identity["executable"]),
-        None,
-        expected_uid=expected_uid,
-        expected_arguments_sha256=recorded_identity["argumentsSha256"],
-        expected_parent_pid=expected_parent_pid,
-        expected_mount_namespace=recorded_identity["mountNamespace"],
-    )
+    try:
+        observed = verify_process(
+            recorded_identity["pid"],
+            Path(recorded_identity["executable"]),
+            None,
+            expected_uid=expected_uid,
+            expected_arguments_sha256=recorded_identity["argumentsSha256"],
+            expected_parent_pid=expected_parent_pid,
+            expected_mount_namespace=recorded_identity["mountNamespace"],
+            expected_cgroup=recorded_identity["cgroup"],
+        )
+    except OSError as error:
+        if isinstance(error, (FileNotFoundError, ProcessLookupError)) or error.errno in (
+            errno.ENOENT,
+            errno.ESRCH,
+        ):
+            raise ProcessIdentityError("recorded process exited during identity proof") from error
+        raise
     for field in RECORDED_PROCESS_FIELDS:
         if field == "parentPid" and relax_parent_for_recovery:
             continue
         _require(observed[field] == recorded_identity[field], f"recorded process {field} differs")
     _require(not _pidfd_has_exited(pidfd), "recorded process exited during identity proof")
     return observed
+
+
+def _open_recorded_pidfd(pid: int) -> int:
+    try:
+        return os.pidfd_open(pid, 0)
+    except OSError as error:
+        if isinstance(error, ProcessLookupError) or error.errno == errno.ESRCH:
+            raise ProcessIdentityError("recorded process exited before pidfd custody") from error
+        raise
 
 
 def verify_recorded_process(
@@ -380,7 +428,7 @@ def verify_recorded_process(
     owner = _validate_expected_uid(expected_uid)
     relaxation = _validate_recovery_parent_relaxation(relax_parent_for_recovery)
     _require(hasattr(os, "pidfd_open"), "pidfd process signalling is unavailable")
-    pidfd = os.pidfd_open(recorded["pid"], 0)
+    pidfd = _open_recorded_pidfd(recorded["pid"])
     try:
         return _prove_recorded_process(
             pidfd,
@@ -417,7 +465,7 @@ def signal_recorded_process(
         "pidfd signal delivery is unavailable",
     )
     _require(hasattr(os, "pidfd_open"), "pidfd process signalling is unavailable")
-    pidfd = os.pidfd_open(recorded["pid"], 0)
+    pidfd = _open_recorded_pidfd(recorded["pid"])
     try:
         observed = _prove_recorded_process(
             pidfd,
@@ -425,7 +473,12 @@ def signal_recorded_process(
             expected_uid=owner,
             relax_parent_for_recovery=relaxation,
         )
-        signal.pidfd_send_signal(pidfd, signum)
+        try:
+            signal.pidfd_send_signal(pidfd, signum)
+        except OSError as error:
+            if isinstance(error, ProcessLookupError) or error.errno == errno.ESRCH:
+                raise ProcessIdentityError("recorded process exited before signal delivery") from error
+            raise
         wait_for_pidfd_exit(pidfd, timeout)
         return observed
     finally:

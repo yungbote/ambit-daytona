@@ -25,11 +25,17 @@ AUTHORITY_NAME = AUTHORITY_ROOT.name
 HOME_ROOT = Path("/home")
 CLAIM_DOMAIN = "ambit.local-daytona-runner-storage-claim/v1"
 CLAIM_PREFIX = ".ambit-c16b-runner-storage.claim."
+LEGACY_RECEIPT_SCHEMA = "ambit.local-daytona-runner-storage/v2"
+LEGACY_LOCK_NAME = "lifecycle.lock"
 IMAGE_NAME = "runner-docker.xfs"
 TARGET_NAME = "runner-docker"
 RUNNER_DATA_NAME = "inner-runner"
 OUTER_DOCKER_NAME = "outer-docker"
 OUTER_CONTAINERD_NAME = "outer-containerd"
+RUNTIME_ROOT_PREFIX = Path("/run/ambit-c16b-docker-")
+SOCKET_ROOT_PREFIX = Path("/run/ambit-c16b-docker-api-")
+CGROUP_ROOT_PREFIX = Path("/sys/fs/cgroup/ambit-c16b-docker-")
+RUNTIME_PARENT = Path("/run")
 RECEIPT_NAME = "storage-receipt.json"
 USER_PROJECTION_NAME = "runner-docker-storage.json"
 RECEIPT_PENDING_NAME = f".{RECEIPT_NAME}.pending"
@@ -57,6 +63,7 @@ TRUSTED_TOOLS = {
 }
 TOOL_ENVIRONMENT = {"HOME": "/root", "LC_ALL": "C.UTF-8", "PATH": "/usr/bin:/bin"}
 MUTATION_GUARDIAN = r"""
+import ctypes
 import os
 import signal
 import subprocess
@@ -70,12 +77,24 @@ grace = float(sys.argv[4])
 command = sys.argv[5:]
 os.fstat(lock_fd)
 tool_fds = tuple(sorted(set(inherited) | {lock_fd}))
+parent_pid = os.getpid()
+libc = ctypes.CDLL(None, use_errno=True)
+
+def bind_tool_to_guardian():
+    for watched in (signal.SIGHUP, signal.SIGINT, signal.SIGQUIT, signal.SIGTERM):
+        signal.signal(watched, signal.SIG_DFL)
+    if libc.prctl(1, signal.SIGKILL, 0, 0, 0) != 0:  # PR_SET_PDEATHSIG
+        os._exit(70)
+    if os.getppid() != parent_pid:
+        os._exit(71)
+
 child = subprocess.Popen(
     command,
     stdout=subprocess.PIPE,
     stderr=subprocess.PIPE,
     pass_fds=tool_fds,
     start_new_session=True,
+    preexec_fn=bind_tool_to_guardian,
 )
 
 requested_signal = None
@@ -237,6 +256,7 @@ def classify_lifecycle_prefix(
     expected_claim_name: str,
     *,
     home_device: int,
+    expected_claim_size: int,
     allow_legacy_empty: bool,
     authority_empty: bool,
 ) -> LifecyclePrefixState:
@@ -253,7 +273,8 @@ def classify_lifecycle_prefix(
             and claim.device == home_device
             and plain_int(claim.inode)
             and claim.inode > 0
-            and claim.size == 0
+            and plain_int(claim.size)
+            and 0 <= claim.size <= expected_claim_size
             and claim.link_count == 1,
             "runner storage lifecycle claim identity differs",
         )
@@ -273,6 +294,10 @@ def classify_lifecycle_prefix(
         "runner storage authority root identity differs",
     )
     if claim_names:
+        require(
+            authority.kind == "absent" or claim.size == expected_claim_size,
+            "published authority has an incomplete lifecycle claim",
+        )
         return "claimed_authority"
     require(
         allow_legacy_empty and authority_empty,
@@ -287,18 +312,6 @@ def prepare_disposition(image_state: ImageState, receipt_present: bool) -> str:
     if image_state == "root_0600_exact" and receipt_present:
         return "recover"
     return "teardown_required"
-
-
-def remove_disposition(image_state: ImageState, receipt_present: bool) -> str:
-    if image_state == "absent" and not receipt_present:
-        return "remove_empty_authority"
-    if image_state.startswith("root_0600_"):
-        if image_state == "root_0600_incomplete_prepublication" and receipt_present:
-            raise RunnerStorageLifecycleError(
-                "incomplete prepublication image unexpectedly has a receipt"
-            )
-        return "remove_image_authority"
-    raise RunnerStorageLifecycleError("runner authority removal state is invalid")
 
 
 def lstat_at(directory_fd: int, name: str) -> os.stat_result | None:
@@ -458,7 +471,16 @@ def claim_name_for_identity(
     caller_uid: int,
     caller_gid: int,
 ) -> str:
-    preimage = (
+    return f"{CLAIM_PREFIX}{sha256_bytes(claim_bytes_for_identity(state_root, evidence, caller_uid, caller_gid))}"
+
+
+def claim_bytes_for_identity(
+    state_root: DirectoryIdentity,
+    evidence: DirectoryIdentity,
+    caller_uid: int,
+    caller_gid: int,
+) -> bytes:
+    return (
         json.dumps(
             claim_binding_document(state_root, evidence, caller_uid, caller_gid),
             sort_keys=True,
@@ -466,7 +488,6 @@ def claim_name_for_identity(
         )
         + "\n"
     ).encode()
-    return f"{CLAIM_PREFIX}{sha256_bytes(preimage)}"
 
 
 def open_absolute_directory_no_symlinks(path: Path) -> int:
@@ -552,7 +573,25 @@ def claim_roster(home_fd: int) -> tuple[str, ...]:
     )
 
 
-def require_claim_identity(home_fd: int, claim_name: str) -> None:
+def read_bounded_descriptor(descriptor: int, limit: int) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        block = os.read(descriptor, 64 * 1024)
+        if not block:
+            return b"".join(chunks)
+        total += len(block)
+        require(total <= limit, "bounded descriptor exceeds its limit")
+        chunks.append(block)
+
+
+def require_claim_identity(
+    home_fd: int,
+    claim_name: str,
+    expected: bytes,
+    *,
+    allow_incomplete: bool = False,
+) -> bytes:
     value = lstat_at(home_fd, claim_name)
     require(value is not None, "runner storage lifecycle claim is absent")
     assert value is not None
@@ -563,12 +602,28 @@ def require_claim_identity(home_fd: int, claim_name: str) -> None:
         and stat.S_IMODE(value.st_mode) == 0o600
         and value.st_dev == os.fstat(home_fd).st_dev
         and value.st_nlink == 1
-        and value.st_size == 0,
+        and 0 <= value.st_size <= len(expected),
         "runner storage lifecycle claim identity differs",
     )
+    descriptor = os.open(claim_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=home_fd)
+    try:
+        require_descriptor_entry(home_fd, claim_name, descriptor)
+        actual = read_bounded_descriptor(descriptor, len(expected))
+    finally:
+        os.close(descriptor)
+    require(expected.startswith(actual), "runner storage lifecycle claim bytes differ")
+    require(
+        allow_incomplete or actual == expected,
+        "runner storage lifecycle claim is incomplete",
+    )
+    require(
+        sha256_bytes(expected) == claim_name.removeprefix(CLAIM_PREFIX),
+        "runner storage lifecycle claim digest differs",
+    )
+    return actual
 
 
-def create_claim(home_fd: int, claim_name: str) -> None:
+def create_claim(home_fd: int, claim_name: str, expected: bytes) -> None:
     descriptor = os.open(
         claim_name,
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
@@ -578,11 +633,116 @@ def create_claim(home_fd: int, claim_name: str) -> None:
     try:
         os.fchown(descriptor, 0, 0)
         os.fchmod(descriptor, 0o600)
+        offset = 0
+        while offset < len(expected):
+            offset += os.write(descriptor, expected[offset:])
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
     os.fsync(home_fd)
-    require_claim_identity(home_fd, claim_name)
+    require_claim_identity(home_fd, claim_name, expected)
+
+
+def repair_incomplete_claim(home_fd: int, claim_name: str, expected: bytes) -> None:
+    actual = require_claim_identity(
+        home_fd,
+        claim_name,
+        expected,
+        allow_incomplete=True,
+    )
+    if actual == expected:
+        return
+    descriptor = os.open(claim_name, os.O_RDWR | os.O_NOFOLLOW, dir_fd=home_fd)
+    try:
+        require_descriptor_entry(home_fd, claim_name, descriptor)
+        os.ftruncate(descriptor, 0)
+        offset = 0
+        while offset < len(expected):
+            offset += os.write(descriptor, expected[offset:])
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    os.fsync(home_fd)
+    require_claim_identity(home_fd, claim_name, expected)
+
+
+def directory_identity_from_document(value: object, label: str) -> DirectoryIdentity:
+    require(isinstance(value, dict), f"{label} is not an object")
+    assert isinstance(value, dict)
+    require(
+        set(value) == {"path", "device", "inode", "ownerUid", "ownerGid", "mode"},
+        f"{label} shape differs",
+    )
+    require(
+        isinstance(value["path"], str)
+        and Path(value["path"]).is_absolute()
+        and os.path.normpath(value["path"]) == value["path"],
+        f"{label} path is invalid",
+    )
+    for field in ("device", "inode", "ownerUid", "ownerGid"):
+        require(plain_int(value[field]), f"{label} coordinate is invalid: {field}")
+    require(
+        isinstance(value["mode"], str) and re.fullmatch(r"[0-7]{4}", value["mode"]),
+        f"{label} mode is invalid",
+    )
+    return DirectoryIdentity(
+        Path(value["path"]),
+        value["device"],
+        value["inode"],
+        value["ownerUid"],
+        value["ownerGid"],
+        int(value["mode"], 8),
+    )
+
+
+def read_claim_document(
+    home_fd: int,
+    claim_name: str,
+) -> tuple[bytes, dict[str, Any], DirectoryIdentity, DirectoryIdentity]:
+    value = lstat_at(home_fd, claim_name)
+    require(value is not None, "runner storage lifecycle claim is absent")
+    assert value is not None
+    require(
+        stat.S_ISREG(value.st_mode)
+        and value.st_uid == 0
+        and value.st_gid == 0
+        and stat.S_IMODE(value.st_mode) == 0o600
+        and value.st_dev == os.fstat(home_fd).st_dev
+        and value.st_nlink == 1
+        and 0 < value.st_size <= MAX_DOCUMENT_BYTES,
+        "runner storage lifecycle claim document identity differs",
+    )
+    descriptor = os.open(claim_name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=home_fd)
+    try:
+        require_descriptor_entry(home_fd, claim_name, descriptor)
+        raw = read_bounded_descriptor(descriptor, MAX_DOCUMENT_BYTES)
+    finally:
+        os.close(descriptor)
+    document = json.loads(raw)
+    require(isinstance(document, dict), "runner storage lifecycle claim is not an object")
+    assert isinstance(document, dict)
+    require(
+        raw == canonical_json_bytes(document),
+        "runner storage lifecycle claim is not canonical JSON",
+    )
+    require(
+        sha256_bytes(raw) == claim_name.removeprefix(CLAIM_PREFIX),
+        "runner storage lifecycle claim filename digest differs",
+    )
+    require(
+        set(document)
+        == {"domain", "authorityRoot", "caller", "stateRootIdentity", "evidenceDirectoryIdentity"}
+        and document["domain"] == CLAIM_DOMAIN
+        and document["authorityRoot"] == str(AUTHORITY_ROOT),
+        "runner storage lifecycle claim document differs",
+    )
+    state = directory_identity_from_document(
+        document["stateRootIdentity"], "claim state-root identity"
+    )
+    evidence = directory_identity_from_document(
+        document["evidenceDirectoryIdentity"], "claim evidence identity"
+    )
+    return raw, document, state, evidence
 
 
 @dataclass
@@ -602,8 +762,10 @@ class AuthorityContext:
     roster: tuple[str, ...]
     exclusive: bool
     claim_name: str
+    claim_bytes: bytes
     claim_present: bool
     legacy_unclaimed: bool
+    orphaned_binding: bool = False
 
     def close(self) -> None:
         for name in (
@@ -628,13 +790,21 @@ class AuthorityContext:
 
 def require_context_binding(context: AuthorityContext) -> None:
     require(
-        context.state_fd is not None
-        and context.evidence_fd is not None
-        and context.home_fd is not None,
+        context.home_fd is not None,
         "lifecycle identity descriptors are absent",
     )
-    require_pinned_directory(context.state_fd, context.state_identity)
-    require_pinned_directory(context.evidence_fd, context.evidence_identity)
+    if context.orphaned_binding:
+        require(
+            context.state_fd is None and context.evidence_fd is None,
+            "orphaned lifecycle binding unexpectedly has caller descriptors",
+        )
+    else:
+        require(
+            context.state_fd is not None and context.evidence_fd is not None,
+            "caller lifecycle identity descriptors are absent",
+        )
+        require_pinned_directory(context.state_fd, context.state_identity)
+        require_pinned_directory(context.evidence_fd, context.evidence_identity)
     home = os.fstat(context.home_fd)
     require_root_directory(home, 0o755, "/home authority parent")
     require(
@@ -646,9 +816,216 @@ def require_context_binding(context: AuthorityContext) -> None:
     claims = claim_roster(context.home_fd)
     if context.claim_present:
         require(claims == (context.claim_name,), "runner storage lifecycle claim differs")
-        require_claim_identity(context.home_fd, context.claim_name)
+        require_claim_identity(
+            context.home_fd,
+            context.claim_name,
+            context.claim_bytes,
+        )
     else:
         require(not claims, "unexpected runner storage lifecycle claim exists")
+
+
+def runtime_authority_paths(state_root: Path) -> tuple[Path, Path, Path]:
+    identifier = sha256_bytes(str(state_root).encode())[:12]
+    return (
+        Path(f"{RUNTIME_ROOT_PREFIX}{identifier}"),
+        Path(f"{SOCKET_ROOT_PREFIX}{identifier}"),
+        Path(f"{CGROUP_ROOT_PREFIX}{identifier}"),
+    )
+
+
+def runtime_lease_path(state_root: Path) -> Path:
+    identifier = sha256_bytes(str(state_root).encode())[:12]
+    return RUNTIME_PARENT / f"ambit-c16b-docker-{identifier}.lock"
+
+
+@dataclass
+class RuntimeDeletionLease:
+    parent_fd: int
+    descriptor: int
+
+    def close(self) -> None:
+        if self.descriptor >= 0:
+            os.close(self.descriptor)
+            self.descriptor = -1
+        if self.parent_fd >= 0:
+            os.close(self.parent_fd)
+            self.parent_fd = -1
+
+    def __enter__(self) -> RuntimeDeletionLease:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+
+def acquire_runtime_deletion_lease(state_root: Path) -> RuntimeDeletionLease:
+    path = runtime_lease_path(state_root)
+    parent_fd = os.open(RUNTIME_PARENT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    descriptor: int | None = None
+    try:
+        parent = os.fstat(parent_fd)
+        require_root_directory(parent, 0o755, "runtime lease parent")
+        descriptor = os.open(
+            path.name,
+            os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=parent_fd,
+        )
+        value = os.fstat(descriptor)
+        literal = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        require(
+            stat.S_ISREG(value.st_mode)
+            and value.st_uid == 0
+            and value.st_gid == 0
+            and stat.S_IMODE(value.st_mode) == 0o600
+            and value.st_nlink == 1
+            and (value.st_dev, value.st_ino) == (literal.st_dev, literal.st_ino),
+            "runtime deletion lease identity differs",
+        )
+        deadline = time.monotonic() + LIFECYCLE_LOCK_TIMEOUT_SECONDS
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise RunnerStorageLifecycleError(
+                        "isolated runtime lease is busy during storage deletion"
+                    )
+                time.sleep(0.05)
+        os.fsync(descriptor)
+        os.fsync(parent_fd)
+        return RuntimeDeletionLease(parent_fd, descriptor)
+    except BaseException:
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(parent_fd)
+        raise
+
+
+def require_runtime_absent(context: AuthorityContext) -> None:
+    require_runtime_paths_absent(context.state_identity.path)
+
+
+def require_runtime_paths_absent(state_root: Path) -> None:
+    for path in runtime_authority_paths(state_root):
+        try:
+            os.stat(path, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        raise RunnerStorageLifecycleError(
+            f"isolated runtime authority must be removed before storage deletion: {path}"
+        )
+
+
+def discover_remove_binding_path(
+    state_root: Path,
+    caller_uid: int,
+    caller_gid: int,
+) -> Path:
+    state_fd: int | None = None
+    evidence_fd: int | None = None
+    state_identity: DirectoryIdentity | None = None
+    evidence_identity: DirectoryIdentity | None = None
+    try:
+        try:
+            state_fd, state_identity, evidence_fd, evidence_identity = open_caller_directories(
+                state_root, caller_uid, caller_gid
+            )
+        except FileNotFoundError:
+            pass
+        home_fd = os.open(HOME_ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            require_root_directory(os.fstat(home_fd), 0o755, "/home authority parent")
+            claims = claim_roster(home_fd)
+            if not claims:
+                require(
+                    state_identity is not None,
+                    "unclaimed orphaned lifecycle binding cannot be discovered",
+                )
+                return state_root
+            require(len(claims) == 1, "lifecycle claim discovery is ambiguous")
+            claim_name = claims[0]
+            if state_identity is not None and evidence_identity is not None:
+                expected_bytes = claim_bytes_for_identity(
+                    state_identity,
+                    evidence_identity,
+                    caller_uid,
+                    caller_gid,
+                )
+                expected_name = f"{CLAIM_PREFIX}{sha256_bytes(expected_bytes)}"
+                if claim_name == expected_name:
+                    require_claim_identity(
+                        home_fd,
+                        claim_name,
+                        expected_bytes,
+                        allow_incomplete=True,
+                    )
+                    return state_root
+            raw, document, stored_state, stored_evidence = read_claim_document(
+                home_fd, claim_name
+            )
+            require(
+                document.get("caller") == {"uid": caller_uid, "gid": caller_gid},
+                "lifecycle claim discovery caller differs",
+            )
+            if state_identity is None or evidence_identity is None:
+                require(
+                    stored_state.path == state_root,
+                    "orphaned lifecycle original path differs",
+                )
+            else:
+                expected_name = claim_name_for_identity(
+                    state_identity, evidence_identity, caller_uid, caller_gid
+                )
+                if expected_name != claim_name:
+                    require(
+                        (
+                            state_identity.device,
+                            state_identity.inode,
+                            state_identity.owner_uid,
+                            state_identity.owner_gid,
+                            state_identity.mode,
+                            evidence_identity.device,
+                            evidence_identity.inode,
+                            evidence_identity.owner_uid,
+                            evidence_identity.owner_gid,
+                            evidence_identity.mode,
+                        )
+                        == (
+                            stored_state.device,
+                            stored_state.inode,
+                            stored_state.owner_uid,
+                            stored_state.owner_gid,
+                            stored_state.mode,
+                            stored_evidence.device,
+                            stored_evidence.inode,
+                            stored_evidence.owner_uid,
+                            stored_evidence.owner_gid,
+                            stored_evidence.mode,
+                        ),
+                        "relocated lifecycle discovery coordinates differ",
+                    )
+                else:
+                    require(
+                        raw
+                        == claim_bytes_for_identity(
+                            state_identity,
+                            evidence_identity,
+                            caller_uid,
+                            caller_gid,
+                        ),
+                        "lifecycle claim discovery bytes differ",
+                    )
+            return stored_state.path
+        finally:
+            os.close(home_fd)
+    finally:
+        if evidence_fd is not None:
+            os.close(evidence_fd)
+        if state_fd is not None:
+            os.close(state_fd)
 
 
 def open_authority(
@@ -659,11 +1036,22 @@ def open_authority(
     create: bool,
     exclusive: bool,
     allow_legacy_empty: bool = False,
+    allow_orphaned_binding: bool = False,
     required_tools: tuple[str, ...] = (),
 ) -> AuthorityContext:
-    state_fd, state_identity, evidence_fd, evidence_identity = open_caller_directories(
-        state_root, caller_uid, caller_gid
-    )
+    state_fd: int | None = None
+    evidence_fd: int | None = None
+    state_identity: DirectoryIdentity | None = None
+    evidence_identity: DirectoryIdentity | None = None
+    try:
+        state_fd, state_identity, evidence_fd, evidence_identity = open_caller_directories(
+            state_root, caller_uid, caller_gid
+        )
+    except FileNotFoundError:
+        require(
+            allow_orphaned_binding,
+            "caller state binding is absent",
+        )
     home_fd: int | None = None
     root_fd: int | None = None
     target_fd: int | None = None
@@ -674,15 +1062,92 @@ def open_authority(
         home_fd = os.open(HOME_ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         home_stat = os.fstat(home_fd)
         require_root_directory(home_stat, 0o755, "/home authority parent")
+        acquire_lifecycle_lock(home_fd, exclusive=exclusive)
+        claims = claim_roster(home_fd)
+        orphaned_binding = False
+        if state_identity is None or evidence_identity is None:
+            require(
+                allow_orphaned_binding and len(claims) == 1,
+                "orphaned lifecycle claim is absent or ambiguous",
+            )
+            claim_name = claims[0]
+            claim_bytes, claim_document, stored_state, stored_evidence = read_claim_document(
+                home_fd, claim_name
+            )
+            require(
+                claim_document.get("caller") == {"uid": caller_uid, "gid": caller_gid}
+                and stored_state.path == state_root,
+                "orphaned lifecycle caller or original path differs",
+            )
+            state_identity = stored_state
+            evidence_identity = stored_evidence
+            orphaned_binding = True
+        else:
+            require(
+                home_stat.st_dev == state_identity.device == evidence_identity.device,
+                "lifecycle identities use different backing filesystems",
+            )
+            claim_name = claim_name_for_identity(
+                state_identity, evidence_identity, caller_uid, caller_gid
+            )
+            claim_bytes = claim_bytes_for_identity(
+                state_identity, evidence_identity, caller_uid, caller_gid
+            )
+            if claims and claims != (claim_name,) and allow_orphaned_binding:
+                require(len(claims) == 1, "orphaned lifecycle claim is ambiguous")
+                stored_name = claims[0]
+                stored_bytes, claim_document, stored_state, stored_evidence = read_claim_document(
+                    home_fd, stored_name
+                )
+                require(
+                    claim_document.get("caller") == {"uid": caller_uid, "gid": caller_gid},
+                    "orphaned lifecycle caller differs",
+                )
+                current_coordinates = (
+                    state_identity.device,
+                    state_identity.inode,
+                    state_identity.owner_uid,
+                    state_identity.owner_gid,
+                    state_identity.mode,
+                    evidence_identity.device,
+                    evidence_identity.inode,
+                    evidence_identity.owner_uid,
+                    evidence_identity.owner_gid,
+                    evidence_identity.mode,
+                )
+                stored_coordinates = (
+                    stored_state.device,
+                    stored_state.inode,
+                    stored_state.owner_uid,
+                    stored_state.owner_gid,
+                    stored_state.mode,
+                    stored_evidence.device,
+                    stored_evidence.inode,
+                    stored_evidence.owner_uid,
+                    stored_evidence.owner_gid,
+                    stored_evidence.mode,
+                )
+                require(
+                    current_coordinates == stored_coordinates,
+                    "relocated lifecycle identity coordinates differ",
+                )
+                os.close(state_fd)
+                os.close(evidence_fd)
+                state_fd = None
+                evidence_fd = None
+                state_identity = stored_state
+                evidence_identity = stored_evidence
+                claim_name = stored_name
+                claim_bytes = stored_bytes
+                orphaned_binding = True
+        require(
+            state_identity is not None and evidence_identity is not None,
+            "resolved lifecycle binding is absent",
+        )
         require(
             home_stat.st_dev == state_identity.device == evidence_identity.device,
-            "lifecycle identities use different backing filesystems",
+            "resolved lifecycle binding uses a foreign filesystem",
         )
-        acquire_lifecycle_lock(home_fd, exclusive=exclusive)
-        claim_name = claim_name_for_identity(
-            state_identity, evidence_identity, caller_uid, caller_gid
-        )
-        claims = claim_roster(home_fd)
         authority_stat = lstat_at(home_fd, AUTHORITY_NAME)
         claim_present = claims == (claim_name,)
         legacy_unclaimed = False
@@ -698,6 +1163,7 @@ def open_authority(
                 claims,
                 claim_name,
                 home_device=home_stat.st_dev,
+                expected_claim_size=len(claim_bytes),
                 allow_legacy_empty=False,
                 authority_empty=True,
             )
@@ -708,6 +1174,7 @@ def open_authority(
                 claims,
                 claim_name,
                 home_device=home_stat.st_dev,
+                expected_claim_size=len(claim_bytes),
                 allow_legacy_empty=False,
                 authority_empty=False,
             )
@@ -716,8 +1183,10 @@ def open_authority(
         if authority_stat is None and create:
             require(exclusive, "authority creation requires an exclusive lifecycle lock")
             if not claim_present:
-                create_claim(home_fd, claim_name)
+                create_claim(home_fd, claim_name, claim_bytes)
                 claim_present = True
+            else:
+                repair_incomplete_claim(home_fd, claim_name, claim_bytes)
             os.mkdir(AUTHORITY_NAME, mode=0o700, dir_fd=home_fd)
             os.fsync(home_fd)
             authority_stat = os.stat(
@@ -730,7 +1199,9 @@ def open_authority(
             )
             legacy_unclaimed = True
         if claim_present:
-            require_claim_identity(home_fd, claim_name)
+            if authority_stat is None and exclusive:
+                repair_incomplete_claim(home_fd, claim_name, claim_bytes)
+            require_claim_identity(home_fd, claim_name, claim_bytes)
 
         if authority_stat is None:
             return AuthorityContext(
@@ -749,8 +1220,10 @@ def open_authority(
                 roster=(),
                 exclusive=exclusive,
                 claim_name=claim_name,
+                claim_bytes=claim_bytes,
                 claim_present=claim_present,
                 legacy_unclaimed=False,
+                orphaned_binding=orphaned_binding,
             )
 
         require_root_directory(authority_stat, 0o700, "runner storage authority root")
@@ -772,6 +1245,7 @@ def open_authority(
                 (),
                 claim_name,
                 home_device=home_stat.st_dev,
+                expected_claim_size=len(claim_bytes),
                 allow_legacy_empty=True,
                 authority_empty=not roster,
             )
@@ -791,8 +1265,10 @@ def open_authority(
                 roster=(),
                 exclusive=exclusive,
                 claim_name=claim_name,
+                claim_bytes=claim_bytes,
                 claim_present=False,
                 legacy_unclaimed=True,
+                orphaned_binding=orphaned_binding,
             )
 
         if exclusive:
@@ -867,8 +1343,10 @@ def open_authority(
             roster=roster,
             exclusive=exclusive,
             claim_name=claim_name,
+            claim_bytes=claim_bytes,
             claim_present=True,
             legacy_unclaimed=False,
+            orphaned_binding=orphaned_binding,
         )
         require_context_binding(context)
         if exclusive:
@@ -1053,6 +1531,16 @@ def require_private_mount_record(record: MountRecord) -> None:
     require(not propagation, "mount authority is not private")
 
 
+def mount_contains_path(record: MountRecord, path: Path) -> bool:
+    target = Path(record.target)
+    require(target.is_absolute(), "mount target is not absolute")
+    try:
+        path.relative_to(target)
+        return True
+    except ValueError:
+        return False
+
+
 def require_private_namespace(expected_device: int, expected_inode: int) -> str:
     expected = f"{expected_device}:{expected_inode}"
     observed = namespace_id()
@@ -1060,7 +1548,7 @@ def require_private_namespace(expected_device: int, expected_inode: int) -> str:
     home_candidates = [
         record
         for record in read_mount_records()
-        if str(HOME_ROOT) == record.target or str(HOME_ROOT).startswith(f"{record.target}/")
+        if mount_contains_path(record, HOME_ROOT)
     ]
     require(home_candidates, "/home mount authority is absent")
     authority = max(home_candidates, key=lambda value: len(value.target))
@@ -1273,6 +1761,7 @@ def create_image(context: AuthorityContext) -> None:
         mutation=True,
         pass_fds=(context.image_fd,),
     )
+    os.fsync(context.image_fd)
     os.fsync(context.root_fd)
     context.image_state = "root_0600_exact"
 
@@ -1594,6 +2083,8 @@ def publish_receipt(
 
 def remove_user_projection(context: AuthorityContext) -> None:
     require_context_binding(context)
+    if context.orphaned_binding:
+        return
     require(context.evidence_fd is not None, "evidence descriptor is absent")
     value = lstat_at(context.evidence_fd, USER_PROJECTION_NAME)
     if value is not None:
@@ -1971,7 +2462,7 @@ def observe_private(args: argparse.Namespace) -> dict[str, Any]:
         return operation_result("observed", expected_namespace, digest, current)
 
 
-def remove_authority(args: argparse.Namespace) -> dict[str, Any]:
+def _remove_authority_locked(args: argparse.Namespace) -> dict[str, Any]:
     with open_authority(
         state_root=args.state_root,
         caller_uid=args.caller_uid,
@@ -1979,9 +2470,11 @@ def remove_authority(args: argparse.Namespace) -> dict[str, Any]:
         create=False,
         exclusive=True,
         allow_legacy_empty=True,
+        allow_orphaned_binding=True,
         required_tools=("losetup", "python"),
     ) as context:
         require_context_binding(context)
+        require_runtime_absent(context)
         if context.root_fd is None:
             require(
                 not path_occurrences(AUTHORITY_ROOT),
@@ -2080,6 +2573,164 @@ def remove_authority(args: argparse.Namespace) -> dict[str, Any]:
     return operation_result("removed", None, None, None)
 
 
+def remove_authority(args: argparse.Namespace) -> dict[str, Any]:
+    # Runtime start/stop always acquires this lease before the storage helper's
+    # `/home` flock.  Standalone deletion uses the same order so a new start
+    # cannot appear between the absence proof and destructive reduction.
+    bound_state_root = discover_remove_binding_path(
+        args.state_root,
+        args.caller_uid,
+        args.caller_gid,
+    )
+    with acquire_runtime_deletion_lease(bound_state_root):
+        return _remove_authority_locked(args)
+
+
+def validate_legacy_v2_removal_receipt(
+    receipt: dict[str, Any],
+    *,
+    state_identity: DirectoryIdentity,
+    root_stat: os.stat_result,
+    image_stat: os.stat_result,
+) -> None:
+    require(
+        receipt.get("schema") == LEGACY_RECEIPT_SCHEMA,
+        "legacy removal receipt schema differs",
+    )
+    require(receipt.get("stateRoot") == str(state_identity.path), "legacy state path differs")
+    stored_state = receipt.get("stateRootIdentity")
+    require(
+        isinstance(stored_state, dict)
+        and stored_state
+        == {
+            "device": state_identity.device,
+            "inode": state_identity.inode,
+            "ownerUid": state_identity.owner_uid,
+            "ownerGid": state_identity.owner_gid,
+            "mode": f"{state_identity.mode:04o}",
+        },
+        "legacy state identity differs",
+    )
+    authority = receipt.get("authorityRoot")
+    image = receipt.get("image")
+    filesystem = receipt.get("filesystem")
+    require(
+        isinstance(authority, dict)
+        and authority.get("path") == str(AUTHORITY_ROOT)
+        and authority.get("device") == root_stat.st_dev
+        and authority.get("inode") == root_stat.st_ino,
+        "legacy authority identity differs",
+    )
+    require(
+        isinstance(image, dict)
+        and image.get("path") == str(AUTHORITY_ROOT / IMAGE_NAME)
+        and image.get("device") == image_stat.st_dev
+        and image.get("inode") == image_stat.st_ino
+        and image.get("logicalBytes") == IMAGE_BYTES,
+        "legacy image identity differs",
+    )
+    require(
+        isinstance(filesystem, dict)
+        and isinstance(filesystem.get("uuid"), str)
+        and FILESYSTEM_UUID.fullmatch(filesystem["uuid"]) is not None,
+        "legacy filesystem identity differs",
+    )
+
+
+def migrate_legacy_v2_for_removal(args: argparse.Namespace) -> None:
+    state_fd, state_identity, evidence_fd, evidence_identity = open_caller_directories(
+        args.state_root, args.caller_uid, args.caller_gid
+    )
+    home_fd: int | None = None
+    root_fd: int | None = None
+    image_fd: int | None = None
+    legacy_lock_fd: int | None = None
+    try:
+        home_fd = os.open(HOME_ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        require_root_directory(os.fstat(home_fd), 0o755, "/home authority parent")
+        acquire_lifecycle_lock(home_fd, exclusive=True)
+        root_fd = os.open(
+            AUTHORITY_NAME,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=home_fd,
+        )
+        require_descriptor_entry(home_fd, AUTHORITY_NAME, root_fd)
+        root_stat = os.fstat(root_fd)
+        require_root_directory(root_stat, 0o700, "legacy storage authority root")
+        image_fd = os.open(IMAGE_NAME, os.O_RDWR | os.O_NOFOLLOW, dir_fd=root_fd)
+        require_descriptor_entry(root_fd, IMAGE_NAME, image_fd)
+        image_stat = os.fstat(image_fd)
+        require(
+            stat.S_ISREG(image_stat.st_mode)
+            and image_stat.st_uid == 0
+            and image_stat.st_gid == 0
+            and stat.S_IMODE(image_stat.st_mode) == 0o600
+            and image_stat.st_size == IMAGE_BYTES,
+            "legacy image node differs",
+        )
+        claim_bytes = claim_bytes_for_identity(
+            state_identity, evidence_identity, args.caller_uid, args.caller_gid
+        )
+        claim_name = f"{CLAIM_PREFIX}{sha256_bytes(claim_bytes)}"
+        claims = claim_roster(home_fd)
+        require(not claims or claims == (claim_name,), "legacy migration claim differs")
+        receipt = read_json_at(root_fd, RECEIPT_NAME)
+        if receipt is not None:
+            validate_legacy_v2_removal_receipt(
+                receipt,
+                state_identity=state_identity,
+                root_stat=root_stat,
+                image_stat=image_stat,
+            )
+        else:
+            require(claims == (claim_name,), "legacy receipt disappeared before durable claim")
+        if not claims:
+            create_claim(home_fd, claim_name, claim_bytes)
+        else:
+            require_claim_identity(home_fd, claim_name, claim_bytes)
+        legacy_lock = lstat_at(root_fd, LEGACY_LOCK_NAME)
+        if legacy_lock is not None:
+            require(
+                stat.S_ISREG(legacy_lock.st_mode)
+                and legacy_lock.st_uid == 0
+                and legacy_lock.st_gid == 0
+                and stat.S_IMODE(legacy_lock.st_mode) == 0o600
+                and legacy_lock.st_nlink == 1,
+                "legacy lifecycle lock identity differs",
+            )
+            legacy_lock_fd = os.open(
+                LEGACY_LOCK_NAME,
+                os.O_RDWR | os.O_NOFOLLOW,
+                dir_fd=root_fd,
+            )
+            require_descriptor_entry(root_fd, LEGACY_LOCK_NAME, legacy_lock_fd)
+            deadline = time.monotonic() + LIFECYCLE_LOCK_TIMEOUT_SECONDS
+            while True:
+                try:
+                    fcntl.flock(legacy_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise RunnerStorageLifecycleError("legacy lifecycle lock is busy")
+                    time.sleep(0.05)
+            os.unlink(LEGACY_LOCK_NAME, dir_fd=root_fd)
+            os.fsync(root_fd)
+        if receipt is not None:
+            os.unlink(RECEIPT_NAME, dir_fd=root_fd)
+            os.fsync(root_fd)
+    finally:
+        for descriptor in (legacy_lock_fd, image_fd, root_fd, home_fd, evidence_fd, state_fd):
+            if descriptor is not None:
+                os.close(descriptor)
+
+
+def remove_legacy_v2_authority(args: argparse.Namespace) -> dict[str, Any]:
+    with acquire_runtime_deletion_lease(args.state_root):
+        require_runtime_paths_absent(args.state_root)
+        migrate_legacy_v2_for_removal(args)
+        return _remove_authority_locked(args)
+
+
 def parser() -> argparse.ArgumentParser:
     value = argparse.ArgumentParser()
     commands = value.add_subparsers(dest="command", required=True)
@@ -2090,10 +2741,11 @@ def parser() -> argparse.ArgumentParser:
         child.add_argument("caller_gid", type=int)
         child.add_argument("namespace_device", type=int)
         child.add_argument("namespace_inode", type=int)
-    remove = commands.add_parser("remove-authority")
-    remove.add_argument("state_root", type=Path)
-    remove.add_argument("caller_uid", type=int)
-    remove.add_argument("caller_gid", type=int)
+    for name in ("remove-authority", "remove-legacy-v2-authority"):
+        remove = commands.add_parser(name)
+        remove.add_argument("state_root", type=Path)
+        remove.add_argument("caller_uid", type=int)
+        remove.add_argument("caller_gid", type=int)
     return value
 
 
@@ -2127,6 +2779,7 @@ def main() -> None:
         "deactivate-private": deactivate_private,
         "observe-private": observe_private,
         "remove-authority": remove_authority,
+        "remove-legacy-v2-authority": remove_legacy_v2_authority,
     }
     result = handlers[args.command](args)
     print(json.dumps(result, sort_keys=True, separators=(",", ":")))

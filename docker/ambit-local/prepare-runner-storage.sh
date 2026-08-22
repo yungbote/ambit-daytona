@@ -1,5 +1,6 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash -p
 set -euo pipefail
+unset BASH_ENV ENV CDPATH GLOBIGNORE
 
 if [[ $# -ne 1 ]]; then
   echo 'Usage: prepare-runner-storage.sh STATE_ROOT' >&2

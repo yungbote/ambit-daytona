@@ -43,7 +43,7 @@ evidence_root=${state_root}/evidence
 
 script_dir=$(cd "$(/usr/bin/dirname -- "${BASH_SOURCE[0]}")" && /usr/bin/pwd -P)
 supervisor=${script_dir}/isolated_runtime_supervisor.py
-supervisor_sha256=69138beedc9ff533ba5f86bcd9bc982cd3147f865e428c838a6c13053005643c
+supervisor_sha256=b2218fae7e5b63c8baab79367e133151c8073bfc115f28271b7aba025080eec9
 
 read -r -d '' pinned_loader <<'PY' || true
 import hashlib
@@ -75,6 +75,7 @@ sys.argv = [path, *arguments]
 globals()["__file__"] = path
 globals()["__package__"] = None
 globals()["__verified_source_sha256__"] = expected
+globals()["__fallback_script_directory__"] = os.path.dirname(path)
 exec(compile(source, path, "exec"), globals(), globals())
 PY
 
@@ -120,9 +121,10 @@ if snapshot_fd is None:
     snapshot_fd = os.open(fallback_path, os.O_RDONLY | os.O_NOFOLLOW)
 try:
     identity = os.fstat(snapshot_fd)
-    if not stat.S_ISREG(identity.st_mode) or not 0 < identity.st_size <= 2 * 1024 * 1024:
+    if (not stat.S_ISREG(identity.st_mode) or identity.st_size > 2 * 1024 * 1024
+            or (identity.st_size == 0 and (chosen == fallback_path or control_present))):
         raise SystemExit("runtime supervisor source identity is invalid")
-    if chosen != fallback_path and not (identity.st_uid == 0 and identity.st_gid == 0 and stat.S_IMODE(identity.st_mode) == 0o400):
+    if chosen != fallback_path and not (identity.st_uid == 0 and identity.st_gid == 0 and identity.st_nlink == 1 and identity.st_dev == root.st_dev and stat.S_IMODE(identity.st_mode) == 0o400):
         raise SystemExit("runtime supervisor snapshot authority differs")
     source = bytearray()
     while True:
@@ -156,6 +158,7 @@ sys.argv = [chosen, *arguments]
 globals()["__file__"] = chosen
 globals()["__package__"] = None
 globals()["__verified_source_sha256__"] = actual
+globals()["__fallback_script_directory__"] = os.path.dirname(fallback_path)
 exec(compile(source, chosen, "exec"), globals(), globals())
 PY
 

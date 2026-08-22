@@ -72,6 +72,9 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
         )
         document = MODULE.claim_binding_document(state, evidence, 1000, 100)
         self.assertEqual(document["domain"], MODULE.CLAIM_DOMAIN)
+        claim_bytes = MODULE.claim_bytes_for_identity(state, evidence, 1000, 100)
+        self.assertEqual(claim_bytes, MODULE.canonical_json_bytes(document))
+        self.assertTrue(baseline.endswith(MODULE.sha256_bytes(claim_bytes)))
         state_changes = {
             "path": Path("/home/example/ambit/other"),
             "device": 48,
@@ -107,11 +110,13 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
 
     def test_lifecycle_prefix_classifier_covers_crash_and_legacy_cutpoints(self) -> None:
         expected = f"{MODULE.CLAIM_PREFIX}{'a' * 64}"
+        expected_size = 128
         authority = MODULE.NodeFacts("directory", 0, 0, 0o700, 47, 71, 0)
-        claim = MODULE.NodeFacts("regular", 0, 0, 0o600, 47, 72, 0, 1)
+        claim_partial = MODULE.NodeFacts("regular", 0, 0, 0o600, 47, 72, 0, 1)
+        claim = MODULE.NodeFacts("regular", 0, 0, 0o600, 47, 72, expected_size, 1)
         cases = (
             (MODULE.absent_node(), MODULE.absent_node(), (), False, True, "absent_unclaimed"),
-            (MODULE.absent_node(), claim, (expected,), False, True, "claim_only"),
+            (MODULE.absent_node(), claim_partial, (expected,), False, True, "claim_only"),
             (authority, claim, (expected,), False, False, "claimed_authority"),
             (authority, MODULE.absent_node(), (), True, True, "legacy_empty_authority"),
         )
@@ -124,6 +129,7 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
                         roster,
                         expected,
                         home_device=47,
+                        expected_claim_size=expected_size,
                         allow_legacy_empty=allow_legacy,
                         authority_empty=empty,
                     ),
@@ -169,6 +175,7 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
                     roster,
                     expected,
                     home_device=47,
+                    expected_claim_size=expected_size,
                     allow_legacy_empty=allow_legacy,
                     authority_empty=empty,
                 )
@@ -186,10 +193,81 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
         )
         self.assertLess(opening.index("create_claim(home_fd"), opening.index("os.mkdir(AUTHORITY_NAME"))
         claim_creation = helper[helper.index("def create_claim"):helper.index("@dataclass\nclass AuthorityContext")]
+        self.assertLess(claim_creation.index("os.write("), claim_creation.index("os.fsync(descriptor)"))
         self.assertLess(claim_creation.index("os.fsync(descriptor)"), claim_creation.index("os.fsync(home_fd)"))
-        removal = helper[helper.index("def remove_authority"):helper.index("def parser")]
+        removal = helper[
+            helper.index("def _remove_authority_locked") : helper.index("def parser")
+        ]
         self.assertLess(removal.rindex("os.rmdir(AUTHORITY_NAME"), removal.rindex("os.unlink(context.claim_name"))
-        self.assertNotIn("lifecycle.lock", helper)
+        self.assertEqual(helper.count('"lifecycle.lock"'), 1)
+
+    def test_format_bytes_are_fsynced_before_publication_can_continue(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        create = source[source.index("def create_image") : source.index("def mount_image")]
+        mkfs = create.index('"mkfs.xfs"')
+        image_fsync = create.index("os.fsync(context.image_fd)", mkfs)
+        root_fsync = create.index("os.fsync(context.root_fd)", image_fsync)
+        self.assertLess(mkfs, image_fsync)
+        self.assertLess(image_fsync, root_fsync)
+
+    def test_legacy_v2_has_an_explicit_remove_only_migration(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        migration = source[
+            source.index("def migrate_legacy_v2_for_removal") : source.index("def remove_legacy_v2_authority")
+        ]
+        self.assertLess(migration.index("create_claim("), migration.index("os.unlink(RECEIPT_NAME"))
+        self.assertIn("remove-legacy-v2-authority", source)
+        wrapper = SCRIPT.with_name("remove-runner-storage.sh").read_text(encoding="utf-8")
+        self.assertIn("--legacy-v2", wrapper)
+        self.assertIn("remove-legacy-v2-authority", wrapper)
+        state = MODULE.DirectoryIdentity(
+            Path("/home/example/state"), 47, 61, 1000, 100, 0o700
+        )
+        root_stat = mock.Mock(st_dev=47, st_ino=71)
+        image_stat = mock.Mock(st_dev=47, st_ino=72)
+        receipt = {
+            "schema": MODULE.LEGACY_RECEIPT_SCHEMA,
+            "stateRoot": str(state.path),
+            "stateRootIdentity": {
+                "device": 47,
+                "inode": 61,
+                "ownerUid": 1000,
+                "ownerGid": 100,
+                "mode": "0700",
+            },
+            "authorityRoot": {
+                "path": str(MODULE.AUTHORITY_ROOT),
+                "device": 47,
+                "inode": 71,
+            },
+            "image": {
+                "path": str(MODULE.AUTHORITY_ROOT / MODULE.IMAGE_NAME),
+                "device": 47,
+                "inode": 72,
+                "logicalBytes": MODULE.IMAGE_BYTES,
+            },
+            "filesystem": {"uuid": "12345678-1234-1234-1234-123456789abc"},
+        }
+        MODULE.validate_legacy_v2_removal_receipt(
+            receipt,
+            state_identity=state,
+            root_stat=root_stat,
+            image_stat=image_stat,
+        )
+        for mutate in (
+            lambda value: value.update(stateRoot="/home/other/state"),
+            lambda value: value["image"].update(inode=73),
+            lambda value: value.update(schema=MODULE.RECEIPT_SCHEMA),
+        ):
+            candidate = copy.deepcopy(receipt)
+            mutate(candidate)
+            with self.assertRaises(MODULE.RunnerStorageLifecycleError):
+                MODULE.validate_legacy_v2_removal_receipt(
+                    candidate,
+                    state_identity=state,
+                    root_stat=root_stat,
+                    image_stat=image_stat,
+                )
 
     def test_absolute_directory_walk_rejects_parent_and_leaf_symlinks(self) -> None:
         with tempfile.TemporaryDirectory(
@@ -222,7 +300,6 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
                 state = MODULE.classify_image(image_facts(size), authority_device=47)
                 self.assertEqual(state, "root_0600_incomplete_prepublication")
                 self.assertEqual(MODULE.prepare_disposition(state, False), "teardown_required")
-                self.assertEqual(MODULE.remove_disposition(state, False), "remove_image_authority")
         exact = MODULE.classify_image(
             image_facts(MODULE.IMAGE_BYTES), authority_device=47
         )
@@ -242,11 +319,6 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
             )
 
     def test_old_or_incomplete_receipt_is_never_reinterpreted(self) -> None:
-        with self.assertRaises(MODULE.RunnerStorageLifecycleError):
-            MODULE.remove_disposition(
-                "root_0600_incomplete_prepublication",
-                True,
-            )
         context = mock.Mock()
         context.root_fd = 3
         context.image_fd = 4
@@ -301,8 +373,9 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
         self.assertIn("tool_fds = tuple(sorted(set(inherited) | {lock_fd}))", MODULE.MUTATION_GUARDIAN)
         self.assertIn("deadline = time.monotonic() + timeout", MODULE.MUTATION_GUARDIAN)
         self.assertIn("os.killpg(child.pid, signal.SIGKILL)", MODULE.MUTATION_GUARDIAN)
+        self.assertIn("libc.prctl(1, signal.SIGKILL", MODULE.MUTATION_GUARDIAN)
 
-    def test_killed_guardian_keeps_lock_until_mutating_child_exits(self) -> None:
+    def test_killed_guardian_kills_tool_and_releases_lock_bounded(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="runner-lock-", dir=temporary_parent()
         ) as directory:
@@ -349,17 +422,14 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
             os.close(lock_fd)
             contender = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
             try:
-                with self.assertRaises(BlockingIOError):
-                    fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                os.kill(child_pid, signal.SIGKILL)
-                for _ in range(100):
+                for _ in range(200):
                     try:
                         fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
                         break
                     except BlockingIOError:
                         time.sleep(0.01)
                 else:
-                    self.fail("lock remained after mutating child exited")
+                    self.fail("guardian death did not terminate the lock-owning tool")
             finally:
                 os.close(contender)
 
@@ -460,6 +530,15 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
     def test_private_propagation_is_a_precondition(self) -> None:
         private = MODULE.MountRecord("8:1", "/home", ())
         MODULE.require_private_mount_record(private)
+        self.assertTrue(
+            MODULE.mount_contains_path(MODULE.MountRecord("8:1", "/", ()), Path("/home"))
+        )
+        self.assertFalse(
+            MODULE.mount_contains_path(
+                MODULE.MountRecord("8:1", "/home-other", ()),
+                Path("/home"),
+            )
+        )
         for optional in (("shared:1",), ("master:1",), ("propagate_from:2",)):
             with self.subTest(optional=optional):
                 with self.assertRaises(MODULE.RunnerStorageLifecycleError):
@@ -507,8 +586,18 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
         context.__enter__.return_value = context
         context.__exit__.return_value = None
         context.root_fd = 10
-        with mock.patch.object(MODULE, "open_authority", return_value=context), mock.patch.object(
+        lease = mock.MagicMock()
+        lease.__enter__.return_value = lease
+        with mock.patch.object(
+            MODULE, "acquire_runtime_deletion_lease", return_value=lease
+        ), mock.patch.object(
+            MODULE,
+            "discover_remove_binding_path",
+            return_value=Path("/home/example/state"),
+        ), mock.patch.object(MODULE, "open_authority", return_value=context), mock.patch.object(
             MODULE, "require_context_binding"
+        ), mock.patch.object(
+            MODULE, "require_runtime_absent"
         ), mock.patch.object(
             MODULE, "target_occurrences", return_value=(foreign,)
         ):
@@ -859,13 +948,45 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
 
     def test_remove_validates_bound_receipt_before_loop_or_path_mutation(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
-        remove = source.index("def remove_authority")
+        remove = source.index("def _remove_authority_locked")
+        runtime = source.index("require_runtime_absent(context)", remove)
         receipt = source.index("validate_receipt(stored, context)", remove)
         loop = source.index("associated_loops(context)", remove)
         projection = source.index("remove_user_projection(context)", loop)
+        self.assertLess(runtime, receipt)
         self.assertLess(receipt, loop)
         self.assertLess(receipt, projection)
         self.assertIn("require_root_credentials()", source[source.index("def main"):])
+
+    def test_storage_deletion_requires_all_ephemeral_runtime_authorities_absent(self) -> None:
+        state_root = Path("/home/example/ambit-state")
+        identifier = MODULE.sha256_bytes(str(state_root).encode())[:12]
+        self.assertEqual(
+            MODULE.runtime_authority_paths(state_root),
+            (
+                Path(f"/run/ambit-c16b-docker-{identifier}"),
+                Path(f"/run/ambit-c16b-docker-api-{identifier}"),
+                Path(f"/sys/fs/cgroup/ambit-c16b-docker-{identifier}"),
+            ),
+        )
+        context = mock.Mock()
+        context.state_identity.path = state_root
+        with mock.patch.object(MODULE.os, "stat", return_value=mock.Mock()):
+            with self.assertRaisesRegex(
+                MODULE.RunnerStorageLifecycleError,
+                "runtime authority must be removed",
+            ):
+                MODULE.require_runtime_absent(context)
+        source = SCRIPT.read_text(encoding="utf-8")
+        remove = source[source.index("def remove_authority") : source.index("def validate_legacy_v2")]
+        self.assertLess(
+            remove.index("discover_remove_binding_path("),
+            remove.index("acquire_runtime_deletion_lease("),
+        )
+        self.assertLess(
+            remove.index("acquire_runtime_deletion_lease("),
+            remove.index("_remove_authority_locked(args)"),
+        )
 
     def test_pending_identity_rejects_hardlinks_and_oversize_before_unlink(self) -> None:
         with tempfile.TemporaryDirectory(

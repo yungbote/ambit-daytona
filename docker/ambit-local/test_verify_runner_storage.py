@@ -240,6 +240,10 @@ class VerifyRunnerStorageTest(unittest.TestCase):
         self.assertIn('socketRootIdentity:$socketRoot', source)
         self.assertIn('socketIdentity:$socketIdentity', source)
         self.assertIn('rootReadySha256:$rootReadySha256', source)
+        self.assertIn('workloadCgroupParent:$cgroupParent', source)
+        self.assertIn('runner storage projection payload digest differs', source)
+        self.assertIn('object_no_duplicates', source)
+        self.assertNotIn('/usr/bin/sha256sum -- "${projection}"', source)
         self.assertIn("trap 'exit 130' INT", source)
         self.assertIn("trap 'exit 143' TERM", source)
 

@@ -16,66 +16,42 @@ state_root=$1
   echo 'STATE_ROOT must be a specific absolute path below /home' >&2
   exit 64
 }
-[[ $(/usr/bin/realpath -e -- "${state_root}") == "${state_root}" ]] || {
-  echo 'STATE_ROOT must be an existing canonical non-symlink path' >&2
-  exit 64
-}
 caller_uid=$(/usr/bin/id -u)
 caller_gid=$(/usr/bin/id -g)
 [[ ${caller_uid} =~ ^[1-9][0-9]*$ && ${caller_gid} =~ ^[0-9]+$ ]] || {
   echo 'isolated runtime caller identity is invalid' >&2
   exit 66
 }
-[[ $(/usr/bin/stat -c '%u:%g:%a:%F' -- "${state_root}") == "${caller_uid}:${caller_gid}:700:directory" ]] || {
-  echo 'isolated runtime state root owner, group, mode, or type differs' >&2
-  exit 66
-}
-evidence_root=${state_root}/evidence
-[[ $(/usr/bin/realpath -e -- "${evidence_root}") == "${evidence_root}" ]] || {
-  echo 'isolated runtime evidence root is absent or noncanonical' >&2
-  exit 66
-}
-[[ $(/usr/bin/stat -c '%u:%g:%a:%F' -- "${evidence_root}") == "${caller_uid}:${caller_gid}:700:directory" ]] || {
-  echo 'isolated runtime evidence root owner, group, mode, or type differs' >&2
-  exit 66
-}
+operation=ensure-stopped
+if [[ -e ${state_root} || -L ${state_root} ]]; then
+  [[ $(/usr/bin/realpath -e -- "${state_root}") == "${state_root}" ]] || {
+    echo 'STATE_ROOT must be an existing canonical non-symlink path' >&2
+    exit 64
+  }
+  [[ $(/usr/bin/stat -c '%u:%g:%a:%F' -- "${state_root}") == "${caller_uid}:${caller_gid}:700:directory" ]] || {
+    echo 'isolated runtime state root owner, group, mode, or type differs' >&2
+    exit 66
+  }
+  evidence_root=${state_root}/evidence
+  [[ $(/usr/bin/realpath -e -- "${evidence_root}") == "${evidence_root}" ]] || {
+    echo 'isolated runtime evidence root is absent or noncanonical' >&2
+    exit 66
+  }
+  [[ $(/usr/bin/stat -c '%u:%g:%a:%F' -- "${evidence_root}") == "${caller_uid}:${caller_gid}:700:directory" ]] || {
+    echo 'isolated runtime evidence root owner, group, mode, or type differs' >&2
+    exit 66
+  }
+else
+  [[ $(/usr/bin/realpath -m -- "${state_root}") == "${state_root}" ]] || {
+    echo 'absent original STATE_ROOT path is not lexically canonical' >&2
+    exit 64
+  }
+  operation=ensure-stopped-orphaned
+fi
 
 script_dir=$(cd "$(/usr/bin/dirname -- "${BASH_SOURCE[0]}")" && /usr/bin/pwd -P)
 supervisor=${script_dir}/isolated_runtime_supervisor.py
-supervisor_sha256=69138beedc9ff533ba5f86bcd9bc982cd3147f865e428c838a6c13053005643c
-
-read -r -d '' pinned_loader <<'PY' || true
-import hashlib
-import hmac
-import os
-import stat
-import sys
-
-path, expected, *arguments = sys.argv[1:]
-descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-try:
-    identity = os.fstat(descriptor)
-    if not stat.S_ISREG(identity.st_mode):
-        raise SystemExit("pinned Python source is not regular")
-    if not 0 < identity.st_size <= 2 * 1024 * 1024:
-        raise SystemExit("pinned Python source size is invalid")
-    source = bytearray()
-    while True:
-        block = os.read(descriptor, 1024 * 1024)
-        if not block:
-            break
-        source.extend(block)
-finally:
-    os.close(descriptor)
-actual = hashlib.sha256(source).hexdigest()
-if not hmac.compare_digest(actual, expected):
-    raise SystemExit("pinned Python source digest differs")
-sys.argv = [path, *arguments]
-globals()["__file__"] = path
-globals()["__package__"] = None
-globals()["__verified_source_sha256__"] = expected
-exec(compile(source, path, "exec"), globals(), globals())
-PY
+supervisor_sha256=b2218fae7e5b63c8baab79367e133151c8073bfc115f28271b7aba025080eec9
 
 read -r -d '' runtime_snapshot_loader <<'PY' || true
 import hashlib
@@ -118,9 +94,10 @@ if descriptor is None:
     descriptor = os.open(fallback_path, os.O_RDONLY | os.O_NOFOLLOW)
 try:
     identity = os.fstat(descriptor)
-    if not stat.S_ISREG(identity.st_mode) or not 0 < identity.st_size <= 2 * 1024 * 1024:
+    if (not stat.S_ISREG(identity.st_mode) or identity.st_size > 2 * 1024 * 1024
+            or (identity.st_size == 0 and (chosen == fallback_path or control_present))):
         raise SystemExit("runtime supervisor source identity is invalid")
-    if chosen != fallback_path and not (identity.st_uid == 0 and identity.st_gid == 0 and stat.S_IMODE(identity.st_mode) == 0o400):
+    if chosen != fallback_path and not (identity.st_uid == 0 and identity.st_gid == 0 and identity.st_nlink == 1 and identity.st_dev == root.st_dev and stat.S_IMODE(identity.st_mode) == 0o400):
         raise SystemExit("runtime supervisor snapshot authority differs")
     source = bytearray()
     while True:
@@ -154,6 +131,7 @@ sys.argv = [chosen, *arguments]
 globals()["__file__"] = chosen
 globals()["__package__"] = None
 globals()["__verified_source_sha256__"] = actual
+globals()["__fallback_script_directory__"] = os.path.dirname(fallback_path)
 exec(compile(source, chosen, "exec"), globals(), globals())
 PY
 
@@ -189,7 +167,7 @@ result=$(
   /usr/bin/sudo -n -- \
     /usr/bin/unshare --mount --propagation private --wd / \
     /usr/bin/python3 -I -S -B -c "${runtime_snapshot_loader}" \
-    "${runtime_root}" "${supervisor}" "${supervisor_sha256}" ensure-stopped \
+    "${runtime_root}" "${supervisor}" "${supervisor_sha256}" "${operation}" \
     "${state_root}" "${caller_uid}" "${caller_gid}"
 )
 

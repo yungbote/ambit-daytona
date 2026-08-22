@@ -54,22 +54,29 @@ export AMBIT_C16B_RUNTIME_OCI_REFERENCE=registry:6000/ambit/runtime-pack-core-do
 Run this stack only through `start-isolated-docker.sh`. The normal host daemon
 is not an admitted provider. The start wrapper executes one exact-byte root
 supervisor under `/usr/bin/unshare --mount --propagation private`. Before it
-spawns any helper or daemon, the supervisor enters one exact root-owned cgroup
-v2 boundary. It is the direct parent of the dedicated containerd and dockerd;
-all their descendants inherit that cgroup. All three process identities bind
+spawns any helper or daemon, the supervisor creates one exact, otherwise-empty
+root-owned cgroup v2 boundary, enables only the admitted CPU, memory, and PID
+controllers, and enters its `runtime` leaf. Docker is fixed to the cgroupfs
+driver and the empty boundary as `cgroup-parent`, so provider workloads are
+siblings of the runtime leaf but descendants of the same `cgroup.kill`
+authority. It is the direct parent of the dedicated containerd and dockerd.
+All three process identities bind
 exact executable, full argument digest, process start/proc inode, and mount
-namespace device/inode. Parent PID remains a live-topology assertion rather
-than immutable recovery identity. Provider containers correctly have separate
+namespace device/inode plus exact cgroup path. Parent PID remains a live-
+topology assertion rather than immutable recovery identity. Provider containers correctly have separate
 child namespaces; their storage acceptance is the exact XFS device/UUID
 exposed at the runner's `/var/lib/docker`, not namespace-inode equality.
 
 Privileged runner storage lives only below the fixed, root-owned, caller-
 unrenameable authority `/home/.ambit-c16b-runner-storage`. Before that root can
 exist, the helper durably publishes a domain-separated, hash-named, root-owned
-claim directly below `/home`; the claim binds the exact caller, `STATE_ROOT`,
-and evidence-directory device/inode/owner/group/mode. The flock on the pinned
+claim directly below `/home`; the filename and durably stored canonical bytes
+bind the exact caller, `STATE_ROOT`, and evidence-directory
+device/inode/owner/group/mode. The flock on the pinned
 `/home` descriptor is the sole lifecycle lock, so there is no crash-prone lock
-file. The authority contains the sparse 60 GiB `runner-docker.xfs`, the
+file. That flock is advisory under the explicit single-user local-host model:
+an unrelated holder can cause the bounded availability timeout, but cannot
+gain claim authority. The authority contains the sparse 60 GiB `runner-docker.xfs`, the
 `runner-docker` XFS mount, the dedicated `inner-runner` data directory, durable
 v3 receipt, and root-owned outer dockerd/containerd directories. Compose binds
 only the literal `runner-docker/inner-runner` directory to the privileged
@@ -86,14 +93,28 @@ publishing any control authority or mutating storage. New image creation
 retains the exact image descriptor through
 truncate, mkfs, loop attachment, and mount. Every mutating external tool runs
 under a bounded process-group guardian; the helper, guardian, and mutator all
-retain the same flock-bearing open-file description. If any parent is killed,
-serialization remains until the mutator exits; if the supervisor is killed,
-the bound cgroup is the exact descendant termination authority. The root
+receive the same flock-bearing open-file description. Helper death leaves the
+guardian waiting; guardian death delivers kernel `PDEATHSIG` to the direct
+tool; supervisor death uses the task cgroup as descendant termination
+authority. The admitted synchronous host tools retaining inherited FDs and not
+daemonizing remains a measured binary contract for live acceptance. The root
 receipt is file-fsynced, atomically renamed, and followed by an
 authority-directory fsync before success; its user projection receives the
 same durable ordering. Random crash-temp names are not admitted. Old receipt
-versions are never reinterpreted as v3; explicit destructive removal still
-requires the exact durable lifecycle claim.
+versions are never reinterpreted as v3. `remove-runner-storage.sh --legacy-v2`
+is a separate remove-only transition: it re-proves the exact existing v2
+state/image/receipt, publishes the v3 claim before mutation, then removes the
+legacy lock and receipt before using the ordinary reducer. Normal activation
+never adopts legacy state. If the caller renames or deletes `STATE_ROOT`, the
+root claim and root runtime control retain the original binding: stop can be
+invoked with the absent original path, and storage removal can use either that
+original spelling or a relocated directory with the same immutable identity.
+Neither route republishes or adopts the authority under a new normal path.
+
+The dedicated containerd configuration uses schema v3, so the supervisor
+preflights and requires containerd 2.x or later before launching it. The
+installed binary version and all cgroup-controller behavior remain live host
+admission measurements, not assumptions hidden by the source contract.
 
 The lifecycle reducer admits absent storage; zero/partial/exact root-owned
 `0600` image cutpoints; published attached state; committed detached state; and
@@ -103,11 +124,19 @@ receipt authority. Teardown scans two stable passes of every mount namespace
 observable through `/proc`, rejecting unreadable, changing, second, nested, or
 foreign loop/target occurrences. The provider and daemon children must stop
 before private unmount/detach. A namespace pinned without a live `/proc`
-representative remains outside the source proof and is an explicit live
-acceptance limit. Static tests establish reducer and authority logic only; they
+representative remains outside the source proof; choosing one representative
+also inherits that process's mountinfo/chroot visibility. These are explicit
+live acceptance limits, not a claimed global proof. Static tests establish reducer and authority logic only; they
 do not establish that this host has successfully created the cgroup, mounted
 XFS, enforced project quotas, started the daemon, or completed two live 20 GiB
 sandbox journeys.
+
+Pre-v5 `/run` daemon state has no root control or supervisor snapshot and is
+therefore never guessed or auto-adopted by this source. This packet is the
+first authorized live candidate; if an operator has independently run an older
+v4 prototype, they must stop it with that exact frozen source (or perform an
+explicit root-admin purge) before using the v5 launcher. Persistent v2 storage
+has the separate authenticated `--legacy-v2` remove-only path described above.
 
 The supervisor first publishes root-owned, canonical control v2 and ready v5
 manifests; caller-owned control/start files are projections only and never
@@ -125,14 +154,18 @@ the 6-CPU, 12-GiB-memory, 60-GiB-backing, and 40-GiB-inner-free thresholds.
 Free/total/allocated capacity remains a current observation rather than stable
 identity, so ordinary use or online backing resize cannot strand recovery.
 
-One deterministic root-owned `/run` lease serializes start, stop, and recovery
+One deterministic root-owned `/run` lease serializes start, stop, recovery,
+and final storage deletion
 for the boot and is never unlinked while the boot is live. Stop invokes the
 root-custodied supervisor snapshot, which pidfd-signals only the exact recorded
-supervisor. The supervisor drains dockerd and containerd, removes the caller
+supervisor. Before draining anything it durably publishes a root stopping
+intent, so every later daemon/socket/storage cutpoint is classifiable. The
+supervisor drains dockerd and containerd, removes the caller
 socket, cleans task network namespaces, deactivates storage, writes a root stop
 manifest, and exits. The outside recovery process then proves the task cgroup
 empty (or writes to its exact `cgroup.kill` and waits for `populated 0`),
-descriptor-removes the ephemeral runtime root, removes the empty cgroup, and
+descriptor-removes the ephemeral runtime root, removes empty descendant
+cgroups bottom-up and then the boundary, and
 publishes the caller stop projection. A killed supervisor follows the same
 bounded recovery path; no descendant discovery guess is used. Persistent
 image/UUID state remains recoverable across a fresh private namespace after

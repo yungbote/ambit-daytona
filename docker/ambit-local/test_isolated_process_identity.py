@@ -65,6 +65,10 @@ class IsolatedProcessIdentityTest(unittest.TestCase):
             receipt["mountNamespace"],
             {"device": own_namespace.st_dev, "inode": own_namespace.st_ino},
         )
+        self.assertEqual(
+            receipt["cgroup"],
+            Path("/proc/self/cgroup").read_text(encoding="ascii").strip()[3:],
+        )
 
     def test_digest_parent_and_namespace_authorities_pass_together(self) -> None:
         raw_arguments = Path(f"/proc/{self.process.pid}/cmdline").read_bytes()
@@ -80,6 +84,7 @@ class IsolatedProcessIdentityTest(unittest.TestCase):
                 "device": namespace.st_dev,
                 "inode": namespace.st_ino,
             },
+            expected_cgroup=Path("/proc/self/cgroup").read_text(encoding="ascii").strip()[3:],
         )
         self.assertEqual(receipt["argumentsSha256"], hashlib.sha256(raw_arguments).hexdigest())
 
@@ -149,6 +154,10 @@ class IsolatedProcessIdentityTest(unittest.TestCase):
         boolean_namespace["mountNamespace"] = {"device": False, "inode": 2}
         mutations.append(("mount namespace boolean", boolean_namespace))
 
+        bad_cgroup = copy.deepcopy(valid)
+        bad_cgroup["cgroup"] = "relative/cgroup"
+        mutations.append(("cgroup path", bad_cgroup))
+
         for name, value in mutations:
             with self.subTest(name=name):
                 with self.assertRaises(MODULE.ProcessIdentityError):
@@ -185,6 +194,7 @@ class IsolatedProcessIdentityTest(unittest.TestCase):
             ("startTimeTicks", recorded["startTimeTicks"] + 1),
             ("executable", str(Path("/usr/bin/true").resolve(strict=True))),
             ("argumentsSha256", "0" * 64),
+            ("cgroup", "/different-cgroup"),
         ]
         namespace = recorded["mountNamespace"]
         assert isinstance(namespace, dict)
@@ -269,6 +279,44 @@ class IsolatedProcessIdentityTest(unittest.TestCase):
                 )
         sender.assert_not_called()
         self.assertIsNone(self.process.poll())
+
+    def test_natural_exit_before_pidfd_or_signal_is_normalized_for_recovery(self) -> None:
+        recorded = self.recorded_identity()
+        with mock.patch.object(
+            MODULE.os,
+            "pidfd_open",
+            side_effect=ProcessLookupError(3, "gone"),
+        ):
+            with self.assertRaisesRegex(
+                MODULE.ProcessIdentityError,
+                "exited before pidfd custody",
+            ):
+                MODULE.signal_recorded_process(
+                    recorded,
+                    expected_uid=os.geteuid(),
+                    exit_timeout_seconds=0.1,
+                )
+
+        read_fd, write_fd = os.pipe()
+        self.addCleanup(os.close, write_fd)
+        with (
+            mock.patch.object(MODULE.os, "pidfd_open", return_value=read_fd),
+            mock.patch.object(MODULE, "_prove_recorded_process", return_value=recorded),
+            mock.patch.object(
+                MODULE.signal,
+                "pidfd_send_signal",
+                side_effect=ProcessLookupError(3, "gone"),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                MODULE.ProcessIdentityError,
+                "exited before signal delivery",
+            ):
+                MODULE.signal_recorded_process(
+                    recorded,
+                    expected_uid=os.geteuid(),
+                    exit_timeout_seconds=0.1,
+                )
 
     def test_parent_mismatch_requires_explicit_recovery_relaxation(self) -> None:
         recorded = self.recorded_identity()
@@ -454,7 +502,7 @@ class IsolatedProcessIdentityTest(unittest.TestCase):
 
     def test_exited_pid_is_rejected(self) -> None:
         self.stop_process()
-        with self.assertRaises((FileNotFoundError, ProcessLookupError)):
+        with self.assertRaises(MODULE.ProcessIdentityError):
             MODULE.verify_recorded_process(
                 {
                     "pid": self.process.pid,
@@ -464,6 +512,7 @@ class IsolatedProcessIdentityTest(unittest.TestCase):
                     "executable": str(self.executable),
                     "argumentsSha256": "0" * 64,
                     "mountNamespace": {"device": 0, "inode": 1},
+                    "cgroup": "/gone",
                 },
                 expected_uid=os.geteuid(),
             )
