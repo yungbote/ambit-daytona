@@ -296,260 +296,225 @@ class ProcessAuthorityTest(unittest.TestCase):
         source = MODULE_PATH.read_text(encoding="utf-8")
         self.assertIn('"cgroupMutationAuthorized": False', source)
         self.assertIn('"forbidden_shared_66_process_observation"', source)
+class ProcessUniverseTest(unittest.TestCase):
+    def test_structured_arguments_do_not_use_substring_authority(self) -> None:
+        exact = (
+            b"/usr/bin/containerd-shim-runc-v2\0-address\0"
+            + str(MODULE.CONTAINERD_SOCKET).encode()
+            + b"\0-namespace\0ambit-c16b\0"
+        )
+        relations = MODULE._structured_argument_relations(exact)
+        self.assertIn("containerdSocketArgv", relations)
+        self.assertIn("namespaceArgv", relations)
+        self.assertNotIn(
+            "namespaceArgv",
+            MODULE._structured_argument_relations(b"/bin/echo\0not-ambit-c16b-extra\0"),
+        )
+
+    def test_universe_requires_two_identical_complete_passes(self) -> None:
+        processes: dict[str, dict[str, object]] = {}
+        runtime = {"tree": [], "rootIdentity": {"device": 1, "inode": 2}}
+        sockets = {"unixRecords": []}
+        stable = {"allowedRoles": [], "related": [], "proofSha256": "a" * 64}
+        with mock.patch.object(
+            MODULE, "_related_process_universe_once", side_effect=(stable, stable)
+        ) as once:
+            self.assertEqual(
+                MODULE.related_process_universe(
+                    processes, runtime, sockets, allowed_roles=set()
+                ),
+                stable,
+            )
+        self.assertEqual(once.call_count, 2)
+        changed = {**stable, "proofSha256": "b" * 64}
+        with mock.patch.object(
+            MODULE, "_related_process_universe_once", side_effect=(stable, changed)
+        ), self.assertRaisesRegex(MODULE.DrainError, "across proof passes"):
+            MODULE.related_process_universe(
+                processes, runtime, sockets, allowed_roles=set()
+            )
+
+    def test_allowed_pidfds_remain_held_through_action(self) -> None:
+        closed: list[int] = []
+        roles = {"dockerd", "containerd"}
+        with mock.patch.object(
+            MODULE, "require_related_process_cutoff", return_value={"proof": True}
+        ), mock.patch.object(
+            MODULE,
+            "process_authority",
+            side_effect=lambda _control, role: {"pid": 1 if role == "dockerd" else 2},
+        ), mock.patch.object(
+            MODULE.os, "pidfd_open", side_effect=(31, 32)
+        ), mock.patch.object(
+            MODULE, "exact_process_status", return_value="live"
+        ), mock.patch.object(
+            MODULE, "pidfd_exited", return_value=False
+        ), mock.patch.object(
+            MODULE.os, "close", side_effect=closed.append
+        ):
+            with MODULE.hold_related_process_cutoff(
+                {"authority": {}}, allowed_roles=roles
+            ):
+                self.assertEqual(closed, [])
+        self.assertEqual(sorted(closed), [31, 32])
+
+    def test_source_covers_empty_argv_maps_namespace_fds_and_pid_reuse(self) -> None:
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        self.assertIn('"runtimeMappedPath"', source)
+        self.assertIn('"runtimeNamespaceFd"', source)
+        self.assertIn('"privateRuntimeNamespace"', source)
+        self.assertIn("recorded legacy process PID was reused", source)
+        self.assertNotIn("if not raw_arguments:\n                second_parent", source)
 
 
 class MountAuthorityTest(unittest.TestCase):
-    def test_opaque_nsfs_root_is_exact_not_path_like(self) -> None:
+    def test_mount_records_preserve_ids_and_stacked_multiplicity(self) -> None:
         raw = (
-            "20 1 8:1 / / rw - ext4 /dev/root rw\n"
-            f"21 20 0:4 net:[4026531833] {MODULE.TASK_NETNS_TARGET} rw - nsfs nsfs rw\n"
+            "21 20 0:4 net:[4026531833] /x rw - nsfs nsfs rw\n"
+            "22 21 0:4 net:[4026531833] /x rw - nsfs nsfs rw\n"
         )
         records = MODULE.mount_records(raw)
-        nsfs = next(record for record in records if record.filesystem == "nsfs")
-        self.assertEqual(nsfs.root, "net:[4026531833]")
-        self.assertTrue(MODULE.mount_root_at_or_below("net:[4026531833]", "net:[4026531833]"))
-        self.assertFalse(MODULE.mount_root_at_or_below("net:[4026531834]", "net:[4026531833]"))
+        self.assertEqual([(row.mount_id, row.parent_id) for row in records], [(21, 20), (22, 21)])
+        references = MODULE.mount_reference_records(
+            raw,
+            Path("/x"),
+            (("0:4", "net:[4026531833]"),),
+        )
+        self.assertEqual(len(references), 2)
 
-    def test_non_nsfs_opaque_root_rejects(self) -> None:
+    def test_opaque_nsfs_is_exact_and_non_nsfs_opaque_rejects(self) -> None:
+        raw = "21 20 0:4 net:[4026531833] /x rw - nsfs nsfs rw\n"
+        record = MODULE.mount_records(raw)[0]
+        self.assertEqual(record.root, "net:[4026531833]")
+        self.assertTrue(
+            MODULE.mount_root_at_or_below(
+                "net:[4026531833]", "net:[4026531833]"
+            )
+        )
         with self.assertRaisesRegex(MODULE.DrainError, "opaque"):
             MODULE.mount_records("20 1 0:4 net:[1] /x rw - ext4 ext4 rw\n")
 
-    def test_foreign_netns_target_blocks_before_unmount(self) -> None:
-        control = {
-            "authority": {
-                "mounts": {
-                    "networkNamespace": {
-                        "sourceAnchor": {"device": "0:4", "root": "net:[4026531833]"},
-                        "ambientTargets": ["/run/docker/netns/default"],
-                        "ownedTarget": str(MODULE.TASK_NETNS_TARGET),
-                    }
-                }
-            }
-        }
-        roster = {
-            "occurrences": [
-                {"mountNamespace": "4:19", "target": str(MODULE.TASK_NETNS_TARGET)},
-                {"mountNamespace": "4:19", "target": "/run/docker/netns/default"},
-                {"mountNamespace": "4:19", "target": "/outside/foreign"},
-            ]
-        }
-        with mock.patch.object(MODULE, "stable_global_mount_roster", return_value=roster), mock.patch.object(
-            MODULE.subprocess, "run"
-        ) as run:
-            with self.assertRaisesRegex(MODULE.ManualRecoveryRequired, "foreign"):
-                MODULE.settle_task_netns(control)
-        run.assert_not_called()
+    def test_fd_umount_uses_only_the_held_procfd(self) -> None:
+        function = mock.Mock(return_value=0)
+        with mock.patch.object(MODULE.LIBC, "umount2", function, create=True):
+            MODULE.fd_umount(31)
+        path_arg, flag_arg = function.call_args.args
+        self.assertEqual(path_arg.value, b"/proc/self/fd/31")
+        self.assertEqual(flag_arg.value, 0)
 
-    def test_ambient_target_disappearance_blocks(self) -> None:
-        control = {
-            "authority": {
-                "mounts": {
-                    "networkNamespace": {
-                        "sourceAnchor": {"device": "0:4", "root": "net:[4026531833]"},
-                        "ambientTargets": ["/run/docker/netns/default"],
-                        "ownedTarget": str(MODULE.TASK_NETNS_TARGET),
-                    }
-                }
-            }
+    def test_marker_transition_is_exact(self) -> None:
+        values = {
+            "st_mode": stat.S_IFREG | 0o600,
+            "st_uid": 0,
+            "st_gid": 0,
+            "st_nlink": 1,
+            "st_size": 0,
         }
-        first = {
-            "occurrences": [
-                {"mountNamespace": "4:19", "target": str(MODULE.TASK_NETNS_TARGET)},
-                {"mountNamespace": "4:19", "target": "/run/docker/netns/default"},
-            ]
-        }
-        final = {"occurrences": []}
-        completed = mock.Mock(returncode=0, stdout=b"", stderr=b"")
-        with mock.patch.object(
-            MODULE, "stable_global_mount_roster", side_effect=(first, final)
-        ), mock.patch.object(MODULE, "trusted_umount", return_value=Path("/usr/bin/umount")), mock.patch.object(
-            MODULE.subprocess, "run", return_value=completed
+        MODULE._require_task_netns_marker(mock.Mock(**values))
+        for field, value in (
+            ("st_uid", 1000),
+            ("st_gid", 1000),
+            ("st_nlink", 2),
+            ("st_size", 1),
+            ("st_mode", stat.S_IFREG | 0o644),
         ):
-            with self.assertRaisesRegex(MODULE.ManualRecoveryRequired, "ambient"):
-                MODULE.settle_task_netns(control)
+            with self.subTest(field=field):
+                invalid = {**values, field: value}
+                with self.assertRaisesRegex(MODULE.DrainError, "marker"):
+                    MODULE._require_task_netns_marker(mock.Mock(**invalid))
 
-    def test_exact_residual_nsfs_unmount_preserves_ambient(self) -> None:
-        control = {
-            "authority": {
-                "mounts": {
-                    "networkNamespace": {
-                        "sourceAnchor": {"device": "0:4", "root": "net:[4026531833]"},
-                        "ambientTargets": ["/run/docker/netns/default"],
-                        "ownedTarget": str(MODULE.TASK_NETNS_TARGET),
-                    }
-                }
-            }
-        }
-        first = {
-            "occurrences": [
-                {"mountNamespace": "4:19", "target": str(MODULE.TASK_NETNS_TARGET)},
-                {"mountNamespace": "4:19", "target": "/run/docker/netns/default"},
-            ]
-        }
-        final = {
-            "occurrences": [
-                {"mountNamespace": "8:88", "target": "/run/docker/netns/default"}
-            ]
-        }
-        completed = mock.Mock(returncode=0, stdout=b"", stderr=b"")
-        with mock.patch.object(
-            MODULE, "stable_global_mount_roster", side_effect=(first, final)
-        ), mock.patch.object(MODULE, "trusted_umount", return_value=Path("/usr/bin/umount")), mock.patch.object(
-            MODULE.subprocess, "run", return_value=completed
-        ) as run:
-            MODULE.settle_task_netns(control)
-        self.assertEqual(run.call_args.args[0][-1], str(MODULE.TASK_NETNS_TARGET))
-
-    def test_netns_unmount_response_loss_is_idempotent(self) -> None:
-        control = {
-            "authority": {
-                "mounts": {
-                    "networkNamespace": {
-                        "sourceAnchor": {"device": "0:4", "root": "net:[4026531833]"},
-                        "ambientTargets": ["/run/docker/netns/default"],
-                        "ownedTarget": str(MODULE.TASK_NETNS_TARGET),
-                    }
-                }
-            }
-        }
-        ambient = {
-            "occurrences": [
-                {"mountNamespace": "8:88", "target": "/run/docker/netns/default"}
-            ]
-        }
-        with mock.patch.object(
-            MODULE, "stable_global_mount_roster", side_effect=(ambient, ambient)
-        ), mock.patch.object(MODULE.subprocess, "run") as run:
-            MODULE.settle_task_netns(control)
-        run.assert_not_called()
-
-    def test_mount_visibility_disagreement_is_manual(self) -> None:
-        raw = "20 1 8:1 / / rw - ext4 /dev/root rw\n"
-        with mock.patch.object(MODULE.Path, "read_text", return_value=raw), mock.patch.object(
-            MODULE.os, "getpid", return_value=10
-        ), mock.patch.object(MODULE, "mount_namespace_key", return_value="4:19"), mock.patch.object(
-            MODULE, "source_anchors", return_value=(("8:1", "/x"),)
-        ), mock.patch.object(MODULE.os, "listdir", return_value=("11",)), mock.patch.object(
-            MODULE.os, "stat", return_value=mock.Mock(st_dev=4, st_ino=19)
-        ), mock.patch.object(
-            MODULE,
-            "mount_references",
-            side_effect=(("/one",), ("/two",)),
-        ):
-            with self.assertRaisesRegex(MODULE.ManualRecoveryRequired, "visibility"):
-                MODULE.global_mount_roster_once(Path("/x"))
-
-    def test_registry_listener_must_be_exact_loopback_and_task_owned(self) -> None:
-        tcp = (
-            "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
-            "   0: 0100007F:8CA0 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 77\n"
-        )
-        tcp6 = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
-        with mock.patch.object(
-            MODULE.Path,
-            "read_text",
-            side_effect=(tcp, tcp6),
-        ), mock.patch.object(
-            MODULE, "socket_inode_owners", return_value={77: (964683,)}
-        ):
-            observed = MODULE.tcp_registry_snapshot(964683)
-        self.assertEqual(observed["address"], "0100007F")
-        self.assertEqual(observed["owners"], [964683])
-
-    def test_public_or_foreign_registry_listener_blocks(self) -> None:
-        header = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
-        public = header + (
-            "   0: 00000000:8CA0 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 77\n"
-        )
-        with mock.patch.object(
-            MODULE.Path,
-            "read_text",
-            side_effect=(public, header),
-        ), mock.patch.object(
-            MODULE, "socket_inode_owners", return_value={77: (999,)}
-        ):
-            with self.assertRaisesRegex(MODULE.ManualRecoveryRequired, "loopback"):
-                MODULE.tcp_registry_snapshot(964683)
-
-    def test_foreign_docker_api_connection_blocks(self) -> None:
-        listener = {
-            "flags": "00010000",
-            "state": "01",
-            "inode": 1,
-            "path": str(MODULE.DOCKER_SOCKET),
-        }
-        connected = {
-            "flags": "00000000",
-            "state": "03",
-            "inode": 2,
-            "path": str(MODULE.DOCKER_SOCKET),
-        }
-        with mock.patch.object(MODULE, "socket_identity", return_value={}), mock.patch.object(
-            MODULE, "proc_unix_records", return_value=(listener, connected)
-        ), mock.patch.object(
-            MODULE, "socket_inode_owners", return_value={1: (960217,), 2: (42, 960217)}
-        ), mock.patch.object(
-            MODULE, "tcp_registry_snapshot", return_value={}
-        ), mock.patch.object(
-            MODULE.Path, "exists", return_value=True
-        ):
-            with self.assertRaisesRegex(MODULE.ManualRecoveryRequired, "already connected"):
-                MODULE.runtime_socket_snapshot(960217)
+    def test_netns_action_compares_full_roster_and_uses_no_path_subprocess(self) -> None:
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        body = source[
+            source.index("def settle_task_netns")
+            : source.index("def _require_task_netns_marker")
+        ]
+        self.assertIn('observed["occurrences"] == recorded_occurrences', body)
+        self.assertIn("fd_umount(target_fd)", body)
+        self.assertNotIn("subprocess.run", body)
+        self.assertNotIn("/usr/bin/umount", body)
 
 
 class ReducerStateMachineTest(unittest.TestCase):
     class FakeControl:
-        def __init__(self) -> None:
-            self.state = {"phase": MODULE.PHASES[0]}
+        def __init__(self, phase: str | None = None) -> None:
+            self.state = {
+                "phase": phase or MODULE.PHASES[0],
+                "observedAt": "2026-08-22T00:00:00+00:00",
+                "bootId": "b" * 36,
+            }
             self.control_digest = "c" * 64
-            self.events: list[str] = []
             self.control = {
+                "sourceSha256": "d" * 64,
                 "authority": {
                     "processGraph": {
                         "processes": {
                             role: {"pid": index + 1}
-                            for index, role in enumerate(MODULE.EXPECTED_PROCESS_CANDIDATES)
+                            for index, role in enumerate(
+                                MODULE.EXPECTED_PROCESS_CANDIDATES
+                            )
                         }
                     }
-                }
+                },
             }
+            self.events: list[str] = []
 
         @property
         def phase(self) -> str:
             return str(self.state["phase"])
 
         def advance(self, phase: str) -> None:
+            current = MODULE.PHASES.index(self.phase)
+            target = MODULE.PHASES.index(phase)
+            if target != current + 1:
+                raise AssertionError(f"nonadjacent transition {self.phase}->{phase}")
             self.events.append(f"phase:{phase}")
-            self.state = {"phase": phase}
+            self.state = {**self.state, "phase": phase}
 
-    def common_patches(self, control: "ReducerStateMachineTest.FakeControl") -> contextlib.ExitStack:
+    def patches(
+        self, control: "ReducerStateMachineTest.FakeControl"
+    ) -> contextlib.ExitStack:
         stack = contextlib.ExitStack()
+        event_functions = {
+            "transfer_runtime_custody": "custody",
+            "remove_bound_socket": "socket",
+            "settle_task_netns": "netns",
+            "runtime_reduction_preflight": "preflight",
+            "unlink_containerd_pidfile": "pidfile",
+            "reduce_runtime_tree": "runtime-reduced",
+            "remove_empty_runtime_root": "runtime-root-removed",
+            "require_terminal_reproof": "terminal-reproof",
+            "transfer_receipt_custody": "receipt-custody",
+        }
+        for name, event in event_functions.items():
+            stack.enter_context(
+                mock.patch.object(
+                    MODULE,
+                    name,
+                    side_effect=lambda *_args, marker=event, **_kwargs: control.events.append(marker),
+                )
+            )
         stack.enter_context(
             mock.patch.object(
                 MODULE,
                 "process_authority",
-                side_effect=lambda value, role: {"role": role, "pid": 1},
-            )
-        )
-        stack.enter_context(
-            mock.patch.object(
-                MODULE,
-                "remove_bound_socket",
-                side_effect=lambda *args: control.events.append("socket-revoked"),
+                side_effect=lambda _value, role: {"role": role, "pid": 1},
             )
         )
         stack.enter_context(
             mock.patch.object(
                 MODULE,
                 "signal_exact_process",
-                side_effect=lambda value: control.events.append(f"signal:{value['role']}"),
+                side_effect=lambda value: control.events.append(
+                    "signal:" + str(value["role"])
+                ),
             )
         )
         stack.enter_context(
             mock.patch.object(
                 MODULE,
                 "wait_for_roles_absent",
-                side_effect=lambda value, roles, **kwargs: control.events.append(
+                side_effect=lambda _value, roles, **_kwargs: control.events.append(
                     "wait:" + ",".join(roles)
                 ),
             )
@@ -557,136 +522,53 @@ class ReducerStateMachineTest(unittest.TestCase):
         stack.enter_context(mock.patch.object(MODULE, "require_mounts_absent"))
         stack.enter_context(mock.patch.object(MODULE, "require_registry_listener_absent"))
         stack.enter_context(mock.patch.object(MODULE, "registry_inventory_matches"))
-        stack.enter_context(
-            mock.patch.object(
-                MODULE,
-                "settle_task_netns",
-                side_effect=lambda *args: control.events.append("netns-settled"),
-            )
-        )
-        stack.enter_context(
-            mock.patch.object(
-                MODULE,
-                "reduce_runtime_tree",
-                side_effect=lambda *args: control.events.append("runtime-reduced"),
-            )
-        )
-        stack.enter_context(
-            mock.patch.object(
-                MODULE,
-                "unlink_containerd_pidfile",
-                side_effect=lambda *args: control.events.append("pidfile-removed"),
-            )
-        )
-        stack.enter_context(
-            mock.patch.object(MODULE, "exists_nofollow", return_value=False)
-        )
-        stack.enter_context(
-            mock.patch.object(MODULE, "exact_process_status", return_value="absent")
-        )
+        stack.enter_context(mock.patch.object(MODULE, "require_related_process_cutoff"))
         stack.enter_context(
             mock.patch.object(
                 MODULE,
                 "archive_receipt",
-                side_effect=lambda *args: control.events.append("receipt-archived"),
-            )
-        )
-        stack.enter_context(
-            mock.patch.object(
-                MODULE,
-                "write_projection",
-                side_effect=lambda *args: control.events.append("projection-written"),
+                side_effect=lambda *_args: (
+                    control.events.append("archive")
+                    or {"schema": MODULE.PROJECTION_SCHEMA, "outcome": "drained"}
+                ),
             )
         )
         return stack
 
-    def test_success_order_is_dockerd_graph_containerd_mount_runtime_archive(self) -> None:
+    def test_success_order_and_archive_is_final_mutation(self) -> None:
         control = self.FakeControl()
-        with self.common_patches(control):
+        with self.patches(control):
             result = MODULE.run_reducer(control)
         self.assertEqual(result["outcome"], "drained")
+        self.assertLess(control.events.index("custody"), control.events.index("socket"))
         self.assertLess(control.events.index("signal:dockerd"), control.events.index("signal:containerd"))
-        self.assertLess(control.events.index("signal:containerd"), control.events.index("netns-settled"))
-        self.assertLess(control.events.index("netns-settled"), control.events.index("runtime-reduced"))
-        self.assertLess(control.events.index("runtime-reduced"), control.events.index("receipt-archived"))
+        self.assertLess(control.events.index("netns"), control.events.index("preflight"))
+        self.assertLess(control.events.index("pidfile"), control.events.index("runtime-reduced"))
+        self.assertLess(control.events.index("runtime-root-removed"), control.events.index("receipt-custody"))
+        self.assertEqual(control.events[-1], "archive")
+        self.assertEqual(control.phase, "archive_intent_final")
 
-    def test_registry_task_survival_never_signals_containerd(self) -> None:
-        control = self.FakeControl()
-        with self.common_patches(control), mock.patch.object(
+    def test_every_phase_replays_to_same_terminal_result(self) -> None:
+        for phase in MODULE.PHASES:
+            with self.subTest(phase=phase):
+                control = self.FakeControl(phase)
+                with self.patches(control):
+                    result = MODULE.run_reducer(control)
+                self.assertEqual(result["outcome"], "drained")
+                self.assertEqual(control.phase, "archive_intent_final")
+                self.assertEqual(control.events[-1], "archive")
+
+    def test_container_graph_blocker_precedes_containerd_signal(self) -> None:
+        control = self.FakeControl("dockerd_stopped")
+        with self.patches(control), mock.patch.object(
             MODULE,
             "wait_for_roles_absent",
-            side_effect=MODULE.ManualRecoveryRequired("registry task survived"),
+            side_effect=MODULE.ManualRecoveryRequired("registry survived"),
         ), self.assertRaisesRegex(MODULE.ManualRecoveryRequired, "survived"):
             MODULE.run_reducer(control)
         self.assertNotIn("signal:containerd", control.events)
 
-    def test_overlay_mount_survival_never_signals_containerd(self) -> None:
-        control = self.FakeControl()
-
-        def mounts(*args: object, **kwargs: object) -> None:
-            if args[1] == "outerDocker":
-                raise MODULE.ManualRecoveryRequired("overlay survived")
-
-        with self.common_patches(control), mock.patch.object(
-            MODULE, "require_mounts_absent", side_effect=mounts
-        ), self.assertRaisesRegex(MODULE.ManualRecoveryRequired, "overlay"):
-            MODULE.run_reducer(control)
-        self.assertNotIn("signal:containerd", control.events)
-
-    def test_dockerd_signal_response_loss_replays_requested_phase(self) -> None:
-        control = self.FakeControl()
-        control.state = {"phase": "dockerd_stop_requested"}
-        with self.common_patches(control):
-            MODULE.run_reducer(control)
-        self.assertEqual(control.events[0], "signal:dockerd")
-
-    def test_runtime_partial_reduction_replays_runtime_phase(self) -> None:
-        control = self.FakeControl()
-        control.state = {"phase": "runtime_reducing"}
-        with self.common_patches(control):
-            MODULE.run_reducer(control)
-        self.assertEqual(control.events[0], "runtime-reduced")
-        self.assertIn("receipt-archived", control.events)
-
-    def test_crash_after_runtime_rmdir_finishes_from_total_absence(self) -> None:
-        control = self.FakeControl()
-        control.state = {"phase": "runtime_removed"}
-        with self.common_patches(control):
-            MODULE.run_reducer(control)
-        self.assertNotIn("runtime-reduced", control.events)
-        self.assertIn("receipt-archived", control.events)
-
-    def test_foreign_reused_pid_blocks_terminal_completion(self) -> None:
-        control = self.FakeControl()
-        control.state = {"phase": "runtime_removed"}
-        with self.common_patches(control), mock.patch.object(
-            MODULE,
-            "exact_process_status",
-            side_effect=MODULE.ManualRecoveryRequired("foreign identity"),
-        ), self.assertRaisesRegex(MODULE.ManualRecoveryRequired, "foreign"):
-            MODULE.run_reducer(control)
-        self.assertNotIn("receipt-archived", control.events)
-
-    def test_registry_inventory_change_blocks_before_archive(self) -> None:
-        control = self.FakeControl()
-        control.state = {"phase": "runtime_reducing"}
-        with self.common_patches(control), mock.patch.object(
-            MODULE,
-            "registry_inventory_matches",
-            side_effect=MODULE.DrainError("registry custody changed"),
-        ), self.assertRaisesRegex(MODULE.DrainError, "custody"):
-            MODULE.run_reducer(control)
-        self.assertNotIn("receipt-archived", control.events)
-
-    def test_complete_response_loss_is_terminal_noop(self) -> None:
-        control = self.FakeControl()
-        control.state = {"phase": "complete"}
-        with self.common_patches(control):
-            result = MODULE.run_reducer(control)
-        self.assertEqual(result["outcome"], "drained")
-        self.assertEqual(control.events, [])
-
-    def test_phase_regression_and_skip_reject(self) -> None:
+    def test_real_advance_rejects_regression_and_skip(self) -> None:
         authority = object.__new__(MODULE.ControlAuthority)
         authority.state = {"phase": "dockerd_stopped"}
         authority.control_digest = "c" * 64
@@ -698,170 +580,138 @@ class ReducerStateMachineTest(unittest.TestCase):
 
 
 class DestructiveBoundaryTest(unittest.TestCase):
-    def test_bound_leaf_swap_rejects(self) -> None:
-        expected = {
-            "device": 1,
-            "inode": 2,
-            "uid": 0,
-            "gid": 0,
-            "type": stat.S_IFREG,
-        }
-        observed = mock.Mock(
-            st_dev=1,
-            st_ino=3,
-            st_uid=0,
-            st_gid=0,
-            st_mode=stat.S_IFREG | 0o600,
-        )
-        with mock.patch.object(MODULE.os, "stat", return_value=observed), mock.patch.object(
-            MODULE.os, "unlink"
-        ) as unlink:
-            with self.assertRaisesRegex(MODULE.DrainError, "changed"):
-                MODULE.remove_tree_entry(31, "leaf", expected)
-        unlink.assert_not_called()
+    def test_no_replace_rename_preserves_foreign_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / "source").write_bytes(b"source")
+            (root / "destination").write_bytes(b"foreign")
+            descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                with self.assertRaises(FileExistsError):
+                    MODULE.rename_noreplace_at(descriptor, "source", descriptor, "destination")
+            finally:
+                os.close(descriptor)
+            self.assertEqual((root / "source").read_bytes(), b"source")
+            self.assertEqual((root / "destination").read_bytes(), b"foreign")
 
-    def test_symlink_runtime_leaf_is_never_reduced(self) -> None:
-        expected = {
-            "device": 1,
-            "inode": 2,
-            "uid": 0,
-            "gid": 0,
-            "type": stat.S_IFLNK,
-        }
-        observed = mock.Mock(
-            st_dev=1,
-            st_ino=2,
-            st_uid=0,
-            st_gid=0,
-            st_mode=stat.S_IFLNK | 0o777,
-        )
-        with mock.patch.object(MODULE.os, "stat", return_value=observed), mock.patch.object(
-            MODULE.os, "unlink"
-        ) as unlink:
-            with self.assertRaisesRegex(MODULE.DrainError, "leaf type"):
-                MODULE.remove_tree_entry(31, "leaf", expected)
-        unlink.assert_not_called()
+    def test_no_replace_rename_success_preserves_inode(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            source = root / "source"
+            source.write_bytes(b"source")
+            before = source.stat()
+            descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                MODULE.rename_noreplace_at(descriptor, "source", descriptor, "destination")
+            finally:
+                os.close(descriptor)
+            self.assertFalse(source.exists())
+            after = (root / "destination").stat()
+            self.assertEqual((before.st_dev, before.st_ino), (after.st_dev, after.st_ino))
 
-    def test_unknown_runtime_entry_is_manual(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            (root / "foreign").write_text("x", encoding="utf-8")
-            with mock.patch.object(MODULE, "EXPECTED_RUNTIME_ROOT", root), mock.patch.object(
-                MODULE.os,
-                "fstat",
-                side_effect=lambda fd: mock.Mock(
-                    st_dev=44,
-                    st_ino=12496265,
-                    st_uid=1000,
-                    st_gid=1000,
-                    st_mode=stat.S_IFDIR | 0o700,
-                    st_nlink=2,
-                ),
-            ):
-                with self.assertRaisesRegex(MODULE.ManualRecoveryRequired, "foreign"):
-                    MODULE.runtime_tree_snapshot()
+    def test_archived_response_loss_is_read_only_and_byte_stable(self) -> None:
+        control = ReducerStateMachineTest.FakeControl("archive_intent_final")
+        expected = {"schema": MODULE.PROJECTION_SCHEMA, "outcome": "drained"}
+        with mock.patch.object(
+            MODULE, "legacy_receipt_state", return_value=("archived", b"x")
+        ), mock.patch.object(
+            MODULE, "read_projection", return_value=expected
+        ) as read, mock.patch.object(
+            MODULE, "write_projection"
+        ) as write, mock.patch.object(
+            MODULE, "rename_noreplace_at"
+        ) as rename:
+            first = MODULE.archive_receipt(control)
+            second = MODULE.archive_receipt(control)
+        self.assertEqual(first, second)
+        self.assertEqual(read.call_count, 2)
+        write.assert_not_called()
+        rename.assert_not_called()
 
-    def test_persistent_roots_are_never_runtime_reducer_targets(self) -> None:
+    def test_projection_is_deterministic_and_precedes_archive(self) -> None:
+        control = ReducerStateMachineTest.FakeControl("archive_intent_final")
+        first = MODULE.terminal_projection_value(control)
+        second = MODULE.terminal_projection_value(control)
+        self.assertEqual(MODULE.canonical_json(first), MODULE.canonical_json(second))
+        self.assertEqual(first["observedAt"], control.state["observedAt"])
         source = MODULE_PATH.read_text(encoding="utf-8")
-        reducer = source[source.index("def reduce_runtime_tree") : source.index("def unlink_containerd_pidfile")]
-        for path in MODULE.PERSISTENT_ROOTS:
-            self.assertNotIn(str(path), reducer)
+        archive = source[
+            source.index("def archive_receipt")
+            : source.index("def registry_inventory_matches")
+        ]
+        self.assertLess(
+            archive.index("terminal = write_projection(control)"),
+            archive.index("rename_noreplace_at("),
+        )
+
+    def test_runtime_and_pidfile_have_complete_preflight_before_unlink(self) -> None:
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        reducer = source[source.index("def run_reducer") : source.index("def require_root")]
+        self.assertLess(reducer.index("runtime_reduction_preflight"), reducer.index("unlink_containerd_pidfile"))
+        self.assertLess(reducer.index("unlink_containerd_pidfile"), reducer.index("reduce_runtime_tree"))
+        runtime = source[source.index("def _scan_runtime_directory") : source.index("def _read_regular_at")]
+        self.assertNotIn("os.walk", runtime)
+        self.assertNotIn("shutil.rmtree", runtime)
+        self.assertIn("dir_fd=", runtime)
 
     def test_source_has_no_cgroup_mutation_force_kill_or_broad_delete(self) -> None:
         source = MODULE_PATH.read_text(encoding="utf-8")
-        self.assertNotIn("SIGKILL", source)
         self.assertNotIn("cgroup.kill", source)
-        self.assertNotIn("cgroup.freeze", source)
-        self.assertNotIn("find -delete", source)
-        self.assertNotIn("rm -rf", source)
-        self.assertEqual(source.count("pidfd_send_signal"), 2)
+        self.assertNotIn("SIGKILL", source)
+        self.assertNotIn("killpg", source)
+        self.assertNotIn("shutil.rmtree", source)
+        self.assertIn('"cgroup": "forbidden_shared_66_process_observation"', source)
 
-    def test_v5_authority_and_second_legacy_runtime_are_manual_blockers(self) -> None:
-        listdir = mock.Mock(
-            side_effect=(
-                ["ambit-c16b-docker-api-1577287b8182"],
-                [],
-                [MODULE.EXPECTED_RUNTIME_ROOT.name],
-            )
-        )
-        with mock.patch.object(MODULE.os, "listdir", listdir), mock.patch.object(
-            MODULE, "exists_nofollow", return_value=False
-        ):
-            with self.assertRaisesRegex(MODULE.ManualRecoveryRequired, "v5"):
-                MODULE.require_v5_absent()
-
-        with mock.patch.object(
-            MODULE.os,
-            "listdir",
-            side_effect=(
-                [],
-                [],
-                [MODULE.EXPECTED_RUNTIME_ROOT.name, "ambit-c16b-docker-aaaaaaaaaaaa"],
-            ),
-        ), mock.patch.object(MODULE, "exists_nofollow", return_value=False):
-            with self.assertRaisesRegex(MODULE.ManualRecoveryRequired, "legacy runtime roster"):
-                MODULE.require_v5_absent()
-
-    def test_only_exact_task_nsfs_can_invoke_umount(self) -> None:
+    def test_capsule_publication_is_atomic_and_boot_bound(self) -> None:
         source = MODULE_PATH.read_text(encoding="utf-8")
-        calls = [line for line in source.splitlines() if "subprocess.run(" in line]
-        self.assertEqual(calls, ["        result = subprocess.run("])
-        self.assertIn("settle_task_netns", source)
-
-    def test_verify_only_has_no_lease_control_write_signal_or_unmount(self) -> None:
-        source = MODULE_PATH.read_text(encoding="utf-8")
-        verify = source[
-            source.index("def operation_verify") : source.index("def operation_drain")
-        ]
-        self.assertIn("return collect_verification", verify)
-        for forbidden in (
-            "RuntimeLease",
-            "ControlAuthority",
-            "signal_exact_process",
-            "settle_task_netns",
-            "atomic_write_at",
-        ):
-            self.assertNotIn(forbidden, verify)
-
-    def test_drain_recomputes_exact_digest_under_global_lease(self) -> None:
-        source = MODULE_PATH.read_text(encoding="utf-8")
-        drain = source[source.index("def operation_drain") : source.index("def operation_resume")]
-        self.assertLess(drain.index("RuntimeLease.acquire"), drain.index("collect_verification"))
-        self.assertLess(drain.index("collect_verification"), drain.index("ControlAuthority.create"))
-        self.assertIn('verification["verificationSha256"] == expected_verification_sha256', drain)
+        publish = source[source.index("def publish_control_capsule") : source.index("def validate_control")]
+        self.assertIn("CONTROL_PENDING_NAME", publish)
+        self.assertIn("rename_noreplace_at(", publish)
+        self.assertIn("os.fsync(parent_fd)", publish)
+        self.assertLess(publish.index("atomic_write_at(descriptor, STATE_NAME"), publish.index("rename_noreplace_at("))
+        self.assertIn('control["bootId"] == current_boot_id()', source)
+        self.assertIn('state["bootId"] == current_boot_id()', source)
 
 
 class WrapperBoundaryTest(unittest.TestCase):
     def test_wrapper_exposes_only_verify_drain_resume(self) -> None:
         source = WRAPPER.read_text(encoding="utf-8")
-        self.assertIn("verify-only)", source)
-        self.assertIn("drain)", source)
-        self.assertIn("resume)", source)
-        for forbidden in ("start)", "activate)", "docker stop", "kill -TERM", "umount --"):
-            self.assertNotIn(forbidden, source)
+        cases = set()
+        for line in source.splitlines():
+            if line in ("  verify-only)", "  drain)", "  resume)"):
+                cases.add(line.strip().removesuffix(")"))
+        self.assertEqual(cases, {"verify-only", "drain", "resume"})
 
-    def test_wrapper_pins_tool_and_sanitizes_root_environment(self) -> None:
+    def test_wrapper_pin_matches_source(self) -> None:
         source = WRAPPER.read_text(encoding="utf-8")
         observed = hashlib.sha256(MODULE_PATH.read_bytes()).hexdigest()
         self.assertIn(f"tool_sha256={observed}", source)
-        self.assertIn("/usr/bin/env -i", source)
-        self.assertIn("/usr/bin/python3 -I -S", source)
-        self.assertIn("SUDO_UID=", source)
-        self.assertIn("SUDO_GID=", source)
 
-    def test_resume_uses_root_snapshot_not_mutable_repo_source(self) -> None:
+    def test_verified_bytes_are_executed_in_sudo_and_snapshotted(self) -> None:
         source = WRAPPER.read_text(encoding="utf-8")
-        resume = source[source.index("  resume)") : source.index("  *)")]
-        self.assertIn('snapshot = control_root / "legacy_v3_drain.py"', resume)
-        self.assertIn("sourceSha256", resume)
-        self.assertIn("os.execv(", resume)
-        self.assertNotIn('sha256sum -- "${tool}"', resume)
+        self.assertIn("/usr/bin/sudo -n -- /usr/bin/python3 -I -S -B -c", source)
+        self.assertIn("exec(compile(source, display_name, \"exec\")", source)
+        self.assertIn('"__legacy_pinned_source_bytes__": source', source)
+        self.assertIn('"__legacy_control_root_fd__"', source)
+        self.assertNotIn("os.execv", source)
+        self.assertNotIn('/usr/bin/python3 -I -S "${tool}"', source)
+
+    def test_resume_boot_gate_precedes_source_execution(self) -> None:
+        source = WRAPPER.read_text(encoding="utf-8")
+        self.assertLess(
+            source.index('control["bootId"] == state["bootId"] == boot_id'),
+            source.index("exec(compile(source, display_name"),
+        )
+        self.assertLess(
+            source.index("control_root_fd = os.open("),
+            source.index('read_bound_at(control_root_fd, "legacy_v3_drain.py"'),
+        )
 
     def test_verify_only_has_no_output_file_argument(self) -> None:
         source = WRAPPER.read_text(encoding="utf-8")
         verify = source[source.index("  verify-only)") : source.index("  drain)")]
-        self.assertNotIn(">", verify)
-        self.assertIn("run_repo_tool verify-only", verify)
+        self.assertIn('invoke_tool repo "${tool}"', verify)
+        self.assertNotIn("output", verify.lower())
 
 
 if __name__ == "__main__":
