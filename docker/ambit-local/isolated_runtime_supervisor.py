@@ -1554,6 +1554,27 @@ def path_exists_nofollow(path: Path) -> bool:
         return False
 
 
+def require_no_other_task_runtime(state_root: Path) -> None:
+    expected_runtime = runtime_root_for(state_root).name
+    expected_socket = socket_root_for(state_root).name
+    expected_cgroup = cgroup_path_for(state_root).name
+    foreign: list[str] = []
+    for parent, pattern, expected in (
+        (RUNTIME_PARENT, RUNTIME_ROOT_RE, expected_runtime),
+        (RUNTIME_PARENT, SOCKET_ROOT_RE, expected_socket),
+        (CGROUP_PARENT, CGROUP_PATH_RE, expected_cgroup),
+    ):
+        for name in os.listdir(parent):
+            path = parent / name
+            if pattern.fullmatch(str(path)) is not None and name != expected:
+                foreign.append(str(path))
+    require(
+        not foreign,
+        "another C16b runtime authority exists; use its original STATE_ROOT binding: "
+        + ",".join(sorted(foreign)),
+    )
+
+
 def read_root_manifest(runtime_identity: RuntimeIdentity, name: str) -> dict[str, Any] | None:
     require(
         name in (ROOT_CONTROL_NAME, ROOT_READY_NAME, ROOT_STOPPING_NAME, ROOT_STOP_NAME),
@@ -2971,6 +2992,7 @@ class RuntimeSupervisor:
         try:
             runtime = existing_runtime_identity(runtime_path)
         except FileNotFoundError:
+            require_no_other_task_runtime(self.state_root)
             reduce_precontrol_runtime(
                 self.state_root,
                 self.caller_gid,
@@ -4200,6 +4222,7 @@ def ensure_orphaned_runtime_stopped(
     socket_path = socket_root_for(state_root)
     cgroup_path = cgroup_path_for(state_root)
     if not path_exists_nofollow(runtime_path):
+        require_no_other_task_runtime(state_root)
         require(
             not path_exists_nofollow(socket_path),
             "orphaned socket root remains without root control authority",

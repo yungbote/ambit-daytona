@@ -381,6 +381,17 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         self.assertRegex(str(cgroup), MODULE.CGROUP_PATH_RE)
         self.assertRegex(str(lease), MODULE.LEASE_PATH_RE)
         self.assertEqual(len({runtime, socket_root, cgroup, lease}), 4)
+        with mock.patch.object(
+            MODULE.os,
+            "listdir",
+            side_effect=(
+                ["ambit-c16b-docker-deadbeef0000"],
+                [],
+                [],
+            ),
+        ):
+            with self.assertRaisesRegex(MODULE.SupervisorError, "another C16b runtime"):
+                MODULE.require_no_other_task_runtime(STATE_ROOT)
 
     def test_every_precontrol_runtime_roster_is_an_exact_creation_prefix(self) -> None:
         roster: set[str] = set()
