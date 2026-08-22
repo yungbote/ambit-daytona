@@ -51,7 +51,7 @@ fi
 
 script_dir=$(cd "$(/usr/bin/dirname -- "${BASH_SOURCE[0]}")" && /usr/bin/pwd -P)
 supervisor=${script_dir}/isolated_runtime_supervisor.py
-supervisor_sha256=ea7a1e2c3ca2ead63b9be3e201a28f68e7e0b98c9b01903375c1b9e390297f2a
+supervisor_sha256=a2f68d61a32183d75db2369183af68ff4d0e6b3a9a68567ce62c975f8111d677
 
 read -r -d '' runtime_snapshot_loader <<'PY' || true
 import hashlib
