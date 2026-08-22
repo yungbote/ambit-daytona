@@ -39,7 +39,7 @@ caller_gid=$(/usr/bin/id -g)
 script_source=$(/usr/bin/realpath -e -- "${BASH_SOURCE[0]}")
 script_dir=${script_source%/*}
 tool=${script_dir}/legacy_v3_drain.py
-tool_sha256=4a063ea15027613cbcc3db25e7e07f368e8b4cf866775785cecdc583934dc9e2
+tool_sha256=7071dd27fa4187e1e39236fee6e83d484c618a0b5365a924b9892a171984687a
 control_root=/run/ambit-c16b-legacy-v3-drain-1577287b8182
 
 read -r -d '' pinned_loader <<'PY' || true
@@ -268,8 +268,13 @@ case ${operation} in
     ;;
   resume)
     [[ $# -eq 2 ]] || usage
-    invoke_tool resume "${control_root}" "${tool_sha256}" resume \
-      "${state_root}" "${caller_uid}" "${caller_gid}"
+    if [[ -e ${control_root} || -L ${control_root} ]]; then
+      invoke_tool resume "${control_root}" "${tool_sha256}" resume \
+        "${state_root}" "${caller_uid}" "${caller_gid}"
+    else
+      invoke_tool repo "${tool}" "${tool_sha256}" resume \
+        "${state_root}" "${caller_uid}" "${caller_gid}"
+    fi
     ;;
   *)
     usage

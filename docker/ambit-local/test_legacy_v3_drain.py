@@ -376,6 +376,41 @@ class ProcessUniverseTest(unittest.TestCase):
         ):
             self.assertEqual(MODULE.exact_process_status(recorded), "exact")
 
+    def test_socket_owner_permission_denial_is_not_treated_as_absence(self) -> None:
+        with mock.patch.object(
+            MODULE.os, "listdir", side_effect=(("1",), ("3",))
+        ), mock.patch.object(
+            MODULE.os, "readlink", side_effect=PermissionError("denied")
+        ), self.assertRaisesRegex(MODULE.ManualRecoveryRequired, "unreadable"):
+            MODULE.socket_inode_owners({99})
+
+    def test_global_lease_classifies_flock_not_path_presence(self) -> None:
+        parent = mock.Mock(st_mode=stat.S_IFDIR | 0o755, st_uid=0, st_gid=0)
+        leaf = mock.Mock(
+            st_mode=stat.S_IFREG | 0o600,
+            st_uid=0,
+            st_gid=0,
+            st_nlink=1,
+            st_dev=1,
+            st_ino=2,
+        )
+        with mock.patch.object(MODULE.os, "open", side_effect=(10, 11)), mock.patch.object(
+            MODULE.os, "fstat", side_effect=(parent, leaf)
+        ), mock.patch.object(MODULE.os, "stat", return_value=leaf), mock.patch.object(
+            MODULE.fcntl, "flock"
+        ) as flock, mock.patch.object(MODULE.os, "close"):
+            self.assertFalse(MODULE.global_runtime_lease_busy())
+        self.assertEqual(flock.call_count, 2)
+
+        with mock.patch.object(MODULE.os, "open", side_effect=(10, 11)), mock.patch.object(
+            MODULE.os, "fstat", side_effect=(parent, leaf)
+        ), mock.patch.object(MODULE.os, "stat", return_value=leaf), mock.patch.object(
+            MODULE.fcntl,
+            "flock",
+            side_effect=BlockingIOError(),
+        ), mock.patch.object(MODULE.os, "close"):
+            self.assertTrue(MODULE.global_runtime_lease_busy())
+
 
 class MountAuthorityTest(unittest.TestCase):
     def test_mount_records_preserve_ids_and_stacked_multiplicity(self) -> None:
@@ -458,6 +493,32 @@ class MountAuthorityTest(unittest.TestCase):
         )
         self.assertEqual([row.mount_id for row in records], [21, 22, 23])
 
+    def test_duplicate_same_source_ambient_occurrence_is_rejected(self) -> None:
+        owned = str(MODULE.TASK_NETNS_TARGET)
+        raw = f"21 20 0:4 net:[4026531833] {owned} rw - nsfs nsfs rw\n"
+        occurrences = [
+            {
+                "mountNamespace": "4:19",
+                "mountId": mount_id,
+                "parentId": 20,
+                "device": "0:4",
+                "root": "net:[4026531833]",
+                "target": target,
+                "filesystem": "nsfs",
+            }
+            for mount_id, target in (
+                (21, owned),
+                (22, "/run/docker/netns/default"),
+                (23, "/run/docker/netns/default"),
+            )
+        ]
+        with mock.patch.object(MODULE.Path, "read_text", return_value=raw), mock.patch.object(
+            MODULE,
+            "stable_global_mount_roster",
+            return_value={"occurrences": occurrences},
+        ), self.assertRaisesRegex(MODULE.ManualRecoveryRequired, "foreign target"):
+            MODULE.netns_baseline()
+
     def test_held_fd_exposes_a_kernel_mount_id(self) -> None:
         with tempfile.NamedTemporaryFile() as value:
             descriptor = os.open(value.name, os.O_RDONLY | os.O_NOFOLLOW)
@@ -469,18 +530,55 @@ class MountAuthorityTest(unittest.TestCase):
     def test_unix_diag_parser_preserves_peer_and_pending_icons(self) -> None:
         sequence = 7
         attributes = (
-            struct.pack("=HHI", 8, 3, 42)
-            + struct.pack("=HHII", 12, 4, 43, 44)
-            + struct.pack("=HHI", 8, 8, 1000)
+            struct.pack("=HHI", 8, MODULE.UNIX_DIAG_PEER, 42)
+            + struct.pack("=HHII", 12, MODULE.UNIX_DIAG_ICONS, 43, 44)
+            + struct.pack("=HHI", 8, MODULE.UNIX_DIAG_UID, 1000)
         )
         payload = struct.pack("=BBBBIII", socket.AF_UNIX, 1, 1, 0, 41, 1, 2) + attributes
-        message = struct.pack("=IHHII", 16 + len(payload), MODULE.SOCK_DIAG_BY_FAMILY, 0, sequence, 0) + payload
+        message = struct.pack(
+            "=IHHII",
+            16 + len(payload),
+            MODULE.SOCK_DIAG_BY_FAMILY,
+            MODULE.NLM_F_MULTI,
+            sequence,
+            0,
+        ) + payload
         done = struct.pack("=IHHII", 16, MODULE.NLMSG_DONE, 0, sequence, 0)
         rows, complete = MODULE.parse_unix_diag_datagram(message + done, expected_sequence=sequence)
         self.assertTrue(complete)
         self.assertEqual(rows[0]["peer"], 42)
         self.assertEqual(rows[0]["icons"], [43, 44])
         self.assertEqual(rows[0]["uid"], 1000)
+
+    def test_unix_diag_rejects_interrupted_or_non_kernel_dump(self) -> None:
+        sequence = 7
+        interrupted = struct.pack(
+            "=IHHII", 16, MODULE.NLMSG_DONE, MODULE.NLM_F_DUMP_INTR, sequence, 0
+        )
+        with self.assertRaisesRegex(MODULE.DrainError, "interrupted"):
+            MODULE.parse_unix_diag_datagram(
+                interrupted, expected_sequence=sequence
+            )
+        foreign = struct.pack(
+            "=IHHII", 16, MODULE.NLMSG_DONE, 0, sequence, 123
+        )
+        with self.assertRaisesRegex(MODULE.DrainError, "kernel"):
+            MODULE.parse_unix_diag_datagram(
+                foreign, expected_sequence=sequence
+            )
+
+    def test_unix_diag_rejects_truncated_kernel_datagram(self) -> None:
+        fake = mock.Mock()
+        fake.sendto.side_effect = lambda request, _address: len(request)
+        sequence = 123
+        done = struct.pack("=IHHII", 16, MODULE.NLMSG_DONE, 0, sequence, 0)
+        fake.recvmsg.return_value = (done, [], socket.MSG_TRUNC, (0, 0))
+        with mock.patch.object(MODULE.socket, "socket", return_value=fake), mock.patch.object(
+            MODULE.os, "getpid", return_value=123
+        ), mock.patch.object(MODULE.time, "monotonic_ns", return_value=0), self.assertRaisesRegex(
+            MODULE.DrainError, "truncated"
+        ):
+            MODULE.unix_diag_records_once()
 
 
 class ReducerStateMachineTest(unittest.TestCase):
@@ -597,6 +695,14 @@ class ReducerStateMachineTest(unittest.TestCase):
         stack.enter_context(mock.patch.object(MODULE, "post_revocation_socket_snapshot"))
         stack.enter_context(mock.patch.object(MODULE, "registry_inventory_matches"))
         stack.enter_context(mock.patch.object(MODULE, "require_related_process_cutoff"))
+        stack.enter_context(mock.patch.object(MODULE, "exact_process_status", return_value="exact"))
+        stack.enter_context(
+            mock.patch.object(
+                MODULE,
+                "exact_live_roles",
+                side_effect=lambda _control, roles: set(roles),
+            )
+        )
         stack.enter_context(
             mock.patch.object(
                 MODULE,
@@ -649,6 +755,26 @@ class ReducerStateMachineTest(unittest.TestCase):
             MODULE.run_reducer(control)
         self.assertNotIn("signal:containerd", control.events)
 
+    def test_dockerd_signal_response_loss_advances_without_resignal(self) -> None:
+        control = self.FakeControl("dockerd_stop_requested")
+        with self.patches(control), mock.patch.object(
+            MODULE, "exact_process_status", return_value="absent"
+        ), mock.patch.object(
+            MODULE, "exists_nofollow", return_value=False
+        ):
+            MODULE.run_reducer(control)
+        self.assertNotIn("signal:dockerd", control.events)
+        self.assertIn("phase:dockerd_stopped", control.events)
+
+    def test_containerd_signal_response_loss_advances_without_resignal(self) -> None:
+        control = self.FakeControl("containerd_stop_requested")
+        with self.patches(control), mock.patch.object(
+            MODULE, "exact_process_status", return_value="absent"
+        ):
+            MODULE.run_reducer(control)
+        self.assertNotIn("signal:containerd", control.events)
+        self.assertIn("phase:containerd_stopped", control.events)
+
     def test_real_advance_rejects_regression_and_skip(self) -> None:
         authority = object.__new__(MODULE.ControlAuthority)
         authority.state = {"phase": "dockerd_stopped"}
@@ -658,6 +784,67 @@ class ReducerStateMachineTest(unittest.TestCase):
             authority.advance("dockerd_stop_requested")
         with self.assertRaisesRegex(MODULE.DrainError, "skip"):
             authority.advance("containerd_stop_requested")
+
+    def test_persisted_marker_state_is_exact_and_path_free(self) -> None:
+        digest = "c" * 64
+        base = {
+            "schema": MODULE.STATE_SCHEMA,
+            "observedAt": "2026-08-22T00:00:00+00:00",
+            "bootId": "boot",
+            "stateRoot": str(MODULE.EXPECTED_STATE_ROOT),
+            "controlSha256": digest,
+            "phase": "mounts_settled",
+            "netnsMarkerIdentity": {
+                "device": 44,
+                "inode": 99,
+                "uid": 0,
+                "gid": 0,
+                "mode": 0o600,
+                "type": stat.S_IFREG,
+                "links": 1,
+                "size": 0,
+            },
+        }
+        with mock.patch.object(MODULE, "current_boot_id", return_value="boot"):
+            self.assertEqual(MODULE.validate_state(base, digest), base)
+            foreign = json.loads(json.dumps(base))
+            foreign["netnsMarkerIdentity"]["path"] = str(MODULE.TASK_NETNS_TARGET)
+            with self.assertRaisesRegex(MODULE.DrainError, "field roster"):
+                MODULE.validate_state(foreign, digest)
+
+    def test_real_control_authority_walks_every_phase_adjacently(self) -> None:
+        authority = object.__new__(MODULE.ControlAuthority)
+        authority.state = {
+            "schema": MODULE.STATE_SCHEMA,
+            "observedAt": "2026-08-22T00:00:00+00:00",
+            "bootId": "boot",
+            "stateRoot": str(MODULE.EXPECTED_STATE_ROOT),
+            "controlSha256": "c" * 64,
+            "phase": MODULE.PHASES[0],
+            "netnsMarkerIdentity": None,
+        }
+        authority.control_digest = "c" * 64
+        authority.descriptor = 31
+        marker = {
+            "device": 44,
+            "inode": 99,
+            "uid": 0,
+            "gid": 0,
+            "mode": 0o600,
+            "type": stat.S_IFREG,
+            "links": 1,
+            "size": 0,
+        }
+        with mock.patch.object(MODULE, "current_boot_id", return_value="boot"), mock.patch.object(
+            MODULE, "utc_now", return_value="2026-08-22T00:00:00+00:00"
+        ), mock.patch.object(MODULE, "atomic_write_at") as write:
+            for phase in MODULE.PHASES[1:]:
+                authority.advance(
+                    phase,
+                    netns_marker_identity=(marker if phase == "mounts_settled" else None),
+                )
+        self.assertEqual(authority.phase, "archive_intent_final")
+        self.assertEqual(write.call_count, len(MODULE.PHASES) - 1)
 
 
 class DestructiveBoundaryTest(unittest.TestCase):
@@ -795,6 +982,13 @@ class DestructiveBoundaryTest(unittest.TestCase):
                 MODULE._live_receipt_disposition(observed, tombstone, control),
                 "tombstone",
             )
+            observed.st_uid = 1000
+            observed.st_gid = 1000
+            observed.st_mode = stat.S_IFREG | 0o600
+            self.assertEqual(
+                MODULE._live_receipt_disposition(observed, tombstone, control),
+                "tombstone",
+            )
 
     def test_archived_response_loss_is_read_only_and_byte_stable(self) -> None:
         control = ReducerStateMachineTest.FakeControl("archive_intent_final")
@@ -829,6 +1023,14 @@ class DestructiveBoundaryTest(unittest.TestCase):
         self.assertLess(
             archive.index("terminal = write_projection(control)"),
             archive.index("link_tmpfile_noreplace_at("),
+        )
+        self.assertLess(
+            archive.index("open_or_publish_prepared_archive"),
+            archive.index("complete_receipt_tombstone"),
+        )
+        self.assertLess(
+            archive.index("complete_receipt_tombstone"),
+            archive.rindex("link_tmpfile_noreplace_at"),
         )
 
     def test_runtime_and_pidfile_have_complete_preflight_before_unlink(self) -> None:
@@ -894,6 +1096,9 @@ class WrapperBoundaryTest(unittest.TestCase):
         self.assertIn('"__legacy_control_root_fd__"', source)
         self.assertNotIn("os.execv", source)
         self.assertNotIn('/usr/bin/python3 -I -S "${tool}"', source)
+        resume = source[source.index("  resume)") : source.index("  *)")]
+        self.assertIn('invoke_tool resume "${control_root}"', resume)
+        self.assertIn('invoke_tool repo "${tool}"', resume)
 
     def test_resume_boot_gate_precedes_source_execution(self) -> None:
         source = WRAPPER.read_text(encoding="utf-8")
