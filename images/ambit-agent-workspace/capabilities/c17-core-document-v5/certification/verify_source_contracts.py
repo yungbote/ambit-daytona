@@ -10,15 +10,21 @@ from typing import Any
 
 SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 SHA512 = re.compile(r"^sha512:[0-9a-f]{128}$")
-SOURCE_CONTRACT_LINE = re.compile(r"^([0-9a-f]{64})  ([a-z0-9][a-z0-9./-]*)$")
+SOURCE_CONTRACT_LINE = re.compile(r"^([0-9a-f]{64})  ([A-Za-z0-9][A-Za-z0-9./_-]*)$")
 SOURCE_CONTRACT_PATHS = (
+    "Dockerfile",
+    "certification/audit_offline_inputs.py",
     "locks/backend-lineage-input.lock.json",
     "locks/base-oci.lock.json",
     "locks/canvas-input.lock.json",
     "locks/capture-helper-input.lock.json",
     "locks/debian-input.lock.json",
     "locks/node-input.lock.json",
+    "locks/offline-build-input.lock.json",
+    "locks/offline-public-artifacts.bytes",
+    "locks/offline-public-artifacts.sha256",
     "locks/pdfjs-input.lock.json",
+    "locks/pdfjs-static-files.sha256",
     "policy/license-policy.json",
     "policy/render-policy.json",
     "policy/runtime-policy.json",
@@ -88,6 +94,64 @@ def _verify_source_manifest(root: Path) -> None:
             raise ValueError(f"source contract digest differs: {relative}")
 
 
+def _verify_pdfjs_roster(root: Path, lock: dict[str, Any]) -> None:
+    path = root / "locks/pdfjs-static-files.sha256"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    entries: list[tuple[str, str]] = []
+    pattern = re.compile(r"^([0-9a-f]{64})  ([A-Za-z0-9][A-Za-z0-9._/-]*)$")
+    for line in lines:
+        match = pattern.fullmatch(line)
+        if match is None:
+            raise ValueError("PDF.js static-file roster is noncanonical")
+        entries.append((match.group(2), match.group(1)))
+    names = [name for name, _ in entries]
+    if names != sorted(set(names)) or len(names) != lock["fileCount"]:
+        raise ValueError("PDF.js static-file roster paths differ")
+    required = {
+        "LICENSE",
+        "cmaps/LICENSE",
+        "iccs/LICENSE",
+        "legacy/build/pdf.mjs",
+        "legacy/build/pdf.worker.mjs",
+        "wasm/LICENSE_JBIG2",
+        "wasm/LICENSE_OPENJPEG",
+        "wasm/LICENSE_PDFJS_JBIG2",
+        "wasm/LICENSE_PDFJS_OPENJPEG",
+        "wasm/LICENSE_PDFJS_QCMS",
+        "wasm/LICENSE_QCMS",
+    }
+    if not required.issubset(names):
+        raise ValueError("PDF.js static-file roster omits required runtime licenses")
+    if any(
+        name.startswith("standard_fonts/") or "quickjs-eval" in name
+        for name in names
+    ):
+        raise ValueError("PDF.js static-file roster retains excluded resources")
+    digest = f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
+    _expect(digest, lock["lockSha256"], "PDF.js static-file roster digest")
+
+
+def _verify_offline_public_manifests(
+    root: Path,
+    artifacts: list[dict[str, Any]],
+) -> None:
+    expected_hashes = [
+        f"{artifact['sha256'].removeprefix('sha256:')}  {artifact['path']}"
+        for artifact in artifacts
+    ]
+    expected_bytes = [
+        f"{artifact['bytes']}  {artifact['path']}" for artifact in artifacts
+    ]
+    observed_hashes = (
+        root / "locks/offline-public-artifacts.sha256"
+    ).read_text(encoding="utf-8").splitlines()
+    observed_bytes = (
+        root / "locks/offline-public-artifacts.bytes"
+    ).read_text(encoding="utf-8").splitlines()
+    _expect(observed_hashes, expected_hashes, "offline public SHA roster")
+    _expect(observed_bytes, expected_bytes, "offline public byte roster")
+
+
 def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
     root = root.resolve(strict=True)
     _verify_source_manifest(root)
@@ -96,6 +160,7 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
     canvas = _read(root / "locks/canvas-input.lock.json")
     debian = _read(root / "locks/debian-input.lock.json")
     node = _read(root / "locks/node-input.lock.json")
+    offline = _read(root / "locks/offline-build-input.lock.json")
     pdfjs = _read(root / "locks/pdfjs-input.lock.json")
     helper = _read(root / "locks/capture-helper-input.lock.json")
     toolchain = _read(root / "toolchain-manifest.json")
@@ -447,6 +512,153 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
     )
 
     _keys(
+        offline,
+        {
+            "baseOci",
+            "buildFrontend",
+            "buildTargets",
+            "frozenEvidence",
+            "missing",
+            "namedBuildContext",
+            "networkDuringBuild",
+            "platform",
+            "proprietaryHelper",
+            "publicArtifactByteManifest",
+            "publicArtifactSha256Manifest",
+            "publicArtifacts",
+            "requiredUnfrozenEvidence",
+            "schema",
+            "state",
+        },
+        "offline build input lock",
+    )
+    _keys(
+        offline["proprietaryHelper"],
+        {"includedInPublicContext", "secretId", "state", "transport"},
+        "offline proprietary helper",
+    )
+    _keys(
+        offline["buildTargets"],
+        {"coreDocumentV5", "rendererSubstrate"},
+        "offline build targets",
+    )
+    _keys(
+        offline["buildFrontend"],
+        {"digest", "reference"},
+        "offline Dockerfile frontend",
+    )
+    _keys(
+        offline["baseOci"],
+        {"configDigest", "indexDigest", "layerDigest", "platformManifestDigest"},
+        "offline base OCI",
+    )
+    _expect(
+        offline["schema"],
+        "ambit.runtime-pack-offline-build-input-lock/v1",
+        "offline build schema",
+    )
+    _expect(offline["state"], "unavailable", "offline build state")
+    _expect(offline["platform"], "linux/amd64", "offline build platform")
+    _expect(offline["networkDuringBuild"], "none", "offline build network")
+    _expect(
+        offline["buildFrontend"]["digest"],
+        "sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e",
+        "offline Dockerfile frontend digest",
+    )
+    _expect(
+        offline["baseOci"],
+        {
+            "indexDigest": base["index"]["digest"],
+            "platformManifestDigest": base["platform"]["manifestDigest"],
+            "configDigest": base["platform"]["configDigest"],
+            "layerDigest": base["platform"]["layers"][0]["digest"],
+        },
+        "offline base OCI pins",
+    )
+    _expect(
+        offline["proprietaryHelper"]["includedInPublicContext"],
+        False,
+        "helper public-context exclusion",
+    )
+    _expect(
+        offline["proprietaryHelper"]["state"],
+        "unavailable",
+        "offline helper state",
+    )
+    expected_public_artifacts = [
+        {
+            "path": "public/canvas/canvas-1.0.7.tgz",
+            "bytes": canvas["javascriptArchive"]["bytes"],
+            "sha256": canvas["javascriptArchive"]["sha256"],
+        },
+        {
+            "path": "public/canvas/canvas-linux-x64-gnu-1.0.7.tgz",
+            "bytes": canvas["platformArchive"]["bytes"],
+            "sha256": canvas["platformArchive"]["sha256"],
+        },
+        {
+            "path": (
+                "public/canvas/canvas-source-"
+                "062130c03715f275fd46a59a4bb224e907c91686.tar.gz"
+            ),
+            "bytes": canvas["implementation"]["sourceArchiveBytes"],
+            "sha256": canvas["implementation"]["sourceArchiveSha256"],
+        },
+        {
+            "path": (
+                "public/canvas/skia-source-"
+                "7219df0fb0ff64f26adad448f94e8c001b964e6a.tar.gz"
+            ),
+            "bytes": 68583095,
+            "sha256": canvas["nativeLineage"]["skiaSourceArchiveSha256"],
+        },
+        {
+            "path": "public/node/SHASUMS256.txt",
+            "bytes": node["releaseAuthority"]["shasumsBytes"],
+            "sha256": node["releaseAuthority"]["shasumsSha256"],
+        },
+        {
+            "path": "public/node/SHASUMS256.txt.sig",
+            "bytes": node["releaseAuthority"]["signatureBytes"],
+            "sha256": node["releaseAuthority"]["signatureSha256"],
+        },
+        {
+            "path": "public/node/node-v24.19.0-linux-x64.tar.xz",
+            "bytes": node["binary"]["archiveBytes"],
+            "sha256": node["binary"]["archiveSha256"],
+        },
+        {
+            "path": "public/node/node-v24.19.0.tar.xz",
+            "bytes": node["source"]["archiveBytes"],
+            "sha256": node["source"]["archiveSha256"],
+        },
+        {
+            "path": "public/pdfjs/pdfjs-dist-6.2.108.tgz",
+            "bytes": pdfjs["archive"]["bytes"],
+            "sha256": pdfjs["archive"]["sha256"],
+        },
+    ]
+    _expect(
+        offline["publicArtifacts"],
+        expected_public_artifacts,
+        "offline public artifact roster",
+    )
+    _expect(offline["frozenEvidence"], [], "offline frozen evidence roster")
+    if not offline["requiredUnfrozenEvidence"]:
+        raise ValueError("unavailable offline build must name its evidence gaps")
+    _expect(
+        offline["publicArtifactSha256Manifest"],
+        "offline-public-artifacts.sha256",
+        "offline public SHA manifest",
+    )
+    _expect(
+        offline["publicArtifactByteManifest"],
+        "offline-public-artifacts.bytes",
+        "offline public byte manifest",
+    )
+    _verify_offline_public_manifests(root, offline["publicArtifacts"])
+
+    _keys(
         debian,
         {
             "archives",
@@ -550,7 +762,7 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
     )
     _keys(
         pdfjs["extractedRoster"],
-        {"requiredLock", "state"},
+        {"fileCount", "lockSha256", "requiredLock", "state"},
         "PDF.js extracted roster",
     )
     _expect(pdfjs["schema"], "ambit.runtime-pack-pdfjs-input-lock/v1", "PDF.js schema")
@@ -559,7 +771,9 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
     _sha256(pdfjs["archive"]["sha256"], "PDF.js archive")
     _sha512(pdfjs["archive"]["sha512"], "PDF.js archive SHA-512")
     _expect(pdfjs["execution"]["state"], "unavailable", "PDF.js execution state")
-    _expect(pdfjs["extractedRoster"]["state"], "unavailable", "PDF.js roster state")
+    _expect(pdfjs["extractedRoster"]["state"], "pinned", "PDF.js roster state")
+    _sha256(pdfjs["extractedRoster"]["lockSha256"], "PDF.js roster lock")
+    _verify_pdfjs_roster(root, pdfjs["extractedRoster"])
     _expect(
         pdfjs["archive"]["sha256"],
         "sha256:b3e68d5cda70551a90b3f771419d379e20fc788ce056fa32de73608e01df47f4",
@@ -674,6 +888,7 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
             "installedEngineLineage",
             "libreOffice",
             "nodeInputLock",
+            "offlineBuildInputLock",
             "pack",
             "pdfjs",
             "pdfjsInputLock",
@@ -703,7 +918,14 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
     )
     _keys(
         toolchain["pdfjs"],
-        {"delivery", "nativeCanvas", "runtimeNode", "runtimeNpm", "version"},
+        {
+            "delivery",
+            "nativeCanvas",
+            "runtimeNode",
+            "runtimeNpm",
+            "staticRoster",
+            "version",
+        },
         "toolchain PDF.js",
     )
     _keys(
@@ -733,6 +955,11 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
         toolchain["pdfjs"]["nativeCanvas"],
         "@napi-rs/canvas-linux-x64-gnu@1.0.7-unavailable",
         "native Canvas",
+    )
+    _expect(
+        toolchain["pdfjs"]["staticRoster"],
+        "pinned-185-files",
+        "PDF.js static roster",
     )
     _expect(
         toolchain["fonts"]["packages"],
@@ -914,6 +1141,7 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
     unavailable = {
         "backendLineage": backend_lineage["state"],
         "installedEngineLineage": toolchain["installedEngineLineage"]["state"],
+        "offlineBuild": offline["state"],
         "toolchain": toolchain["state"],
         "node": node["state"],
         "canvas": canvas["state"],

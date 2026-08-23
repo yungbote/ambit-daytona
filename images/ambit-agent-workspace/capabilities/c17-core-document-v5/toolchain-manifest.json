@@ -12,6 +12,7 @@
   "pdfjsInputLock": "locks/pdfjs-input.lock.json",
   "nodeInputLock": "locks/node-input.lock.json",
   "canvasInputLock": "locks/canvas-input.lock.json",
+  "offlineBuildInputLock": "locks/offline-build-input.lock.json",
   "captureHelperInputLock": "locks/capture-helper-input.lock.json",
   "libreOffice": {
     "package": "libreoffice-writer-nogui",
@@ -33,6 +34,7 @@
   "pdfjs": {
     "version": "6.2.108",
     "delivery": "direct-content-addressed-node-assets",
+    "staticRoster": "pinned-185-files",
     "runtimeNode": "24.19.0",
     "runtimeNpm": "absent",
     "nativeCanvas": "@napi-rs/canvas-linux-x64-gnu@1.0.7-unavailable"
@@ -62,7 +64,6 @@
     "capture-helper-external-authority-unavailable",
     "debian-binary-source-and-license-closure-unfrozen",
     "font-file-fontconfig-and-license-rosters-unfrozen",
-    "pdfjs-static-file-roster-unfrozen",
     "node-release-dynamic-license-and-vulnerability-evidence-incomplete",
     "pdfjs-canvas-native-source-license-and-vulnerability-evidence-incomplete",
     "per-page-pixel-conformance-unproved",
