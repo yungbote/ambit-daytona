@@ -147,7 +147,8 @@ export async function writeDurableOutput(output, filename, bytes) {
     throw new TypeError('Output filename is not canonical.')
   }
   await reproveOutputDirectory(output.path, output.identity)
-  const path = join(output.path, filename)
+  const heldDirectoryPath = `/proc/self/fd/${output.handle.fd}`
+  const path = join(heldDirectoryPath, filename)
   const handle = await open(
     path,
     fsConstants.O_WRONLY |
@@ -157,6 +158,7 @@ export async function writeDurableOutput(output, filename, bytes) {
       fsConstants.O_CLOEXEC,
     0o444,
   )
+  let writtenIdentity
   try {
     await handle.writeFile(bytes)
     await handle.sync()
@@ -164,15 +166,27 @@ export async function writeDurableOutput(output, filename, bytes) {
     if (
       !metadata.isFile() ||
       metadata.nlink !== 1n ||
+      metadata.dev !== output.identity.dev ||
       metadata.size !== BigInt(Buffer.byteLength(bytes)) ||
-      (metadata.mode & 0o222n) !== 0n
+      (metadata.mode & 0o777n) !== 0o444n
     ) {
       throw new TypeError('Durable output file identity is invalid.')
     }
+    writtenIdentity = metadata
   } finally {
     await handle.close()
   }
   await reproveOutputDirectory(output.path, output.identity)
+  const linked = await lstat(join(output.path, filename), { bigint: true })
+  if (
+    !linked.isFile() ||
+    linked.isSymbolicLink() ||
+    linked.dev !== output.identity.dev ||
+    linked.ino !== writtenIdentity.ino ||
+    (linked.mode & 0o777n) !== 0o444n
+  ) {
+    throw new TypeError('Durable output is not linked at the admitted path.')
+  }
   await output.handle.sync()
 }
 
