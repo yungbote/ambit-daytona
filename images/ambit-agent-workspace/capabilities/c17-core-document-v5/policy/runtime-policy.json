@@ -1,0 +1,20 @@
+{
+  "schema": "ambit.runtime-pack-runtime-policy/v3",
+  "runtimeUser": "daytona",
+  "runtimeUid": 1000,
+  "rootEscalation": "denied",
+  "rootFilesystem": "read-only",
+  "hostSocketsAndDevices": "denied",
+  "network": "provider-enforced-none",
+  "runtimePackageInstallers": "absent",
+  "ambientDependencyResolution": "forbidden",
+  "longLivedOfficeOrUnoDaemon": "forbidden",
+  "writableRoots": [
+    "task-private-bounded-input",
+    "task-private-bounded-output",
+    "task-private-bounded-libreoffice-profile",
+    "task-private-bounded-cache"
+  ],
+  "workspacePublication": "external-atomic-materialization-authority-only",
+  "secretsInImageOrEnvironment": "denied"
+}
