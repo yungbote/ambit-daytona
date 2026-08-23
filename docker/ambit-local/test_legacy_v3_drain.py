@@ -414,7 +414,38 @@ class ProcessAuthorityTest(unittest.TestCase):
             MODULE.capture_process(candidate)
         close.assert_called_once_with(30)
         self.assertNotIsInstance(raised.exception, MODULE.ProcessUnavailable)
-        self.assertIsInstance(raised.exception.__cause__, MODULE.DrainError)
+        self.assertIsInstance(raised.exception.__cause__, OSError)
+
+    def test_process_capture_success_tail_interruption_still_settles_owner(self) -> None:
+        candidate = MODULE.EXPECTED_PROCESS_CANDIDATES["dockerd"]
+
+        def interrupt_after_capture(
+            _candidate: object,
+            _pid: int,
+            custody: MODULE.ResourceCustody,
+        ) -> object:
+            custody.pidfd_open(960217, 0)
+            custody.open("/proc/960217", os.O_RDONLY)
+            raise KeyboardInterrupt("after captured process construction")
+
+        with mock.patch.object(
+            MODULE.os,
+            "pidfd_open",
+            return_value=30,
+        ), mock.patch.object(
+            MODULE.os,
+            "open",
+            return_value=31,
+        ), mock.patch.object(
+            MODULE,
+            "_capture_process_owned",
+            side_effect=interrupt_after_capture,
+        ), mock.patch.object(MODULE.os, "close") as close, self.assertRaisesRegex(
+            KeyboardInterrupt,
+            "after captured process construction",
+        ):
+            MODULE.capture_process(candidate)
+        self.assertEqual(close.call_args_list, [mock.call(31), mock.call(30)])
 
     def test_stable_process_field_substitution_rejects(self) -> None:
         parsed = MODULE.parse_legacy_receipt(encoded_receipt())["dockerd"]
@@ -735,7 +766,7 @@ class ProcessCredentialAuthorityTest(unittest.TestCase):
             source.index("def capture_task") : source.index("class CapturedProcess")
         ]
         capture = source[
-            source.index("def capture_process")
+            source.index("def _capture_process_owned")
             : source.index("def validate_receipt_process")
         ]
         cutoff = source[
@@ -3000,6 +3031,105 @@ class ProcessUniverseTest(unittest.TestCase):
         self.assertEqual(custody._resources, [])
         self.assertEqual(custody._state, "closed")
 
+    def test_incomplete_close_remains_closing_and_rejects_new_generation(self) -> None:
+        close_ast = class_method_ast(
+            MODULE_PATH.read_text(encoding="utf-8"),
+            "ResourceCustody",
+            "close",
+        )
+        transition = next(
+            node
+            for node in ast.walk(close_ast)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Attribute) and target.attr == "_state"
+                for target in node.targets
+            )
+            and isinstance(node.value, ast.Constant)
+            and node.value.value == "closing"
+        )
+        after_transition = min(
+            node.lineno
+            for node in ast.walk(close_ast)
+            if isinstance(node, ast.stmt) and node.lineno > transition.lineno
+        )
+        custody = MODULE.ResourceCustody(label="incomplete close")
+        acquire_test_descriptor(custody, 40)
+        with mock.patch.object(MODULE.os, "close") as close:
+            with self.assertRaisesRegex(KeyboardInterrupt, "close interrupted"):
+                with interrupt_once_on_line(
+                    MODULE.ResourceCustody.close.__code__,
+                    after_transition,
+                    "close interrupted",
+                ) as fired:
+                    custody.close()
+            self.assertTrue(fired[0])
+            self.assertEqual(custody._state, "closing")
+            self.assertEqual(len(custody._resources), 1)
+            with mock.patch.object(
+                MODULE.os,
+                "open",
+                return_value=41,
+            ), self.assertRaisesRegex(MODULE.DrainError, "unavailable"):
+                custody.open("new generation", os.O_RDONLY)
+            self.assertEqual(close.call_args_list, [mock.call(41)])
+            custody.close()
+        self.assertEqual(close.call_args_list, [mock.call(41), mock.call(40)])
+        self.assertEqual(custody._state, "closed")
+
+    def test_interrupted_close_error_persistence_poison_rejects_fd_reuse(self) -> None:
+        close_many = class_method_ast(
+            MODULE_PATH.read_text(encoding="utf-8"),
+            "ResourceCustody",
+            "close_descriptors",
+        )
+        settle = next(
+            node
+            for node in ast.walk(close_many)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "cleanup_error"
+                for target in node.targets
+            )
+            and isinstance(node.value, ast.Call)
+        )
+        after_settle = min(
+            node.lineno
+            for node in ast.walk(close_many)
+            if isinstance(node, ast.If) and node.lineno > settle.lineno
+        )
+        first = OSError("original close is ambiguous")
+        custody = MODULE.ResourceCustody(label="interrupted close persistence")
+        acquire_test_descriptor(custody, 40)
+        with mock.patch.object(
+            MODULE.os,
+            "close",
+            side_effect=(first, None),
+        ) as close:
+            with self.assertRaisesRegex(KeyboardInterrupt, "before persistence"):
+                with interrupt_once_on_line(
+                    MODULE.ResourceCustody.close_descriptors.__code__,
+                    after_settle,
+                    "before persistence",
+                ) as fired:
+                    custody.close_descriptors((40,))
+            self.assertTrue(fired[0])
+            self.assertEqual(custody._state, "closing")
+            self.assertIsNone(custody._cleanup_error)
+            self.assertIs(custody._resources[0].close_error, first)
+            with mock.patch.object(
+                MODULE.os,
+                "open",
+                return_value=40,
+            ), self.assertRaisesRegex(MODULE.DrainError, "unavailable"):
+                custody.open("reused generation", os.O_RDONLY)
+            self.assertEqual(close.call_args_list, [mock.call(40), mock.call(40)])
+            with self.assertRaisesRegex(MODULE.DrainError, "cleanup failed") as raised:
+                custody.close()
+        self.assertIs(raised.exception.__cause__, first)
+        self.assertEqual(close.call_args_list, [mock.call(40), mock.call(40)])
+        self.assertEqual(custody._state, "closed")
+
     def test_three_resource_cleanup_preserves_first_error_and_formats_hostile_error(self) -> None:
         class HostileCleanupError(OSError):
             def __str__(self) -> str:
@@ -4884,9 +5014,26 @@ class DestructiveBoundaryTest(unittest.TestCase):
         self.assertIsInstance(containing_body[assignment_index + 1], ast.Try)
         settlement_scope = containing_body[assignment_index + 1]
         assert isinstance(settlement_scope, ast.Try)
+        self.assertTrue(settlement_scope.body)
+        self.assertIsInstance(settlement_scope.body[0], ast.With)
+        lexical_owner = settlement_scope.body[0]
+        assert isinstance(lexical_owner, ast.With)
+        self.assertTrue(
+            any(
+                isinstance(node, ast.Name) and node.id == target
+                for node in ast.walk(lexical_owner.items[0].context_expr)
+            )
+        )
+        helpers = {
+            node.name: node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+        }
+        owned_capture = helpers["_capture_process_owned"]
+        self.assertEqual(owned_capture.args.args[2].arg, target)
         acquisitions = {
             node.attr
-            for node in ast.walk(settlement_scope)
+            for node in ast.walk(owned_capture)
             if isinstance(node, ast.Attribute)
             and isinstance(node.value, ast.Name)
             and node.value.id == target
@@ -4900,7 +5047,6 @@ class DestructiveBoundaryTest(unittest.TestCase):
             and isinstance(node.value, ast.Name)
             and node.value.id == target
             and node.attr in {"open", "pidfd_open", "dup", "socket"}
-            and node not in set(ast.walk(settlement_scope))
         ]
         self.assertEqual(unprotected, [])
 
@@ -6720,6 +6866,54 @@ class WrapperBoundaryTest(unittest.TestCase):
                 close.assert_called_once_with(40)
             self.assertEqual(custody.descriptors, [])
             self.assertEqual(custody.state, "closed")
+
+    def test_loader_incomplete_close_rejects_new_generation_until_resume(self) -> None:
+        descriptor_custody = self._descriptor_custody_type()
+        loader = WRAPPER.read_text(encoding="utf-8").split(
+            "read -r -d '' pinned_loader <<'PY' || true\n",
+            1,
+        )[1].split("\nPY\n", 1)[0]
+        close_ast = class_method_ast(loader, "DescriptorCustody", "close")
+        transition = next(
+            node
+            for node in ast.walk(close_ast)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Attribute) and target.attr == "state"
+                for target in node.targets
+            )
+            and isinstance(node.value, ast.Constant)
+            and node.value.value == "closing"
+        )
+        after_transition = min(
+            node.lineno
+            for node in ast.walk(close_ast)
+            if isinstance(node, ast.stmt) and node.lineno > transition.lineno
+        )
+        custody = descriptor_custody("loader incomplete close")
+        with mock.patch.object(os, "open", return_value=40):
+            custody.open("existing", os.O_RDONLY)
+        with mock.patch.object(os, "close") as close:
+            with self.assertRaisesRegex(KeyboardInterrupt, "loader interrupted"):
+                with interrupt_once_on_line(
+                    descriptor_custody.close.__code__,
+                    after_transition,
+                    "loader interrupted",
+                ) as fired:
+                    custody.close()
+            self.assertTrue(fired[0])
+            self.assertEqual(custody.state, "closing")
+            self.assertEqual(len(custody.descriptors), 1)
+            with mock.patch.object(
+                os,
+                "open",
+                return_value=41,
+            ), self.assertRaisesRegex(SystemExit, "unavailable"):
+                custody.open("new", os.O_RDONLY)
+            self.assertEqual(close.call_args_list, [mock.call(41)])
+            custody.close()
+        self.assertEqual(close.call_args_list, [mock.call(41), mock.call(40)])
+        self.assertEqual(custody.state, "closed")
 
     def test_loader_distinct_tokens_aliasing_one_fd_close_at_most_once(self) -> None:
         descriptor_custody = self._descriptor_custody_type()

@@ -39,7 +39,7 @@ caller_gid=$(/usr/bin/id -g)
 script_source=$(/usr/bin/realpath -e -- "${BASH_SOURCE[0]}")
 script_dir=${script_source%/*}
 tool=${script_dir}/legacy_v3_drain.py
-tool_sha256=89a0f72d6299bc2704138324fc46832c10b345d7bf3573bf27961aa9d1804845
+tool_sha256=64fdd7ef4f0c1c3c3437681b3531adda83928506322dc33b10ae2662a992b541
 control_root=/run/ambit-c16b-legacy-v3-drain-1577287b8182
 
 read -r -d '' pinned_loader <<'PY' || true
@@ -381,7 +381,7 @@ class DescriptorCustody:
                 # An interrupted line leaves CLOSING resumable with the old roster.
                 self.descriptors = []; self.state = "closed"
             else:
-                self.state = "open"
+                self.state = "closing"
         if self.cleanup_error is not None:
             raise self.cleanup_error
 

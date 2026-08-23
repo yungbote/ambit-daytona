@@ -1316,7 +1316,7 @@ class ResourceCustody:
                 # Roster retirement precedes returning to an OPEN owner.
                 self._state = "open"
             else:
-                self._state = "open"
+                self._state = "closing"
         self._raise_cleanup_error(f"{self.label} descriptor close failed")
 
     def _owned_registration(
@@ -1422,7 +1422,7 @@ class ResourceCustody:
                 # An interrupted line leaves CLOSING resumable with the old roster.
                 self._resources = []; self._state = "closed"
             else:
-                self._state = "open"
+                self._state = "closing"
         self._raise_cleanup_error(f"{self.label} cleanup failed")
 
     def __enter__(self) -> "ResourceCustody":
@@ -1643,10 +1643,11 @@ class CapturedProcess:
     observed_proc_inode: int
 
 
-def capture_process(candidate: Mapping[str, object]) -> CapturedProcess:
-    pid = plain_int(candidate.get("pid"), "candidate process pid", positive=True)
-    require(hasattr(os, "pidfd_open"), "pidfd custody is unavailable")
-    custody = ResourceCustody(label="captured process")
+def _capture_process_owned(
+    candidate: Mapping[str, object],
+    pid: int,
+    custody: ResourceCustody,
+) -> CapturedProcess:
     try:
         try:
             pidfd = custody.pidfd_open(pid, 0)
@@ -1770,18 +1771,25 @@ def capture_process(candidate: Mapping[str, object]) -> CapturedProcess:
             observed_proc_inode=process_dir.st_ino,
         )
     except FileNotFoundError as error:
-        translated = ProcessUnavailable(f"candidate process disappeared: {pid}")
-        cleanup_error = custody._close_after_error(translated)
-        if cleanup_error is not None:
+        raise ProcessUnavailable(
+            f"candidate process disappeared: {pid}"
+        ) from error
+    return result
+
+
+def capture_process(candidate: Mapping[str, object]) -> CapturedProcess:
+    pid = plain_int(candidate.get("pid"), "candidate process pid", positive=True)
+    require(hasattr(os, "pidfd_open"), "pidfd custody is unavailable")
+    custody = ResourceCustody(label="captured process")
+    try:
+        with custody:
+            return _capture_process_owned(candidate, pid, custody)
+    except ProcessUnavailable as error:
+        if custody._cleanup_error is not None:
             raise DrainError(
                 f"candidate process cleanup is ambiguous: {pid}"
-            ) from cleanup_error
-        raise translated from error
-    except BaseException as error:
-        custody._close_after_error(error)
+            ) from custody._cleanup_error
         raise
-    custody.close()
-    return result
 
 
 def validate_receipt_process(
