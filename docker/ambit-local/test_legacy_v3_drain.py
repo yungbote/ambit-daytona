@@ -250,6 +250,32 @@ class ReceiptContractTest(unittest.TestCase):
 
 
 class ProcessAuthorityTest(unittest.TestCase):
+    def test_process_capture_failure_attempts_procfd_and_pidfd_cleanup(self) -> None:
+        candidate = MODULE.EXPECTED_PROCESS_CANDIDATES["dockerd"]
+        with mock.patch.object(
+            MODULE.os,
+            "pidfd_open",
+            return_value=30,
+        ), mock.patch.object(
+            MODULE,
+            "pidfd_exited",
+            return_value=False,
+        ), mock.patch.object(
+            MODULE.os,
+            "open",
+            return_value=31,
+        ), mock.patch.object(
+            MODULE.os,
+            "fstat",
+            side_effect=RuntimeError("capture failed"),
+        ), mock.patch.object(
+            MODULE.os,
+            "close",
+            side_effect=(OSError("proc close failed"), None),
+        ) as close, self.assertRaisesRegex(RuntimeError, "capture failed"):
+            MODULE.capture_process(candidate)
+        self.assertEqual(close.call_args_list, [mock.call(31), mock.call(30)])
+
     def test_stable_process_field_substitution_rejects(self) -> None:
         parsed = MODULE.parse_legacy_receipt(encoded_receipt())["dockerd"]
         for field, captured in (
@@ -903,6 +929,31 @@ class ProcessUniverseTest(unittest.TestCase):
             self.assertEqual(task.security_state, self._root_security())
             task.close()
         pidfd_open.assert_called_once_with(101, MODULE.PIDFD_THREAD)
+
+    def test_task_capture_failure_attempts_procfd_and_pidfd_cleanup(self) -> None:
+        with mock.patch.object(
+            MODULE.os,
+            "pidfd_open",
+            return_value=30,
+        ), mock.patch.object(
+            MODULE,
+            "pidfd_exited",
+            return_value=False,
+        ), mock.patch.object(
+            MODULE.os,
+            "open",
+            return_value=31,
+        ), mock.patch.object(
+            MODULE.os,
+            "fstat",
+            side_effect=RuntimeError("capture failed"),
+        ), mock.patch.object(
+            MODULE.os,
+            "close",
+            side_effect=(OSError("proc close failed"), None),
+        ) as close, self.assertRaisesRegex(RuntimeError, "capture failed"):
+            MODULE.capture_task(100, 101)
+        self.assertEqual(close.call_args_list, [mock.call(31), mock.call(30)])
 
     def test_held_thread_pidfd_reproof_reads_current_nonleader_security(self) -> None:
         expected = self._root_security()
@@ -2870,6 +2921,90 @@ class ReducerStateMachineTest(unittest.TestCase):
 
 
 class DestructiveBoundaryTest(unittest.TestCase):
+    def test_root_pair_acquisition_failure_attempts_every_descriptor_close(self) -> None:
+        runtime_control = {
+            "authority": {
+                "runtime": {
+                    "rootIdentity": {"device": 1, "inode": 2, "uid": 1000, "gid": 1000}
+                }
+            }
+        }
+        with mock.patch.object(
+            MODULE.os,
+            "open",
+            side_effect=(30, 31),
+        ), mock.patch.object(
+            MODULE.os,
+            "fstat",
+            side_effect=RuntimeError("root capture failed"),
+        ), mock.patch.object(
+            MODULE.os,
+            "close",
+            side_effect=(OSError("root close failed"), None),
+        ) as close, self.assertRaisesRegex(RuntimeError, "root capture failed"):
+            MODULE.runtime_root_descriptors(
+                runtime_control,
+                require_root_owned=None,
+            )
+        self.assertEqual(close.call_args_list, [mock.call(31), mock.call(30)])
+
+        state = mock.Mock(st_mode=stat.S_IFDIR, st_dev=1, st_ino=2)
+        literal = mock.Mock(st_dev=1, st_ino=2)
+        directory_control = {
+            "authority": {
+                "stateRootIdentity": {"device": 1, "inode": 2},
+                "evidenceRootIdentity": {
+                    "device": 1,
+                    "inode": 3,
+                    "uid": 1000,
+                    "gid": 1000,
+                    "mode": 0o700,
+                },
+            }
+        }
+        with mock.patch.object(
+            MODULE.os,
+            "open",
+            side_effect=(30, 31),
+        ), mock.patch.object(
+            MODULE.os,
+            "fstat",
+            side_effect=(state, RuntimeError("child capture failed")),
+        ), mock.patch.object(
+            MODULE.os,
+            "stat",
+            return_value=literal,
+        ), mock.patch.object(
+            MODULE.os,
+            "close",
+            side_effect=(OSError("child close failed"), None),
+        ) as close, self.assertRaisesRegex(RuntimeError, "child capture failed"):
+            MODULE._recorded_directory_pair(
+                directory_control,
+                child_name="evidence",
+                authority_key="evidenceRootIdentity",
+            )
+        self.assertEqual(close.call_args_list, [mock.call(31), mock.call(30)])
+
+    def test_multi_resource_finalizers_use_close_all_authority(self) -> None:
+        tree = ast.parse(MODULE_PATH.read_text(encoding="utf-8"))
+        offenders: list[tuple[int, list[int]]] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Try) or not node.finalbody:
+                continue
+            close_lines = [
+                child.lineno
+                for child in ast.walk(
+                    ast.Module(body=node.finalbody, type_ignores=[])
+                )
+                if isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Attribute)
+                and child.func.attr == "close"
+            ]
+            if len(close_lines) > 1:
+                offenders.append((node.lineno, close_lines))
+        self.assertEqual(offenders, [])
+
     def test_no_replace_rename_preserves_foreign_destination(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

@@ -39,7 +39,7 @@ caller_gid=$(/usr/bin/id -g)
 script_source=$(/usr/bin/realpath -e -- "${BASH_SOURCE[0]}")
 script_dir=${script_source%/*}
 tool=${script_dir}/legacy_v3_drain.py
-tool_sha256=d453feaa42f2152713a4ed40ab161d0cfbe838bbc008b31b7140188abfc92ac1
+tool_sha256=3685f8b7096aa7970c3135923c2651ecb70f4ebcf2925e5d18832394c3e4a9b1
 control_root=/run/ambit-c16b-legacy-v3-drain-1577287b8182
 
 read -r -d '' pinned_loader <<'PY' || true

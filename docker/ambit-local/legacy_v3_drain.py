@@ -930,6 +930,37 @@ def close_all_descriptors(
         raise DrainError(f"{label} descriptor close failed") from first_error
 
 
+def close_all_descriptors_preserving_active(
+    descriptors: Sequence[int],
+    *,
+    label: str,
+) -> None:
+    active_error = sys.exception()
+    try:
+        close_all_descriptors(descriptors, label=label)
+    except BaseException as cleanup_error:
+        if active_error is None:
+            raise
+        active_error.add_note(f"cleanup also failed: {cleanup_error}")
+
+
+def transfer_descriptor_after_cleanup(
+    descriptor: int,
+    cleanup_descriptors: Sequence[int],
+    *,
+    label: str,
+) -> int:
+    try:
+        close_all_descriptors(cleanup_descriptors, label=label)
+    except BaseException as error:
+        try:
+            close_all_descriptors((descriptor,), label=f"{label} transfer")
+        except BaseException as cleanup_error:
+            error.add_note(f"transferred descriptor cleanup also failed: {cleanup_error}")
+        raise
+    return descriptor
+
+
 class Closeable(Protocol):
     def close(self) -> None: ...
 
@@ -1063,10 +1094,15 @@ def capture_task(thread_group_id: int, task_id: int) -> CapturedTask | None:
         keep = True
         return captured
     finally:
-        if process_fd is not None and not keep:
-            os.close(process_fd)
         if not keep:
-            os.close(pidfd)
+            close_all_descriptors_preserving_active(
+                tuple(
+                    descriptor
+                    for descriptor in (process_fd, pidfd)
+                    if descriptor is not None
+                ),
+                label="partial captured task",
+            )
 
 
 @dataclass(frozen=True)
@@ -1204,9 +1240,14 @@ def capture_process(candidate: Mapping[str, object]) -> CapturedProcess:
     except FileNotFoundError as error:
         raise ProcessUnavailable(f"candidate process disappeared: {pid}") from error
     finally:
-        if process_fd is not None:
-            os.close(process_fd)
-        os.close(pidfd)
+        close_all_descriptors_preserving_active(
+            tuple(
+                descriptor
+                for descriptor in (process_fd, pidfd)
+                if descriptor is not None
+            ),
+            label="captured process",
+        )
 
 
 def validate_receipt_process(
@@ -2844,8 +2885,10 @@ def post_revocation_socket_snapshot(control: Mapping[str, object]) -> dict[str, 
             else:
                 raise ManualRecoveryRequired("bound Docker API pathname reappeared")
         finally:
-            os.close(root_fd)
-            os.close(parent_fd)
+            close_all_descriptors_preserving_active(
+                (root_fd, parent_fd),
+                label="post-revocation runtime root",
+            )
         rows = [
             row
             for row in proc_unix_records()
@@ -3779,9 +3822,14 @@ def global_runtime_lease_busy() -> bool:
         fcntl.flock(descriptor, fcntl.LOCK_UN)
         return False
     finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        os.close(parent_fd)
+        close_all_descriptors_preserving_active(
+            tuple(
+                value
+                for value in (descriptor, parent_fd)
+                if value is not None
+            ),
+            label="global runtime lease observation",
+        )
 
 
 def pidfile_identity(
@@ -4304,6 +4352,7 @@ def open_run_parent() -> int:
 
 def open_control_root() -> int:
     parent_fd = open_run_parent()
+    descriptor: int | None = None
     try:
         descriptor = os.open(
             CONTROL_ROOT.name,
@@ -4311,13 +4360,25 @@ def open_control_root() -> int:
             dir_fd=parent_fd,
         )
         _validate_control_root_descriptor(parent_fd, descriptor, CONTROL_ROOT.name)
-        return descriptor
-    except BaseException:
-        if "descriptor" in locals():
-            os.close(descriptor)
+    except BaseException as error:
+        try:
+            close_all_descriptors(
+                tuple(
+                    value
+                    for value in (descriptor, parent_fd)
+                    if value is not None
+                ),
+                label="control root open",
+            )
+        except BaseException as cleanup_error:
+            error.add_note(f"cleanup also failed: {cleanup_error}")
         raise
-    finally:
-        os.close(parent_fd)
+    assert descriptor is not None
+    return transfer_descriptor_after_cleanup(
+        descriptor,
+        (parent_fd,),
+        label="control root parent",
+    )
 
 
 def snapshot_source(control_fd: int) -> str:
@@ -4420,7 +4481,7 @@ def publish_control_capsule(
     control: Mapping[str, object],
     state: Mapping[str, object],
 ) -> int:
-    parent_fd = open_run_parent()
+    parent_fd: int | None = open_run_parent()
     descriptor: int | None = None
     published = False
     try:
@@ -4434,7 +4495,13 @@ def publish_control_capsule(
             existing = None
         if existing is not None:
             _validate_control_root_descriptor(parent_fd, existing, CONTROL_ROOT.name)
-            return existing
+            cleanup_parent = parent_fd
+            parent_fd = None
+            return transfer_descriptor_after_cleanup(
+                existing,
+                (cleanup_parent,),
+                label="existing control root parent",
+            )
         _reduce_pending_control_capsule(parent_fd)
         os.mkdir(CONTROL_PENDING_NAME, 0o700, dir_fd=parent_fd)
         os.fsync(parent_fd)
@@ -4475,15 +4542,37 @@ def publish_control_capsule(
                 dir_fd=parent_fd,
             )
             _validate_control_root_descriptor(parent_fd, existing, CONTROL_ROOT.name)
-            return existing
+            cleanup_parent = parent_fd
+            parent_fd = None
+            return transfer_descriptor_after_cleanup(
+                existing,
+                (cleanup_parent,),
+                label="raced control root parent",
+            )
         os.fsync(parent_fd)
         _validate_control_root_descriptor(parent_fd, descriptor, CONTROL_ROOT.name)
         published = True
-        return descriptor
+        result = descriptor
+        descriptor = None
+        cleanup_parent = parent_fd
+        parent_fd = None
+        return transfer_descriptor_after_cleanup(
+            result,
+            (cleanup_parent,),
+            label="published control root parent",
+        )
     finally:
-        if descriptor is not None and not published:
-            os.close(descriptor)
-        os.close(parent_fd)
+        close_all_descriptors_preserving_active(
+            tuple(
+                value
+                for value in (
+                    descriptor if not published else None,
+                    parent_fd,
+                )
+                if value is not None
+            ),
+            label="control capsule publication",
+        )
 
 
 def validate_control(value: object) -> dict[str, Any]:
@@ -5023,10 +5112,18 @@ def runtime_root_descriptors(
             "legacy runtime root custody differs",
         )
         return parent_fd, root_fd
-    except BaseException:
-        if root_fd is not None:
-            os.close(root_fd)
-        os.close(parent_fd)
+    except BaseException as error:
+        try:
+            close_all_descriptors(
+                tuple(
+                    value
+                    for value in (root_fd, parent_fd)
+                    if value is not None
+                ),
+                label="runtime root acquisition",
+            )
+        except BaseException as cleanup_error:
+            error.add_note(f"cleanup also failed: {cleanup_error}")
         raise
 
 
@@ -5078,10 +5175,18 @@ def _recorded_directory_pair(
             f"legacy {child_name} directory binding differs",
         )
         return state_fd, child_fd
-    except BaseException:
-        if child_fd is not None:
-            os.close(child_fd)
-        os.close(state_fd)
+    except BaseException as error:
+        try:
+            close_all_descriptors(
+                tuple(
+                    value
+                    for value in (child_fd, state_fd)
+                    if value is not None
+                ),
+                label=f"recorded {child_name} directory acquisition",
+            )
+        except BaseException as cleanup_error:
+            error.add_note(f"cleanup also failed: {cleanup_error}")
         raise
 
 
@@ -5350,8 +5455,10 @@ def _transfer_runtime_custody(control: Mapping[str, object]) -> None:
         )
         os.fsync(parent_fd)
     finally:
-        os.close(root_fd)
-        os.close(parent_fd)
+        close_all_descriptors_preserving_active(
+            (root_fd, parent_fd),
+            label="runtime custody transfer",
+        )
 
 
 def remove_bound_socket(control: Mapping[str, object]) -> None:
@@ -5402,10 +5509,14 @@ def _remove_bound_socket(control: Mapping[str, object]) -> None:
             os.unlink("docker.sock", dir_fd=root_fd)
             os.fsync(root_fd)
     finally:
-        if leaf_fd is not None:
-            os.close(leaf_fd)
-        os.close(root_fd)
-        os.close(parent_fd)
+        close_all_descriptors_preserving_active(
+            tuple(
+                value
+                for value in (leaf_fd, root_fd, parent_fd)
+                if value is not None
+            ),
+            label="Docker API revocation",
+        )
     post_revocation_socket_snapshot(control)
 
 
@@ -5767,8 +5878,10 @@ def runtime_reduction_preflight(
         )
         require(first == second, "legacy runtime tree changed across preflight passes")
     finally:
-        os.close(root_fd)
-        os.close(parent_fd)
+        close_all_descriptors_preserving_active(
+            (root_fd, parent_fd),
+            label="runtime reduction preflight root",
+        )
 
     authority = control["authority"]
     assert isinstance(authority, dict)
@@ -5816,8 +5929,10 @@ def runtime_reduction_preflight(
             finally:
                 os.close(pidfile_fd)
     finally:
-        os.close(config_fd)
-        os.close(state_fd)
+        close_all_descriptors_preserving_active(
+            (config_fd, state_fd),
+            label="runtime reduction pidfile preflight",
+        )
     manual(pidfile is not None, "legacy containerd pidfile disappeared")
     return {"runtime": second, "pidfile": pidfile}
 
@@ -5857,10 +5972,14 @@ def require_containerd_pidfile_exact(control: Mapping[str, object]) -> None:
             "legacy containerd pidfile changed during terminal reproof",
         )
     finally:
-        if leaf_fd is not None:
-            os.close(leaf_fd)
-        os.close(config_fd)
-        os.close(state_fd)
+        close_all_descriptors_preserving_active(
+            tuple(
+                value
+                for value in (leaf_fd, config_fd, state_fd)
+                if value is not None
+            ),
+            label="containerd pidfile terminal reproof",
+        )
 
 
 def _reduce_runtime_directory(
@@ -5959,8 +6078,10 @@ def reduce_runtime_tree(
         os.fsync(root_fd)
         os.fsync(parent_fd)
     finally:
-        os.close(root_fd)
-        os.close(parent_fd)
+        close_all_descriptors_preserving_active(
+            (root_fd, parent_fd),
+            label="runtime tree reduction",
+        )
 
 
 def remove_empty_runtime_root(control: Mapping[str, object]) -> None:
@@ -6005,8 +6126,10 @@ def remove_empty_runtime_root(control: Mapping[str, object]) -> None:
         os.rmdir(EXPECTED_RUNTIME_ROOT.name, dir_fd=parent_fd)
         os.fsync(parent_fd)
     finally:
-        os.close(root_fd)
-        os.close(parent_fd)
+        close_all_descriptors_preserving_active(
+            (root_fd, parent_fd),
+            label="empty runtime root removal",
+        )
 
 
 def _read_regular_at(
@@ -6252,11 +6375,19 @@ def legacy_receipt_state(
         )
         return disposition, live[2]
     finally:
-        for value in (live, archive):
-            if value is not None:
-                os.close(value[0])
-        os.close(evidence_fd)
-        os.close(state_fd)
+        close_all_descriptors_preserving_active(
+            tuple(
+                descriptor
+                for descriptor in (
+                    live[0] if live is not None else None,
+                    archive[0] if archive is not None else None,
+                    evidence_fd,
+                    state_fd,
+                )
+                if descriptor is not None
+            ),
+            label="legacy receipt state",
+        )
 
 
 def transfer_receipt_custody(control: Mapping[str, object]) -> None:
@@ -6302,10 +6433,18 @@ def transfer_receipt_custody(control: Mapping[str, object]) -> None:
         )
         os.fsync(evidence_fd)
     finally:
-        if value is not None:
-            os.close(value[0])
-        os.close(evidence_fd)
-        os.close(state_fd)
+        close_all_descriptors_preserving_active(
+            tuple(
+                descriptor
+                for descriptor in (
+                    value[0] if value is not None else None,
+                    evidence_fd,
+                    state_fd,
+                )
+                if descriptor is not None
+            ),
+            label="legacy receipt custody transfer",
+        )
 
 
 def _write_all(descriptor: int, raw: bytes) -> None:
@@ -6582,10 +6721,18 @@ def read_projection(control: ControlAuthority) -> dict[str, object]:
         )
         return expected
     finally:
-        if value is not None:
-            os.close(value[0])
-        os.close(evidence_fd)
-        os.close(state_fd)
+        close_all_descriptors_preserving_active(
+            tuple(
+                descriptor
+                for descriptor in (
+                    value[0] if value is not None else None,
+                    evidence_fd,
+                    state_fd,
+                )
+                if descriptor is not None
+            ),
+            label="terminal projection read",
+        )
 
 
 def read_terminal_projection_without_control(
@@ -7034,12 +7181,19 @@ def recover_terminal_archive_without_control() -> dict[str, object]:
         )
         return projection
     finally:
-        if final_fd is not None:
-            os.close(final_fd)
-        if prepared_fd is not None:
-            os.close(prepared_fd)
-        os.close(evidence_fd)
-        os.close(state_fd)
+        close_all_descriptors_preserving_active(
+            tuple(
+                descriptor
+                for descriptor in (
+                    final_fd,
+                    prepared_fd,
+                    evidence_fd,
+                    state_fd,
+                )
+                if descriptor is not None
+            ),
+            label="boot-independent archive recovery",
+        )
 
 
 def write_projection(control: ControlAuthority) -> dict[str, object]:
@@ -7100,12 +7254,19 @@ def write_projection(control: ControlAuthority) -> dict[str, object]:
         )
         return value
     finally:
-        if final_fd is not None:
-            os.close(final_fd)
-        if temporary_fd is not None:
-            os.close(temporary_fd)
-        os.close(evidence_fd)
-        os.close(state_fd)
+        close_all_descriptors_preserving_active(
+            tuple(
+                descriptor
+                for descriptor in (
+                    final_fd,
+                    temporary_fd,
+                    evidence_fd,
+                    state_fd,
+                )
+                if descriptor is not None
+            ),
+            label="terminal projection publication",
+        )
 
 
 
@@ -7190,12 +7351,19 @@ def archive_receipt(control: ControlAuthority) -> dict[str, object]:
         )
         return terminal
     finally:
-        if archived_fd is not None:
-            os.close(archived_fd)
-        if temporary_fd is not None:
-            os.close(temporary_fd)
-        os.close(evidence_fd)
-        os.close(state_fd)
+        close_all_descriptors_preserving_active(
+            tuple(
+                descriptor
+                for descriptor in (
+                    archived_fd,
+                    temporary_fd,
+                    evidence_fd,
+                    state_fd,
+                )
+                if descriptor is not None
+            ),
+            label="legacy receipt archive publication",
+        )
 
 
 
