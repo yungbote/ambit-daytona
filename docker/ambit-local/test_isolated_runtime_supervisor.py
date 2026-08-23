@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import copy
+import dis
 import hashlib
 import importlib.util
 import io
@@ -85,12 +86,8 @@ def control_authority() -> tuple[
     MODULE.SocketPathIdentity,
     MODULE.CgroupIdentity,
 ]:
-    runtime = MODULE.RuntimeIdentity(
-        MODULE.runtime_root_for(STATE_ROOT), 21, 22, 0, 0, 0o700
-    )
-    socket_root = MODULE.SocketPathIdentity(
-        MODULE.socket_root_for(STATE_ROOT), 21, 23, 0, 1000, 0o750
-    )
+    runtime = MODULE.RuntimeIdentity(MODULE.runtime_root_for(STATE_ROOT), 21, 22, 0, 0, 0o700)
+    socket_root = MODULE.SocketPathIdentity(MODULE.socket_root_for(STATE_ROOT), 21, 23, 0, 1000, 0o750)
     cgroup = MODULE.CgroupIdentity(MODULE.cgroup_path_for(STATE_ROOT), 29, 30)
     value = {
         "schema": MODULE.CONTROL_SCHEMA,
@@ -178,11 +175,7 @@ def storage_operation(outcome: str = "activated") -> dict[str, object]:
                 "ownerGid": 0,
                 "mode": "0600",
             },
-            "loop": (
-                None
-                if outcome == "deactivated"
-                else {"device": "/dev/loop7", "major": 7, "minor": 7}
-            ),
+            "loop": (None if outcome == "deactivated" else {"device": "/dev/loop7", "major": 7, "minor": 7}),
             "filesystem": {
                 "type": "xfs",
                 "uuid": "12345678-1234-1234-1234-123456789abc",
@@ -213,22 +206,26 @@ def storage_operation(outcome: str = "activated") -> dict[str, object]:
 class RuntimeSupervisorPureContractTest(unittest.TestCase):
     def test_orphan_absent_cleanup_is_serialized_by_the_global_lease(self) -> None:
         lease = MODULE.RuntimeLease(Path("/run/example.lock"), 90, 91, 1, 2)
-        with mock.patch.object(
-            MODULE,
-            "path_exists_nofollow",
-            side_effect=(False, False, False, False, False),
-        ), mock.patch.object(
-            MODULE.RuntimeLease,
-            "acquire",
-            return_value=lease,
-        ) as acquire, mock.patch.object(
-            MODULE, "require_no_other_task_runtime"
-        ) as singleton, mock.patch.object(
-            MODULE, "reduce_runtime_removal_root", return_value=False
-        ), mock.patch.object(MODULE.os, "close") as close:
+        with (
+            mock.patch.object(
+                MODULE,
+                "path_exists_nofollow",
+                side_effect=(False, False, False, False, False),
+            ),
+            mock.patch.object(
+                MODULE.RuntimeLease,
+                "pending",
+                return_value=lease,
+            ) as pending,
+            mock.patch.object(lease, "acquire") as acquire,
+            mock.patch.object(MODULE, "require_no_other_task_runtime") as singleton,
+            mock.patch.object(MODULE, "reduce_runtime_removal_root", return_value=False),
+            mock.patch.object(MODULE.os, "close") as close,
+        ):
             result = MODULE.ensure_orphaned_runtime_stopped(STATE_ROOT, 1000, 1000)
         self.assertEqual(result["outcome"], "passed")
-        acquire.assert_called_once_with(STATE_ROOT)
+        pending.assert_called_once_with(STATE_ROOT)
+        acquire.assert_called_once_with()
         self.assertEqual(
             singleton.call_args_list,
             [mock.call(STATE_ROOT), mock.call(STATE_ROOT, lease=lease)],
@@ -236,24 +233,31 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         self.assertEqual(close.call_args_list, [mock.call(91), mock.call(90)])
 
         competing = MODULE.RuntimeLease(Path("/run/example.lock"), 92, 93, 1, 2)
-        with mock.patch.object(
-            MODULE,
-            "path_exists_nofollow",
-            side_effect=(False, True),
-        ), mock.patch.object(
-            MODULE.RuntimeLease,
-            "acquire",
-            return_value=competing,
-        ), mock.patch.object(
-            MODULE, "require_no_other_task_runtime"
-        ), mock.patch.object(MODULE.os, "close") as close, self.assertRaisesRegex(
-            MODULE.SupervisorError,
-            "appeared while acquiring the global lease",
+        with (
+            mock.patch.object(
+                MODULE,
+                "path_exists_nofollow",
+                side_effect=(False, True),
+            ),
+            mock.patch.object(
+                MODULE.RuntimeLease,
+                "pending",
+                return_value=competing,
+            ),
+            mock.patch.object(competing, "acquire"),
+            mock.patch.object(MODULE, "require_no_other_task_runtime"),
+            mock.patch.object(MODULE.os, "close") as close,
+            self.assertRaisesRegex(
+                MODULE.SupervisorError,
+                "appeared while acquiring the global lease",
+            ),
         ):
             MODULE.ensure_orphaned_runtime_stopped(STATE_ROOT, 1000, 1000)
         self.assertEqual(close.call_args_list, [mock.call(93), mock.call(92)])
 
-    def test_root_control_binds_boot_state_runtime_socket_cgroup_and_sources(self) -> None:
+    def test_root_control_binds_boot_state_runtime_socket_cgroup_and_sources(
+        self,
+    ) -> None:
         value, runtime, socket_root, cgroup = control_authority()
         authority = {"validate_recorded_identity": lambda candidate: candidate}
         with mock.patch.object(MODULE, "current_boot_id", return_value=BOOT_ID):
@@ -268,9 +272,7 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         self.assertEqual(parsed["supervisor"], value["supervisorProcessIdentity"])
 
         mutations = {
-            "old schema": lambda candidate: candidate.update(
-                schema="ambit.local-daytona-isolated-docker-control/v1"
-            ),
+            "old schema": lambda candidate: candidate.update(schema="ambit.local-daytona-isolated-docker-control/v1"),
             "other boot": lambda candidate: candidate.update(bootId="22345678-1234-1234-1234-123456789abc"),
             "other state inode": lambda candidate: candidate["stateRootIdentity"].update(inode=99),
             "other socket path": lambda candidate: candidate["socketRootIdentity"].update(
@@ -315,7 +317,9 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
                     1000,
                 )
 
-    def test_root_ready_separates_outer_daemon_roots_from_inner_runner_xfs(self) -> None:
+    def test_root_ready_separates_outer_daemon_roots_from_inner_runner_xfs(
+        self,
+    ) -> None:
         control, runtime, socket_root, cgroup = control_authority()
         socket_identity = MODULE.SocketPathIdentity(
             socket_root.path / MODULE.SOCKET_NAME,
@@ -398,12 +402,8 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         for name, mutate in {
             "socket group": lambda candidate: candidate["socketIdentity"].update(gid=999),
             "socket mode": lambda candidate: candidate["socketIdentity"].update(mode=0o666),
-            "socket path": lambda candidate: candidate.update(
-                socket=str(runtime.path / "docker.sock")
-            ),
-            "old ready": lambda candidate: candidate.update(
-                schema="ambit.local-daytona-isolated-docker/v4"
-            ),
+            "socket path": lambda candidate: candidate.update(socket=str(runtime.path / "docker.sock")),
+            "old ready": lambda candidate: candidate.update(schema="ambit.local-daytona-isolated-docker/v4"),
             "extra": lambda candidate: candidate.update(extra=True),
         }.items():
             with self.subTest(name=name):
@@ -433,30 +433,36 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
             lease,
             MODULE.lease_path_for(Path("/home/other/ambit-state")),
         )
-        with mock.patch.object(
-            MODULE.os,
-            "listdir",
-            side_effect=(
-                ["ambit-c16b-docker-deadbeef0000"],
-                [],
-                [],
-                [],
-                [],
+        with (
+            mock.patch.object(
+                MODULE.os,
+                "listdir",
+                side_effect=(
+                    ["ambit-c16b-docker-deadbeef0000"],
+                    [],
+                    [],
+                    [],
+                    [],
+                ),
             ),
-        ), mock.patch.object(MODULE, "observe_legacy_v3_transition"):
+            mock.patch.object(MODULE, "observe_legacy_v3_transition"),
+        ):
             with self.assertRaisesRegex(MODULE.SupervisorError, "another C16b runtime"):
                 MODULE.require_no_other_task_runtime(STATE_ROOT)
-        with mock.patch.object(
-            MODULE.os,
-            "listdir",
-            side_effect=(
-                [],
-                [],
-                [],
-                [],
-                ["ambit-c16b-docker-1577287b8182"],
+        with (
+            mock.patch.object(
+                MODULE.os,
+                "listdir",
+                side_effect=(
+                    [],
+                    [],
+                    [],
+                    [],
+                    ["ambit-c16b-docker-1577287b8182"],
+                ),
             ),
-        ), mock.patch.object(MODULE, "observe_legacy_v3_transition"):
+            mock.patch.object(MODULE, "observe_legacy_v3_transition"),
+        ):
             with self.assertRaisesRegex(MODULE.SupervisorError, "legacy /tmp C16b runtime"):
                 MODULE.require_no_other_task_runtime(STATE_ROOT)
 
@@ -511,15 +517,16 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
             st_dev=21,
             st_ino=22,
         )
-        with mock.patch.object(MODULE.os, "stat", return_value=parent), mock.patch.object(
-            MODULE.os, "mkdir", side_effect=mkdir
-        ), mock.patch.object(MODULE.os, "open", return_value=31), mock.patch.object(
-            MODULE.os, "fstat", return_value=root
-        ), mock.patch.object(
-            MODULE.os, "listdir", return_value=("containerd-state",)
-        ), mock.patch.object(MODULE.os, "close"), mock.patch.object(
-            MODULE, "_remove_tree_entry"
-        ) as remove_entry, mock.patch.object(MODULE.os, "rmdir") as rmdir:
+        with (
+            mock.patch.object(MODULE.os, "stat", return_value=parent),
+            mock.patch.object(MODULE.os, "mkdir", side_effect=mkdir),
+            mock.patch.object(MODULE.os, "open", return_value=31),
+            mock.patch.object(MODULE.os, "fstat", return_value=root),
+            mock.patch.object(MODULE.os, "listdir", return_value=("containerd-state",)),
+            mock.patch.object(MODULE.os, "close"),
+            mock.patch.object(MODULE, "_remove_tree_entry") as remove_entry,
+            mock.patch.object(MODULE.os, "rmdir") as rmdir,
+        ):
             with self.assertRaisesRegex(InjectedCrash, "response lost"):
                 MODULE.create_runtime_root(runtime_path)
 
@@ -529,18 +536,26 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         rmdir.assert_not_called()
 
     def test_legacy_v4_caller_receipts_cannot_authorize_signal_or_kill(self) -> None:
-        runtime = MODULE.RuntimeIdentity(
-            MODULE.runtime_root_for(STATE_ROOT), 1, 2, 0, 0, 0o700
-        )
-        with mock.patch.object(MODULE, "verify_runtime_root", return_value=31), mock.patch.object(
-            MODULE.os,
-            "listdir",
-            return_value=["dockerd.json", "docker.sock", MODULE.STORAGE_LIFECYCLE_NAME],
-        ), mock.patch.object(MODULE.os, "close"):
+        runtime = MODULE.RuntimeIdentity(MODULE.runtime_root_for(STATE_ROOT), 1, 2, 0, 0, 0o700)
+        with (
+            mock.patch.object(MODULE, "verify_runtime_root", return_value=31),
+            mock.patch.object(
+                MODULE.os,
+                "listdir",
+                return_value=[
+                    "dockerd.json",
+                    "docker.sock",
+                    MODULE.STORAGE_LIFECYCLE_NAME,
+                ],
+            ),
+            mock.patch.object(MODULE.os, "close"),
+        ):
             with self.assertRaisesRegex(MODULE.SupervisorError, "legacy v4 runtime"):
                 MODULE.reject_legacy_v4_runtime_roster(runtime)
         source = SCRIPT.read_text(encoding="utf-8")
-        ensure = source[source.index("def ensure_runtime_stopped") : source.index("def ensure_orphaned_runtime_stopped")]
+        ensure = source[
+            source.index("def ensure_runtime_stopped") : source.index("def ensure_orphaned_runtime_stopped")
+        ]
         validated = ensure.index("_validated_existing_authorities(")
         signal_call = ensure.index('process_authority["signal_recorded_process"]')
         self.assertLess(validated, signal_call)
@@ -570,9 +585,7 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         observed = "containerd github.com/containerd/containerd/v2 v2.2.2 deadbeef"
         self.assertEqual(MODULE.require_containerd_v2_or_later(observed), observed)
         with self.assertRaises(MODULE.SupervisorError):
-            MODULE.require_containerd_v2_or_later(
-                "containerd github.com/containerd/containerd v1.7.27 deadbeef"
-            )
+            MODULE.require_containerd_v2_or_later("containerd github.com/containerd/containerd v1.7.27 deadbeef")
         installed = subprocess.run(
             ["/usr/bin/containerd", "--version"],
             check=True,
@@ -584,14 +597,14 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
 
     def test_docker_config_uses_exact_caller_group_and_split_socket(self) -> None:
         encoded = MODULE.docker_config(
-                data_root=MODULE.AUTHORITY_ROOT / "outer-docker",
-                exec_root=Path("/run/ambit-c16b-docker-0123456789ab/docker-exec"),
-                pidfile=Path("/run/ambit-c16b-docker-0123456789ab/docker.pid"),
-                socket=Path("/run/ambit-c16b-docker-api-0123456789ab/docker.sock"),
-                socket_gid=1000,
-                containerd_socket=Path("/run/ambit-c16b-docker-0123456789ab/containerd.sock"),
-                cgroup_parent="/ambit-c16b-docker-0123456789ab",
-            )
+            data_root=MODULE.AUTHORITY_ROOT / "outer-docker",
+            exec_root=Path("/run/ambit-c16b-docker-0123456789ab/docker-exec"),
+            pidfile=Path("/run/ambit-c16b-docker-0123456789ab/docker.pid"),
+            socket=Path("/run/ambit-c16b-docker-api-0123456789ab/docker.sock"),
+            socket_gid=1000,
+            containerd_socket=Path("/run/ambit-c16b-docker-0123456789ab/containerd.sock"),
+            cgroup_parent="/ambit-c16b-docker-0123456789ab",
+        )
         value = json.loads(encoded)
         self.assertEqual(value["group"], "1000")
         self.assertEqual(
@@ -648,10 +661,11 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
             1000,
             0o660,
         )
-        with mock.patch.object(MODULE.os, "stat", return_value=mock.Mock()), mock.patch.object(
-            MODULE, "verify_socket_root", return_value=31
-        ), mock.patch.object(MODULE.os, "listdir", return_value=[]), mock.patch.object(
-            MODULE.os, "close"
+        with (
+            mock.patch.object(MODULE.os, "stat", return_value=mock.Mock()),
+            mock.patch.object(MODULE, "verify_socket_root", return_value=31),
+            mock.patch.object(MODULE.os, "listdir", return_value=[]),
+            mock.patch.object(MODULE.os, "close"),
         ):
             self.assertEqual(
                 MODULE.classify_recovery_socket(
@@ -671,21 +685,28 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
                 )
 
     def test_task_cgroup_is_the_total_descendant_recovery_boundary(self) -> None:
-        identity = MODULE.CgroupIdentity(
-            Path("/sys/fs/cgroup/ambit-c16b-docker-0123456789ab"), 9, 10
-        )
-        with mock.patch.object(MODULE, "open_cgroup", return_value=31), mock.patch.object(
-            MODULE, "_write_at"
-        ) as write, mock.patch.object(MODULE.os, "close"), mock.patch.object(
-            MODULE, "cgroup_is_populated", side_effect=(True, False)
+        identity = MODULE.CgroupIdentity(Path("/sys/fs/cgroup/ambit-c16b-docker-0123456789ab"), 9, 10)
+        with (
+            mock.patch.object(MODULE, "open_cgroup", return_value=31),
+            mock.patch.object(MODULE, "_write_at") as write,
+            mock.patch.object(MODULE.os, "close"),
+            mock.patch.object(MODULE, "cgroup_is_populated", side_effect=(True, False)),
         ):
             MODULE.kill_cgroup_and_wait(identity, timeout=1.0)
         write.assert_called_once_with(31, "cgroup.kill", b"1\n")
 
-        with mock.patch.object(MODULE, "open_cgroup", return_value=31), mock.patch.object(
-            MODULE, "_write_at"
-        ) as write, mock.patch.object(MODULE.os, "close"), mock.patch.object(
-            MODULE, "cgroup_events", side_effect=({"populated": "1", "frozen": "0"}, {"populated": "1", "frozen": "1"})
+        with (
+            mock.patch.object(MODULE, "open_cgroup", return_value=31),
+            mock.patch.object(MODULE, "_write_at") as write,
+            mock.patch.object(MODULE.os, "close"),
+            mock.patch.object(
+                MODULE,
+                "cgroup_events",
+                side_effect=(
+                    {"populated": "1", "frozen": "0"},
+                    {"populated": "1", "frozen": "1"},
+                ),
+            ),
         ):
             MODULE.freeze_cgroup_and_wait(identity, timeout=1.0)
         write.assert_called_once_with(31, "cgroup.freeze", b"1\n")
@@ -708,20 +729,14 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
             creation.index('"cgroup.subtree_control"'),
             creation.index("os.mkdir(CGROUP_EXECUTION_NAME"),
         )
-        cleanup = source[
-            source.index("def remove_empty_cgroup_children") : source.index("def create_runtime_root")
-        ]
+        cleanup = source[source.index("def remove_empty_cgroup_children") : source.index("def create_runtime_root")]
         self.assertLess(
             cleanup.index("remove_empty_cgroup_children(child)"),
             cleanup.index("os.rmdir(name"),
         )
         self.assertNotIn("systemctl", source)
-        installed_controllers = set(
-            Path("/sys/fs/cgroup/cgroup.controllers").read_text(encoding="ascii").split()
-        )
-        delegated_controllers = set(
-            Path("/sys/fs/cgroup/cgroup.subtree_control").read_text(encoding="ascii").split()
-        )
+        installed_controllers = set(Path("/sys/fs/cgroup/cgroup.controllers").read_text(encoding="ascii").split())
+        delegated_controllers = set(Path("/sys/fs/cgroup/cgroup.subtree_control").read_text(encoding="ascii").split())
         self.assertTrue({"cpu", "memory", "pids"} <= installed_controllers)
         self.assertTrue({"cpu", "memory", "pids"} <= delegated_controllers)
 
@@ -731,7 +746,8 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         self.assertIn("fcntl.flock(descriptor, flags)", lease)
         self.assertNotIn("os.unlink", lease)
         run = source[source.index("def run(self)") : source.index("def _validated_existing_authorities")]
-        self.assertLess(run.index("RuntimeLease.acquire"), run.index("self.setup()"))
+        self.assertLess(run.index("RuntimeLease.pending"), run.index("self.setup()"))
+        self.assertLess(run.index("self.lease.acquire()"), run.index("self.setup()"))
         for child_start in (
             "self.containerd_process = subprocess.Popen(",
             "self.docker_process = subprocess.Popen(",
@@ -739,9 +755,7 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
             region = source[source.index(child_start) : source.index(child_start) + 1400]
             self.assertIn("close_fds=True", region)
             self.assertNotIn("pass_fds", region)
-        storage_child = source[
-            source.index("def invoke_storage_helper(") : source.index("def docker_config(")
-        ]
+        storage_child = source[source.index("def invoke_storage_helper(") : source.index("def docker_config(")]
         self.assertIn("pass_fds = (runtime_lease_fd,)", storage_child)
         self.assertIn("or (not mutating and runtime_lease_fd is None)", storage_child)
         self.assertIn("str(runtime_lease_fd)", storage_child)
@@ -750,13 +764,12 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         process = mock.Mock(returncode=0)
         process.communicate.return_value = ("{}", "")
         normalized = {"projectionDigest": None}
-        with mock.patch.object(
-            MODULE.subprocess, "Popen", return_value=process
-        ) as popen, mock.patch.object(
-            MODULE, "wait_for_adopted_children"
-        ), mock.patch.object(
-            MODULE, "normalize_storage_operation", return_value=normalized
-        ), mock.patch.object(MODULE.os, "fstat"):
+        with (
+            mock.patch.object(MODULE.subprocess, "Popen", return_value=process) as popen,
+            mock.patch.object(MODULE, "wait_for_adopted_children"),
+            mock.patch.object(MODULE, "normalize_storage_operation", return_value=normalized),
+            mock.patch.object(MODULE.os, "fstat"),
+        ):
             observed = MODULE.invoke_storage_helper(
                 helper=Path("/run/helper.py"),
                 command="observe-private",
@@ -791,9 +804,7 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         supervisor.namespace = NAMESPACE
         supervisor.storage_helper_path = Path("/run/helper.py")
         supervisor.lease = mock.Mock(descriptor=77)
-        with mock.patch.object(
-            MODULE, "invoke_storage_helper", return_value=normalized
-        ) as invoke:
+        with mock.patch.object(MODULE, "invoke_storage_helper", return_value=normalized) as invoke:
             supervisor.invoke_storage("activate-private", "activated")
             supervisor.invoke_storage("observe-private", "observed")
             supervisor.invoke_storage("deactivate-private", "deactivated")
@@ -802,15 +813,23 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
             [77, None, 77],
         )
 
-    def test_root_manifests_are_durable_authority_and_user_files_are_projections(self) -> None:
+    def test_root_manifests_are_durable_authority_and_user_files_are_projections(
+        self,
+    ) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         writer = source[source.index("def write_root_manifest") : source.index("def _entry_exists")]
-        self.assertIn('_root_manifest_pending(name)', writer)
+        self.assertIn("_root_manifest_pending(name)", writer)
         self.assertLess(writer.index("os.fsync(descriptor)"), writer.index("os.replace("))
         self.assertLess(writer.index("os.replace("), writer.index("os.fsync(runtime_fd)"))
         setup = source[source.index("def setup") : source.index("def snapshot_storage_sources")]
-        self.assertLess(setup.index("self.snapshot_storage_sources()"), setup.index("self.write_control_receipt()"))
-        self.assertLess(setup.index("self.write_control_receipt()"), setup.index('"activate-private"'))
+        self.assertLess(
+            setup.index("self.snapshot_storage_sources()"),
+            setup.index("self.write_control_receipt()"),
+        )
+        self.assertLess(
+            setup.index("self.write_control_receipt()"),
+            setup.index('"activate-private"'),
+        )
         self.assertLess(
             setup.index("self.prepare_netns_baseline()"),
             setup.index("self.start_daemons()"),
@@ -893,11 +912,12 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
     def test_daemon_preexec_sets_parent_death_signal_and_closes_fork_race(self) -> None:
         libc = mock.Mock()
         libc.prctl.return_value = 0
-        with mock.patch.object(MODULE, "LIBC", libc), mock.patch.object(
-            MODULE.os, "getppid", return_value=123
-        ), mock.patch.object(MODULE.os, "_exit") as exit_process, mock.patch.object(
-            MODULE.signal, "signal"
-        ) as reset_signal:
+        with (
+            mock.patch.object(MODULE, "LIBC", libc),
+            mock.patch.object(MODULE.os, "getppid", return_value=123),
+            mock.patch.object(MODULE.os, "_exit") as exit_process,
+            mock.patch.object(MODULE.signal, "signal") as reset_signal,
+        ):
             MODULE.parent_death_preexec(123)()
         libc.prctl.assert_called_once_with(1, MODULE.signal.SIGTERM, 0, 0, 0)
         self.assertEqual(
@@ -912,10 +932,11 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         exit_process.assert_not_called()
 
         libc.reset_mock()
-        with mock.patch.object(MODULE, "LIBC", libc), mock.patch.object(
-            MODULE.os, "getppid", return_value=124
-        ), mock.patch.object(MODULE.os, "_exit") as exit_process, mock.patch.object(
-            MODULE.signal, "signal"
+        with (
+            mock.patch.object(MODULE, "LIBC", libc),
+            mock.patch.object(MODULE.os, "getppid", return_value=124),
+            mock.patch.object(MODULE.os, "_exit") as exit_process,
+            mock.patch.object(MODULE.signal, "signal"),
         ):
             MODULE.parent_death_preexec(123)()
         exit_process.assert_called_once_with(71)
@@ -951,21 +972,18 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
 
     def test_private_mountinfo_accepts_only_nonpropagating_records(self) -> None:
         private = (
-            "36 25 0:31 / / rw,relatime - ext4 /dev/root rw\n"
-            "37 36 0:32 / /proc rw,nosuid,nodev,noexec - proc proc rw\n"
+            "36 25 0:31 / / rw,relatime - ext4 /dev/root rw\n37 36 0:32 / /proc rw,nosuid,nodev,noexec - proc proc rw\n"
         )
         self.assertTrue(MODULE.mountinfo_is_private(private))
         for optional in ("shared:1", "master:2", "propagate_from:3"):
             with self.subTest(optional=optional):
                 with self.assertRaises(MODULE.SupervisorError):
-                    MODULE.mountinfo_is_private(
-                        f"36 25 0:31 / / rw,relatime {optional} - ext4 /dev/root rw\n"
-                    )
+                    MODULE.mountinfo_is_private(f"36 25 0:31 / / rw,relatime {optional} - ext4 /dev/root rw\n")
 
-    def test_address_pool_proof_is_dual_stack_and_fails_on_ambiguous_routes(self) -> None:
-        networks = MODULE.read_route_networks(
-            json.dumps([{"dst": "2001:db8::/32"}, {"dst": "10.0.0.0/8"}])
-        )
+    def test_address_pool_proof_is_dual_stack_and_fails_on_ambiguous_routes(
+        self,
+    ) -> None:
+        networks = MODULE.read_route_networks(json.dumps([{"dst": "2001:db8::/32"}, {"dst": "10.0.0.0/8"}]))
         self.assertEqual(tuple(value.version for value in networks), (6, 4))
         with self.assertRaises(MODULE.SupervisorError):
             MODULE.read_route_networks(json.dumps([{"dst": "not-a-network"}]))
@@ -1061,25 +1079,15 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
             "old schema": lambda value: value.update(schema="v1"),
             "wrong outcome": lambda value: value.update(outcome="passed"),
             "wrong target": lambda value: value.update(mountTarget="/tmp/runner-docker"),
-            "wrong namespace": lambda value: value.update(
-                mountNamespace="4:20"
-            ),
+            "wrong namespace": lambda value: value.update(mountNamespace="4:20"),
             "wrong digest": lambda value: value.update(authorityReceiptSha256="A" * 64),
             "foreign receipt field": lambda value: value["receipt"].update(extra=True),
             "wrong state": lambda value: value["receipt"].update(stateRoot="/home/other/state"),
-            "wrong root mode": lambda value: value["receipt"]["authorityRoot"].update(
-                mode="0711"
-            ),
-            "wrong target owner": lambda value: value["receipt"]["mountTarget"].update(
-                ownerUid=1000
-            ),
+            "wrong root mode": lambda value: value["receipt"]["authorityRoot"].update(mode="0711"),
+            "wrong target owner": lambda value: value["receipt"]["mountTarget"].update(ownerUid=1000),
             "wrong image": lambda value: value["receipt"]["image"].update(inode=0),
-            "wrong loop": lambda value: value["receipt"]["loop"].update(
-                device="/dev/sda"
-            ),
-            "wrong filesystem": lambda value: value["receipt"]["filesystem"].update(
-                type="ext4"
-            ),
+            "wrong loop": lambda value: value["receipt"]["loop"].update(device="/dev/sda"),
+            "wrong filesystem": lambda value: value["receipt"]["filesystem"].update(type="ext4"),
         }
         for name, mutate in mutations.items():
             with self.subTest(name=name):
@@ -1106,6 +1114,7 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         ):
             with self.assertRaises(MODULE.SupervisorError):
                 MODULE.task_netns_mounts(runtime_root, candidate)
+
     def test_runtime_cleanup_detects_bind_sources_mounted_elsewhere(self) -> None:
         runtime = Path("/run/ambit-c16b-docker-0123456789ab")
         root_backed = (
@@ -1147,65 +1156,72 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
             ("/outside/task-1",),
         )
         with self.assertRaisesRegex(MODULE.SupervisorError, "admitted opaque"):
-            MODULE.mount_records(
-                "20 1 8:1 net:[4026533321] /outside rw - ext4 /dev/root rw\n"
-            )
+            MODULE.mount_records("20 1 8:1 net:[4026533321] /outside rw - ext4 /dev/root rw\n")
 
     def test_runtime_removal_rename_makes_partial_cleanup_replayable(self) -> None:
-        runtime = MODULE.RuntimeIdentity(
-            MODULE.runtime_root_for(STATE_ROOT), 21, 22, 0, 0, 0o700
-        )
+        runtime = MODULE.RuntimeIdentity(MODULE.runtime_root_for(STATE_ROOT), 21, 22, 0, 0, 0o700)
         events: list[str] = []
-        with mock.patch.object(
-            MODULE, "verify_runtime_root", return_value=31
-        ), mock.patch.object(MODULE, "verify_runtime_entries"), mock.patch.object(
-            MODULE, "stable_global_mount_targets", return_value=()
-        ), mock.patch.object(
-            MODULE, "path_exists_nofollow", return_value=False
-        ), mock.patch.object(MODULE.os, "open", return_value=32), mock.patch.object(
-            MODULE.os,
-            "stat",
-            return_value=mock.Mock(st_dev=runtime.device, st_ino=runtime.inode),
-        ), mock.patch.object(
-            MODULE.os, "rename", side_effect=lambda *args, **kwargs: events.append("rename")
-        ), mock.patch.object(
-            MODULE.os, "fsync", side_effect=lambda *args: events.append("parent-fsync")
-        ), mock.patch.object(MODULE.os, "close"), mock.patch.object(
-            MODULE,
-            "reduce_runtime_removal_root",
-            side_effect=lambda *args: events.append("reduce") or True,
+        with (
+            mock.patch.object(MODULE, "verify_runtime_root", return_value=31),
+            mock.patch.object(MODULE, "verify_runtime_entries"),
+            mock.patch.object(MODULE, "stable_global_mount_targets", return_value=()),
+            mock.patch.object(MODULE, "path_exists_nofollow", return_value=False),
+            mock.patch.object(MODULE.os, "open", return_value=32),
+            mock.patch.object(
+                MODULE.os,
+                "stat",
+                return_value=mock.Mock(st_dev=runtime.device, st_ino=runtime.inode),
+            ),
+            mock.patch.object(
+                MODULE.os,
+                "rename",
+                side_effect=lambda *args, **kwargs: events.append("rename"),
+            ),
+            mock.patch.object(
+                MODULE.os,
+                "fsync",
+                side_effect=lambda *args: events.append("parent-fsync"),
+            ),
+            mock.patch.object(MODULE.os, "close"),
+            mock.patch.object(
+                MODULE,
+                "reduce_runtime_removal_root",
+                side_effect=lambda *args: events.append("reduce") or True,
+            ),
         ):
             MODULE.remove_runtime_root(runtime, STATE_ROOT)
         self.assertLess(events.index("rename"), events.index("parent-fsync"))
         self.assertLess(events.index("parent-fsync"), events.index("reduce"))
 
-        removal = MODULE.RuntimeIdentity(
-            MODULE.runtime_removal_root_for(STATE_ROOT), 21, 22, 0, 0, 0o700
-        )
+        removal = MODULE.RuntimeIdentity(MODULE.runtime_removal_root_for(STATE_ROOT), 21, 22, 0, 0, 0o700)
         reduced: list[str] = []
-        with mock.patch.object(
-            MODULE, "existing_runtime_identity", return_value=removal
-        ), mock.patch.object(
-            MODULE, "verify_runtime_root", return_value=31
-        ), mock.patch.object(MODULE, "verify_runtime_entries"), mock.patch.object(
-            MODULE, "stable_global_mount_targets", return_value=()
-        ), mock.patch.object(
-            MODULE.os, "listdir", side_effect=(("runtime-stop.json",), ())
-        ), mock.patch.object(
-            MODULE,
-            "_remove_tree_entry",
-            side_effect=lambda *args: reduced.append(args[1]),
-        ), mock.patch.object(MODULE.os, "open", return_value=32), mock.patch.object(
-            MODULE.os,
-            "stat",
-            return_value=mock.Mock(st_dev=removal.device, st_ino=removal.inode),
-        ), mock.patch.object(MODULE.os, "rmdir"), mock.patch.object(
-            MODULE.os, "fsync"
-        ), mock.patch.object(MODULE.os, "close"):
+        with (
+            mock.patch.object(MODULE, "existing_runtime_identity", return_value=removal),
+            mock.patch.object(MODULE, "verify_runtime_root", return_value=31),
+            mock.patch.object(MODULE, "verify_runtime_entries"),
+            mock.patch.object(MODULE, "stable_global_mount_targets", return_value=()),
+            mock.patch.object(MODULE.os, "listdir", side_effect=(("runtime-stop.json",), ())),
+            mock.patch.object(
+                MODULE,
+                "_remove_tree_entry",
+                side_effect=lambda *args: reduced.append(args[1]),
+            ),
+            mock.patch.object(MODULE.os, "open", return_value=32),
+            mock.patch.object(
+                MODULE.os,
+                "stat",
+                return_value=mock.Mock(st_dev=removal.device, st_ino=removal.inode),
+            ),
+            mock.patch.object(MODULE.os, "rmdir"),
+            mock.patch.object(MODULE.os, "fsync"),
+            mock.patch.object(MODULE.os, "close"),
+        ):
             self.assertTrue(MODULE.reduce_runtime_removal_root(STATE_ROOT))
         self.assertEqual(reduced, ["runtime-stop.json"])
 
-    def test_reduced_runtime_removal_settles_residual_cgroup_before_return(self) -> None:
+    def test_reduced_runtime_removal_settles_residual_cgroup_before_return(
+        self,
+    ) -> None:
         supervisor = MODULE.RuntimeSupervisor(STATE_ROOT, 1000, 1000)
         supervisor.state = mock.Mock()
         supervisor.namespace = NAMESPACE
@@ -1223,34 +1239,36 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
             self.assertEqual((identity.device, identity.inode), (41, 42))
             events.append("cgroup-removed")
 
-        with mock.patch.object(
-            MODULE, "require_no_other_task_runtime"
-        ), mock.patch.object(
-            MODULE,
-            "path_exists_nofollow",
-            side_effect=lambda path: path == MODULE.runtime_removal_root_for(STATE_ROOT),
-        ), mock.patch.object(
-            MODULE,
-            "reduce_runtime_removal_root",
-            side_effect=lambda *args: events.append("runtime-removal-reduced") or True,
-        ), mock.patch.object(
-            MODULE,
-            "existing_runtime_identity",
-            side_effect=FileNotFoundError,
-        ), mock.patch.object(
-            MODULE.os,
-            "stat",
-            side_effect=(FileNotFoundError, mock.Mock(st_dev=41, st_ino=42)),
-        ), mock.patch.object(
-            MODULE, "cgroup_is_populated", side_effect=cgroup_is_populated
-        ), mock.patch.object(
-            MODULE, "remove_empty_cgroup", side_effect=remove_cgroup
-        ), mock.patch.object(
-            MODULE, "writable_state_authority", side_effect=lambda value: value
-        ), mock.patch.object(
-            MODULE,
-            "remove_user_runtime_projections",
-            side_effect=lambda *args: events.append("projections-removed"),
+        with (
+            mock.patch.object(MODULE, "require_no_other_task_runtime"),
+            mock.patch.object(
+                MODULE,
+                "path_exists_nofollow",
+                side_effect=lambda path: path == MODULE.runtime_removal_root_for(STATE_ROOT),
+            ),
+            mock.patch.object(
+                MODULE,
+                "reduce_runtime_removal_root",
+                side_effect=lambda *args: events.append("runtime-removal-reduced") or True,
+            ),
+            mock.patch.object(
+                MODULE,
+                "existing_runtime_identity",
+                side_effect=FileNotFoundError,
+            ),
+            mock.patch.object(
+                MODULE.os,
+                "stat",
+                side_effect=(FileNotFoundError, mock.Mock(st_dev=41, st_ino=42)),
+            ),
+            mock.patch.object(MODULE, "cgroup_is_populated", side_effect=cgroup_is_populated),
+            mock.patch.object(MODULE, "remove_empty_cgroup", side_effect=remove_cgroup),
+            mock.patch.object(MODULE, "writable_state_authority", side_effect=lambda value: value),
+            mock.patch.object(
+                MODULE,
+                "remove_user_runtime_projections",
+                side_effect=lambda *args: events.append("projections-removed"),
+            ),
         ):
             supervisor.recover_existing_runtime()
 
@@ -1266,9 +1284,7 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
 
     def test_task_netns_cleanup_carries_source_anchors_across_unmount(self) -> None:
         supervisor = MODULE.RuntimeSupervisor(STATE_ROOT, 1000, 1000)
-        supervisor.runtime_identity = MODULE.RuntimeIdentity(
-            MODULE.runtime_root_for(STATE_ROOT), 21, 22, 0, 0, 0o700
-        )
+        supervisor.runtime_identity = MODULE.RuntimeIdentity(MODULE.runtime_root_for(STATE_ROOT), 21, 22, 0, 0, 0o700)
         supervisor.namespace = NAMESPACE
         supervisor.root_control_digest = "a" * 64
         supervisor.root_stopping_digest = "b" * 64
@@ -1283,24 +1299,25 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         expected = (("4:19", str(target)),)
         anchors = (("0:42", Path("net:[4026533321]")),)
         plan = ((target, anchors, (), expected),)
-        with mock.patch.object(
-            MODULE,
-            "ensure_task_netns_detach_manifest",
-            return_value=("c" * 64, plan),
-        ), mock.patch.object(
-            MODULE.Path,
-            "read_text",
-            side_effect=(mounted, "20 1 8:1 / / rw - ext4 /dev/root rw\n"),
-        ), mock.patch.object(
-            MODULE,
-            "stable_global_mount_targets",
-            side_effect=(expected, (), ()),
-        ) as stable, mock.patch.object(
-            MODULE, "mount_namespace", return_value=NAMESPACE
-        ), mock.patch.object(
-            MODULE.subprocess, "run"
-        ) as run, mock.patch.object(
-            MODULE, "require_exact_children"
+        with (
+            mock.patch.object(
+                MODULE,
+                "ensure_task_netns_detach_manifest",
+                return_value=("c" * 64, plan),
+            ),
+            mock.patch.object(
+                MODULE.Path,
+                "read_text",
+                side_effect=(mounted, "20 1 8:1 / / rw - ext4 /dev/root rw\n"),
+            ),
+            mock.patch.object(
+                MODULE,
+                "stable_global_mount_targets",
+                side_effect=(expected, (), ()),
+            ) as stable,
+            mock.patch.object(MODULE, "mount_namespace", return_value=NAMESPACE),
+            mock.patch.object(MODULE.subprocess, "run") as run,
+            mock.patch.object(MODULE, "require_exact_children"),
         ):
             supervisor.cleanup_task_netns()
         run.assert_called_once()
@@ -1311,9 +1328,7 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         self.assertEqual(stable.call_args_list[2].kwargs["source_anchors"], first_anchors)
 
     def test_task_netns_detach_manifest_replays_after_source_unmount(self) -> None:
-        runtime = MODULE.RuntimeIdentity(
-            MODULE.runtime_root_for(STATE_ROOT), 21, 22, 0, 0, 0o700
-        )
+        runtime = MODULE.RuntimeIdentity(MODULE.runtime_root_for(STATE_ROOT), 21, 22, 0, 0, 0o700)
         target = runtime.path / "docker-exec/netns/task-1"
         anchor = ("0:42", Path("net:[4026533321]"))
         ambient_targets = ("/run/docker/netns/default",)
@@ -1337,9 +1352,7 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
                         "device": "0:42",
                         "root": "net:[4026533321]",
                     },
-                    "ownedOccurrences": [
-                        {"mountNamespace": "4:19", "target": str(target)}
-                    ],
+                    "ownedOccurrences": [{"mountNamespace": "4:19", "target": str(target)}],
                 }
             ],
         }
@@ -1363,13 +1376,15 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
             ("7:7", "/run/docker/netns/default"),
             ("8:88", "/run/docker/netns/default"),
         )
-        with mock.patch.object(
-            MODULE.Path, "read_text", side_effect=(source_absent, source_absent)
-        ), mock.patch.object(
-            MODULE,
-            "stable_global_mount_targets",
-            side_effect=(ambient_current, ambient_current),
-        ) as stable, mock.patch.object(MODULE.subprocess, "run") as run:
+        with (
+            mock.patch.object(MODULE.Path, "read_text", side_effect=(source_absent, source_absent)),
+            mock.patch.object(
+                MODULE,
+                "stable_global_mount_targets",
+                side_effect=(ambient_current, ambient_current),
+            ) as stable,
+            mock.patch.object(MODULE.subprocess, "run") as run,
+        ):
             MODULE.settle_task_netns_detach_manifest(
                 runtime=runtime,
                 recorded_namespace=NAMESPACE,
@@ -1380,9 +1395,7 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         self.assertEqual(stable.call_count, 2)
 
     def test_task_netns_detach_manifest_is_final_before_cleanup(self) -> None:
-        runtime = MODULE.RuntimeIdentity(
-            MODULE.runtime_root_for(STATE_ROOT), 21, 22, 0, 0, 0o700
-        )
+        runtime = MODULE.RuntimeIdentity(MODULE.runtime_root_for(STATE_ROOT), 21, 22, 0, 0, 0o700)
         target = runtime.path / "docker-exec/netns/task-1"
         mounted = (
             "20 1 8:1 / / rw - ext4 /dev/root rw\n"
@@ -1393,17 +1406,14 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         ambient_occurrences = (("7:7", "/run/docker/netns/default"),)
         ambient_targets = ("/run/docker/netns/default",)
         ambient_sources = ((anchor, ambient_targets),)
-        with mock.patch.object(
-            MODULE, "current_boot_id", return_value=BOOT_ID
-        ), mock.patch.object(
-            MODULE, "read_mountinfo_for_namespace", return_value=mounted
-        ), mock.patch.object(
-            MODULE, "runtime_netns_entry_roster", return_value=("task-1",)
-        ), mock.patch.object(
-            MODULE,
-            "stable_global_mount_targets",
-            return_value=tuple(
-                sorted((*ambient_occurrences, ("4:19", str(target))))
+        with (
+            mock.patch.object(MODULE, "current_boot_id", return_value=BOOT_ID),
+            mock.patch.object(MODULE, "read_mountinfo_for_namespace", return_value=mounted),
+            mock.patch.object(MODULE, "runtime_netns_entry_roster", return_value=("task-1",)),
+            mock.patch.object(
+                MODULE,
+                "stable_global_mount_targets",
+                return_value=tuple(sorted((*ambient_occurrences, ("4:19", str(target))))),
             ),
         ):
             manifest = MODULE.build_task_netns_detach_manifest(
@@ -1430,9 +1440,7 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
                         "device": "0:42",
                         "root": "net:[4026533321]",
                     },
-                    "ownedOccurrences": [
-                        {"mountNamespace": "4:19", "target": str(target)}
-                    ],
+                    "ownedOccurrences": [{"mountNamespace": "4:19", "target": str(target)}],
                 }
             ],
         )
@@ -1445,15 +1453,13 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
                 )
             )
         )
-        with mock.patch.object(
-            MODULE, "current_boot_id", return_value=BOOT_ID
-        ), mock.patch.object(
-            MODULE, "read_mountinfo_for_namespace", return_value=mounted
-        ), mock.patch.object(
-            MODULE, "runtime_netns_entry_roster", return_value=("task-1",)
-        ), mock.patch.object(
-            MODULE, "stable_global_mount_targets", return_value=foreign
-        ), self.assertRaisesRegex(MODULE.SupervisorError, "neither ambient nor"):
+        with (
+            mock.patch.object(MODULE, "current_boot_id", return_value=BOOT_ID),
+            mock.patch.object(MODULE, "read_mountinfo_for_namespace", return_value=mounted),
+            mock.patch.object(MODULE, "runtime_netns_entry_roster", return_value=("task-1",)),
+            mock.patch.object(MODULE, "stable_global_mount_targets", return_value=foreign),
+            self.assertRaisesRegex(MODULE.SupervisorError, "neither ambient nor"),
+        ):
             MODULE.build_task_netns_detach_manifest(
                 runtime=runtime,
                 state_root=STATE_ROOT,
@@ -1464,15 +1470,16 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
                 recorded_namespace=NAMESPACE,
             )
         digest = MODULE.canonical_document_digest(manifest)
-        with mock.patch.object(
-            MODULE,
-            "read_root_manifest",
-            side_effect=(None, manifest),
-        ), mock.patch.object(
-            MODULE, "build_task_netns_detach_manifest", return_value=manifest
-        ), mock.patch.object(
-            MODULE, "write_root_manifest", return_value=digest
-        ) as write, mock.patch.object(MODULE, "current_boot_id", return_value=BOOT_ID):
+        with (
+            mock.patch.object(
+                MODULE,
+                "read_root_manifest",
+                side_effect=(None, manifest),
+            ),
+            mock.patch.object(MODULE, "build_task_netns_detach_manifest", return_value=manifest),
+            mock.patch.object(MODULE, "write_root_manifest", return_value=digest) as write,
+            mock.patch.object(MODULE, "current_boot_id", return_value=BOOT_ID),
+        ):
             observed_digest, plan = MODULE.ensure_task_netns_detach_manifest(
                 runtime=runtime,
                 state_root=STATE_ROOT,
@@ -1487,21 +1494,18 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
         write.assert_called_once_with(runtime, MODULE.ROOT_NETNS_DETACH_NAME, manifest)
 
     def test_ambient_netns_baseline_preserves_host_default_occurrence(self) -> None:
-        runtime = MODULE.RuntimeIdentity(
-            MODULE.runtime_root_for(STATE_ROOT), 21, 22, 0, 0, 0o700
-        )
+        runtime = MODULE.RuntimeIdentity(MODULE.runtime_root_for(STATE_ROOT), 21, 22, 0, 0, 0o700)
         ambient_occurrences = (("7:7", "/run/docker/netns/default"),)
         namespace_stat = mock.Mock(
             st_dev=os.makedev(0, 4),
             st_ino=4026531833,
         )
-        with mock.patch.object(
-            MODULE.os, "readlink", return_value="net:[4026531833]"
-        ), mock.patch.object(
-            MODULE.os, "stat", return_value=namespace_stat
-        ), mock.patch.object(
-            MODULE, "stable_global_mount_targets", return_value=ambient_occurrences
-        ), mock.patch.object(MODULE, "current_boot_id", return_value=BOOT_ID):
+        with (
+            mock.patch.object(MODULE.os, "readlink", return_value="net:[4026531833]"),
+            mock.patch.object(MODULE.os, "stat", return_value=namespace_stat),
+            mock.patch.object(MODULE, "stable_global_mount_targets", return_value=ambient_occurrences),
+            mock.patch.object(MODULE, "current_boot_id", return_value=BOOT_ID),
+        ):
             manifest = MODULE.build_netns_baseline_manifest(
                 runtime=runtime,
                 state_root=STATE_ROOT,
@@ -1522,39 +1526,30 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
 
     def test_same_namespace_representative_visibility_must_agree(self) -> None:
         root = Path("/run/ambit-c16b-docker-0123456789ab")
-        mountinfo = (
-            "20 1 8:1 / / rw - ext4 /dev/root rw\n"
-            "21 20 0:31 / /run rw - tmpfs tmpfs rw\n"
-        )
+        mountinfo = "20 1 8:1 / / rw - ext4 /dev/root rw\n21 20 0:31 / /run rw - tmpfs tmpfs rw\n"
         namespace_stat = mock.Mock(st_dev=4, st_ino=19)
-        with mock.patch.object(
-            MODULE.os, "stat", return_value=namespace_stat
-        ), mock.patch.object(
-            MODULE.Path, "read_text", return_value=mountinfo
-        ), mock.patch.object(
-            MODULE.os, "listdir", return_value=["1", "2"]
-        ), mock.patch.object(
-            MODULE,
-            "_mount_targets_for_namespace",
-            side_effect=((), ("/hidden-bind",)),
-        ), self.assertRaisesRegex(
-            MODULE.SupervisorError,
-            "visibility differs across representatives",
+        with (
+            mock.patch.object(MODULE.os, "stat", return_value=namespace_stat),
+            mock.patch.object(MODULE.Path, "read_text", return_value=mountinfo),
+            mock.patch.object(MODULE.os, "listdir", return_value=["1", "2"]),
+            mock.patch.object(
+                MODULE,
+                "_mount_targets_for_namespace",
+                side_effect=((), ("/hidden-bind",)),
+            ),
+            self.assertRaisesRegex(
+                MODULE.SupervisorError,
+                "visibility differs across representatives",
+            ),
         ):
             MODULE._global_mount_roster_once(root, (("0:31", Path(f"/{root.name}")),))
 
     def test_every_stop_route_scans_foreign_authorities_before_signal(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         bound = source[
-            source.index("def ensure_runtime_stopped(") : source.index(
-                "def ensure_orphaned_runtime_stopped("
-            )
+            source.index("def ensure_runtime_stopped(") : source.index("def ensure_orphaned_runtime_stopped(")
         ]
-        orphaned = source[
-            source.index("def ensure_orphaned_runtime_stopped(") : source.index(
-                "def parser()"
-            )
-        ]
+        orphaned = source[source.index("def ensure_orphaned_runtime_stopped(") : source.index("def parser()")]
         for name, body in (("bound", bound), ("orphaned", orphaned)):
             with self.subTest(route=name):
                 self.assertLess(
@@ -1565,9 +1560,7 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
     def test_pinned_loader_ignores_hostile_cwd_and_pythonpath(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
-            (directory / "hashlib.py").write_text(
-                "raise RuntimeError('hostile module imported')\n", encoding="utf-8"
-            )
+            (directory / "hashlib.py").write_text("raise RuntimeError('hostile module imported')\n", encoding="utf-8")
             source = directory / "payload.py"
             source.write_text(
                 "import hashlib; print(hashlib.sha256(b'proof').hexdigest())\n",
@@ -1625,12 +1618,8 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
         value.storage = {"projectionDigest": DIGEST}
         value.storage_activation_attempted = True
         value.supervisor_identity = {"pid": 44}
-        value.runtime_identity = MODULE.RuntimeIdentity(
-            Path("/run/ambit-c16b-docker-0123456789ab"), 1, 2, 0, 0, 0o700
-        )
-        value.cgroup_identity = MODULE.CgroupIdentity(
-            Path("/sys/fs/cgroup/ambit-c16b-docker-0123456789ab"), 3, 4
-        )
+        value.runtime_identity = MODULE.RuntimeIdentity(Path("/run/ambit-c16b-docker-0123456789ab"), 1, 2, 0, 0, 0o700)
+        value.cgroup_identity = MODULE.CgroupIdentity(Path("/sys/fs/cgroup/ambit-c16b-docker-0123456789ab"), 3, 4)
         value.socket_root_identity = MODULE.SocketPathIdentity(
             Path("/run/ambit-c16b-docker-api-0123456789ab"),
             1,
@@ -1653,17 +1642,15 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
         value.ambient_netns_sources = ()
         value.root_netns_detach_digest = "f" * 64
         value.task_netns_detach_manifest = ()
-        value.write_shutdown_intent = lambda reason: setattr(
-            value, "root_stopping_digest", "e" * 64
-        )
+        value.write_shutdown_intent = lambda reason: setattr(value, "root_stopping_digest", "e" * 64)
         return value
 
-    def test_shutdown_order_keeps_storage_until_daemons_and_netns_are_gone(self) -> None:
+    def test_shutdown_order_keeps_storage_until_daemons_and_netns_are_gone(
+        self,
+    ) -> None:
         supervisor = self.supervisor()
         events: list[str] = []
-        supervisor.write_control_receipt = lambda outcome="active": events.append(
-            f"control-{outcome}"
-        )
+        supervisor.write_control_receipt = lambda outcome="active": events.append(f"control-{outcome}")
         supervisor.write_shutdown_intent = lambda reason: (
             events.append("root-stopping"),
             setattr(supervisor, "root_stopping_digest", "e" * 64),
@@ -1686,7 +1673,11 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
             mock.patch.object(MODULE, "remove_socket_root", lambda *args: events.append("socket")),
             mock.patch.object(MODULE, "read_root_manifest", return_value=None),
             mock.patch.object(MODULE, "write_root_manifest", return_value="c" * 64),
-            mock.patch.object(MODULE, "current_boot_id", return_value="12345678-1234-1234-1234-123456789abc"),
+            mock.patch.object(
+                MODULE,
+                "current_boot_id",
+                return_value="12345678-1234-1234-1234-123456789abc",
+            ),
         ):
             self.assertTrue(supervisor.try_shutdown("operator_request"))
         self.assertEqual(
@@ -1710,22 +1701,26 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
             ],
         )
 
-    def test_failed_deactivation_keeps_control_receipts_and_supervisor_retryable(self) -> None:
+    def test_failed_deactivation_keeps_control_receipts_and_supervisor_retryable(
+        self,
+    ) -> None:
         supervisor = self.supervisor()
         supervisor.terminate_daemon = lambda name, process: None
         supervisor.cleanup_task_netns = lambda: None
         supervisor.write_control_receipt = lambda outcome="active": None
 
-        def fail_deactivation(
-            command: str, outcome: str, **kwargs: object
-        ) -> dict[str, object]:
+        def fail_deactivation(command: str, outcome: str, **kwargs: object) -> dict[str, object]:
             raise MODULE.SupervisorError("mount still busy")
 
         supervisor.invoke_storage = fail_deactivation
         with (
             mock.patch.object(MODULE, "wait_for_adopted_children"),
             mock.patch.object(MODULE, "remove_socket_root"),
-            mock.patch.object(MODULE, "current_boot_id", return_value="12345678-1234-1234-1234-123456789abc"),
+            mock.patch.object(
+                MODULE,
+                "current_boot_id",
+                return_value="12345678-1234-1234-1234-123456789abc",
+            ),
         ):
             self.assertFalse(supervisor.try_shutdown("operator_request"))
         self.assertIn(MODULE.START_RECEIPT_NAME, supervisor.state.entries)
@@ -1735,7 +1730,9 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
             supervisor.state.events,
         )
 
-    def test_adopted_mutator_guardian_is_waited_and_reaped_without_a_signal(self) -> None:
+    def test_adopted_mutator_guardian_is_waited_and_reaped_without_a_signal(
+        self,
+    ) -> None:
         with (
             mock.patch.object(
                 MODULE,
@@ -1751,7 +1748,9 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
         sleep.assert_not_called()
         kill.assert_not_called()
 
-    def test_retry_after_later_cleanup_failure_does_not_repeat_deactivation(self) -> None:
+    def test_retry_after_later_cleanup_failure_does_not_repeat_deactivation(
+        self,
+    ) -> None:
         supervisor = self.supervisor()
         supervisor.terminate_daemon = lambda name, process: None
         supervisor.cleanup_task_netns = lambda: None
@@ -1785,19 +1784,17 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
         self.assertEqual(storage_calls, ["deactivate-private"])
         self.assertEqual(manifest_calls, 2)
 
-    def test_pre_activation_failure_cleans_runtime_without_inventing_storage(self) -> None:
+    def test_pre_activation_failure_cleans_runtime_without_inventing_storage(
+        self,
+    ) -> None:
         supervisor = self.supervisor()
         supervisor.storage = None
         supervisor.storage_activation_attempted = False
         events: list[str] = []
-        supervisor.write_control_receipt = lambda outcome="active": events.append(
-            f"control-{outcome}"
-        )
+        supervisor.write_control_receipt = lambda outcome="active": events.append(f"control-{outcome}")
         supervisor.terminate_daemon = lambda name, process: events.append(name)
         supervisor.cleanup_task_netns = lambda: events.append("netns")
-        supervisor.invoke_storage = lambda *args, **kwargs: self.fail(
-            "pre-activation cleanup invoked storage"
-        )
+        supervisor.invoke_storage = lambda *args, **kwargs: self.fail("pre-activation cleanup invoked storage")
         with (
             mock.patch.object(MODULE, "wait_for_adopted_children"),
             mock.patch.object(MODULE, "remove_socket_root", lambda *args: events.append("socket")),
@@ -1821,7 +1818,9 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
         ]
         self.assertEqual(stop_values, [(MODULE.STOP_RECEIPT_NAME, "quiesced")])
 
-    def test_dead_supervisor_recovery_kills_bound_cgroup_before_storage_reduction(self) -> None:
+    def test_dead_supervisor_recovery_kills_bound_cgroup_before_storage_reduction(
+        self,
+    ) -> None:
         supervisor = self.supervisor()
         control, runtime, socket_root, cgroup = control_authority()
         supervisor.runtime_identity = None
@@ -1846,9 +1845,7 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
             "namespace": NAMESPACE,
             "supervisor": control["supervisorProcessIdentity"],
         }
-        supervisor.invoke_storage = lambda *args, **kwargs: (
-            events.append("storage") or {"projectionDigest": None}
-        )
+        supervisor.invoke_storage = lambda *args, **kwargs: events.append("storage") or {"projectionDigest": None}
         post_freeze_socket = MODULE.SocketPathIdentity(
             socket_root.path / MODULE.SOCKET_NAME,
             socket_root.device,
@@ -1917,8 +1914,7 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
             mock.patch.object(
                 MODULE,
                 "ensure_netns_baseline_manifest",
-                side_effect=lambda **kwargs: events.append("netns-baseline")
-                or ("d" * 64, ()),
+                side_effect=lambda **kwargs: events.append("netns-baseline") or ("d" * 64, ()),
             ),
             mock.patch.object(
                 MODULE,
@@ -1926,7 +1922,11 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
                 side_effect=lambda **kwargs: events.append("netns-plan") or ("f" * 64, ()),
             ),
             mock.patch.object(MODULE, "cgroup_is_populated", return_value=True),
-            mock.patch.object(MODULE, "kill_cgroup_and_wait", side_effect=lambda *args, **kwargs: events.append("cgroup-kill")),
+            mock.patch.object(
+                MODULE,
+                "kill_cgroup_and_wait",
+                side_effect=lambda *args, **kwargs: events.append("cgroup-kill"),
+            ),
             mock.patch.object(
                 MODULE,
                 "settle_task_netns_detach_manifest",
@@ -1935,12 +1935,22 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
             mock.patch.object(MODULE.os, "stat", return_value=mock.Mock()),
             mock.patch.object(MODULE, "remove_socket_root", side_effect=remove_socket),
             mock.patch.object(MODULE, "read_pinned_source", return_value=b"source"),
-            mock.patch.object(MODULE, "remove_runtime_root", side_effect=lambda *args: events.append("runtime-remove")),
-            mock.patch.object(MODULE, "remove_empty_cgroup", side_effect=lambda *args: events.append("cgroup-remove")),
             mock.patch.object(
-                MODULE, "writable_state_authority", side_effect=lambda value: value
+                MODULE,
+                "remove_runtime_root",
+                side_effect=lambda *args: events.append("runtime-remove"),
             ),
-            mock.patch.object(MODULE, "remove_user_runtime_projections", side_effect=lambda *args: events.append("projection-remove")),
+            mock.patch.object(
+                MODULE,
+                "remove_empty_cgroup",
+                side_effect=lambda *args: events.append("cgroup-remove"),
+            ),
+            mock.patch.object(MODULE, "writable_state_authority", side_effect=lambda value: value),
+            mock.patch.object(
+                MODULE,
+                "remove_user_runtime_projections",
+                side_effect=lambda *args: events.append("projection-remove"),
+            ),
         )
         with contextlib.ExitStack() as stack:
             for patcher in patchers:
@@ -1967,7 +1977,9 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
             ],
         )
 
-    def test_dead_recovery_intent_replays_after_socket_removal_response_loss(self) -> None:
+    def test_dead_recovery_intent_replays_after_socket_removal_response_loss(
+        self,
+    ) -> None:
         supervisor = self.supervisor()
         control, runtime, socket_root, cgroup = control_authority()
         supervisor.runtime_identity = None
@@ -1980,9 +1992,7 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
 
         process_authority = {
             "ProcessIdentityError": ProcessGone,
-            "verify_recorded_process": lambda *args, **kwargs: (_ for _ in ()).throw(
-                ProcessGone("gone")
-            ),
+            "verify_recorded_process": lambda *args, **kwargs: (_ for _ in ()).throw(ProcessGone("gone")),
         }
         validated = {
             "control": control,
@@ -2063,18 +2073,14 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
             mock.patch.object(MODULE, "read_pinned_source", return_value=b"source"),
             mock.patch.object(MODULE, "remove_runtime_root"),
             mock.patch.object(MODULE, "remove_empty_cgroup"),
-            mock.patch.object(
-                MODULE, "writable_state_authority", side_effect=lambda value: value
-            ),
+            mock.patch.object(MODULE, "writable_state_authority", side_effect=lambda value: value),
             mock.patch.object(MODULE, "remove_user_runtime_projections"),
         )
         supervisor.invoke_storage = lambda *args, **kwargs: {"projectionDigest": None}
         with contextlib.ExitStack() as stack:
             for patcher in common:
                 stack.enter_context(patcher)
-            stack.enter_context(
-                mock.patch.object(MODULE, "remove_socket_root", side_effect=remove_socket)
-            )
+            stack.enter_context(mock.patch.object(MODULE, "remove_socket_root", side_effect=remove_socket))
             with self.assertRaisesRegex(InjectedCrash, "response lost"):
                 supervisor.recover_existing_runtime()
         self.assertIn(MODULE.ROOT_STOPPING_NAME, root_manifests)
@@ -2095,9 +2101,7 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
 
         process_authority = {
             "ProcessIdentityError": ProcessGone,
-            "verify_recorded_process": lambda *args, **kwargs: (_ for _ in ()).throw(
-                ProcessGone("gone")
-            ),
+            "verify_recorded_process": lambda *args, **kwargs: (_ for _ in ()).throw(ProcessGone("gone")),
         }
         validated = {
             "control": control,
@@ -2125,9 +2129,7 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
             ),
             mock.patch.object(MODULE, "reduce_runtime_removal_root", return_value=False),
             mock.patch.object(MODULE, "existing_runtime_identity", return_value=runtime),
-            mock.patch.object(
-                MODULE, "load_process_authority", return_value=process_authority
-            ),
+            mock.patch.object(MODULE, "load_process_authority", return_value=process_authority),
             mock.patch.object(
                 MODULE,
                 "read_root_manifest",
@@ -2151,15 +2153,17 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
 
 
 class DescriptorCustodyTest(unittest.TestCase):
-    def test_first_oserror_is_primary_and_every_descriptor_is_attempted_once(self) -> None:
+    def test_first_oserror_is_primary_and_every_descriptor_is_attempted_once(
+        self,
+    ) -> None:
         owner = MODULE.DescriptorCustody((10, 11, 12))
         first = OSError("first close failed")
         later = KeyboardInterrupt("later close failed")
         calls: list[int] = []
 
         def close(descriptor: int) -> None:
-            self.assertEqual(owner.attempted, (12, 11, 10))
             calls.append(descriptor)
+            self.assertEqual(owner.attempted, tuple(calls))
             if descriptor == 12:
                 raise first
             if descriptor == 11:
@@ -2173,9 +2177,7 @@ class DescriptorCustodyTest(unittest.TestCase):
 
         self.assertEqual(calls, [12, 11, 10])
         self.assertEqual(owner.failures, ((12, first), (11, later)))
-        self.assertTrue(
-            any("fd 11" in note for note in getattr(first, "__notes__", ()))
-        )
+        self.assertTrue(any("fd 11" in note for note in getattr(first, "__notes__", ())))
 
     def test_first_keyboard_interrupt_remains_primary_after_later_oserror(self) -> None:
         owner = MODULE.DescriptorCustody((20, 21))
@@ -2196,7 +2198,442 @@ class DescriptorCustodyTest(unittest.TestCase):
         self.assertEqual(calls, [21, 20])
         self.assertEqual(owner.failures, ((21, first), (20, later)))
 
-    def test_active_body_exception_survives_close_failures_and_hostile_add_note(self) -> None:
+    def test_acquire_masks_interruption_until_factory_result_is_registered(self) -> None:
+        owner = MODULE.DescriptorCustody()
+        calls: list[int] = []
+        interrupted = False
+
+        def trace(frame: object, event: str, _argument: object) -> object:
+            nonlocal interrupted
+            if (
+                not interrupted
+                and event == "line"
+                and getattr(frame, "f_code", None) is MODULE.DescriptorCustody.acquire.__code__
+                and frame.f_locals.get("descriptor") == 105
+                and 105 not in frame.f_locals["self"].owned
+            ):
+                interrupted = True
+                raise KeyboardInterrupt("registration interrupted")
+            return trace
+
+        with mock.patch.object(
+            MODULE.os,
+            "close",
+            side_effect=lambda descriptor: calls.append(descriptor),
+        ):
+            with owner:
+                sys.settrace(trace)
+                try:
+                    self.assertEqual(owner.acquire(lambda: 105), 105)
+                finally:
+                    sys.settrace(None)
+
+        self.assertFalse(interrupted)
+        self.assertEqual(calls, [105])
+        self.assertEqual(owner.owned, ())
+
+    def test_opcode_probes_cannot_enter_acquire_or_close_critical_sections(self) -> None:
+        acquire_store = max(
+            instruction.offset
+            for instruction in dis.get_instructions(MODULE.DescriptorCustody.acquire)
+            if instruction.opname == "STORE_FAST" and instruction.argval == "descriptor"
+        )
+        close_load = next(
+            instruction.offset
+            for instruction in dis.get_instructions(MODULE.DescriptorCustody._close_next)
+            if instruction.opname == "LOAD_GLOBAL" and instruction.argval == "os"
+        )
+        owner = MODULE.DescriptorCustody()
+        calls: list[int] = []
+        fired: list[tuple[str, int]] = []
+
+        def trace(frame: object, event: str, _argument: object) -> object:
+            if getattr(frame, "f_code", None) in (
+                MODULE.DescriptorCustody.acquire.__code__,
+                MODULE.DescriptorCustody._close_next.__code__,
+            ):
+                frame.f_trace_opcodes = True
+                if event == "opcode" and frame.f_lasti in (acquire_store, close_load):
+                    fired.append((frame.f_code.co_name, frame.f_lasti))
+                    raise KeyboardInterrupt("critical opcode was traceable")
+            return trace
+
+        with mock.patch.object(
+            MODULE.os,
+            "close",
+            side_effect=lambda descriptor: calls.append(descriptor),
+        ):
+            sys.settrace(trace)
+            try:
+                with owner:
+                    self.assertEqual(owner.acquire(lambda: 121), 121)
+            finally:
+                sys.settrace(None)
+
+        self.assertEqual(fired, [])
+        self.assertEqual(calls, [121])
+        self.assertEqual(owner.attempted, (121,))
+
+    def test_every_custody_transition_line_is_closed_or_exactly_retryable(self) -> None:
+        close_codes = (
+            MODULE.DescriptorCustody._close_next.__code__,
+            MODULE.DescriptorCustody._drain.__code__,
+            MODULE.DescriptorCustody.close.__code__,
+        )
+        executed: dict[object, set[int]] = {code: set() for code in close_codes}
+
+        def record(frame: object, event: str, _argument: object) -> object:
+            code = getattr(frame, "f_code", None)
+            if event == "line" and code in executed:
+                executed[code].add(frame.f_lineno)
+            return record
+
+        baseline = MODULE.DescriptorCustody((117, 118))
+        with mock.patch.object(MODULE.os, "close"):
+            sys.settrace(record)
+            try:
+                baseline.close()
+            finally:
+                sys.settrace(None)
+
+        for code in close_codes:
+            lines = sorted(executed[code])
+            for target in lines:
+                with self.subTest(code=code.co_name, line=target):
+                    owner = MODULE.DescriptorCustody((119, 120))
+                    calls: list[int] = []
+                    interrupted = False
+
+                    def trace(frame: object, event: str, _argument: object) -> object:
+                        nonlocal interrupted
+                        if (
+                            not interrupted
+                            and event == "line"
+                            and getattr(frame, "f_code", None) is code
+                            and frame.f_lineno == target
+                        ):
+                            interrupted = True
+                            raise KeyboardInterrupt(f"{code.co_name}:{target}")
+                        return trace
+
+                    with mock.patch.object(
+                        MODULE.os,
+                        "close",
+                        side_effect=lambda descriptor: calls.append(descriptor),
+                    ):
+                        sys.settrace(trace)
+                        try:
+                            try:
+                                owner.close()
+                            except KeyboardInterrupt:
+                                pass
+                        finally:
+                            sys.settrace(None)
+                        try:
+                            owner.close()
+                        except KeyboardInterrupt:
+                            pass
+
+                    self.assertTrue(interrupted)
+                    self.assertEqual(calls, [120, 119])
+                    self.assertEqual(owner.owned, ())
+                    self.assertEqual(owner.attempted, (120, 119))
+
+    def test_close_driver_interruptions_still_attempt_the_complete_roster(self) -> None:
+        for mode in ("before_syscall", "between_tokens", "record_failure"):
+            with self.subTest(mode=mode):
+                owner = MODULE.DescriptorCustody((106, 107))
+                calls: list[int] = []
+                interrupted = False
+
+                def close(descriptor: int) -> None:
+                    calls.append(descriptor)
+                    if mode == "record_failure" and descriptor == 107:
+                        raise OSError("first close failed")
+
+                def trace(frame: object, event: str, _argument: object) -> object:
+                    nonlocal interrupted
+                    if interrupted or event != "line":
+                        return trace
+                    if (
+                        mode == "before_syscall"
+                        and getattr(frame, "f_code", None)
+                        is MODULE.DescriptorCustody._close_next.__code__
+                        and frame.f_locals.get("descriptor") == 107
+                        and not owner.attempted
+                    ):
+                        interrupted = True
+                        raise KeyboardInterrupt("before syscall")
+                    if (
+                        mode == "between_tokens"
+                        and getattr(frame, "f_code", None)
+                        is MODULE.DescriptorCustody._drain.__code__
+                        and owner.attempted == (107,)
+                        and owner.owned == (106,)
+                    ):
+                        interrupted = True
+                        raise KeyboardInterrupt("between tokens")
+                    if (
+                        mode == "record_failure"
+                        and getattr(frame, "f_code", None)
+                        is MODULE.DescriptorCustody._drain.__code__
+                        and frame.f_locals.get("failure") is not None
+                    ):
+                        interrupted = True
+                        raise KeyboardInterrupt("while recording failure")
+                    return trace
+
+                with mock.patch.object(MODULE.os, "close", side_effect=close):
+                    sys.settrace(trace)
+                    try:
+                        if mode == "record_failure":
+                            with self.assertRaises(OSError) as raised:
+                                owner.close()
+                            self.assertEqual(str(raised.exception), "first close failed")
+                            self.assertTrue(
+                                any(
+                                    "KeyboardInterrupt" in note
+                                    for note in getattr(raised.exception, "__notes__", ())
+                                )
+                            )
+                        else:
+                            with self.assertRaises(KeyboardInterrupt):
+                                owner.close()
+                    finally:
+                        sys.settrace(None)
+
+                self.assertTrue(interrupted)
+                self.assertEqual(calls, [107, 106])
+                self.assertEqual(owner.owned, ())
+                self.assertEqual(owner.attempted, (107, 106))
+
+    def test_primary_is_durable_before_failure_merge_progress_advances(self) -> None:
+        owner = MODULE.DescriptorCustody((122, 123))
+        first = OSError("first close failed")
+        calls: list[int] = []
+        interrupted = False
+
+        def close(descriptor: int) -> None:
+            calls.append(descriptor)
+            if descriptor == 123:
+                raise first
+
+        def trace(frame: object, event: str, _argument: object) -> object:
+            nonlocal interrupted
+            if (
+                not interrupted
+                and event == "line"
+                and getattr(frame, "f_code", None)
+                is MODULE.DescriptorCustody._merge_recorded_failures.__code__
+                and owner._merged_failure_count == 1
+            ):
+                interrupted = True
+                raise KeyboardInterrupt("after merge progress")
+            return trace
+
+        with mock.patch.object(MODULE.os, "close", side_effect=close):
+            sys.settrace(trace)
+            try:
+                with self.assertRaises(OSError) as raised:
+                    owner.close()
+            finally:
+                sys.settrace(None)
+
+        self.assertTrue(interrupted)
+        self.assertIs(raised.exception, first)
+        self.assertEqual(calls, [123, 122])
+        self.assertTrue(
+            any(
+                "KeyboardInterrupt" in note
+                for note in getattr(first, "__notes__", ())
+            )
+        )
+
+    def test_authority_retirement_interrupt_still_closes_all_four_descriptors(self) -> None:
+        state = MODULE.StateAuthority(STATE_ROOT, 1000, 1000, 108, 109)
+        lease = MODULE.RuntimeLease(Path("/run/example.lock"), 110, 111, 1, 2)
+        calls: list[int] = []
+        interrupted = False
+
+        def trace(frame: object, event: str, _argument: object) -> object:
+            nonlocal interrupted
+            if (
+                not interrupted
+                and event == "line"
+                and getattr(frame, "f_code", None)
+                is MODULE._retire_and_close_authorities.__code__
+                and (state.root_fd, state.evidence_fd) == (-1, -1)
+                and (lease.parent_fd, lease.descriptor) == (-1, -1)
+                and state._descriptors.owned
+                and lease._descriptors.owned
+            ):
+                interrupted = True
+                raise KeyboardInterrupt("retirement interrupted")
+            return trace
+
+        with mock.patch.object(
+            MODULE.os,
+            "close",
+            side_effect=lambda descriptor: calls.append(descriptor),
+        ):
+            sys.settrace(trace)
+            try:
+                with self.assertRaisesRegex(KeyboardInterrupt, "retirement interrupted"):
+                    MODULE.close_runtime_authorities(state=state, lease=lease)
+            finally:
+                sys.settrace(None)
+
+        self.assertTrue(interrupted)
+        self.assertEqual(calls, [109, 108, 111, 110])
+        self.assertEqual(state._descriptors.owned, ())
+        self.assertEqual(lease._descriptors.owned, ())
+
+    def test_returned_fd_factory_publishes_directly_into_recipient_custody(self) -> None:
+        owner = MODULE.DescriptorCustody()
+        identity = MODULE.CgroupIdentity(MODULE.cgroup_path_for(STATE_ROOT), 1, 2)
+        observed = mock.Mock(
+            st_mode=stat.S_IFDIR | 0o700,
+            st_uid=0,
+            st_gid=0,
+            st_dev=1,
+            st_ino=2,
+        )
+        calls: list[int] = []
+        interrupted = False
+
+        def trace(frame: object, event: str, _argument: object) -> object:
+            nonlocal interrupted
+            if (
+                not interrupted
+                and event == "line"
+                and getattr(frame, "f_code", None) is MODULE.open_cgroup.__code__
+                and frame.f_locals.get("descriptor") == 112
+                and frame.f_locals.get("observed") is observed
+            ):
+                interrupted = True
+                raise KeyboardInterrupt("recipient publication interrupted")
+            return trace
+
+        with (
+            mock.patch.object(MODULE.os, "open", return_value=112),
+            mock.patch.object(MODULE.os, "fstat", return_value=observed),
+            mock.patch.object(
+                MODULE.os,
+                "close",
+                side_effect=lambda descriptor: calls.append(descriptor),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                KeyboardInterrupt,
+                "recipient publication interrupted",
+            ):
+                with owner:
+                    sys.settrace(trace)
+                    try:
+                        MODULE.open_cgroup(identity, custody=owner)
+                    finally:
+                        sys.settrace(None)
+
+        self.assertTrue(interrupted)
+        self.assertEqual(calls, [112])
+        self.assertEqual(owner.owned, ())
+
+    def test_state_recipient_exists_before_descriptor_acquisition(self) -> None:
+        state = MODULE.StateAuthority.pending(STATE_ROOT, 1000, 1000)
+        root = mock.Mock(
+            st_mode=stat.S_IFDIR | 0o700,
+            st_uid=1000,
+            st_gid=1000,
+            st_dev=1,
+            st_ino=2,
+        )
+        evidence = mock.Mock(
+            st_mode=stat.S_IFDIR | 0o700,
+            st_uid=1000,
+            st_gid=1000,
+            st_dev=1,
+            st_ino=3,
+        )
+        calls: list[int] = []
+        interrupted = False
+
+        def trace(frame: object, event: str, _argument: object) -> object:
+            nonlocal interrupted
+            if (
+                not interrupted
+                and event == "line"
+                and getattr(frame, "f_code", None) is MODULE.StateAuthority.acquire.__code__
+                and state._descriptors.owned == (113, 114)
+                and frame.f_locals.get("evidence") is evidence
+            ):
+                interrupted = True
+                raise KeyboardInterrupt("state publication interrupted")
+            return trace
+
+        def stat_value(path: object, **_kwargs: object) -> object:
+            return evidence if path == "evidence" else root
+
+        with (
+            mock.patch.object(Path, "resolve", return_value=STATE_ROOT),
+            mock.patch.object(MODULE.os, "open", side_effect=(113, 114)),
+            mock.patch.object(
+                MODULE.os,
+                "fstat",
+                side_effect=lambda descriptor: root if descriptor == 113 else evidence,
+            ),
+            mock.patch.object(MODULE.os, "stat", side_effect=stat_value),
+            mock.patch.object(
+                MODULE.os,
+                "close",
+                side_effect=lambda descriptor: calls.append(descriptor),
+            ),
+        ):
+            with self.assertRaisesRegex(KeyboardInterrupt, "state publication interrupted"):
+                with state:
+                    sys.settrace(trace)
+                    try:
+                        state.acquire()
+                    finally:
+                        sys.settrace(None)
+
+        self.assertTrue(interrupted)
+        self.assertEqual(calls, [114, 113])
+        self.assertEqual((state.root_fd, state.evidence_fd), (-1, -1))
+        self.assertEqual(state._descriptors.owned, ())
+
+    def test_nested_single_descriptor_cleanup_preserves_inner_primary(self) -> None:
+        first = OSError("inner write descriptor close failed")
+        later = KeyboardInterrupt("outer execution descriptor close failed")
+        calls: list[int] = []
+
+        def close(descriptor: int) -> None:
+            calls.append(descriptor)
+            raise first if descriptor == 101 else later
+
+        with (
+            mock.patch.object(
+                MODULE,
+                "open_execution_cgroup",
+                side_effect=lambda _identity, *, custody: custody.acquire(lambda: 100),
+            ),
+            mock.patch.object(MODULE.os, "open", return_value=101),
+            mock.patch.object(
+                MODULE.os,
+                "write",
+                side_effect=lambda _descriptor, value: len(value),
+            ),
+            mock.patch.object(MODULE.os, "close", side_effect=close),
+        ):
+            with self.assertRaises(OSError) as raised:
+                MODULE.enter_cgroup(MODULE.CgroupIdentity(Path("/sys/fs/cgroup/example"), 1, 2))
+
+        self.assertIs(raised.exception, first)
+        self.assertEqual(calls, [101, 100])
+        self.assertTrue(any("fd 100" in note for note in getattr(first, "__notes__", ())))
+
+    def test_active_body_exception_survives_close_failures_and_hostile_add_note(
+        self,
+    ) -> None:
         class HostileBodyError(RuntimeError):
             def add_note(self, note: str) -> None:
                 raise SystemExit(f"hostile add_note: {note}")
@@ -2224,7 +2661,9 @@ class DescriptorCustodyTest(unittest.TestCase):
         self.assertIs(caught, primary)
         self.assertEqual(calls, [32, 31, 30])
 
-    def test_descriptor_tokens_and_duplicate_aliases_are_rejected_before_close(self) -> None:
+    def test_descriptor_tokens_and_duplicate_aliases_are_rejected_before_close(
+        self,
+    ) -> None:
         class IntSubclass(int):
             pass
 
@@ -2237,16 +2676,19 @@ class DescriptorCustodyTest(unittest.TestCase):
         )
         with mock.patch.object(MODULE.os, "close") as close:
             for roster in invalid_rosters:
-                with self.subTest(roster=roster), self.assertRaisesRegex(
-                    MODULE.SupervisorError,
-                    "descriptor|duplicate",
+                with (
+                    self.subTest(roster=roster),
+                    self.assertRaisesRegex(
+                        MODULE.SupervisorError,
+                        "descriptor|duplicate",
+                    ),
                 ):
                     MODULE.DescriptorCustody(roster)
             close.assert_not_called()
 
             owner = MODULE.DescriptorCustody((40,))
             with self.assertRaisesRegex(MODULE.SupervisorError, "duplicate"):
-                owner.own(40)
+                owner.acquire(lambda: 40)
             close.assert_not_called()
             owner.close()
             owner.close()
@@ -2267,11 +2709,11 @@ class DescriptorCustodyTest(unittest.TestCase):
             close.assert_not_called()
         self.assertEqual((state.root_fd, state.evidence_fd), (41, 42))
         self.assertEqual((lease.parent_fd, lease.descriptor), (43, 42))
-        self.assertTrue(
-            any("validation failed" in note for note in getattr(primary, "__notes__", ()))
-        )
+        self.assertTrue(any("validation failed" in note for note in getattr(primary, "__notes__", ())))
 
-    def test_state_authority_marks_both_fields_closed_before_first_syscall(self) -> None:
+    def test_state_authority_marks_both_fields_closed_before_first_syscall(
+        self,
+    ) -> None:
         state = MODULE.StateAuthority(Path("/home/example/state"), 1000, 1000, 50, 51)
         calls: list[int] = []
 
@@ -2305,7 +2747,9 @@ class DescriptorCustodyTest(unittest.TestCase):
 
         self.assertEqual(calls, [61, 60])
 
-    def test_composed_state_and_lease_are_retired_before_all_attempt_cleanup(self) -> None:
+    def test_composed_state_and_lease_are_retired_before_all_attempt_cleanup(
+        self,
+    ) -> None:
         state = MODULE.StateAuthority(Path("/home/example/state"), 1000, 1000, 70, 71)
         lease = MODULE.RuntimeLease(Path("/run/example.lock"), 72, 73, 1, 2)
         first = OSError("state evidence close failed")
@@ -2328,11 +2772,38 @@ class DescriptorCustodyTest(unittest.TestCase):
             MODULE.close_runtime_authorities(state=state, lease=lease)
 
         self.assertEqual(calls, [71, 70, 73, 72])
+        self.assertTrue(any("fd 73" in note for note in getattr(first, "__notes__", ())))
+
+    def test_projection_drift_does_not_abandon_valid_internal_peer_custody(self) -> None:
+        state = MODULE.StateAuthority(STATE_ROOT, 1000, 1000, 115, 116)
+        lease = MODULE.RuntimeLease(Path("/run/example.lock"), 117, 118, 1, 2)
+        state.evidence_fd = 999
+        primary = RuntimeError("active body failed")
+        calls: list[int] = []
+
+        with mock.patch.object(
+            MODULE.os,
+            "close",
+            side_effect=lambda descriptor: calls.append(descriptor),
+        ):
+            self.assertTrue(
+                MODULE.close_runtime_authorities(
+                    state=state,
+                    lease=lease,
+                    primary=primary,
+                )
+            )
+
+        self.assertEqual(calls, [116, 115, 118, 117])
+        self.assertEqual((state.root_fd, state.evidence_fd), (-1, -1))
+        self.assertEqual((lease.parent_fd, lease.descriptor), (-1, -1))
         self.assertTrue(
-            any("fd 73" in note for note in getattr(first, "__notes__", ()))
+            any("validation failed" in note for note in getattr(primary, "__notes__", ()))
         )
 
-    def test_supervisor_run_preserves_body_primary_while_closing_both_authorities(self) -> None:
+    def test_supervisor_run_preserves_body_primary_while_closing_both_authorities(
+        self,
+    ) -> None:
         supervisor = MODULE.RuntimeSupervisor(STATE_ROOT, 1000, 1000)
         state = MODULE.StateAuthority(STATE_ROOT, 1000, 1000, 80, 81)
         lease = MODULE.RuntimeLease(Path("/run/example.lock"), 82, 83, 1, 2)
@@ -2349,7 +2820,8 @@ class DescriptorCustodyTest(unittest.TestCase):
 
         caught: BaseException | None = None
         with (
-            mock.patch.object(MODULE.RuntimeLease, "acquire", return_value=lease),
+            mock.patch.object(MODULE.RuntimeLease, "pending", return_value=lease),
+            mock.patch.object(lease, "acquire"),
             mock.patch.object(supervisor, "setup", side_effect=primary),
             mock.patch.object(MODULE.os, "close", side_effect=close),
             contextlib.redirect_stderr(io.StringIO()),
@@ -2366,7 +2838,9 @@ class DescriptorCustodyTest(unittest.TestCase):
         self.assertEqual((state.root_fd, state.evidence_fd), (-1, -1))
         self.assertEqual((lease.parent_fd, lease.descriptor), (-1, -1))
 
-    def test_outer_handled_exception_cannot_suppress_normal_run_cleanup_failure(self) -> None:
+    def test_outer_handled_exception_cannot_suppress_normal_run_cleanup_failure(
+        self,
+    ) -> None:
         supervisor = MODULE.RuntimeSupervisor(STATE_ROOT, 1000, 1000)
         state = MODULE.StateAuthority(STATE_ROOT, 1000, 1000, 84, 85)
         lease = MODULE.RuntimeLease(Path("/run/example.lock"), 86, 87, 1, 2)
@@ -2380,7 +2854,8 @@ class DescriptorCustodyTest(unittest.TestCase):
                 raise failure
 
         with (
-            mock.patch.object(MODULE.RuntimeLease, "acquire", return_value=lease),
+            mock.patch.object(MODULE.RuntimeLease, "pending", return_value=lease),
+            mock.patch.object(lease, "acquire"),
             mock.patch.object(supervisor, "setup"),
             mock.patch.object(supervisor, "monitor", return_value=0),
             mock.patch.object(MODULE.os, "close", side_effect=close),
@@ -2394,7 +2869,111 @@ class DescriptorCustodyTest(unittest.TestCase):
         self.assertIs(raised.exception, failure)
         self.assertEqual(calls, [85, 84, 87, 86])
 
-    def test_every_multi_descriptor_seam_uses_the_shared_custody_authority(self) -> None:
+    def test_stop_state_acquisition_is_inside_primary_preserving_cleanup_scope(
+        self,
+    ) -> None:
+        state = MODULE.StateAuthority(STATE_ROOT, 1000, 1000, 88, 89)
+        primary = RuntimeError("post-acquisition singleton proof failed")
+        calls: list[int] = []
+
+        def close(descriptor: int) -> None:
+            calls.append(descriptor)
+            if descriptor == 89:
+                raise OSError("state cleanup failed")
+
+        caught: BaseException | None = None
+        with (
+            mock.patch.object(MODULE.StateAuthority, "pending", return_value=state),
+            mock.patch.object(state, "acquire"),
+            mock.patch.object(
+                MODULE,
+                "require_no_other_task_runtime",
+                side_effect=primary,
+            ),
+            mock.patch.object(MODULE.os, "close", side_effect=close),
+        ):
+            try:
+                MODULE.ensure_runtime_stopped(STATE_ROOT, 1000, 1000)
+            except BaseException as error:
+                caught = error
+
+        self.assertIs(caught, primary)
+        self.assertEqual(calls, [89, 88])
+
+    def test_orphan_recovery_keeps_descriptor_free_stored_state_out_of_cleanup(
+        self,
+    ) -> None:
+        stored_before = MODULE.StoredStateAuthority(
+            STATE_ROOT,
+            1000,
+            1000,
+            {"path": str(STATE_ROOT)},
+            {"path": str(STATE_ROOT / "evidence")},
+        )
+        stored_after = MODULE.StoredStateAuthority(
+            STATE_ROOT,
+            1000,
+            1000,
+            {"path": str(STATE_ROOT), "generation": "after"},
+            {"path": str(STATE_ROOT / "evidence"), "generation": "after"},
+        )
+        runtime = MODULE.RuntimeIdentity(MODULE.runtime_root_for(STATE_ROOT), 1, 2, 0, 0, 0o700)
+        validated = {"supervisor": {"pid": 123}}
+        process_authority: dict[str, object] = {}
+        lease = MODULE.RuntimeLease(Path("/run/example.lock"), 94, 95, 1, 2)
+        supervisor = mock.Mock()
+        calls: list[int] = []
+        real_close = MODULE.close_runtime_authorities
+
+        def close_authorities(
+            *,
+            state: MODULE.StateAuthority | None,
+            lease: MODULE.RuntimeLease | None,
+            primary: BaseException | None = None,
+        ) -> None:
+            self.assertIsNone(state)
+            real_close(state=state, lease=lease, primary=primary)
+
+        with (
+            mock.patch.object(MODULE, "require_no_other_task_runtime"),
+            mock.patch.object(MODULE, "path_exists_nofollow", return_value=True),
+            mock.patch.object(
+                MODULE,
+                "_validated_orphaned_authorities",
+                side_effect=(
+                    (stored_before, runtime, validated, None, process_authority),
+                    (stored_after, runtime, validated, None, process_authority),
+                ),
+            ),
+            mock.patch.object(MODULE.RuntimeLease, "pending", return_value=lease),
+            mock.patch.object(lease, "acquire"),
+            mock.patch.object(MODULE, "RuntimeSupervisor", return_value=supervisor),
+            mock.patch.object(MODULE, "prove_private_namespace", return_value=NAMESPACE),
+            mock.patch.object(MODULE, "load_process_verifier", return_value=mock.Mock()),
+            mock.patch.object(MODULE, "set_child_subreaper"),
+            mock.patch.object(
+                MODULE,
+                "close_runtime_authorities",
+                side_effect=close_authorities,
+            ) as composed_close,
+            mock.patch.object(
+                MODULE.os,
+                "close",
+                side_effect=lambda descriptor: calls.append(descriptor),
+            ),
+        ):
+            result = MODULE.ensure_orphaned_runtime_stopped(STATE_ROOT, 1000, 1000)
+
+        self.assertEqual(result["outcome"], "passed")
+        self.assertIs(supervisor.state, stored_after)
+        self.assertIs(supervisor.lease, lease)
+        supervisor.recover_existing_runtime.assert_called_once_with(orphaned=True)
+        composed_close.assert_called_once()
+        self.assertEqual(calls, [95, 94])
+
+    def test_every_multi_descriptor_seam_uses_the_shared_custody_authority(
+        self,
+    ) -> None:
         tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
         parents: dict[ast.AST, ast.AST] = {}
         for node in ast.walk(tree):
@@ -2410,20 +2989,13 @@ class DescriptorCustodyTest(unittest.TestCase):
             functions[f"{prefix}{node.name}"] = node
 
         migrated = {
-            "StateAuthority.open",
-            "RuntimeLease.acquire",
-            "close_runtime_authorities",
             "create_cgroup",
-            "open_cgroup",
-            "open_execution_cgroup",
             "remove_empty_cgroup",
-            "verify_runtime_root",
             "runtime_netns_entry_roster",
             "_remove_tree_entry",
             "reduce_runtime_removal_root",
             "remove_runtime_root",
             "create_socket_root",
-            "verify_socket_root",
             "remove_socket_root",
             "write_root_manifest",
             "settle_legacy_v3_terminal_archive",
@@ -2442,6 +3014,36 @@ class DescriptorCustodyTest(unittest.TestCase):
             ]
             self.assertTrue(custody_calls, name)
 
+        for name in ("StateAuthority.acquire", "RuntimeLease.acquire"):
+            internal_acquires = [
+                call
+                for call in ast.walk(functions[name])
+                if isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "acquire"
+                and isinstance(call.func.value, ast.Attribute)
+                and call.func.value.attr == "_descriptors"
+            ]
+            self.assertTrue(internal_acquires, name)
+
+        for name in (
+            "open_cgroup",
+            "open_execution_cgroup",
+            "verify_runtime_root",
+            "verify_socket_root",
+        ):
+            self.assertIn("custody", {argument.arg for argument in functions[name].args.kwonlyargs})
+            recipient_acquires = [
+                call
+                for call in ast.walk(functions[name])
+                if isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "acquire"
+                and isinstance(call.func.value, ast.Name)
+                and call.func.value.id == "custody"
+            ]
+            self.assertTrue(recipient_acquires, name)
+
         raw_close_by_function: dict[str, list[int]] = {}
         for name, function in functions.items():
             raw_close_by_function[name] = [
@@ -2453,14 +3055,9 @@ class DescriptorCustodyTest(unittest.TestCase):
                 and call.func.value.id == "os"
                 and call.func.attr == "close"
             ]
-        self.assertEqual(
-            {
-                name: lines
-                for name, lines in raw_close_by_function.items()
-                if len(lines) > 1
-            },
-            {},
-        )
+        raw_closers = {name: lines for name, lines in raw_close_by_function.items() if lines}
+        self.assertEqual(set(raw_closers), {"DescriptorCustody._close_next"})
+        self.assertEqual(len(raw_closers["DescriptorCustody._close_next"]), 1)
         for name in migrated:
             self.assertEqual(raw_close_by_function[name], [], name)
 
@@ -2483,6 +3080,7 @@ class DescriptorCustodyTest(unittest.TestCase):
             self.assertTrue(calls, name)
         source = SCRIPT.read_text(encoding="utf-8")
         self.assertNotIn("sys.exception(", source)
+        self.assertNotIn("def transfer", source)
         for forbidden in (
             "state.close(",
             "lease.close(",
@@ -2491,39 +3089,82 @@ class DescriptorCustodyTest(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, source)
 
-        fd_factories = {
-            "open",
+        os_fd_factories = {"open", "pidfd_open"}
+        recipient_factories = {
             "open_cgroup",
             "open_execution_cgroup",
             "verify_runtime_root",
             "verify_socket_root",
         }
-        for name in migrated:
-            for call in ast.walk(functions[name]):
-                if not isinstance(call, ast.Call):
-                    continue
-                called_name: str | None = None
-                if isinstance(call.func, ast.Name):
-                    called_name = call.func.id
-                elif (
-                    isinstance(call.func, ast.Attribute)
-                    and isinstance(call.func.value, ast.Name)
-                    and call.func.value.id == "os"
-                ):
-                    called_name = call.func.attr
-                if called_name not in fd_factories:
-                    continue
-                parent = parents.get(call)
+        for call in ast.walk(tree):
+            if not isinstance(call, ast.Call):
+                continue
+            called_name: str | None = None
+            if isinstance(call.func, ast.Name):
+                called_name = call.func.id
+            elif (
+                isinstance(call.func, ast.Attribute)
+                and isinstance(call.func.value, ast.Name)
+                and call.func.value.id == "os"
+            ):
+                called_name = call.func.attr
+            if called_name in recipient_factories:
                 self.assertTrue(
-                    isinstance(parent, ast.Call)
-                    and isinstance(parent.func, ast.Attribute)
-                    and parent.func.attr == "own",
-                    f"{name}:{call.lineno}",
+                    any(keyword.arg == "custody" for keyword in call.keywords),
+                    f"returned descriptor lacks recipient custody at line {call.lineno}",
                 )
+                continue
+            if called_name not in os_fd_factories:
+                continue
+            parent = parents.get(call)
+            if isinstance(parent, ast.Lambda):
+                parent = parents.get(parent)
+            self.assertTrue(
+                isinstance(parent, ast.Call)
+                and isinstance(parent.func, ast.Attribute)
+                and parent.func.attr == "acquire"
+                and len(parent.args) == 1
+                and isinstance(parent.args[0], ast.Lambda),
+                f"descriptor factory is outside custody at line {call.lineno}",
+            )
+
+        loader_tree = ast.parse(MODULE.PINNED_EXEC_LOADER)
+        loader_opens = [
+            call
+            for call in ast.walk(loader_tree)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and isinstance(call.func.value, ast.Name)
+            and call.func.value.id == "os"
+            and call.func.attr == "open"
+        ]
+        loader_closes = [
+            call
+            for call in ast.walk(loader_tree)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and isinstance(call.func.value, ast.Name)
+            and call.func.value.id == "os"
+            and call.func.attr == "close"
+        ]
+        self.assertEqual(len(loader_opens), 1)
+        self.assertEqual(len(loader_closes), 1)
+        loader_try = next(node for node in loader_tree.body if isinstance(node, ast.Try))
+        self.assertEqual(
+            [
+                call.lineno
+                for statement in loader_try.finalbody
+                for call in ast.walk(statement)
+                if call in loader_closes
+            ],
+            [loader_closes[0].lineno],
+        )
 
 
 class RuntimeSupervisorSourceBoundaryTest(unittest.TestCase):
-    def test_daemons_are_foreground_direct_children_and_never_sudo_background_jobs(self) -> None:
+    def test_daemons_are_foreground_direct_children_and_never_sudo_background_jobs(
+        self,
+    ) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         self.assertNotIn("sudo -b", source)
         self.assertNotIn("start_new_session=True", source)
@@ -2544,7 +3185,9 @@ class RuntimeSupervisorSourceBoundaryTest(unittest.TestCase):
             source.index('"deactivate-private"', shutdown),
         )
 
-    def test_launchers_share_the_exact_isolated_loader_and_stop_only_the_supervisor(self) -> None:
+    def test_launchers_share_the_exact_isolated_loader_and_stop_only_the_supervisor(
+        self,
+    ) -> None:
         start = SCRIPT.with_name("start-isolated-docker.sh").read_text(encoding="utf-8")
         stop = SCRIPT.with_name("stop-isolated-docker.sh").read_text(encoding="utf-8")
 
@@ -2585,8 +3228,11 @@ class RuntimeSupervisorSourceBoundaryTest(unittest.TestCase):
         self.assertIn('os.open("isolated_runtime_supervisor.py"', start)
         self.assertIn("control_present", start)
         self.assertIn("fallback_source.startswith(source)", start)
-        self.assertIn("identity.st_size == 0 and (chosen == fallback_path or control_present)", start)
-        self.assertIn('__fallback_script_directory__', start)
+        self.assertIn(
+            "identity.st_size == 0 and (chosen == fallback_path or control_present)",
+            start,
+        )
+        self.assertIn("__fallback_script_directory__", start)
         recovery = SCRIPT.read_text()[
             SCRIPT.read_text().index("def recover_existing_runtime") : SCRIPT.read_text().index("def setup")
         ]
@@ -2600,14 +3246,22 @@ class RuntimeSupervisorSourceBoundaryTest(unittest.TestCase):
         identity = SCRIPT.with_name(MODULE.PROCESS_IDENTITY_NAME)
         storage = SCRIPT.with_name(MODULE.STORAGE_LIFECYCLE_NAME)
         storage_verifier = SCRIPT.with_name(MODULE.STORAGE_IDENTITY_VERIFIER_NAME)
-        self.assertEqual(hashlib.sha256(identity.read_bytes()).hexdigest(), MODULE.PROCESS_IDENTITY_SHA256)
-        self.assertEqual(hashlib.sha256(storage.read_bytes()).hexdigest(), MODULE.STORAGE_LIFECYCLE_SHA256)
+        self.assertEqual(
+            hashlib.sha256(identity.read_bytes()).hexdigest(),
+            MODULE.PROCESS_IDENTITY_SHA256,
+        )
+        self.assertEqual(
+            hashlib.sha256(storage.read_bytes()).hexdigest(),
+            MODULE.STORAGE_LIFECYCLE_SHA256,
+        )
         self.assertEqual(
             hashlib.sha256(storage_verifier.read_bytes()).hexdigest(),
             MODULE.STORAGE_IDENTITY_VERIFIER_SHA256,
         )
 
-    def test_storage_sources_are_snapshotted_before_the_first_private_mutation(self) -> None:
+    def test_storage_sources_are_snapshotted_before_the_first_private_mutation(
+        self,
+    ) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         setup = source.index("def setup")
         snapshot = source.index("self.snapshot_storage_sources()", setup)
@@ -2624,6 +3278,7 @@ class RuntimeSupervisorSourceBoundaryTest(unittest.TestCase):
             "STORAGE_IDENTITY_VERIFIER_NAME",
         ):
             self.assertIn(name, snapshot_region)
+
 
 class LegacyV3TransitionBarrierTest(unittest.TestCase):
     @staticmethod
@@ -2661,12 +3316,7 @@ class LegacyV3TransitionBarrierTest(unittest.TestCase):
                                     archive_exact=archive_exact,
                                 ):
                                     expected = source_exact or (
-                                        (
-                                            source_present
-                                            or control
-                                            or archive_present
-                                            or prepared_present
-                                        )
+                                        (source_present or control or archive_present or prepared_present)
                                         and not archive_exact
                                     )
                                     self.assertEqual(
@@ -2680,33 +3330,31 @@ class LegacyV3TransitionBarrierTest(unittest.TestCase):
                                         ),
                                         expected,
                                     )
-        self.assertTrue(
-            MODULE._legacy_v3_snapshot_blocked(
-                self.snapshot(terminal_archive_exact=True)
-            )
-        )
-        self.assertTrue(
-            MODULE._legacy_v3_snapshot_blocked(
-                self.snapshot(source_exact=True)
-            )
-        )
+        self.assertTrue(MODULE._legacy_v3_snapshot_blocked(self.snapshot(terminal_archive_exact=True)))
+        self.assertTrue(MODULE._legacy_v3_snapshot_blocked(self.snapshot(source_exact=True)))
 
     def test_observer_is_global_and_archive_is_the_only_control_handoff(self) -> None:
-        with mock.patch.object(
-            MODULE,
-            "legacy_v3_transition_snapshot",
-            return_value=self.snapshot(
-                source_present=True,
-                source_exact=True,
-                control_present=True,
+        with (
+            mock.patch.object(
+                MODULE,
+                "legacy_v3_transition_snapshot",
+                return_value=self.snapshot(
+                    source_present=True,
+                    source_exact=True,
+                    control_present=True,
+                ),
             ),
-        ), self.assertRaisesRegex(MODULE.SupervisorError, "not terminally archived"):
+            self.assertRaisesRegex(MODULE.SupervisorError, "not terminally archived"),
+        ):
             MODULE.observe_legacy_v3_transition()
-        with mock.patch.object(
-            MODULE,
-            "legacy_v3_transition_snapshot",
-            return_value=self.snapshot(archive_present=True),
-        ), self.assertRaisesRegex(MODULE.SupervisorError, "not terminally archived"):
+        with (
+            mock.patch.object(
+                MODULE,
+                "legacy_v3_transition_snapshot",
+                return_value=self.snapshot(archive_present=True),
+            ),
+            self.assertRaisesRegex(MODULE.SupervisorError, "not terminally archived"),
+        ):
             MODULE.observe_legacy_v3_transition()
 
         with mock.patch.object(
@@ -2723,7 +3371,10 @@ class LegacyV3TransitionBarrierTest(unittest.TestCase):
     def test_wrong_digest_or_malformed_source_is_not_the_singleton(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             path = Path(raw) / "receipt.json"
-            for content in (b"not-json", b'{"schema":"ambit.local-daytona-isolated-docker/v3"}'):
+            for content in (
+                b"not-json",
+                b'{"schema":"ambit.local-daytona-isolated-docker/v3"}',
+            ):
                 with self.subTest(content=content):
                     path.write_bytes(content)
                     self.assertFalse(
@@ -2732,11 +3383,14 @@ class LegacyV3TransitionBarrierTest(unittest.TestCase):
                             require_terminal_identity=False,
                         )
                     )
-        with mock.patch.object(
-            MODULE,
-            "legacy_v3_transition_snapshot",
-            return_value=self.snapshot(source_present=True),
-        ), self.assertRaisesRegex(MODULE.SupervisorError, "not terminally archived"):
+        with (
+            mock.patch.object(
+                MODULE,
+                "legacy_v3_transition_snapshot",
+                return_value=self.snapshot(source_present=True),
+            ),
+            self.assertRaisesRegex(MODULE.SupervisorError, "not terminally archived"),
+        ):
             MODULE.observe_legacy_v3_transition()
 
     def test_terminal_archive_allows_a_later_nonlegacy_live_receipt(self) -> None:
@@ -2759,17 +3413,18 @@ class LegacyV3TransitionBarrierTest(unittest.TestCase):
             terminal_archive_exact=True,
         )
         lease = mock.Mock()
-        with mock.patch.object(
-            MODULE, "legacy_v3_transition_snapshot", return_value=visible
-        ), mock.patch.object(
-            MODULE, "settle_legacy_v3_terminal_archive", return_value=visible
-        ) as settle:
+        with (
+            mock.patch.object(MODULE, "legacy_v3_transition_snapshot", return_value=visible),
+            mock.patch.object(MODULE, "settle_legacy_v3_terminal_archive", return_value=visible) as settle,
+        ):
             self.assertEqual(MODULE.observe_legacy_v3_transition(), visible)
             settle.assert_not_called()
             MODULE.require_legacy_v3_transition_terminal(lease=lease)
         settle.assert_called_once_with(lease)
 
-    def test_cross_process_response_loss_is_fsynced_then_stably_reobserved(self) -> None:
+    def test_cross_process_response_loss_is_fsynced_then_stably_reobserved(
+        self,
+    ) -> None:
         terminal = self.snapshot(
             control_present=True,
             archive_present=True,
@@ -2783,19 +3438,18 @@ class LegacyV3TransitionBarrierTest(unittest.TestCase):
             events.append("snapshot")
             return dict(terminal)
 
-        with mock.patch.object(
-            MODULE, "_require_runtime_lease_custody"
-        ), mock.patch.object(
-            MODULE.os, "open", side_effect=(20, 21)
-        ), mock.patch.object(
-            MODULE, "_require_legacy_v3_evidence_binding"
-        ) as binding, mock.patch.object(
-            MODULE.os,
-            "fsync",
-            side_effect=lambda descriptor: events.append(f"fsync:{descriptor}"),
-        ), mock.patch.object(
-            MODULE, "legacy_v3_transition_snapshot", side_effect=observe
-        ), mock.patch.object(MODULE.os, "close"):
+        with (
+            mock.patch.object(MODULE, "_require_runtime_lease_custody"),
+            mock.patch.object(MODULE.os, "open", side_effect=(20, 21)),
+            mock.patch.object(MODULE, "_require_legacy_v3_evidence_binding") as binding,
+            mock.patch.object(
+                MODULE.os,
+                "fsync",
+                side_effect=lambda descriptor: events.append(f"fsync:{descriptor}"),
+            ),
+            mock.patch.object(MODULE, "legacy_v3_transition_snapshot", side_effect=observe),
+            mock.patch.object(MODULE.os, "close"),
+        ):
             self.assertEqual(
                 MODULE.settle_legacy_v3_terminal_archive(mock.Mock()),
                 terminal,
@@ -2819,11 +3473,11 @@ class LegacyV3TransitionBarrierTest(unittest.TestCase):
             1,
             2,
         )
-        with mock.patch.object(
-            MODULE.os, "fstat", return_value=identity
-        ), mock.patch.object(
-            MODULE.os, "stat", return_value=identity
-        ), mock.patch.object(MODULE.fcntl, "flock") as flock:
+        with (
+            mock.patch.object(MODULE.os, "fstat", return_value=identity),
+            mock.patch.object(MODULE.os, "stat", return_value=identity),
+            mock.patch.object(MODULE.fcntl, "flock") as flock,
+        ):
             MODULE._require_runtime_lease_custody(lease)
         flock.assert_called_once_with(
             11,
@@ -2841,21 +3495,21 @@ class LegacyV3TransitionBarrierTest(unittest.TestCase):
             control_present=True,
             prepared_present=True,
         )
-        with mock.patch.object(
-            MODULE, "_require_runtime_lease_custody"
-        ), mock.patch.object(
-            MODULE.os, "open", side_effect=(20, 21)
-        ), mock.patch.object(
-            MODULE, "_require_legacy_v3_evidence_binding"
-        ), mock.patch.object(
-            MODULE.os, "fsync"
-        ), mock.patch.object(
-            MODULE,
-            "legacy_v3_transition_snapshot",
-            side_effect=(terminal, regressed),
-        ), mock.patch.object(MODULE.os, "close"), self.assertRaisesRegex(
-            MODULE.SupervisorError,
-            "changed while completing durability",
+        with (
+            mock.patch.object(MODULE, "_require_runtime_lease_custody"),
+            mock.patch.object(MODULE.os, "open", side_effect=(20, 21)),
+            mock.patch.object(MODULE, "_require_legacy_v3_evidence_binding"),
+            mock.patch.object(MODULE.os, "fsync"),
+            mock.patch.object(
+                MODULE,
+                "legacy_v3_transition_snapshot",
+                side_effect=(terminal, regressed),
+            ),
+            mock.patch.object(MODULE.os, "close"),
+            self.assertRaisesRegex(
+                MODULE.SupervisorError,
+                "changed while completing durability",
+            ),
         ):
             MODULE.settle_legacy_v3_terminal_archive(mock.Mock())
 
@@ -2869,9 +3523,7 @@ class LegacyV3TransitionBarrierTest(unittest.TestCase):
             tombstone.write_bytes(b'{"schema":"legacy-tombstone"}\n')
             os.chmod(tombstone, 0o600)
             root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-            evidence_fd = os.open(
-                evidence, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-            )
+            evidence_fd = os.open(evidence, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             state = MODULE.StateAuthority(
                 root,
                 os.getuid(),
@@ -2887,15 +3539,18 @@ class LegacyV3TransitionBarrierTest(unittest.TestCase):
 
     def test_barrier_uses_literal_paths_digest_and_no_legacy_mutation(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
-        region = source[
-            source.index("def legacy_v3_transition_blocked")
-            : source.index("def read_root_manifest")
-        ]
+        region = source[source.index("def legacy_v3_transition_blocked") : source.index("def read_root_manifest")]
         self.assertIn(str(MODULE.LEGACY_V3_STATE_ROOT), source)
         self.assertIn(MODULE.LEGACY_V3_RECEIPT_SHA256, source)
         self.assertIn(str(MODULE.LEGACY_V3_CONTROL_ROOT), source)
         self.assertNotIn("LEGACY_V3_DRAIN_ROOT_RE", source)
-        for mutation in ("os.unlink", "os.rename", "os.replace", "os.write", "os.mkdir"):
+        for mutation in (
+            "os.unlink",
+            "os.rename",
+            "os.replace",
+            "os.write",
+            "os.mkdir",
+        ):
             self.assertNotIn(mutation, region)
         self.assertIn("os.fsync(evidence_fd)", region)
         self.assertIn("_require_runtime_lease_custody(lease)", region)
@@ -2918,8 +3573,9 @@ class LegacyV3TransitionBarrierTest(unittest.TestCase):
     def test_each_runtime_route_checks_barrier_before_its_first_mutation(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
         recover = source[
-            source.index("    def recover_existing_runtime")
-            : source.index("    def setup", source.index("    def recover_existing_runtime"))
+            source.index("    def recover_existing_runtime") : source.index(
+                "    def setup", source.index("    def recover_existing_runtime")
+            )
         ]
         self.assertLess(
             recover.index("require_no_other_task_runtime"),
@@ -2931,7 +3587,9 @@ class LegacyV3TransitionBarrierTest(unittest.TestCase):
             status.index("require_no_other_task_runtime"),
             status.index("_validated_existing_authorities"),
         )
-        stopped = source[source.index("def ensure_runtime_stopped") : source.index("def ensure_orphaned_runtime_stopped")]
+        stopped = source[
+            source.index("def ensure_runtime_stopped") : source.index("def ensure_orphaned_runtime_stopped")
+        ]
         self.assertLess(
             stopped.index("require_no_other_task_runtime"),
             stopped.index("signal_recorded_process"),
@@ -2956,9 +3614,7 @@ class LegacyV3TransitionBarrierTest(unittest.TestCase):
 
     def test_legacy_and_v5_share_one_literal_handoff_contract(self) -> None:
         legacy_path = SCRIPT.with_name("legacy_v3_drain.py")
-        specification = importlib.util.spec_from_file_location(
-            "ambit_legacy_v3_contract", legacy_path
-        )
+        specification = importlib.util.spec_from_file_location("ambit_legacy_v3_contract", legacy_path)
         assert specification is not None and specification.loader is not None
         legacy = importlib.util.module_from_spec(specification)
         sys.modules[specification.name] = legacy
