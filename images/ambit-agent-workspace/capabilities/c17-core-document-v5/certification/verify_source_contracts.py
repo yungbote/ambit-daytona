@@ -62,6 +62,8 @@ def _sha512(value: Any, label: str) -> None:
 
 def _verify_source_manifest(root: Path) -> None:
     manifest = root / "certification/source-contracts.sha256"
+    if manifest.is_symlink() or not manifest.is_file():
+        raise ValueError("source contract manifest must be a regular file")
     lines = manifest.read_text(encoding="utf-8").splitlines()
     entries: list[tuple[str, str]] = []
     for line in lines:
@@ -80,8 +82,9 @@ def _verify_source_manifest(root: Path) -> None:
             raise ValueError(f"source contract digest differs: {relative}")
 
 
-def verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
+def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
     root = root.resolve(strict=True)
+    _verify_source_manifest(root)
     base = _read(root / "locks/base-oci.lock.json")
     debian = _read(root / "locks/debian-input.lock.json")
     pdfjs = _read(root / "locks/pdfjs-input.lock.json")
@@ -104,6 +107,12 @@ def verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
         "base lock",
     )
     _expect(base["schema"], "ambit.runtime-pack-base-oci-lock/v1", "base schema")
+    _keys(base["index"], {"digest", "mediaType", "reference"}, "base index")
+    _keys(
+        base["platform"],
+        {"architecture", "configDigest", "layers", "manifestDigest", "os"},
+        "base platform",
+    )
     _expect(
         base["index"]["reference"],
         (
@@ -121,8 +130,25 @@ def verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
     _sha256(base["platform"]["configDigest"], "base config")
     if len(base["platform"]["layers"]) != 1:
         raise ValueError("base layer roster must be exact")
+    _keys(
+        base["platform"]["layers"][0],
+        {"digest", "mediaType", "size"},
+        "base layer",
+    )
     _sha256(base["platform"]["layers"][0]["digest"], "base layer")
 
+    _keys(
+        debian,
+        {
+            "archives",
+            "platform",
+            "requestedPackages",
+            "resolution",
+            "schema",
+            "signaturePolicy",
+        },
+        "Debian lock",
+    )
     _expect(debian["schema"], "ambit.runtime-pack-debian-input-lock/v1", "Debian schema")
     _expect(debian["platform"], "linux/amd64", "Debian platform")
     _expect(
@@ -130,19 +156,80 @@ def verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
         [
             "fonts-noto-cjk=1:20240730+repack1-1",
             "fonts-noto-core=20201225-2",
+            "fonts-noto-mono=20201225-2",
             "libreoffice-writer-nogui=4:25.2.3-2+deb13u6",
         ],
         "Debian requested package roster",
     )
     _expect(debian["signaturePolicy"]["verifyInRelease"], True, "Debian signatures")
+    _keys(
+        debian["signaturePolicy"],
+        {
+            "checkValidUntil",
+            "checkValidUntilException",
+            "trustedKeyring",
+            "verifyInRelease",
+        },
+        "Debian signature policy",
+    )
+    _keys(
+        debian["resolution"],
+        {"installRecommends", "missing", "requiredClosureLock", "state"},
+        "Debian resolution",
+    )
     _expect(debian["resolution"]["state"], "unavailable", "Debian closure state")
     if len(debian["archives"]) != 2:
         raise ValueError("Debian archive roster must contain exactly two archives")
     for archive in debian["archives"]:
+        _keys(
+            archive,
+            {"component", "inRelease", "name", "snapshot", "suite"},
+            "Debian archive",
+        )
+        _keys(archive["inRelease"], {"sha256", "url"}, "Debian InRelease")
         _sha256(archive["inRelease"]["sha256"], f"{archive['name']} InRelease")
         if not archive["snapshot"].startswith("https://snapshot.debian.org/archive/"):
             raise ValueError("Debian snapshot must use the official immutable archive")
 
+    _keys(
+        pdfjs,
+        {
+            "archive",
+            "excludedRoots",
+            "execution",
+            "extractedRoster",
+            "package",
+            "requiredLicenseFiles",
+            "retainedStaticRoots",
+            "schema",
+            "source",
+            "version",
+        },
+        "PDF.js lock",
+    )
+    _keys(pdfjs["source"], {"commit", "repository", "tag"}, "PDF.js source")
+    _keys(
+        pdfjs["archive"],
+        {
+            "bytes",
+            "npmAttestationUrl",
+            "npmIntegrity",
+            "sha256",
+            "sha512",
+            "url",
+        },
+        "PDF.js archive",
+    )
+    _keys(
+        pdfjs["execution"],
+        {"forbiddenSubstitutions", "reason", "state"},
+        "PDF.js execution",
+    )
+    _keys(
+        pdfjs["extractedRoster"],
+        {"requiredLock", "state"},
+        "PDF.js extracted roster",
+    )
     _expect(pdfjs["schema"], "ambit.runtime-pack-pdfjs-input-lock/v1", "PDF.js schema")
     _expect(pdfjs["package"], "pdfjs-dist", "PDF.js package")
     _expect(pdfjs["version"], "6.2.108", "PDF.js version")
@@ -155,6 +242,52 @@ def verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
     if any("node_modules" in item for item in pdfjs["retainedStaticRoots"]):
         raise ValueError("PDF.js static roster must not smuggle a Node dependency tree")
 
+    _keys(
+        helper,
+        {
+            "archiveAdmission",
+            "interfaceRef",
+            "license",
+            "missing",
+            "requiredExternalAuthority",
+            "roleRef",
+            "schema",
+            "state",
+        },
+        "capture helper lock",
+    )
+    _keys(
+        helper["license"],
+        {"distribution", "packageLicenseField", "spdxExpression"},
+        "capture helper license",
+    )
+    _keys(
+        helper["requiredExternalAuthority"],
+        {
+            "archivePath",
+            "detachedSignature",
+            "downgrade",
+            "expectedPublisherKeySha256",
+            "expectedRawSha256",
+            "expectedSignatureSha256",
+            "publisherPublicKey",
+        },
+        "capture helper external authority",
+    )
+    _keys(
+        helper["archiveAdmission"],
+        {
+            "absoluteParentDuplicateExtraAndMissingPaths",
+            "canonicalMemberRosterRequired",
+            "exactByteCountRequired",
+            "exactModeOwnerTimestampSizeAndContentDigest",
+            "hashRawBytesBeforeParsing",
+            "linksDevicesFifosSocketsSparseAndUnknownPax",
+            "regularFilesAndDirectoriesOnly",
+            "selfDescribedDigestsGrantAuthority",
+        },
+        "capture helper archive admission",
+    )
     _expect(
         helper["schema"],
         "ambit.runtime-pack-external-capture-helper-input-lock/v1",
@@ -188,6 +321,60 @@ def verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
         "helper self-description authority",
     )
 
+    _keys(
+        toolchain,
+        {
+            "activation",
+            "baseOciLock",
+            "captureHelperInputLock",
+            "debianInputLock",
+            "fonts",
+            "knownBlockers",
+            "libreOffice",
+            "pack",
+            "pdfjs",
+            "pdfjsInputLock",
+            "platform",
+            "runtime",
+            "schema",
+            "state",
+        },
+        "toolchain",
+    )
+    _keys(toolchain["platform"], {"architecture", "os"}, "toolchain platform")
+    _keys(
+        toolchain["libreOffice"],
+        {"mode", "notClaimed", "package", "version"},
+        "toolchain LibreOffice",
+    )
+    _keys(
+        toolchain["fonts"],
+        {
+            "packages",
+            "requiredFontconfigRoster",
+            "requiredLicenseInventory",
+            "requiredManifest",
+            "state",
+        },
+        "toolchain fonts",
+    )
+    _keys(
+        toolchain["pdfjs"],
+        {"delivery", "nativeCanvas", "runtimeNode", "runtimeNpm", "version"},
+        "toolchain PDF.js",
+    )
+    _keys(
+        toolchain["runtime"],
+        {
+            "network",
+            "packageInstallers",
+            "rootFilesystem",
+            "uid",
+            "user",
+            "workspacePublication",
+        },
+        "toolchain runtime",
+    )
     _expect(toolchain["schema"], "ambit.runtime-pack-toolchain/v3", "toolchain schema")
     _expect(toolchain["pack"], "ambit.runtime-pack/core-document@5", "pack ref")
     _expect(toolchain["state"], "unavailable", "toolchain state")
@@ -195,10 +382,129 @@ def verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
     _expect(toolchain["pdfjs"]["runtimeNode"], "absent", "runtime Node")
     _expect(toolchain["pdfjs"]["runtimeNpm"], "absent", "runtime npm")
     _expect(toolchain["pdfjs"]["nativeCanvas"], "unavailable", "native Canvas")
+    _expect(
+        toolchain["fonts"]["packages"],
+        [
+            package
+            for package in debian["requestedPackages"]
+            if package.startswith("fonts-noto-")
+        ],
+        "toolchain and Debian font rosters",
+    )
     _expect(toolchain["activation"], "forbidden", "activation")
     if len(toolchain["knownBlockers"]) != len(set(toolchain["knownBlockers"])):
         raise ValueError("toolchain blockers must be unique")
 
+    _keys(
+        runtime,
+        {
+            "ambientDependencyResolution",
+            "hostSocketsAndDevices",
+            "longLivedOfficeOrUnoDaemon",
+            "network",
+            "rootEscalation",
+            "rootFilesystem",
+            "runtimePackageInstallers",
+            "runtimeUid",
+            "runtimeUser",
+            "schema",
+            "secretsInImageOrEnvironment",
+            "workspacePublication",
+            "writableRoots",
+        },
+        "runtime policy",
+    )
+    _keys(
+        render,
+        {
+            "canonicalArtifactBoundary",
+            "input",
+            "libreOffice",
+            "pages",
+            "pdfjs",
+            "policyRef",
+            "renderOutputGrantsCanonicalAuthority",
+            "schema",
+        },
+        "render policy",
+    )
+    _keys(
+        render["input"],
+        {
+            "externalLinks",
+            "localImmutableBytesOnly",
+            "macros",
+            "maximumBytes",
+            "passwordProtected",
+            "remoteUrls",
+        },
+        "render input policy",
+    )
+    _keys(
+        render["libreOffice"],
+        {
+            "headless",
+            "maximumWallMilliseconds",
+            "nodefault",
+            "nologo",
+            "norestore",
+            "privateUserProfile",
+            "processModel",
+            "profileReuse",
+        },
+        "render LibreOffice policy",
+    )
+    _keys(
+        render["pages"],
+        {
+            "exactPngSha256Required",
+            "maximumCount",
+            "maximumHeightPixels",
+            "maximumPixelsPerPage",
+            "maximumTotalOutputBytes",
+            "maximumTotalPixels",
+            "maximumWidthPixels",
+            "orderedZeroBasedRosterRequired",
+        },
+        "render page policy",
+    )
+    _keys(
+        render["pdfjs"],
+        {
+            "bytesInputOnly",
+            "executionState",
+            "localStaticResourcesOnly",
+            "popplerFallback",
+            "standardFonts",
+            "workerVersionMustEqualApiVersion",
+        },
+        "render PDF.js policy",
+    )
+    _keys(
+        license_policy,
+        {
+            "nativeCanvas",
+            "noAssertion",
+            "pdfjsStandardFonts",
+            "promotionWithoutCompleteInventory",
+            "proprietary",
+            "requiredEvidence",
+            "schema",
+            "state",
+            "unknown",
+        },
+        "license policy",
+    )
+    _keys(
+        license_policy["pdfjsStandardFonts"],
+        {"disposition", "reason"},
+        "PDF.js standard-font license policy",
+    )
+    _keys(
+        license_policy["nativeCanvas"],
+        {"disposition", "requiredBeforeAdmission"},
+        "native Canvas license policy",
+    )
     _expect(runtime["runtimeUid"], 1000, "runtime UID")
     _expect(runtime["rootEscalation"], "denied", "root escalation")
     _expect(runtime["rootFilesystem"], "read-only", "root filesystem")
@@ -206,6 +512,12 @@ def verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
     _expect(runtime["runtimePackageInstallers"], "absent", "runtime installers")
     _expect(render["pdfjs"]["popplerFallback"], "forbidden", "Poppler fallback")
     _expect(render["pdfjs"]["executionState"], "unavailable", "render execution")
+    _expect(render["pages"]["maximumTotalPixels"], 536870912, "total pixels")
+    _expect(
+        render["pages"]["maximumTotalOutputBytes"],
+        536870912,
+        "total output bytes",
+    )
     _expect(render["canonicalArtifactBoundary"], "external-commit-only", "commit boundary")
     _expect(render["renderOutputGrantsCanonicalAuthority"], False, "render authority")
     _expect(license_policy["state"], "unavailable", "license policy state")
@@ -219,8 +531,6 @@ def verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
         "forbidden",
         "license promotion",
     )
-
-    _verify_source_manifest(root)
 
     unavailable = {
         "toolchain": toolchain["state"],
@@ -239,6 +549,15 @@ def verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
         "outcome": "passed",
         "availability": unavailable,
     }
+
+
+def verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
+    try:
+        return _verify(root, require_ready=require_ready)
+    except ValueError:
+        raise
+    except (AttributeError, IndexError, KeyError, TypeError) as error:
+        raise ValueError("source contract structure is invalid") from error
 
 
 def main() -> None:
