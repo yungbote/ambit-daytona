@@ -5737,6 +5737,7 @@ class RuntimeSupervisor:
 
     def run(self) -> int:
         self.lease = RuntimeLease.acquire(self.state_root)
+        primary: BaseException | None = None
         try:
             try:
                 self.setup()
@@ -5751,6 +5752,9 @@ class RuntimeSupervisor:
                         ) from error
                 raise
             return self.monitor()
+        except BaseException as error:
+            primary = error
+            raise
         finally:
             state = self.state
             lease = self.lease
@@ -5759,7 +5763,7 @@ class RuntimeSupervisor:
             close_runtime_authorities(
                 state=state,
                 lease=lease,
-                primary=sys.exception(),
+                primary=primary,
             )
 
 
@@ -6001,6 +6005,7 @@ def ensure_runtime_stopped(
     script_directory = Path(__file__).resolve(strict=True).parent
     state = StateAuthority.open(state_root, caller_uid, caller_gid)
     lease: RuntimeLease | None = None
+    primary: BaseException | None = None
     try:
         # Refuse every signal/kill while a second task authority makes the
         # singleton state ambiguous. The global lease prevents a new v5 start
@@ -6082,11 +6087,14 @@ def ensure_runtime_stopped(
         }
         state.write_json(STOP_RECEIPT_NAME, value)
         return value
+    except BaseException as error:
+        primary = error
+        raise
     finally:
         close_runtime_authorities(
             state=state,
             lease=lease,
-            primary=sys.exception(),
+            primary=primary,
         )
 
 
@@ -6102,6 +6110,7 @@ def ensure_orphaned_runtime_stopped(
     require_no_other_task_runtime(state_root)
     if not path_exists_nofollow(runtime_path):
         lease = RuntimeLease.acquire(state_root)
+        primary: BaseException | None = None
         try:
             require(
                 not path_exists_nofollow(runtime_path),
@@ -6135,11 +6144,14 @@ def ensure_orphaned_runtime_stopped(
                 "socketRootRemoved": True,
                 "cgroupRemoved": True,
             }
+        except BaseException as error:
+            primary = error
+            raise
         finally:
             close_runtime_authorities(
                 state=None,
                 lease=lease,
-                primary=sys.exception(),
+                primary=primary,
             )
     state, _, validated, _, process_authority = _validated_orphaned_authorities(
         state_root,
@@ -6149,6 +6161,7 @@ def ensure_orphaned_runtime_stopped(
     )
     current_state: StateAuthority | None = state
     lease: RuntimeLease | None = None
+    primary = None
     try:
         try:
             lease = RuntimeLease.acquire(state_root)
@@ -6191,11 +6204,14 @@ def ensure_orphaned_runtime_stopped(
             "socketRootRemoved": True,
             "cgroupRemoved": True,
         }
+    except BaseException as error:
+        primary = error
+        raise
     finally:
         close_runtime_authorities(
             state=current_state,
             lease=lease,
-            primary=sys.exception(),
+            primary=primary,
         )
 
 

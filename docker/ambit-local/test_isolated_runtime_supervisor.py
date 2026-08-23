@@ -2366,6 +2366,34 @@ class DescriptorCustodyTest(unittest.TestCase):
         self.assertEqual((state.root_fd, state.evidence_fd), (-1, -1))
         self.assertEqual((lease.parent_fd, lease.descriptor), (-1, -1))
 
+    def test_outer_handled_exception_cannot_suppress_normal_run_cleanup_failure(self) -> None:
+        supervisor = MODULE.RuntimeSupervisor(STATE_ROOT, 1000, 1000)
+        state = MODULE.StateAuthority(STATE_ROOT, 1000, 1000, 84, 85)
+        lease = MODULE.RuntimeLease(Path("/run/example.lock"), 86, 87, 1, 2)
+        supervisor.state = state
+        failure = OSError("normal-return cleanup failed")
+        calls: list[int] = []
+
+        def close(descriptor: int) -> None:
+            calls.append(descriptor)
+            if descriptor == 85:
+                raise failure
+
+        with (
+            mock.patch.object(MODULE.RuntimeLease, "acquire", return_value=lease),
+            mock.patch.object(supervisor, "setup"),
+            mock.patch.object(supervisor, "monitor", return_value=0),
+            mock.patch.object(MODULE.os, "close", side_effect=close),
+        ):
+            try:
+                raise ValueError("handled by outer caller")
+            except ValueError:
+                with self.assertRaises(OSError) as raised:
+                    supervisor.run()
+
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(calls, [85, 84, 87, 86])
+
     def test_every_multi_descriptor_seam_uses_the_shared_custody_authority(self) -> None:
         tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
         parents: dict[ast.AST, ast.AST] = {}
@@ -2454,6 +2482,7 @@ class DescriptorCustodyTest(unittest.TestCase):
             ]
             self.assertTrue(calls, name)
         source = SCRIPT.read_text(encoding="utf-8")
+        self.assertNotIn("sys.exception(", source)
         for forbidden in (
             "state.close(",
             "lease.close(",
