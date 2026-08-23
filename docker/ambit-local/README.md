@@ -304,13 +304,34 @@ security state, every task in a recorded role's TGID must equal that role's
 sealed profile in both complete universe passes, and the same state is read
 again through each held `PIDFD_THREAD` task descriptor before and after every
 non-signal action cutoff.
-Any unreadable namespace, foreign client/process/source target, substituted
-path, unknown runtime entry, changed registry blob, residual v5 cgroup, or
-coexisting v5 authority is a manual blocker. The legacy tool observes but
-never mutates a cgroup. A residual matching v5 cgroup therefore requires a
-separate v5-owned, exact-empty reconciliation before this drain; teaching the
-legacy reducer to adopt it would cross the authority boundary and is
-deliberately not a fallback.
+
+Task namespace and mount discovery use one shared stable census rather than
+separate recorded-process, drain-process, and per-root allowlists. A typed
+namespace FD is ambient observation authority—not a legacy relation—only when
+its exact device/inode is also a current namespace of a captured live task.
+For each mount namespace, one representative whose held root descriptor binds
+the `/` filesystem root supplies the canonical complete mount roster. Other
+representatives may be chroot-restricted views, but every record in each view
+must map by mount ID, source root, and its held root path to a canonical record.
+Canonical presence survives a restricted view that cannot see it; a restricted
+view never establishes absence. This deletes the former recorded-or-self-only
+namespace admission rule and the incorrect requirement that every chroot view
+return identical mount targets.
+
+A detached namespace FD, an nsfs-mounted namespace without a live
+representative, a mount namespace with no proven full-root view, an
+unexplainable projection, or any unreadable/churning census remains a manual
+blocker. Namespace FDs queued only in `SCM_RIGHTS` messages and other
+processless namespace references are not observable through `/proc` task FD
+tables and are explicitly not admitted. The tool does not turn their absence
+from a stable sample into proof that none exist.
+
+Any foreign client/process/source target, substituted path, unknown runtime
+entry, changed registry blob, residual v5 cgroup, or coexisting v5 authority
+is likewise a manual blocker. The legacy tool observes but never mutates a
+cgroup. A residual matching v5 cgroup therefore requires a separate v5-owned,
+exact-empty reconciliation before this drain; teaching the legacy reducer to
+adopt it would cross the authority boundary and is deliberately not a fallback.
 
 The pidfd/edge, socket, and mount rosters are deterministic stable-sample
 proofs, not a claim that Linux freezes every root-capable actor between two
