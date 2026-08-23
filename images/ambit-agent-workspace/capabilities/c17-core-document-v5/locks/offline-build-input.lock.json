@@ -1,0 +1,98 @@
+{
+  "schema": "ambit.runtime-pack-offline-build-input-lock/v1",
+  "state": "unavailable",
+  "platform": "linux/amd64",
+  "namedBuildContext": "public_inputs",
+  "networkDuringBuild": "none",
+  "buildFrontend": {
+    "reference": "docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e",
+    "digest": "sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e"
+  },
+  "baseOci": {
+    "indexDigest": "sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258",
+    "platformManifestDigest": "sha256:38a76d01668772e381ad2826d876627c89e7133e2f8a0f5d567306798b0f2a16",
+    "configDigest": "sha256:cb1aeeeb4fff439fcbc763f5b313a1f00b39d03f45d2d4be0c52cf14928b297e",
+    "layerDigest": "sha256:26c307b5e35a59ce911f5fde5b9458120ec8734e831ea2da5649a9ad14abfd3d"
+  },
+  "publicArtifacts": [
+    {
+      "path": "public/canvas/canvas-1.0.7.tgz",
+      "bytes": 32351,
+      "sha256": "sha256:8f969d4166974b4508007838d1bb53f27d030b2554ffbbbbf50f8dba0a7fbabe"
+    },
+    {
+      "path": "public/canvas/canvas-linux-x64-gnu-1.0.7.tgz",
+      "bytes": 14085888,
+      "sha256": "sha256:8bbe6cbfcf5add8a43232b90d86636d90ed8f28a9acb0a91c0e9a49dc2124699"
+    },
+    {
+      "path": "public/canvas/canvas-source-062130c03715f275fd46a59a4bb224e907c91686.tar.gz",
+      "bytes": 2273773,
+      "sha256": "sha256:a742c5453323327c4d6de7bfdcc69d0678144c3bf0db8f7dc246668dc5273c22"
+    },
+    {
+      "path": "public/canvas/skia-source-7219df0fb0ff64f26adad448f94e8c001b964e6a.tar.gz",
+      "bytes": 68583095,
+      "sha256": "sha256:83edae36346f1cd9122a1674b82277693bb101d17a106822835c0863f002b5bd"
+    },
+    {
+      "path": "public/node/SHASUMS256.txt",
+      "bytes": 2967,
+      "sha256": "sha256:be0629ee2bcd8e40bb856abdd3407f0762101b76bd60a36b8867f637733631c0"
+    },
+    {
+      "path": "public/node/SHASUMS256.txt.sig",
+      "bytes": 119,
+      "sha256": "sha256:801534e2d4c769c087e2e3eec89e879032872357e64e82336f86f03e72ece630"
+    },
+    {
+      "path": "public/node/node-v24.19.0-linux-x64.tar.xz",
+      "bytes": 31633904,
+      "sha256": "sha256:14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647"
+    },
+    {
+      "path": "public/node/node-v24.19.0.tar.xz",
+      "bytes": 55505276,
+      "sha256": "sha256:f6d95e10a0431ee1067fc6aabe9f762908b4716dd35324e1ddb4b1466b76659f"
+    },
+    {
+      "path": "public/pdfjs/pdfjs-dist-6.2.108.tgz",
+      "bytes": 8419573,
+      "sha256": "sha256:b3e68d5cda70551a90b3f771419d379e20fc788ce056fa32de73608e01df47f4"
+    }
+  ],
+  "publicArtifactSha256Manifest": "offline-public-artifacts.sha256",
+  "publicArtifactByteManifest": "offline-public-artifacts.bytes",
+  "frozenEvidence": [],
+  "requiredUnfrozenEvidence": [
+    "canvas/complete-native-source-license.lock.json",
+    "debian/copyright-files.sha256",
+    "debian/runtime-debs.sha256",
+    "debian/runtime-dpkg.lock",
+    "debian/source-artifacts.sha256",
+    "fonts/font-files.sha256",
+    "fonts/font-license-inventory.json",
+    "fonts/fontconfig-roster.json",
+    "lineage/installed-render-engine-lineage.json",
+    "node/release-keyring-verification.json"
+  ],
+  "proprietaryHelper": {
+    "transport": "required-buildkit-secret",
+    "secretId": "ambit_capture_helper_archive",
+    "includedInPublicContext": false,
+    "state": "unavailable"
+  },
+  "buildTargets": {
+    "rendererSubstrate": "unavailable",
+    "coreDocumentV5": "unavailable"
+  },
+  "missing": [
+    "exact-debian-runtime-binary-source-license-closure",
+    "exact-font-file-fontconfig-license-rosters",
+    "exact-pdfjs-retained-file-roster",
+    "verified-node-release-keyring-and-runtime-closure",
+    "complete-canvas-skia-cargo-source-license-vulnerability-closure",
+    "root-owned-installed-engine-lineage",
+    "independently-anchored-backend-capture-helper"
+  ]
+}

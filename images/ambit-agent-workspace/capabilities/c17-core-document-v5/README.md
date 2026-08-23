@@ -16,6 +16,10 @@ The current source tree is deliberately **unavailable**, not a runnable image:
   `@napi-rs/canvas@1.0.7` surface is raw-byte-pinned and behavior-probed, but
   stays unavailable until Node release/ABI evidence and the native
   Skia/Cargo/source/license/vulnerability closure are complete;
+- the exact retained PDF.js roster is frozen to 185 files: the legacy Node
+  API/worker, CMaps, ICC data, selected WASM decoders, and actual license files.
+  Standard fonts, QuickJS eval, stock viewer, maps, and the browser build are
+  excluded;
 - Noto Core/Mono/CJK are selected, but their exact archive, file, fontconfig,
   source, and license rosters still have to be frozen from the signed snapshot;
 - the proprietary `UNLICENSED` working-copy capture helper must arrive as an
@@ -47,6 +51,26 @@ may supply only the authoritative backend component-lineage envelope; Node,
 PDF.js, Canvas, LibreOffice, and font pins are derived from a root-owned
 installed engine-lineage file. Both inputs remain unavailable until the exact
 backend schema and image closure freeze.
+
+## Offline build boundary
+
+`Dockerfile` defines an explicitly non-authoritative `renderer_substrate`
+stage and an always-failing `core_document_v5` target. The required
+`public_inputs` BuildKit context is external; the source-owned input lock and
+raw SHA/byte manifests are checked under `RUN --network=none` before anything
+is copied. There is no caller-provided readiness argument and no downloader.
+
+The source lock currently contains exact pins only for already observed public
+archives. Every unresolved Debian, font, Node trust, Canvas native-license,
+installed-engine, backend-lineage, and helper artifact remains in
+`requiredUnfrozenEvidence`; it cannot pass through an existence-only field.
+The final runtime removes apt and dpkg executables, runs as UID 1000, and
+retains actual Node/PDF.js/Canvas/Skia and supplied closure license bytes.
+
+This substrate is not `core-document@5` image authority. It deliberately lacks
+the existing `@4` structural Python/atomic-materializer composition and the
+independently admitted capture helper. The default final target exits dark even
+if someone supplies the secret.
 
 ## Intended narrow runtime
 
