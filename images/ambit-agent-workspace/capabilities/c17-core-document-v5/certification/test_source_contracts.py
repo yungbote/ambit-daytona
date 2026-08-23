@@ -54,7 +54,11 @@ class SourceContractTests(unittest.TestCase):
     def test_exact_unavailable_contract_passes_source_verification(self) -> None:
         result = verify(self.root)
         self.assertEqual(result["outcome"], "passed")
-        self.assertEqual(set(result["availability"].values()), {"unavailable"})
+        self.assertEqual(
+            set(result["availability"].values()),
+            {"pinned", "unavailable"},
+        )
+        self.assertEqual(result["availability"]["pdfjsRoster"], "pinned")
 
     def test_ready_gate_fails_closed(self) -> None:
         with self.assertRaisesRegex(ValueError, "core-document@5 is unavailable"):
@@ -107,6 +111,30 @@ class SourceContractTests(unittest.TestCase):
             "locks/pdfjs-input.lock.json",
             lambda value: value["excludedRoots"].remove("standard_fonts"),
         )
+
+    def test_pdfjs_static_roster_omission_or_substitution_is_rejected(self) -> None:
+        path = self.root / "locks/pdfjs-static-files.sha256"
+        lines = path.read_text(encoding="utf-8").splitlines()
+        path.write_text("\n".join(lines[1:]) + "\n", encoding="utf-8")
+        self.refresh_manifest_digest("locks/pdfjs-static-files.sha256")
+        with self.assertRaisesRegex(ValueError, "roster paths differ"):
+            verify(self.root)
+
+        shutil.rmtree(self.root)
+        shutil.copytree(ROOT, self.root)
+        path = self.root / "locks/pdfjs-static-files.sha256"
+        lines = path.read_text(encoding="utf-8").splitlines()
+        candidate = next(
+            index for index, line in enumerate(lines) if "cmaps/78-EUC-H.bcmap" in line
+        )
+        lines[candidate] = lines[candidate].replace(
+            "cmaps/78-EUC-H.bcmap", "standard_fonts/BadFont.pfb"
+        )
+        lines.sort(key=lambda line: line.split("  ", 1)[1])
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        self.refresh_manifest_digest("locks/pdfjs-static-files.sha256")
+        with self.assertRaisesRegex(ValueError, "excluded resources"):
+            verify(self.root)
 
     def test_pdfjs_execution_claim_without_canvas_is_rejected(self) -> None:
         self.assert_rejected(

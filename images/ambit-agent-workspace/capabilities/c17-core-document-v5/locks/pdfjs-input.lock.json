@@ -37,7 +37,9 @@
     "build",
     "standard_fonts",
     "types",
-    "web"
+    "web",
+    "wasm/quickjs-eval.js",
+    "wasm/quickjs-eval.wasm"
   ],
   "execution": {
     "state": "unavailable",
@@ -52,7 +54,9 @@
     ]
   },
   "extractedRoster": {
-    "state": "unavailable",
-    "requiredLock": "pdfjs-static-files.sha256"
+    "state": "pinned",
+    "requiredLock": "pdfjs-static-files.sha256",
+    "fileCount": 185,
+    "lockSha256": "sha256:48ad6be9eeafbec8a86ccfb60b6b4b30f77a6c90ebfa17c3df2c98821939f26b"
   }
 }
