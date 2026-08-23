@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import tempfile
@@ -21,11 +22,29 @@ class SourceContractTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def mutate(self, relative: str, update) -> None:
+    def refresh_manifest_digest(self, relative: str) -> None:
+        manifest = self.root / "certification/source-contracts.sha256"
+        digest = hashlib.sha256((self.root / relative).read_bytes()).hexdigest()
+        lines = manifest.read_text(encoding="utf-8").splitlines()
+        rewritten = []
+        matched = False
+        for line in lines:
+            _, path = line.split("  ", 1)
+            if path == relative:
+                line = f"{digest}  {relative}"
+                matched = True
+            rewritten.append(line)
+        if not matched:
+            raise AssertionError(f"source manifest does not bind {relative}")
+        manifest.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
+
+    def mutate(self, relative: str, update, *, refresh_manifest: bool = True) -> None:
         path = self.root / relative
         value = json.loads(path.read_text(encoding="utf-8"))
         update(value)
         path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        if refresh_manifest:
+            self.refresh_manifest_digest(relative)
 
     def assert_rejected(self, relative: str, update) -> None:
         self.mutate(relative, update)
@@ -67,6 +86,14 @@ class SourceContractTests(unittest.TestCase):
             lambda value: value["signaturePolicy"].__setitem__("verifyInRelease", False),
         )
 
+    def test_toolchain_and_debian_font_rosters_cannot_drift(self) -> None:
+        self.assert_rejected(
+            "toolchain-manifest.json",
+            lambda value: value["fonts"]["packages"].remove(
+                "fonts-noto-mono=20201225-2"
+            ),
+        )
+
     def test_pdfjs_standard_font_expansion_is_rejected(self) -> None:
         self.assert_rejected(
             "locks/pdfjs-input.lock.json",
@@ -77,6 +104,12 @@ class SourceContractTests(unittest.TestCase):
         self.assert_rejected(
             "locks/pdfjs-input.lock.json",
             lambda value: value["execution"].__setitem__("state", "available"),
+        )
+
+    def test_refreshed_manifest_cannot_authorize_unknown_nested_field(self) -> None:
+        self.assert_rejected(
+            "locks/pdfjs-input.lock.json",
+            lambda value: value["archive"].__setitem__("ambient", "allowed"),
         )
 
     def test_helper_cannot_self_mint_expected_archive_digest(self) -> None:
@@ -117,10 +150,41 @@ class SourceContractTests(unittest.TestCase):
             lambda value: value.__setitem__("renderOutputGrantsCanonicalAuthority", True),
         )
 
+    def test_aggregate_page_bounds_cannot_be_removed_or_expanded(self) -> None:
+        self.assert_rejected(
+            "policy/render-policy.json",
+            lambda value: value["pages"].__setitem__(
+                "maximumTotalPixels", 536870913
+            ),
+        )
+        shutil.rmtree(self.root)
+        shutil.copytree(ROOT, self.root)
+        self.assert_rejected(
+            "policy/render-policy.json",
+            lambda value: value["pages"].pop("maximumTotalOutputBytes"),
+        )
+
+    def test_raw_source_manifest_tamper_is_rejected(self) -> None:
+        manifest = self.root / "certification/source-contracts.sha256"
+        text = manifest.read_text(encoding="utf-8")
+        manifest.write_text(text.replace(text[0], "0", 1), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "source contract digest differs"):
+            verify(self.root)
+
+    def test_source_manifest_symlink_is_rejected_before_read(self) -> None:
+        manifest = self.root / "certification/source-contracts.sha256"
+        target = self.root / "certification/source-contracts-copy.sha256"
+        target.write_bytes(manifest.read_bytes())
+        manifest.unlink()
+        manifest.symlink_to(target)
+        with self.assertRaisesRegex(ValueError, "manifest must be a regular file"):
+            verify(self.root)
+
     def test_duplicate_json_keys_are_rejected_before_interpretation(self) -> None:
         path = self.root / "policy/license-policy.json"
         text = path.read_text(encoding="utf-8")
         path.write_text(text.replace("{\n", '{\n  "state": "ready",\n', 1), encoding="utf-8")
+        self.refresh_manifest_digest("policy/license-policy.json")
         with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
             verify(self.root)
 

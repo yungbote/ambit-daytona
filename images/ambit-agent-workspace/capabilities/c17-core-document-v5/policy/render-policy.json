@@ -24,6 +24,8 @@
     "maximumWidthPixels": 20000,
     "maximumHeightPixels": 20000,
     "maximumPixelsPerPage": 100000000,
+    "maximumTotalPixels": 536870912,
+    "maximumTotalOutputBytes": 536870912,
     "orderedZeroBasedRosterRequired": true,
     "exactPngSha256Required": true
   },
