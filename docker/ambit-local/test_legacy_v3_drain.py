@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import ast
+import collections
 import contextlib
+import dis
 import errno
+import functools
 import hashlib
 import importlib.util
+import itertools
 import json
 import os
+import operator
 import signal
 import socket
 import stat
@@ -242,6 +247,36 @@ def interrupt_once_on_line(
             fired[0] = True
             sys.settrace(previous)
             raise KeyboardInterrupt(message)
+        return trace
+
+    sys.settrace(trace)
+    try:
+        yield fired
+    finally:
+        sys.settrace(previous)
+
+
+@contextlib.contextmanager
+def interrupt_once_on_opcode(
+    code: object,
+    offset: int,
+    message: str,
+):  # type: ignore[no-untyped-def]
+    """Inject once after a selected instruction has made its state durable."""
+
+    previous = sys.gettrace()
+    fired = [False]
+
+    def trace(frame: object, event: str, _argument: object):  # type: ignore[no-untyped-def]
+        if getattr(frame, "f_code") is code:
+            setattr(frame, "f_trace_opcodes", True)
+            if (
+                not fired[0]
+                and event == "opcode"
+                and getattr(frame, "f_lasti") == offset
+            ):
+                fired[0] = True
+                raise KeyboardInterrupt(message)
         return trace
 
     sys.settrace(trace)
@@ -2366,7 +2401,7 @@ class ProcessUniverseTest(unittest.TestCase):
         first.close.side_effect = MODULE.DrainError("task close failed")
         custody = MODULE.ResourceCustody(label="namespace observation")
         acquire_test_descriptors(custody, 40, 41)
-        with mock.patch.object(MODULE.socket, "socket", side_effect=(first, second)):
+        with mock.patch.object(MODULE._socket, "socket", side_effect=(first, second)):
             custody.socket()
             custody.socket()
         with mock.patch.object(
@@ -2662,6 +2697,244 @@ class ProcessUniverseTest(unittest.TestCase):
             close.assert_called_once_with(40)
             self.assertEqual(custody._resources, [prior])
 
+    def test_c_capture_guards_acquisition_before_python_opcode_resumes(self) -> None:
+        capture_code = MODULE.ResourceCustody._capture_producer_result.__code__
+        capture_complete = next(
+            instruction.offset
+            for instruction in dis.get_instructions(capture_code)
+            if instruction.opname == "POP_TOP"
+        )
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        acquire_ast = class_method_ast(source, "ResourceCustody", "_acquire")
+        custody_ast = next(
+            node
+            for node in ast.parse(source).body
+            if isinstance(node, ast.ClassDef) and node.name == "ResourceCustody"
+        )
+        self.assertFalse(
+            any(
+                isinstance(node, ast.Name) and node.id == "acquired"
+                for node in ast.walk(acquire_ast)
+            )
+        )
+        self.assertFalse(any(isinstance(node, ast.Lambda) for node in ast.walk(custody_ast)))
+        partial_targets = {
+            (node.args[0].value.id, node.args[0].attr)
+            for node in ast.walk(custody_ast)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "functools"
+            and node.func.attr == "partial"
+            and node.args
+            and isinstance(node.args[0], ast.Attribute)
+            and isinstance(node.args[0].value, ast.Name)
+        }
+        self.assertTrue(
+            {
+                ("os", "open"),
+                ("os", "pidfd_open"),
+                ("os", "dup"),
+                ("_socket", "socket"),
+            }
+            <= partial_targets
+        )
+        acquire_instructions = list(
+            dis.get_instructions(MODULE.ResourceCustody._acquire)
+        )
+        capture_load = next(
+            index
+            for index, instruction in enumerate(acquire_instructions)
+            if instruction.argval == "_capture_producer_result"
+        )
+        capture_call = next(
+            index
+            for index in range(capture_load, len(acquire_instructions))
+            if acquire_instructions[index].opname.startswith("CALL")
+        )
+        after_capture_call = acquire_instructions[capture_call + 1].offset
+
+        real_open = os.open
+        real_close = os.close
+        for label, code, offset in (
+            ("inside C capture", capture_code, capture_complete),
+            (
+                "after capture helper call",
+                MODULE.ResourceCustody._acquire.__code__,
+                after_capture_call,
+            ),
+        ):
+            opened: list[int] = []
+
+            def observed_open(*args: object, **kwargs: object) -> int:
+                descriptor = real_open(*args, **kwargs)  # type: ignore[arg-type]
+                opened.append(descriptor)
+                return descriptor
+
+            custody = MODULE.ResourceCustody(label=label)
+            try:
+                with self.subTest(boundary=label), mock.patch.object(
+                    MODULE.os,
+                    "open",
+                    side_effect=observed_open,
+                ), self.assertRaisesRegex(KeyboardInterrupt, label):
+                    with interrupt_once_on_opcode(
+                        code,
+                        offset,
+                        label,
+                    ) as fired:
+                        custody.open("/dev/null", os.O_RDONLY)
+                self.assertTrue(fired[0])
+                self.assertEqual(len(opened), 1)
+                with self.assertRaises(OSError):
+                    os.fstat(opened[0])
+                self.assertEqual(custody._resources, [])
+                self.assertEqual(custody._state, "open")
+            finally:
+                for descriptor in opened:
+                    try:
+                        os.fstat(descriptor)
+                    except OSError:
+                        continue
+                    real_close(descriptor)
+
+    def test_pending_acquisition_survives_handler_entry_interruption(self) -> None:
+        acquire_code = MODULE.ResourceCustody._acquire.__code__
+        acquire_instructions = list(dis.get_instructions(acquire_code))
+        handler_start = next(
+            index
+            for index, instruction in enumerate(acquire_instructions)
+            if instruction.opname == "PUSH_EXC_INFO"
+        )
+        handler_entry = next(
+            instruction.offset
+            for instruction in acquire_instructions[handler_start:]
+            if instruction.opname == "STORE_FAST"
+        )
+        real_open = os.open
+        real_close = os.close
+        opened: list[int] = []
+
+        def observed_open(*args: object, **kwargs: object) -> int:
+            descriptor = real_open(*args, **kwargs)  # type: ignore[arg-type]
+            opened.append(descriptor)
+            return descriptor
+
+        custody = MODULE.ResourceCustody(label="pending handler entry")
+        custody._state = "closed"
+        try:
+            with mock.patch.object(
+                MODULE.os,
+                "open",
+                side_effect=observed_open,
+            ), self.assertRaisesRegex(KeyboardInterrupt, "handler entry"):
+                with interrupt_once_on_opcode(
+                    acquire_code,
+                    handler_entry,
+                    "handler entry",
+                ) as fired:
+                    custody.open("/dev/null", os.O_RDONLY)
+            self.assertTrue(fired[0])
+            self.assertEqual(len(opened), 1)
+            self.assertIsNotNone(custody._pending_acquisition)
+            os.fstat(opened[0])
+            custody.close()
+            with self.assertRaises(OSError):
+                os.fstat(opened[0])
+            self.assertIsNone(custody._pending_acquisition)
+            self.assertEqual(custody._resources, [])
+            self.assertEqual(custody._state, "closed")
+        finally:
+            for descriptor in opened:
+                try:
+                    os.fstat(descriptor)
+                except OSError:
+                    continue
+                real_close(descriptor)
+
+    def test_reentrant_close_cannot_consume_an_active_acquisition(self) -> None:
+        acquire_code = MODULE.ResourceCustody._acquire.__code__
+        instructions = list(dis.get_instructions(acquire_code))
+        capture_load = next(
+            index
+            for index, instruction in enumerate(instructions)
+            if instruction.argval == "_capture_producer_result"
+        )
+        capture_call = next(
+            index
+            for index in range(capture_load, len(instructions))
+            if instructions[index].opname.startswith("CALL")
+        )
+        boundaries = (
+            ("after active capture", instructions[capture_call + 1].offset),
+            (
+                "at active return",
+                next(
+                    instruction.offset
+                    for instruction in instructions
+                    if instruction.opname == "RETURN_VALUE"
+                ),
+            ),
+        )
+        real_close = os.close
+        for label, offset in boundaries:
+            custody = MODULE.ResourceCustody(label=label)
+            observed: list[BaseException] = []
+            fired = [False]
+
+            def trace(frame: object, event: str, _argument: object):  # type: ignore[no-untyped-def]
+                if getattr(frame, "f_code") is acquire_code:
+                    setattr(frame, "f_trace_opcodes", True)
+                    if (
+                        not fired[0]
+                        and event == "opcode"
+                        and getattr(frame, "f_lasti") == offset
+                    ):
+                        fired[0] = True
+                        try:
+                            custody.close()
+                        except BaseException as error:
+                            observed.append(error)
+                return trace
+
+            descriptor: int | None = None
+            calls: list[int] = []
+
+            def observed_close(value: int) -> None:
+                calls.append(value)
+                real_close(value)
+
+            previous = sys.gettrace()
+            try:
+                sys.settrace(trace)
+                descriptor = custody.open("/dev/null", os.O_RDONLY)
+            finally:
+                sys.settrace(previous)
+            try:
+                self.assertTrue(fired[0])
+                self.assertEqual(len(observed), 1)
+                self.assertIsInstance(observed[0], MODULE.DrainError)
+                self.assertIn("acquisition is still active", str(observed[0]))
+                assert descriptor is not None
+                os.fstat(descriptor)
+                with mock.patch.object(
+                    MODULE.os,
+                    "close",
+                    side_effect=observed_close,
+                ):
+                    custody.close()
+                self.assertEqual(calls, [descriptor])
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+            finally:
+                if descriptor is not None:
+                    try:
+                        os.fstat(descriptor)
+                    except OSError:
+                        pass
+                    else:
+                        real_close(descriptor)
+
     def test_bool_alias_does_not_hide_the_exact_integer_descriptor(self) -> None:
         custody = MODULE.ResourceCustody(label="exact descriptor roster")
         acquire_test_descriptor(custody, 1)
@@ -2671,6 +2944,27 @@ class ProcessUniverseTest(unittest.TestCase):
             close.assert_not_called()
             custody.close()
         close.assert_called_once_with(1)
+
+    def test_socket_constructor_cannot_adopt_a_caller_owned_descriptor(self) -> None:
+        existing = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        custody = MODULE.ResourceCustody(label="socket adoption")
+        try:
+            descriptor = existing.fileno()
+            with mock.patch.object(MODULE._socket, "socket") as constructor:
+                with self.assertRaisesRegex(MODULE.DrainError, "adoption is forbidden"):
+                    custody.socket(fileno=descriptor)
+                with self.assertRaisesRegex(MODULE.DrainError, "adoption is forbidden"):
+                    custody.socket(
+                        socket.AF_UNIX,
+                        socket.SOCK_STREAM,
+                        0,
+                        descriptor,
+                    )
+            constructor.assert_not_called()
+            self.assertEqual(existing.fileno(), descriptor)
+            self.assertEqual(custody._resources, [])
+        finally:
+            existing.close()
 
     def test_hostile_int_subclass_rejects_before_equality_or_close(self) -> None:
         equality_called = False
@@ -2704,22 +2998,12 @@ class ProcessUniverseTest(unittest.TestCase):
             "ResourceCustody",
             "_cleanup_registration_once",
         )
-        descriptor_invoke_line = next(
+        invoke_line = next(
             node.lineno
             for node in ast.walk(cleanup)
             if isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "os"
-            and node.func.attr == "close"
-        )
-        closeable_invoke_line = next(
-            node.lineno
-            for node in ast.walk(cleanup)
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "close"
-            and not isinstance(node.func.value, ast.Name)
+            and node.func.attr == "_invoke_closer"
         )
         finished_line = next(
             node.lineno
@@ -2729,7 +3013,7 @@ class ProcessUniverseTest(unittest.TestCase):
                 isinstance(target, ast.Attribute) and target.attr == "close_finished"
                 for target in node.targets
             )
-            and node.lineno > max(descriptor_invoke_line, closeable_invoke_line)
+            and node.lineno > invoke_line
         )
 
         def close_one(custody: MODULE.ResourceCustody) -> None:
@@ -2747,7 +3031,7 @@ class ProcessUniverseTest(unittest.TestCase):
             ("close", close_all),
         ):
             for boundary, line in (
-                ("pre_close_before_syscall", descriptor_invoke_line),
+                ("pre_close_before_syscall", invoke_line),
                 ("after_close_before_finished", finished_line),
             ):
                 custody = MODULE.ResourceCustody(
@@ -2782,13 +3066,13 @@ class ProcessUniverseTest(unittest.TestCase):
                     close.assert_called_once_with(40)
 
         for boundary, line in (
-            ("closeable_pre_close_before_syscall", closeable_invoke_line),
+            ("closeable_pre_close_before_syscall", invoke_line),
             ("closeable_after_close_before_finished", finished_line),
         ):
             custody = MODULE.ResourceCustody(label=boundary)
             resource_value = mock.Mock()
             with mock.patch.object(
-                MODULE.socket,
+                MODULE._socket,
                 "socket",
                 return_value=resource_value,
             ):
@@ -2808,6 +3092,74 @@ class ProcessUniverseTest(unittest.TestCase):
             self.assertIsInstance(first.exception.__cause__, KeyboardInterrupt)
             self.assertEqual(custody._resources, [])
             self.assertEqual(custody._state, "closed")
+
+    def test_c_closer_guard_and_invocation_precede_python_opcode_resumption(
+        self,
+    ) -> None:
+        invoke_code = MODULE.ResourceCustody._invoke_closer.__code__
+        inside_invoke = next(
+            instruction.offset
+            for instruction in dis.get_instructions(invoke_code)
+            if instruction.opname == "POP_TOP"
+        )
+        cleanup_instructions = list(
+            dis.get_instructions(MODULE.ResourceCustody._cleanup_registration_once)
+        )
+        invoke_load = next(
+            index
+            for index, instruction in enumerate(cleanup_instructions)
+            if instruction.argval == "_invoke_closer"
+        )
+        invoke_call = next(
+            index
+            for index in range(invoke_load, len(cleanup_instructions))
+            if cleanup_instructions[index].opname.startswith("CALL")
+        )
+        after_invoke_call = cleanup_instructions[invoke_call + 1].offset
+
+        real_close = os.close
+        for label, code, offset in (
+            ("inside C closer invocation", invoke_code, inside_invoke),
+            (
+                "after C closer helper call",
+                MODULE.ResourceCustody._cleanup_registration_once.__code__,
+                after_invoke_call,
+            ),
+        ):
+            custody = MODULE.ResourceCustody(label=label)
+            descriptor = custody.open("/dev/null", os.O_RDONLY)
+            calls: list[int] = []
+
+            def observed_close(value: int) -> None:
+                calls.append(value)
+                real_close(value)
+
+            try:
+                with self.subTest(boundary=label), mock.patch.object(
+                    MODULE.os,
+                    "close",
+                    side_effect=observed_close,
+                ), self.assertRaisesRegex(MODULE.DrainError, "cleanup failed") as raised:
+                    with interrupt_once_on_opcode(
+                        code,
+                        offset,
+                        label,
+                    ) as fired:
+                        custody.close()
+                self.assertTrue(fired[0])
+                self.assertIsInstance(raised.exception.__cause__, KeyboardInterrupt)
+                self.assertEqual(calls, [descriptor])
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+                self.assertEqual(custody._resources, [])
+                self.assertEqual(custody._state, "closed")
+            finally:
+                try:
+                    os.fstat(descriptor)
+                except OSError:
+                    pass
+                else:
+                    real_close(descriptor)
 
     def test_close_open_to_closing_and_final_settlement_are_resumable(self) -> None:
         source = MODULE_PATH.read_text(encoding="utf-8")
@@ -2927,9 +3279,7 @@ class ProcessUniverseTest(unittest.TestCase):
             for node in ast.walk(cleanup_ast)
             if isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "os"
-            and node.func.attr == "close"
+            and node.func.attr == "_invoke_closer"
         )
         error_return = min(
             (
@@ -3182,7 +3532,7 @@ class ProcessUniverseTest(unittest.TestCase):
         reusing = ReusingCloseable()
         try:
             with mock.patch.object(
-                MODULE.socket,
+                MODULE._socket,
                 "socket",
                 return_value=reusing,
             ), mock.patch.object(MODULE.os, "open", side_effect=observed_open):
@@ -3541,7 +3891,7 @@ class ProcessUniverseTest(unittest.TestCase):
                 custody.close()
 
         reentrant = ReentrantCloseable()
-        with mock.patch.object(MODULE.socket, "socket", return_value=reentrant):
+        with mock.patch.object(MODULE._socket, "socket", return_value=reentrant):
             self.assertIs(custody.socket(), reentrant)
         custody.close()
         self.assertEqual(reentrant.calls, 1)
@@ -3559,7 +3909,7 @@ class ProcessUniverseTest(unittest.TestCase):
 
         self_registering = SelfRegisteringCloseable()
         with mock.patch.object(
-            MODULE.socket,
+            MODULE._socket,
             "socket",
             side_effect=(self_registering, intruder),
         ):
@@ -4637,7 +4987,7 @@ class MountAuthorityTest(unittest.TestCase):
         sequence = 123
         done = struct.pack("=IHHII", 16, MODULE.NLMSG_DONE, 0, sequence, 123)
         fake.recvmsg.return_value = (done, [], socket.MSG_TRUNC, (0, 0))
-        with mock.patch.object(MODULE.socket, "socket", return_value=fake), mock.patch.object(
+        with mock.patch.object(MODULE._socket, "socket", return_value=fake), mock.patch.object(
             MODULE.os, "getpid", return_value=123
         ), mock.patch.object(MODULE.time, "monotonic_ns", return_value=0), self.assertRaisesRegex(
             MODULE.DrainError, "truncated"
@@ -5232,6 +5582,7 @@ class DestructiveBoundaryTest(unittest.TestCase):
                 offenders.append((node.lineno, close_lines))
         self.assertEqual(offenders, [])
         raw_acquisitions: list[tuple[int, str]] = []
+        observed_raw_acquisitions: list[tuple[str, str]] = []
         parents: dict[ast.AST, ast.AST] = {}
         for node in ast.walk(tree):
             for child in ast.iter_child_nodes(node):
@@ -5239,16 +5590,25 @@ class DestructiveBoundaryTest(unittest.TestCase):
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
                 continue
-            if not isinstance(node.func.value, ast.Name):
-                continue
-            call = (node.func.value.id, node.func.attr)
+            call: tuple[str, str] | None = None
+            if isinstance(node.func.value, ast.Name):
+                call = (node.func.value.id, node.func.attr)
+                if (
+                    call == ("functools", "partial")
+                    and node.args
+                    and isinstance(node.args[0], ast.Attribute)
+                    and isinstance(node.args[0].value, ast.Name)
+                ):
+                    call = (node.args[0].value.id, node.args[0].attr)
             if call not in {
                 ("os", "open"),
                 ("os", "pidfd_open"),
                 ("os", "dup"),
-                ("socket", "socket"),
+                ("_socket", "socket"),
             }:
                 continue
+            assert call is not None
+            observed_raw_acquisitions.append(call)
             parent: ast.AST | None = node
             function: ast.FunctionDef | None = None
             class_name: str | None = None
@@ -5264,6 +5624,17 @@ class DestructiveBoundaryTest(unittest.TestCase):
                     (node.lineno, function.name if function is not None else "<module>")
                 )
         self.assertEqual(raw_acquisitions, [])
+        self.assertEqual(
+            sorted(observed_raw_acquisitions),
+            sorted(
+                [
+                    ("os", "open"),
+                    ("os", "pidfd_open"),
+                    ("os", "dup"),
+                    ("_socket", "socket"),
+                ]
+            ),
+        )
         self.assertNotIn("sys.exception()", source)
         self.assertNotIn("close_all_descriptors_preserving_active", source)
         self.assertNotIn("close_closeable_preserving_active", source)
@@ -6420,13 +6791,26 @@ class WrapperBoundaryTest(unittest.TestCase):
             )
             or (
                 isinstance(node, ast.ClassDef)
-                and node.name in {"DescriptorRegistration", "DescriptorCustody"}
+                and node.name
+                in {
+                    "DescriptorRegistration",
+                    "PendingDescriptorAcquisition",
+                    "DescriptorCustody",
+                }
             )
         ]
         extracted = ast.fix_missing_locations(
             ast.Module(body=selected, type_ignores=[])
         )
-        namespace = {"os": os, "sys": sys}
+        namespace = {
+            "ACQUISITION_EMPTY": object(),
+            "collections": collections,
+            "functools": functools,
+            "itertools": itertools,
+            "os": os,
+            "operator": operator,
+            "sys": sys,
+        }
         exec(compile(extracted, "<loader-custody>", "exec"), namespace, namespace)
         return namespace["DescriptorCustody"]
 
@@ -6800,6 +7184,222 @@ class WrapperBoundaryTest(unittest.TestCase):
             close.assert_called_once_with(40)
             self.assertEqual(custody.descriptors, [prior])
 
+    def test_loader_c_capture_guards_fd_before_python_opcode_resumes(self) -> None:
+        descriptor_custody = self._descriptor_custody_type()
+        capture_code = descriptor_custody._capture_producer_result.__code__
+        inside_capture = next(
+            instruction.offset
+            for instruction in dis.get_instructions(capture_code)
+            if instruction.opname == "POP_TOP"
+        )
+        open_instructions = list(dis.get_instructions(descriptor_custody.open))
+        capture_load = next(
+            index
+            for index, instruction in enumerate(open_instructions)
+            if instruction.argval == "_capture_producer_result"
+        )
+        capture_call = next(
+            index
+            for index in range(capture_load, len(open_instructions))
+            if open_instructions[index].opname.startswith("CALL")
+        )
+        after_capture_call = open_instructions[capture_call + 1].offset
+        loader = WRAPPER.read_text(encoding="utf-8").split(
+            "read -r -d '' pinned_loader <<'PY' || true\n",
+            1,
+        )[1].split("\nPY\n", 1)[0]
+        open_ast = class_method_ast(loader, "DescriptorCustody", "open")
+        self.assertFalse(
+            any(
+                isinstance(node, ast.Name) and node.id == "acquired"
+                for node in ast.walk(open_ast)
+            )
+        )
+        self.assertNotIn("lambda", ast.get_source_segment(loader, open_ast) or "")
+
+        real_open = os.open
+        real_close = os.close
+        for label, code, offset in (
+            ("loader inside C capture", capture_code, inside_capture),
+            (
+                "loader after capture helper call",
+                descriptor_custody.open.__code__,
+                after_capture_call,
+            ),
+        ):
+            opened: list[int] = []
+
+            def observed_open(*args: object, **kwargs: object) -> int:
+                descriptor = real_open(*args, **kwargs)  # type: ignore[arg-type]
+                opened.append(descriptor)
+                return descriptor
+
+            custody = descriptor_custody(label)
+            try:
+                with self.subTest(boundary=label), mock.patch.object(
+                    os,
+                    "open",
+                    side_effect=observed_open,
+                ), self.assertRaisesRegex(KeyboardInterrupt, label):
+                    with interrupt_once_on_opcode(
+                        code,
+                        offset,
+                        label,
+                    ) as fired:
+                        custody.open("/dev/null", os.O_RDONLY)
+                self.assertTrue(fired[0])
+                self.assertEqual(len(opened), 1)
+                with self.assertRaises(OSError):
+                    os.fstat(opened[0])
+                self.assertEqual(custody.descriptors, [])
+                self.assertEqual(custody.state, "open")
+            finally:
+                for descriptor in opened:
+                    try:
+                        os.fstat(descriptor)
+                    except OSError:
+                        continue
+                    real_close(descriptor)
+
+    def test_loader_pending_acquisition_survives_handler_interruption(self) -> None:
+        descriptor_custody = self._descriptor_custody_type()
+        open_code = descriptor_custody.open.__code__
+        open_instructions = list(dis.get_instructions(open_code))
+        handler_start = next(
+            index
+            for index, instruction in enumerate(open_instructions)
+            if instruction.opname == "PUSH_EXC_INFO"
+        )
+        handler_entry = next(
+            instruction.offset
+            for instruction in open_instructions[handler_start:]
+            if instruction.opname == "STORE_FAST"
+        )
+        real_open = os.open
+        real_close = os.close
+        opened: list[int] = []
+
+        def observed_open(*args: object, **kwargs: object) -> int:
+            descriptor = real_open(*args, **kwargs)  # type: ignore[arg-type]
+            opened.append(descriptor)
+            return descriptor
+
+        custody = descriptor_custody("loader pending handler entry")
+        custody.state = "closed"
+        try:
+            with mock.patch.object(
+                os,
+                "open",
+                side_effect=observed_open,
+            ), self.assertRaisesRegex(KeyboardInterrupt, "loader handler entry"):
+                with interrupt_once_on_opcode(
+                    open_code,
+                    handler_entry,
+                    "loader handler entry",
+                ) as fired:
+                    custody.open("/dev/null", os.O_RDONLY)
+            self.assertTrue(fired[0])
+            self.assertEqual(len(opened), 1)
+            self.assertIsNotNone(custody.pending_acquisition)
+            os.fstat(opened[0])
+            custody.close()
+            with self.assertRaises(OSError):
+                os.fstat(opened[0])
+            self.assertIsNone(custody.pending_acquisition)
+            self.assertEqual(custody.descriptors, [])
+            self.assertEqual(custody.state, "closed")
+        finally:
+            for descriptor in opened:
+                try:
+                    os.fstat(descriptor)
+                except OSError:
+                    continue
+                real_close(descriptor)
+
+    def test_loader_reentrant_close_cannot_consume_active_open(self) -> None:
+        descriptor_custody = self._descriptor_custody_type()
+        open_code = descriptor_custody.open.__code__
+        instructions = list(dis.get_instructions(open_code))
+        capture_load = next(
+            index
+            for index, instruction in enumerate(instructions)
+            if instruction.argval == "_capture_producer_result"
+        )
+        capture_call = next(
+            index
+            for index in range(capture_load, len(instructions))
+            if instructions[index].opname.startswith("CALL")
+        )
+        boundaries = (
+            ("loader after active capture", instructions[capture_call + 1].offset),
+            (
+                "loader at active return",
+                next(
+                    instruction.offset
+                    for instruction in instructions
+                    if instruction.opname == "RETURN_VALUE"
+                ),
+            ),
+        )
+        real_close = os.close
+        for label, offset in boundaries:
+            custody = descriptor_custody(label)
+            observed: list[BaseException] = []
+            fired = [False]
+
+            def trace(frame: object, event: str, _argument: object):  # type: ignore[no-untyped-def]
+                if getattr(frame, "f_code") is open_code:
+                    setattr(frame, "f_trace_opcodes", True)
+                    if (
+                        not fired[0]
+                        and event == "opcode"
+                        and getattr(frame, "f_lasti") == offset
+                    ):
+                        fired[0] = True
+                        try:
+                            custody.close()
+                        except BaseException as error:
+                            observed.append(error)
+                return trace
+
+            descriptor: int | None = None
+            calls: list[int] = []
+
+            def observed_close(value: int) -> None:
+                calls.append(value)
+                real_close(value)
+
+            previous = sys.gettrace()
+            try:
+                sys.settrace(trace)
+                descriptor = custody.open("/dev/null", os.O_RDONLY)
+            finally:
+                sys.settrace(previous)
+            try:
+                self.assertTrue(fired[0])
+                self.assertEqual(len(observed), 1)
+                self.assertIsInstance(observed[0], SystemExit)
+                self.assertIn("acquisition is still active", str(observed[0]))
+                assert descriptor is not None
+                os.fstat(descriptor)
+                with mock.patch.object(
+                    os,
+                    "close",
+                    side_effect=observed_close,
+                ):
+                    custody.close()
+                self.assertEqual(calls, [descriptor])
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+            finally:
+                if descriptor is not None:
+                    try:
+                        os.fstat(descriptor)
+                    except OSError:
+                        pass
+                    else:
+                        real_close(descriptor)
+
     def test_loader_restore_and_close_boundary_matrices_persist_first_error(self) -> None:
         descriptor_custody = self._descriptor_custody_type()
         loader = WRAPPER.read_text(encoding="utf-8").split(
@@ -6867,10 +7467,9 @@ class WrapperBoundaryTest(unittest.TestCase):
         invoke_line = next(
             node.lineno
             for node in ast.walk(close_ast)
-            if isinstance(node, ast.Expr)
-            and isinstance(node.value, ast.Call)
-            and isinstance(node.value.func, ast.Attribute)
-            and node.value.func.attr == "close"
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "_invoke_closer"
         )
         finished_line = next(
             node.lineno
@@ -6985,6 +7584,72 @@ class WrapperBoundaryTest(unittest.TestCase):
             self.assertEqual(custody.descriptors, [])
             self.assertEqual(custody.state, "closed")
 
+    def test_loader_c_closer_guard_precedes_python_opcode_resumption(self) -> None:
+        descriptor_custody = self._descriptor_custody_type()
+        invoke_code = descriptor_custody._invoke_closer.__code__
+        inside_invoke = next(
+            instruction.offset
+            for instruction in dis.get_instructions(invoke_code)
+            if instruction.opname == "POP_TOP"
+        )
+        close_instructions = list(
+            dis.get_instructions(descriptor_custody._close_once)
+        )
+        invoke_load = next(
+            index
+            for index, instruction in enumerate(close_instructions)
+            if instruction.argval == "_invoke_closer"
+        )
+        invoke_call = next(
+            index
+            for index in range(invoke_load, len(close_instructions))
+            if close_instructions[index].opname.startswith("CALL")
+        )
+        after_invoke_call = close_instructions[invoke_call + 1].offset
+
+        real_close = os.close
+        for label, code, offset in (
+            ("loader inside C closer invocation", invoke_code, inside_invoke),
+            (
+                "loader after C closer helper call",
+                descriptor_custody._close_once.__code__,
+                after_invoke_call,
+            ),
+        ):
+            custody = descriptor_custody(label)
+            descriptor = custody.open("/dev/null", os.O_RDONLY)
+            calls: list[int] = []
+
+            def observed_close(value: int) -> None:
+                calls.append(value)
+                real_close(value)
+
+            try:
+                with self.subTest(boundary=label), mock.patch.object(
+                    os,
+                    "close",
+                    side_effect=observed_close,
+                ), self.assertRaisesRegex(KeyboardInterrupt, label):
+                    with interrupt_once_on_opcode(
+                        code,
+                        offset,
+                        label,
+                    ) as fired:
+                        custody.close()
+                self.assertTrue(fired[0])
+                self.assertEqual(calls, [descriptor])
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+                self.assertEqual(custody.descriptors, [])
+                self.assertEqual(custody.state, "closed")
+            finally:
+                try:
+                    os.fstat(descriptor)
+                except OSError:
+                    pass
+                else:
+                    real_close(descriptor)
+
     def test_loader_error_return_interruption_preserves_close_failure(self) -> None:
         descriptor_custody = self._descriptor_custody_type()
         loader = WRAPPER.read_text(encoding="utf-8").split(
@@ -6997,9 +7662,7 @@ class WrapperBoundaryTest(unittest.TestCase):
             for node in ast.walk(close_once_ast)
             if isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "os"
-            and node.func.attr == "close"
+            and node.func.attr == "_invoke_closer"
         )
         error_return = min(
             (

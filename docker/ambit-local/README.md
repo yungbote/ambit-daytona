@@ -334,7 +334,12 @@ FD counts are preflight telemetry, not durable authority, so holding the global
 lease cannot change an otherwise identical verification digest.
 Every application descriptor or closeable returned by this source's explicit
 opening primitives enters its lifetime-matching lexical custody in the same
-helper that performs the acquisition. Descriptor-producing
+helper that performs the acquisition. A preallocated guard slot receives each
+raw C producer result through one C-driven capture pipeline before Python
+bytecode resumes, so an interruption between the producer return and an
+ordinary local-variable store cannot make the result unreachable. Socket
+construction uses the base C socket type and rejects `fileno` adoption, so a
+caller-owned descriptor cannot silently enter a second owner. Descriptor-producing
 helpers receive that custody before opening anything and return only borrowed
 views that are already registered; there is no raw-return/adoption interval,
 unowned release state, or custody-to-custody transfer mechanism. Each syscall
@@ -346,7 +351,10 @@ exists. Each generation separately records whether its closer was entered and
 whether it returned. Cleanup enters `OPEN -> CLOSING -> CLOSED`, rejects and
 settles new acquisitions while closing, lets an interrupted or reentrant
 `CLOSING` traversal resume through the same one-shot generations, persists the
-first cleanup error across retries, attempts the complete distinct roster, and
+first cleanup error across retries, groups the complete roster before invoking
+any closer, gives a possibly started generation authority over every numeric or
+object alias, publishes closer entry and invokes the C closer in one C-consumed
+action sequence, attempts each remaining distinct authority once, and
 never retries an ambiguous failed numeric close that the kernel may already
 have consumed. The
 custody context receives the exact immediate body exception, and supplemental

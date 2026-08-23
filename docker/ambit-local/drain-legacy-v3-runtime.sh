@@ -39,14 +39,18 @@ caller_gid=$(/usr/bin/id -g)
 script_source=$(/usr/bin/realpath -e -- "${BASH_SOURCE[0]}")
 script_dir=${script_source%/*}
 tool=${script_dir}/legacy_v3_drain.py
-tool_sha256=694c9698e460e95479c07af07b1bf35fb29fb6896b43ef79cea15ed5e594d88c
+tool_sha256=7279c1366195bda944c854192b8bb3c3f40478fbf419106cf017577323f58f33
 control_root=/run/ambit-c16b-legacy-v3-drain-1577287b8182
 
 read -r -d '' pinned_loader <<'PY' || true
+import collections
+import functools
 import hashlib
 import hmac
+import itertools
 import json
 import os
+import operator
 import stat
 import sys
 
@@ -72,6 +76,7 @@ def canonical(value):
     return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 TERMINAL_TIMESTAMP_SENTINEL = "2000-01-01T00:00:00.000000+00:00"
+ACQUISITION_EMPTY = object()
 
 def terminal_projection_value_for(control, *, observed_at, boot_id):
     return {
@@ -117,22 +122,118 @@ class DescriptorRegistration:
         self.close_finished = False
         self.close_error = None
 
+class PendingDescriptorAcquisition:
+    def __init__(self):
+        self.captured = [ACQUISITION_EMPTY]
+        self.registration = None
+
 class DescriptorCustody:
     def __init__(self, label):
         self.label = label
         self.descriptors = []
         self.state = "open"
         self.cleanup_error = None
+        self.pending_acquisition = None
+
+    def _acknowledge_published_pending(self):
+        pending = self.pending_acquisition
+        if pending is None:
+            return
+        if self._acquisition_is_active(pending):
+            raise SystemExit(self.label + " acquisition is still active")
+        registration = pending.registration
+        if not (
+            registration is not None
+            and registration.published
+            and any(owned is registration for owned in self.descriptors)
+        ):
+            raise SystemExit(self.label + " prior acquisition handoff is incomplete")
+        self.pending_acquisition = None
+
+    def _admit_pending_registration(self):
+        pending = self.pending_acquisition
+        if pending is None:
+            return
+        if pending.captured[0] is ACQUISITION_EMPTY:
+            self.pending_acquisition = None
+            return
+        descriptor = pending.captured[0]
+        registration = pending.registration
+        if registration is None:
+            try:
+                registration = DescriptorRegistration(descriptor)
+            except BaseException:
+                registration = object.__new__(DescriptorRegistration)
+                registration.descriptor = descriptor
+                registration.published = False
+                registration.close_started = False
+                registration.close_finished = False
+                registration.close_error = None
+            pending.registration = registration
+        if not any(owned is registration for owned in self.descriptors):
+            candidate = list.copy(self.descriptors)
+            candidate.append(registration)
+            self.descriptors = candidate
+        registration.published = True
+        self.pending_acquisition = None
+
+    def _acquisition_is_active(self, pending):
+        frame = sys._getframe(1)
+        try:
+            while frame is not None:
+                if (
+                    frame.f_code is DescriptorCustody.open.__code__
+                    and frame.f_locals.get("self") is self
+                    and frame.f_locals.get("pending") is pending
+                ):
+                    return True
+                frame = frame.f_back
+            return False
+        finally:
+            del frame
+
+    @staticmethod
+    def _capture_producer_result(captured, producer):
+        collections.deque(
+            map(
+                functools.partial(captured.__setitem__, 0),
+                itertools.starmap(producer, ((),)),
+            ),
+            maxlen=0,
+        )
+
+    @staticmethod
+    def _invoke_closer(registration, closer):
+        collections.deque(
+            map(
+                operator.call,
+                (
+                    functools.partial(
+                        setattr,
+                        registration,
+                        "close_started",
+                        True,
+                    ),
+                    closer,
+                ),
+            ),
+            maxlen=0,
+        )
 
     def open(self, *args, **kwargs):
+        self._acknowledge_published_pending()
         baseline = list.copy(self.descriptors)
-        descriptor = None
+        pending = PendingDescriptorAcquisition()
+        self.pending_acquisition = pending
         registration = None
-        acquired = False
         try:
-            # Keep the acquired result and guard on one line-trace boundary.
-            descriptor = os.open(*args, **kwargs); acquired = True
+            producer = functools.partial(os.open, *args, **kwargs)
+            self._capture_producer_result(pending.captured, producer)
+            if pending.captured[0] is ACQUISITION_EMPTY:
+                raise SystemExit(self.label + " producer returned no descriptor")
+            descriptor = pending.captured[0]
             registration = DescriptorRegistration(descriptor)
+            pending.registration = registration
             if type(descriptor) is not int or descriptor < 0:
                 raise SystemExit(self.label + " acquired descriptor is invalid")
             if self.state != "open" or self.cleanup_error is not None:
@@ -146,8 +247,11 @@ class DescriptorCustody:
             registration.published = True
             return descriptor
         except BaseException as error:
-            if not acquired:
+            if pending.captured[0] is ACQUISITION_EMPTY:
+                if self.pending_acquisition is pending:
+                    self.pending_acquisition = None
                 raise
+            descriptor = pending.captured[0]
             if registration is None:
                 try:
                     registration = DescriptorRegistration(descriptor)
@@ -163,6 +267,7 @@ class DescriptorCustody:
                     registration.close_started = False
                     registration.close_finished = False
                     registration.close_error = None
+            pending.registration = registration
             for _attempt in range(2):
                 try:
                     self._restore_roster(baseline, registration, error)
@@ -193,6 +298,11 @@ class DescriptorCustody:
                     self.label + " registration cleanup also failed: ",
                     cleanup_error,
                 )
+            if (
+                self.pending_acquisition is pending
+                and (registration.close_started or registration.close_finished)
+            ):
+                self.pending_acquisition = None
             raise
 
     def _restore_roster(self, baseline, registration, active_error):
@@ -232,8 +342,8 @@ class DescriptorCustody:
         preinvoke_error = None
         while not registration.close_started:
             try:
-                # Publish syscall entry and invoke it at one trace boundary.
-                registration.close_started = True; os.close(registration.descriptor)
+                closer = functools.partial(os.close, registration.descriptor)
+                self._invoke_closer(registration, closer)
                 registration.close_finished = True
             except BaseException as cleanup_error:
                 if not registration.close_started:
@@ -341,7 +451,11 @@ class DescriptorCustody:
             )
 
     def close(self):
-        if self.state == "closed":
+        pending = self.pending_acquisition
+        if pending is not None and self._acquisition_is_active(pending):
+            raise SystemExit(self.label + " acquisition is still active")
+        self._admit_pending_registration()
+        if self.state == "closed" and not self.descriptors:
             if self.cleanup_error is not None:
                 raise self.cleanup_error
             return

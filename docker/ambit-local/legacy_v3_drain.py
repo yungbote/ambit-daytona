@@ -12,15 +12,20 @@ control record, pidfd process custody, and exact mount/socket postconditions.
 
 from __future__ import annotations
 
+import _socket
 import argparse
+import collections
 import contextlib
 import ctypes
 import datetime as dt
 import errno
 import fcntl
+import functools
 import hashlib
+import itertools
 import json
 import os
+import operator
 import re
 import resource
 import select
@@ -33,7 +38,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterator, Mapping, Protocol, Sequence
+from typing import Any, Callable, Iterator, Mapping, Protocol, Sequence, cast
 
 
 SCHEMA = "ambit.local-daytona-legacy-v3-drain-verification/v1"
@@ -42,6 +47,7 @@ STATE_SCHEMA = "ambit.local-daytona-legacy-v3-drain-state/v1"
 PROJECTION_SCHEMA = "ambit.local-daytona-legacy-v3-drain-terminal/v1"
 SOURCE_TOMBSTONE_SCHEMA = "ambit.local-daytona-legacy-v3-source-tombstone/v1"
 LEGACY_SCHEMA = "ambit.local-daytona-isolated-docker/v3"
+ACQUISITION_EMPTY = object()
 
 EXPECTED_STATE_ROOT = Path("/home/bote/m/.local/ambit-daytona-c16b/state")
 EXPECTED_RECEIPT_SHA256 = (
@@ -980,6 +986,15 @@ class ResourceRegistration:
     close_error: BaseException | None = field(default=None, init=False)
 
 
+@dataclass(eq=False)
+class PendingAcquisition:
+    kind: str
+    captured: list[object] = field(
+        default_factory=lambda: [ACQUISITION_EMPTY]
+    )
+    registration: ResourceRegistration | None = None
+
+
 class ResourceCustody:
     """One-shot resource ownership with failure-total, reentrancy-safe cleanup."""
 
@@ -988,23 +1003,127 @@ class ResourceCustody:
         self._resources: list[ResourceRegistration] = []
         self._state = "open"
         self._cleanup_error: BaseException | None = None
+        self._pending_acquisition: PendingAcquisition | None = None
+
+    def _acknowledge_published_pending(self) -> None:
+        pending = self._pending_acquisition
+        if pending is None:
+            return
+        require(
+            not self._acquisition_is_active(pending),
+            f"{self.label} acquisition is still active",
+        )
+        registration = pending.registration
+        require(
+            registration is not None
+            and registration.published
+            and any(owned is registration for owned in self._resources),
+            f"{self.label} prior acquisition handoff is incomplete",
+        )
+        self._pending_acquisition = None
+
+    def _admit_pending_registration(self) -> None:
+        pending = self._pending_acquisition
+        if pending is None:
+            return
+        if pending.captured[0] is ACQUISITION_EMPTY:
+            self._pending_acquisition = None
+            return
+        resource_value = cast(int | Closeable, pending.captured[0])
+        registration = pending.registration
+        if registration is None:
+            try:
+                registration = ResourceRegistration(pending.kind, resource_value)
+            except BaseException:
+                registration = object.__new__(ResourceRegistration)
+                registration.kind = pending.kind
+                registration.value = resource_value
+                registration.published = False
+                registration.close_started = False
+                registration.close_finished = False
+                registration.close_error = None
+            pending.registration = registration
+        if not any(owned is registration for owned in self._resources):
+            candidate = list.copy(self._resources)
+            candidate.append(registration)
+            self._resources = candidate
+        registration.published = True
+        self._pending_acquisition = None
+
+    def _acquisition_is_active(self, pending: PendingAcquisition) -> bool:
+        frame = sys._getframe(1)
+        try:
+            while frame is not None:
+                if (
+                    frame.f_code is ResourceCustody._acquire.__code__
+                    and frame.f_locals.get("self") is self
+                    and frame.f_locals.get("pending") is pending
+                ):
+                    return True
+                frame = frame.f_back
+            return False
+        finally:
+            del frame
 
     def open(self, *args: object, **kwargs: object) -> int:
         return self._acquire(
             "descriptor",
-            lambda: os.open(*args, **kwargs),  # type: ignore[arg-type]
+            functools.partial(os.open, *args, **kwargs),  # type: ignore[arg-type]
         )
 
     def pidfd_open(self, pid: int, flags: int) -> int:
-        return self._acquire("descriptor", lambda: os.pidfd_open(pid, flags))
+        return self._acquire(
+            "descriptor",
+            functools.partial(os.pidfd_open, pid, flags),
+        )
 
     def dup(self, descriptor: int) -> int:
-        return self._acquire("descriptor", lambda: os.dup(descriptor))
+        return self._acquire("descriptor", functools.partial(os.dup, descriptor))
 
-    def socket(self, *args: object, **kwargs: object) -> socket.socket:
+    def socket(self, *args: object, **kwargs: object) -> _socket.socket:
+        require(
+            len(args) < 4 and "fileno" not in kwargs,
+            f"{self.label} raw socket adoption is forbidden",
+        )
         return self._acquire(
             "closeable",
-            lambda: socket.socket(*args, **kwargs),  # type: ignore[arg-type]
+            functools.partial(_socket.socket, *args, **kwargs),  # type: ignore[arg-type]
+        )  # type: ignore[return-value]
+
+    @staticmethod
+    def _capture_producer_result(
+        captured: list[object],
+        producer: Callable[[], int | Closeable],
+    ) -> None:
+        # The C iterator stores the C producer's result into the preallocated
+        # slot before the interpreter can deliver an opcode-level interruption.
+        collections.deque(
+            map(
+                functools.partial(captured.__setitem__, 0),
+                itertools.starmap(producer, ((),)),
+            ),
+            maxlen=0,
+        )
+
+    @staticmethod
+    def _invoke_closer(
+        registration: ResourceRegistration,
+        closer: Callable[[], None],
+    ) -> None:
+        collections.deque(
+            map(
+                operator.call,
+                (
+                    functools.partial(
+                        setattr,
+                        registration,
+                        "close_started",
+                        True,
+                    ),
+                    closer,
+                ),
+            ),
+            maxlen=0,
         )
 
     def _acquire(
@@ -1012,22 +1131,30 @@ class ResourceCustody:
         kind: str,
         producer: Callable[[], int | Closeable],
     ) -> int | Closeable:
+        self._acknowledge_published_pending()
         baseline = list.copy(self._resources)
-        resource_value: int | Closeable | None = None
+        pending = PendingAcquisition(kind)
+        self._pending_acquisition = pending
         registration: ResourceRegistration | None = None
-        acquired = False
         try:
-            # One source line prevents a line-trace gap between result and guard.
-            resource_value = producer(); acquired = True
+            self._capture_producer_result(pending.captured, producer)
+            require(
+                pending.captured[0] is not ACQUISITION_EMPTY,
+                f"{self.label} producer returned no resource",
+            )
+            resource_value = cast(int | Closeable, pending.captured[0])
             registration = ResourceRegistration(kind, resource_value)
+            pending.registration = registration
             self._publish_registration(registration, baseline)
             return resource_value
         except BaseException as error:
-            if not acquired:
+            if pending.captured[0] is ACQUISITION_EMPTY:
+                if self._pending_acquisition is pending:
+                    self._pending_acquisition = None
                 raise
+            resource_value = cast(int | Closeable, pending.captured[0])
             if registration is None:
                 try:
-                    assert resource_value is not None
                     registration = ResourceRegistration(kind, resource_value)
                 except BaseException as registration_error:
                     add_error_note(
@@ -1042,6 +1169,7 @@ class ResourceCustody:
                     registration.close_started = False
                     registration.close_finished = False
                     registration.close_error = None
+            pending.registration = registration
             for _attempt in range(2):
                 try:
                     self._restore_roster(baseline, registration, error)
@@ -1072,6 +1200,11 @@ class ResourceCustody:
                     f"{self.label} registration cleanup also failed: ",
                     cleanup_error,
                 )
+            if (
+                self._pending_acquisition is pending
+                and (registration.close_started or registration.close_finished)
+            ):
+                self._pending_acquisition = None
             raise
 
     def _publish_registration(
@@ -1168,11 +1301,11 @@ class ResourceCustody:
         preinvoke_error: BaseException | None = None
         while not registration.close_started:
             try:
-                # Publish syscall entry and invoke it at one trace boundary.
                 if registration.kind == "descriptor":
-                    registration.close_started = True; os.close(registration.value)
+                    closer = functools.partial(os.close, registration.value)
                 else:
-                    registration.close_started = True; registration.value.close()
+                    closer = functools.partial(registration.value.close)
+                self._invoke_closer(registration, closer)
                 registration.close_finished = True
             except BaseException as cleanup_error:
                 if not registration.close_started:
@@ -1308,6 +1441,7 @@ class ResourceCustody:
         self.close_descriptors((descriptor,))
 
     def close_descriptors(self, descriptors: tuple[int, ...]) -> None:
+        self._acknowledge_published_pending()
         require(
             type(descriptors) is tuple
             and all(exact_descriptor(descriptor) for descriptor in descriptors)
@@ -1365,7 +1499,13 @@ class ResourceCustody:
         return matches[0]
 
     def close(self) -> None:
-        if self._state == "closed":
+        pending = self._pending_acquisition
+        require(
+            pending is None or not self._acquisition_is_active(pending),
+            f"{self.label} acquisition is still active",
+        )
+        self._admit_pending_registration()
+        if self._state == "closed" and not self._resources:
             self._raise_cleanup_error(f"{self.label} cleanup failed")
             return
         completed = False
