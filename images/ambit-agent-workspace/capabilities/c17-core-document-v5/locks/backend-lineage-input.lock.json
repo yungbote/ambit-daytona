@@ -1,0 +1,27 @@
+{
+  "schema": "ambit.runtime-pack-external-backend-lineage-input-lock/v1",
+  "state": "unavailable",
+  "producer": "ambit-backend",
+  "ownership": "backend-runtime-capability-current-component-durable-lineage",
+  "interpretation": "opaque-canonical-byte-envelope-only",
+  "requiredEnvelopeFields": [
+    "schemaRef",
+    "ref",
+    "digest",
+    "canonicalBytesSha256"
+  ],
+  "expectedBackendCommit": "unavailable",
+  "expectedBackendSchemaRef": "unavailable",
+  "requiredCrossRepositoryEvidence": [
+    "exact-backend-commit-and-tree",
+    "exact-canonical-lineage-fixture",
+    "exact-schema-ref-and-digest",
+    "backend-currentness-reproof-before-each-render",
+    "daytona-byte-for-byte-envelope-conformance"
+  ],
+  "forbidden": [
+    "daytona-owned-profile-pack-or-currentness-interpretation",
+    "second-runtime-component-lineage-schema",
+    "self-consistent-envelope-as-operational-authority"
+  ]
+}

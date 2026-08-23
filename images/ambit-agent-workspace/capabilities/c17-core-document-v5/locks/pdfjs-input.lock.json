@@ -16,8 +16,8 @@
     "npmAttestationUrl": "https://registry.npmjs.org/-/npm/v1/attestations/pdfjs-dist@6.2.108"
   },
   "retainedStaticRoots": [
-    "build/pdf.mjs",
-    "build/pdf.worker.mjs",
+    "legacy/build/pdf.mjs",
+    "legacy/build/pdf.worker.mjs",
     "cmaps",
     "iccs",
     "wasm"
@@ -34,14 +34,16 @@
     "wasm/LICENSE_QCMS"
   ],
   "excludedRoots": [
-    "legacy",
+    "build",
     "standard_fonts",
     "types",
     "web"
   ],
   "execution": {
     "state": "unavailable",
-    "reason": "no-exact-licensed-pdfjs-canvas-execution-component",
+    "nodeInputLock": "node-input.lock.json",
+    "canvasInputLock": "canvas-input.lock.json",
+    "reason": "exact-node-and-canvas-evidence-closures-incomplete",
     "forbiddenSubstitutions": [
       "browser-cdn",
       "poppler",
