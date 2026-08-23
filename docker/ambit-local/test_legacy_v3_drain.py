@@ -204,6 +204,23 @@ def namespace_census(
     return result
 
 
+def acquire_test_descriptor(
+    custody: MODULE.ResourceCustody,
+    descriptor: int,
+) -> int:
+    """Acquire a synthetic descriptor through the same public custody boundary."""
+
+    with mock.patch.object(MODULE.os, "open", return_value=descriptor):
+        return custody.open("test-owned-descriptor", os.O_RDONLY)
+
+
+def acquire_test_descriptors(
+    custody: MODULE.ResourceCustody,
+    *descriptors: int,
+) -> tuple[int, ...]:
+    return tuple(acquire_test_descriptor(custody, value) for value in descriptors)
+
+
 class ReceiptContractTest(unittest.TestCase):
     def test_exact_v3_receipt_passes(self) -> None:
         parsed = MODULE.parse_legacy_receipt(encoded_receipt())
@@ -778,7 +795,6 @@ class ProcessUniverseTest(unittest.TestCase):
             )
 
     def test_allowed_pidfds_remain_held_through_action(self) -> None:
-        closed: list[str] = []
         roles = {"dockerd", "containerd"}
         security_state = self._root_security()
         rows = [
@@ -792,12 +808,20 @@ class ProcessUniverseTest(unittest.TestCase):
                 parent_pid=row["parentPid"],
                 start_ticks=row["startTimeTicks"],
                 pidfd=30 + row["taskId"],
+                process_fd=130 + row["taskId"],
                 security_state=row["securityState"],
             )
-            task.close.side_effect = (
-                lambda value=f"{row['pid']}/{row['taskId']}": closed.append(value)
-            )
             tasks.append(task)
+
+        def capture(
+            custody: MODULE.ResourceCustody,
+            _thread_group_id: int,
+            _task_id: int,
+        ) -> object:
+            task = tasks.pop(0)
+            acquire_test_descriptors(custody, task.pidfd, task.process_fd)
+            return task
+
         with mock.patch.object(
             MODULE,
             "require_related_process_cutoff",
@@ -805,7 +829,7 @@ class ProcessUniverseTest(unittest.TestCase):
         ), mock.patch.object(
             MODULE,
             "capture_task",
-            side_effect=tasks,
+            side_effect=capture,
         ), mock.patch.object(
             MODULE, "pidfd_exited", return_value=False
         ), mock.patch.object(
@@ -814,12 +838,22 @@ class ProcessUniverseTest(unittest.TestCase):
             MODULE, "process_authority", return_value={}
         ), mock.patch.object(
             MODULE, "exact_process_status", return_value="exact"
-        ):
+        ), mock.patch.object(MODULE.os, "close") as close:
             with MODULE.hold_related_process_cutoff(
                 {"authority": {}}, allowed_roles=roles
             ):
-                self.assertEqual(closed, [])
-        self.assertEqual(sorted(closed), ["1/1", "1/3", "2/2"])
+                close.assert_not_called()
+        self.assertCountEqual(
+            close.call_args_list,
+            [
+                mock.call(31),
+                mock.call(131),
+                mock.call(33),
+                mock.call(133),
+                mock.call(32),
+                mock.call(132),
+            ],
+        )
 
     def test_action_cutoff_rejects_a_new_unheld_thread(self) -> None:
         security_state = self._root_security()
@@ -838,14 +872,24 @@ class ProcessUniverseTest(unittest.TestCase):
             parent_pid=0,
             start_ticks=10,
             pidfd=31,
+            process_fd=131,
             security_state=security_state,
         )
+
+        def capture(
+            custody: MODULE.ResourceCustody,
+            _thread_group_id: int,
+            _task_id: int,
+        ) -> object:
+            acquire_test_descriptors(custody, task.pidfd, task.process_fd)
+            return task
+
         with mock.patch.object(
             MODULE,
             "require_related_process_cutoff",
             side_effect=(original, changed),
         ), mock.patch.object(
-            MODULE, "capture_task", return_value=task
+            MODULE, "capture_task", side_effect=capture
         ), mock.patch.object(
             MODULE, "pidfd_exited", return_value=False
         ), mock.patch.object(
@@ -854,13 +898,16 @@ class ProcessUniverseTest(unittest.TestCase):
             MODULE, "process_authority", return_value={}
         ), mock.patch.object(
             MODULE, "exact_process_status", return_value="exact"
-        ), self.assertRaisesRegex(MODULE.DrainError, "entering the action cutoff"):
+        ), mock.patch.object(MODULE.os, "close") as close, self.assertRaisesRegex(
+            MODULE.DrainError,
+            "entering the action cutoff",
+        ):
             with MODULE.hold_related_process_cutoff(
                 {"authority": {}},
                 allowed_roles={"dockerd"},
             ):
                 self.fail("a changed task roster reached the action")
-        task.close.assert_called_once_with()
+        self.assertEqual(close.call_args_list, [mock.call(131), mock.call(31)])
 
     def test_action_cutoff_rejects_held_nonleader_security_drift(self) -> None:
         security_state = self._root_security()
@@ -873,12 +920,22 @@ class ProcessUniverseTest(unittest.TestCase):
             parent_pid=0,
             start_ticks=10,
             pidfd=31,
+            process_fd=131,
             security_state=security_state,
         )
+
+        def capture(
+            custody: MODULE.ResourceCustody,
+            _thread_group_id: int,
+            _task_id: int,
+        ) -> object:
+            acquire_test_descriptors(custody, task.pidfd, task.process_fd)
+            return task
+
         with mock.patch.object(
             MODULE, "require_related_process_cutoff", return_value=proof
         ), mock.patch.object(
-            MODULE, "capture_task", return_value=task
+            MODULE, "capture_task", side_effect=capture
         ), mock.patch.object(
             MODULE, "pidfd_exited", return_value=False
         ), mock.patch.object(
@@ -896,13 +953,13 @@ class ProcessUniverseTest(unittest.TestCase):
         ), self.assertRaisesRegex(
             MODULE.ManualRecoveryRequired,
             "security state changed",
-        ):
+        ), mock.patch.object(MODULE.os, "close") as close:
             with MODULE.hold_related_process_cutoff(
                 {"authority": {}},
                 allowed_roles={"dockerd"},
             ):
                 pass
-        task.close.assert_called_once_with()
+        self.assertEqual(close.call_args_list, [mock.call(131), mock.call(31)])
 
     def test_action_error_remains_primary_while_post_cutoff_reproof_runs(self) -> None:
         security_state = self._root_security()
@@ -921,8 +978,18 @@ class ProcessUniverseTest(unittest.TestCase):
             parent_pid=0,
             start_ticks=10,
             pidfd=31,
+            process_fd=131,
             security_state=security_state,
         )
+
+        def capture(
+            custody: MODULE.ResourceCustody,
+            _thread_group_id: int,
+            _task_id: int,
+        ) -> object:
+            acquire_test_descriptors(custody, task.pidfd, task.process_fd)
+            return task
+
         with mock.patch.object(
             MODULE,
             "require_related_process_cutoff",
@@ -934,7 +1001,7 @@ class ProcessUniverseTest(unittest.TestCase):
         ) as cutoff, mock.patch.object(
             MODULE,
             "capture_task",
-            return_value=task,
+            side_effect=capture,
         ), mock.patch.object(
             MODULE,
             "pidfd_exited",
@@ -953,7 +1020,7 @@ class ProcessUniverseTest(unittest.TestCase):
         ), self.assertRaisesRegex(
             RuntimeError,
             "action failed after mutation",
-        ) as raised:
+        ) as raised, mock.patch.object(MODULE.os, "close") as close:
             with MODULE.hold_related_process_cutoff(
                 {"authority": {}},
                 allowed_roles={"dockerd"},
@@ -962,7 +1029,7 @@ class ProcessUniverseTest(unittest.TestCase):
         self.assertEqual(cutoff.call_count, 3)
         self.assertEqual(reprove.call_count, 3)
         self.assertIn("post-action universe drift", "\n".join(raised.exception.__notes__))
-        task.close.assert_called_once_with()
+        self.assertEqual(close.call_args_list, [mock.call(131), mock.call(31)])
 
     def test_task_roster_includes_nonleader_threads(self) -> None:
         with mock.patch.object(
@@ -1029,13 +1096,15 @@ class ProcessUniverseTest(unittest.TestCase):
             MODULE.os, "stat", return_value=identity
         ), mock.patch.object(
             MODULE, "read_at", side_effect=read
-        ), mock.patch.object(MODULE.os, "close"):
-            task = MODULE.capture_task(100, 101)
-            self.assertIsNotNone(task)
-            assert task is not None
-            self.assertEqual((task.parent_pid, task.start_ticks), (1, 77))
-            self.assertEqual(task.security_state, self._root_security())
-            task.close()
+        ), mock.patch.object(MODULE.os, "close") as close:
+            with MODULE.ResourceCustody(label="captured task test") as custody:
+                task = MODULE.capture_task(custody, 100, 101)
+                self.assertIsNotNone(task)
+                assert task is not None
+                self.assertEqual((task.parent_pid, task.start_ticks), (1, 77))
+                self.assertEqual(task.security_state, self._root_security())
+                close.assert_not_called()
+        self.assertEqual(close.call_args_list, [mock.call(31), mock.call(30)])
         pidfd_open.assert_called_once_with(101, MODULE.PIDFD_THREAD)
 
     def test_task_capture_failure_attempts_procfd_and_pidfd_cleanup(self) -> None:
@@ -1060,8 +1129,82 @@ class ProcessUniverseTest(unittest.TestCase):
             "close",
             side_effect=(OSError("proc close failed"), None),
         ) as close, self.assertRaisesRegex(RuntimeError, "capture failed"):
-            MODULE.capture_task(100, 101)
+            with MODULE.ResourceCustody(label="captured task failure") as custody:
+                MODULE.capture_task(custody, 100, 101)
         self.assertEqual(close.call_args_list, [mock.call(31), mock.call(30)])
+
+    def test_caller_interrupt_immediately_after_task_capture_closes_both(self) -> None:
+        status = mock.Mock(
+            thread_group_id=100,
+            task_id=101,
+            security_state=self._root_security(),
+        )
+        identity = mock.Mock(st_dev=1, st_ino=2)
+        with mock.patch.object(MODULE.os, "pidfd_open", return_value=30), mock.patch.object(
+            MODULE,
+            "pidfd_exited",
+            return_value=False,
+        ), mock.patch.object(MODULE.os, "open", return_value=31), mock.patch.object(
+            MODULE.os,
+            "fstat",
+            return_value=identity,
+        ), mock.patch.object(MODULE.os, "stat", return_value=identity), mock.patch.object(
+            MODULE,
+            "read_at",
+            return_value=b"captured",
+        ), mock.patch.object(MODULE, "parse_task_status", return_value=status), mock.patch.object(
+            MODULE,
+            "stat_identity",
+            return_value=(1, 77),
+        ), mock.patch.object(MODULE, "reprove_captured_task"), mock.patch.object(
+            MODULE.os,
+            "close",
+        ) as close, self.assertRaisesRegex(KeyboardInterrupt, "caller interrupted"):
+            with MODULE.ResourceCustody(label="task capture caller") as custody:
+                captured = MODULE.capture_task(custody, 100, 101)
+                self.assertIsNotNone(captured)
+                raise KeyboardInterrupt("caller interrupted")
+        self.assertEqual(close.call_args_list, [mock.call(31), mock.call(30)])
+
+    def test_task_capture_partial_acquisition_interrupt_closes_pidfd(self) -> None:
+        with mock.patch.object(MODULE.os, "pidfd_open", return_value=30), mock.patch.object(
+            MODULE,
+            "pidfd_exited",
+            return_value=False,
+        ), mock.patch.object(
+            MODULE.os,
+            "open",
+            side_effect=KeyboardInterrupt("task directory acquisition interrupted"),
+        ), mock.patch.object(MODULE.os, "close") as close, self.assertRaisesRegex(
+            KeyboardInterrupt,
+            "task directory acquisition interrupted",
+        ):
+            with MODULE.ResourceCustody(label="partial task capture") as custody:
+                MODULE.capture_task(custody, 100, 101)
+        close.assert_called_once_with(30)
+
+    def test_task_capture_none_churn_retires_each_acquisition_once(self) -> None:
+        with mock.patch.object(MODULE.os, "pidfd_open", return_value=30), mock.patch.object(
+            MODULE,
+            "pidfd_exited",
+            return_value=True,
+        ), mock.patch.object(MODULE.os, "close") as close:
+            with MODULE.ResourceCustody(label="already exited task") as custody:
+                self.assertIsNone(MODULE.capture_task(custody, 100, 101))
+            close.assert_called_once_with(30)
+
+        with mock.patch.object(MODULE.os, "pidfd_open", return_value=30), mock.patch.object(
+            MODULE,
+            "pidfd_exited",
+            side_effect=(False, True),
+        ), mock.patch.object(MODULE.os, "open", return_value=31), mock.patch.object(
+            MODULE.os,
+            "fstat",
+            side_effect=FileNotFoundError(),
+        ), mock.patch.object(MODULE.os, "close") as close:
+            with MODULE.ResourceCustody(label="vanished task") as custody:
+                self.assertIsNone(MODULE.capture_task(custody, 100, 101))
+            self.assertEqual(close.call_args_list, [mock.call(31), mock.call(30)])
 
     def test_held_thread_pidfd_reproof_reads_current_nonleader_security(self) -> None:
         expected = self._root_security()
@@ -1097,40 +1240,6 @@ class ProcessUniverseTest(unittest.TestCase):
                 expected_security_state=expected,
             )
         reopened.assert_not_called()
-
-    def test_captured_task_close_attempts_all_after_base_exception(self) -> None:
-        task = MODULE.CapturedTask(
-            100,
-            101,
-            30,
-            31,
-            1,
-            77,
-            self._root_security(),
-        )
-        with mock.patch.object(
-            MODULE.os,
-            "close",
-            side_effect=(KeyboardInterrupt("proc close interrupted"), None),
-        ) as close, self.assertRaisesRegex(
-            MODULE.DrainError,
-            "captured task descriptor close failed",
-        ):
-            task.close()
-        self.assertEqual(close.call_args_list, [mock.call(31), mock.call(30)])
-
-    def test_process_observation_close_attempts_procfd_and_pidfd_after_failure(self) -> None:
-        observation = MODULE.ProcessReferenceObservation({}, 30, 31)
-        with mock.patch.object(
-            MODULE.os,
-            "close",
-            side_effect=(OSError("proc close failed"), None),
-        ) as close, self.assertRaisesRegex(
-            MODULE.DrainError,
-            "process reference observation descriptor close failed",
-        ):
-            observation.close()
-        self.assertEqual(close.call_args_list, [mock.call(31), mock.call(30)])
 
     def test_nonleader_edge_is_in_the_related_task_proof(self) -> None:
         root_security = self._root_security()
@@ -1182,19 +1291,29 @@ class ProcessUniverseTest(unittest.TestCase):
         def observation(row: dict[str, object], offset: int) -> object:
             return MODULE.ProcessReferenceObservation(row, 30 + offset, 40 + offset)
 
-        scans = (
+        scans = iter((
             observation(leader, 0),
             observation(worker, 1),
             observation(verifier, 2),
             observation(dict(leader), 3),
             observation(dict(worker), 4),
-        )
+        ))
+
+        def scan(
+            custody: MODULE.ResourceCustody,
+            *_args: object,
+            **_kwargs: object,
+        ) -> object:
+            value = next(scans)
+            acquire_test_descriptors(custody, value.pidfd, value.process_fd)
+            return value
+
         with mock.patch.object(
             MODULE,
             "process_task_coordinates_once",
             return_value=((100, 100), (100, 101), (999, 999)),
         ), mock.patch.object(
-            MODULE, "process_reference_scan", side_effect=scans
+            MODULE, "process_reference_scan", side_effect=scan
         ), mock.patch.object(
             MODULE.os, "getpid", return_value=999
         ), mock.patch.object(
@@ -1304,6 +1423,17 @@ class ProcessUniverseTest(unittest.TestCase):
                 MODULE.ProcessReferenceObservation(row, 30 + index, 40 + index)
                 for index, row in enumerate(rows)
             )
+            observation_values = iter(observations)
+
+            def scan(
+                custody: MODULE.ResourceCustody,
+                *_args: object,
+                **_kwargs: object,
+            ) -> object:
+                value = next(observation_values)
+                acquire_test_descriptors(custody, value.pidfd, value.process_fd)
+                return value
+
             current = {
                 MODULE.NamespaceIdentity(
                     str(identity["kind"]),
@@ -1320,7 +1450,7 @@ class ProcessUniverseTest(unittest.TestCase):
             ), mock.patch.object(
                 MODULE,
                 "process_reference_scan",
-                side_effect=observations,
+                side_effect=scan,
             ), mock.patch.object(
                 MODULE.os,
                 "getpid",
@@ -1466,18 +1596,10 @@ class ProcessUniverseTest(unittest.TestCase):
         self.assertIn("_task_mount_view(task) == view", held_commit)
         self.assertIn("_namespace_fd_records(", held_commit)
         self.assertIn("== namespace_fd_rows", held_commit)
-        self.assertLess(
-            held_commit.index("result = ("),
-            held_commit.index("for task in tuple(held)"),
-        )
-        self.assertLess(
-            held_commit.index("for task in tuple(held)"),
-            held_commit.index("custody.release_descriptors(descriptors)"),
-        )
-        self.assertLess(
-            held_commit.index("custody.release_descriptors(descriptors)"),
-            held_commit.index("return result"),
-        )
+        self.assertIn("destination_custody", held_commit)
+        self.assertIn("capture_task(custody,", held_commit)
+        self.assertIn("open_current_task_namespace(", held_commit)
+        self.assertNotIn(".close()", held_commit)
         mount_projection = source[
             source.index("def global_mount_roster_once")
             : source.index("def stable_global_mount_roster")
@@ -1507,8 +1629,8 @@ class ProcessUniverseTest(unittest.TestCase):
             source.index("def collect_authority")
             : source.index("def collect_verification")
         ]
-        self.assertEqual(collection.count("stable_task_namespace_census()"), 1)
-        self.assertIn("with stable_task_namespace_census() as namespace_census", collection)
+        self.assertEqual(collection.count("stable_task_namespace_census(custody)"), 1)
+        self.assertIn("namespace_census = stable_task_namespace_census(custody)", collection)
         finish = source[
             source.index("def _finish_authority_with_namespace_census")
             : source.index("def collect_authority")
@@ -1750,64 +1872,82 @@ class ProcessUniverseTest(unittest.TestCase):
     def test_namespace_census_churn_between_passes_rejects(self) -> None:
         stable = namespace_census(digest="1" * 64)
         changed = namespace_census(digest="2" * 64)
+        values = iter((stable, changed))
+
+        def once(custody: MODULE.ResourceCustody, **_kwargs: object) -> object:
+            value = next(values)
+            return value
+
         with mock.patch.object(
             MODULE,
             "task_namespace_census_once",
-            side_effect=(stable, changed),
-        ), self.assertRaisesRegex(MODULE.DrainError, "changed across proof passes"):
-            MODULE.stable_task_namespace_census()
+            side_effect=once,
+        ), self.assertRaisesRegex(
+            MODULE.DrainError,
+            "changed across proof passes",
+        ):
+            with MODULE.ResourceCustody(label="changed namespace census") as custody:
+                MODULE.stable_task_namespace_census(custody)
 
     def test_second_namespace_pass_excludes_first_pass_proof_descriptors(self) -> None:
         first = mock.Mock(proof_sha256="a" * 64, namespace_descriptors=(40, 41))
         second = mock.Mock(proof_sha256="a" * 64, namespace_descriptors=(50,))
+        values = iter((first, second))
+
+        def census_once(
+            custody: MODULE.ResourceCustody,
+            **_kwargs: object,
+        ) -> object:
+            value = next(values)
+            acquire_test_descriptors(custody, *value.namespace_descriptors)
+            return value
+
         with mock.patch.object(
             MODULE,
             "task_namespace_census_once",
-            side_effect=(first, second),
-        ) as once:
-            self.assertIs(MODULE.stable_task_namespace_census(), second)
-        self.assertEqual(once.call_args_list[0], mock.call())
+            side_effect=census_once,
+        ) as once, mock.patch.object(MODULE.os, "close") as close:
+            with MODULE.ResourceCustody(label="second namespace census") as custody:
+                self.assertIs(MODULE.stable_task_namespace_census(custody), second)
+                self.assertEqual(close.call_args_list, [mock.call(41), mock.call(40)])
+            self.assertEqual(
+                close.call_args_list,
+                [mock.call(41), mock.call(40), mock.call(50)],
+            )
+        self.assertEqual(len(once.call_args_list[0].args), 1)
+        self.assertIsInstance(once.call_args_list[0].args[0], MODULE.ResourceCustody)
+        self.assertEqual(once.call_args_list[0].kwargs, {})
+        self.assertIs(once.call_args_list[1].args[0], custody)
         self.assertEqual(
-            once.call_args_list[1],
-            mock.call(external_self_excluded_fds=frozenset((40, 41))),
+            once.call_args_list[1].kwargs,
+            {"external_self_excluded_fds": frozenset((40, 41))},
         )
-        first.close.assert_called_once_with()
-        second.close.assert_not_called()
 
-    def test_first_census_close_failure_closes_second_before_rejecting(self) -> None:
+    def test_first_census_cleanup_failure_still_closes_second_before_rejecting(self) -> None:
         first = mock.Mock(proof_sha256="a" * 64, namespace_descriptors=(40,))
         second = mock.Mock(proof_sha256="a" * 64, namespace_descriptors=(50,))
-        first.close.side_effect = MODULE.DrainError("first close failed")
+        values = iter((first, second))
+
+        def census_once(
+            custody: MODULE.ResourceCustody,
+            **_kwargs: object,
+        ) -> object:
+            value = next(values)
+            acquire_test_descriptors(custody, *value.namespace_descriptors)
+            return value
+
         with mock.patch.object(
             MODULE,
             "task_namespace_census_once",
-            side_effect=(first, second),
-        ), self.assertRaisesRegex(MODULE.DrainError, "first close failed"):
-            MODULE.stable_task_namespace_census()
-        first.close.assert_called_once_with()
-        second.close.assert_called_once_with()
-
-    def test_closed_borrowed_namespace_census_rejects_before_consumer_scan(self) -> None:
-        census = MODULE.TaskNamespaceCensus(
-            frozenset(),
-            frozenset(),
-            (),
-            "a" * 64,
-            {},
-        )
-        census.close()
-        with mock.patch.object(
-            MODULE,
-            "_related_process_universe_once",
-        ) as scan, self.assertRaisesRegex(MODULE.DrainError, "already closed"):
-            MODULE.related_process_universe(
-                {},
-                {"tree": [], "rootIdentity": {"device": 1, "inode": 2}},
-                {"unixRecords": []},
-                allowed_roles=set(),
-                namespace_census=census,
-            )
-        scan.assert_not_called()
+            side_effect=census_once,
+        ), mock.patch.object(
+            MODULE.os,
+            "close",
+            side_effect=(OSError("first close failed"), None),
+        ) as close, self.assertRaisesRegex(MODULE.DrainError, "cleanup failed"):
+            with MODULE.ResourceCustody(label="second namespace census") as custody:
+                MODULE.stable_task_namespace_census(custody)
+        self.assertEqual(close.call_args_list, [mock.call(40), mock.call(50)])
 
     def test_borrowed_namespace_census_reproves_held_descriptor_identity(self) -> None:
         identities = tuple(
@@ -1868,10 +2008,8 @@ class ProcessUniverseTest(unittest.TestCase):
             return_value="mnt:[101]",
         ), self.assertRaisesRegex(MODULE.DrainError, "identity differs"):
             census.require_open()
-        with mock.patch.object(MODULE.os, "close"):
-            census.close()
 
-    def test_namespace_census_context_closes_owned_descriptors_once(self) -> None:
+    def test_caller_custody_closes_namespace_descriptors_once(self) -> None:
         census = MODULE.TaskNamespaceCensus(
             frozenset(),
             frozenset(),
@@ -1884,10 +2022,11 @@ class ProcessUniverseTest(unittest.TestCase):
             MODULE.os,
             "close",
         ) as close:
-            with census:
-                pass
-            census.close()
-        self.assertEqual(close.call_args_list, [mock.call(40), mock.call(41)])
+            with MODULE.ResourceCustody(label="namespace census caller") as custody:
+                acquire_test_descriptors(custody, 40, 41)
+                census.require_open()
+                close.assert_not_called()
+        self.assertEqual(close.call_args_list, [mock.call(41), mock.call(40)])
 
     def test_borrowed_census_rejects_mutated_digest_preimage(self) -> None:
         preimage = MODULE.task_namespace_census_preimage(
@@ -1961,7 +2100,7 @@ class ProcessUniverseTest(unittest.TestCase):
             MODULE.sha256_bytes(MODULE.canonical_json(second)),
         )
 
-    def test_census_enter_failure_closes_before_python_can_call_exit(self) -> None:
+    def test_census_validation_failure_leaves_cleanup_with_caller(self) -> None:
         preimage = MODULE.task_namespace_census_preimage(set(), set(), (), 0)
         digest = hashlib.sha256(MODULE.canonical_json(preimage)).hexdigest()
         census = MODULE.TaskNamespaceCensus(
@@ -1986,7 +2125,9 @@ class ProcessUniverseTest(unittest.TestCase):
             MODULE.DrainError,
             "descriptor roster differs",
         ):
-            census.__enter__()
+            with MODULE.ResourceCustody(label="invalid namespace census") as custody:
+                acquire_test_descriptor(custody, 40)
+                census.require_open()
         close.assert_called_once_with(40)
 
     def test_current_namespace_change_inside_one_task_capture_rejects(self) -> None:
@@ -2090,21 +2231,26 @@ class ProcessUniverseTest(unittest.TestCase):
     def test_duplicate_namespace_descriptor_closes_on_divergence(self) -> None:
         identity = MODULE.NamespaceIdentity("mnt", 4, 100)
         held = {identity: 40}
-        with mock.patch.object(
-            MODULE.os,
-            "fstat",
-            side_effect=(
-                mock.Mock(st_dev=4, st_ino=100, st_mode=stat.S_IFREG),
-                mock.Mock(st_dev=4, st_ino=101, st_mode=stat.S_IFREG),
-            ),
-        ), mock.patch.object(
-            MODULE.os,
-            "close",
-        ) as close, self.assertRaisesRegex(
-            MODULE.DrainError,
-            "descriptor identity diverges",
-        ):
-            MODULE.admit_held_namespace_descriptor(held, identity, 41)
+        with mock.patch.object(MODULE.os, "close") as close:
+            with MODULE.ResourceCustody(label="namespace admission test") as custody:
+                acquire_test_descriptor(custody, 41)
+                with mock.patch.object(
+                    MODULE.os,
+                    "fstat",
+                    side_effect=(
+                        mock.Mock(st_dev=4, st_ino=100, st_mode=stat.S_IFREG),
+                        mock.Mock(st_dev=4, st_ino=101, st_mode=stat.S_IFREG),
+                    ),
+                ), self.assertRaisesRegex(
+                    MODULE.DrainError,
+                    "descriptor identity diverges",
+                ):
+                    MODULE.admit_held_namespace_descriptor(
+                        custody,
+                        held,
+                        identity,
+                        41,
+                    )
         close.assert_called_once_with(41)
         self.assertEqual(held, {identity: 40})
 
@@ -2113,9 +2259,10 @@ class ProcessUniverseTest(unittest.TestCase):
         second = mock.Mock()
         first.close.side_effect = MODULE.DrainError("task close failed")
         custody = MODULE.ResourceCustody(label="namespace observation")
-        custody.own_descriptors((40, 41))
-        custody.own_closeable(first)
-        custody.own_closeable(second)
+        acquire_test_descriptors(custody, 40, 41)
+        with mock.patch.object(MODULE.socket, "socket", side_effect=(first, second)):
+            custody.socket()
+            custody.socket()
         with mock.patch.object(
             MODULE.os,
             "close",
@@ -2132,7 +2279,7 @@ class ProcessUniverseTest(unittest.TestCase):
     def test_resource_custody_preserves_primary_and_surfaces_normal_cleanup(self) -> None:
         primary = RuntimeError("body failed")
         custody = MODULE.ResourceCustody(label="fault injection")
-        custody.own_descriptor(40)
+        acquire_test_descriptor(custody, 40)
         with mock.patch.object(
             MODULE.os,
             "close",
@@ -2142,7 +2289,7 @@ class ProcessUniverseTest(unittest.TestCase):
         self.assertIn("cleanup also failed", "\n".join(primary.__notes__))
 
         custody = MODULE.ResourceCustody(label="fault injection")
-        custody.own_descriptor(41)
+        acquire_test_descriptor(custody, 41)
         with mock.patch.object(
             MODULE.os,
             "close",
@@ -2150,7 +2297,7 @@ class ProcessUniverseTest(unittest.TestCase):
         ), self.assertRaisesRegex(MODULE.DrainError, "cleanup failed"):
             custody.__exit__(None, None, None)
 
-    def test_resource_registration_failure_closes_current_and_remaining(self) -> None:
+    def test_resource_registration_failure_closes_current_and_prior_owner(self) -> None:
         class FailSecondAppend(list[object]):
             def __init__(self) -> None:
                 super().__init__()
@@ -2164,14 +2311,18 @@ class ProcessUniverseTest(unittest.TestCase):
 
         custody = MODULE.ResourceCustody(label="registration")
         custody._resources = FailSecondAppend()  # type: ignore[assignment]
-        with mock.patch.object(MODULE.os, "close") as close:
+        with mock.patch.object(MODULE.os, "open", side_effect=(40, 41)), mock.patch.object(
+            MODULE.os,
+            "close",
+        ) as close:
+            custody.open("first", os.O_RDONLY)
             with self.assertRaisesRegex(MemoryError, "registration failed"):
-                custody.own_descriptors((40, 41, 42))
-            self.assertEqual(close.call_args_list, [mock.call(41), mock.call(42)])
+                custody.open("second", os.O_RDONLY)
+            self.assertEqual(close.call_args_list, [mock.call(41)])
             custody.close()
             self.assertEqual(
                 close.call_args_list,
-                [mock.call(41), mock.call(42), mock.call(40)],
+                [mock.call(41), mock.call(40)],
             )
 
     def test_resource_registration_preflight_failure_closes_incoming_owner(self) -> None:
@@ -2198,8 +2349,12 @@ class ProcessUniverseTest(unittest.TestCase):
         resource_value = mock.Mock()
         custody = MODULE.ResourceCustody(label="registration")
         custody._resources = ExplodingOwnershipScan()  # type: ignore[assignment]
-        with self.assertRaisesRegex(MemoryError, "ownership scan failed"):
-            custody.own_closeable(resource_value)
+        with mock.patch.object(
+            MODULE.socket,
+            "socket",
+            return_value=resource_value,
+        ), self.assertRaisesRegex(MemoryError, "ownership scan failed"):
+            custody.socket()
         resource_value.close.assert_called_once_with()
 
     def test_post_commit_append_failure_rolls_back_before_cleanup(self) -> None:
@@ -2210,11 +2365,14 @@ class ProcessUniverseTest(unittest.TestCase):
 
         custody = MODULE.ResourceCustody(label="registration")
         custody._resources = AppendThenRaise()  # type: ignore[assignment]
-        with mock.patch.object(MODULE.os, "close") as close, self.assertRaisesRegex(
+        with mock.patch.object(MODULE.os, "open", return_value=40), mock.patch.object(
+            MODULE.os,
+            "close",
+        ) as close, self.assertRaisesRegex(
             KeyboardInterrupt,
             "append committed then interrupted",
         ):
-            custody.own_descriptor(40)
+            custody.open("descriptor", os.O_RDONLY)
         close.assert_called_once_with(40)
         self.assertEqual(custody._resources, [])
         custody.close()
@@ -2223,8 +2381,15 @@ class ProcessUniverseTest(unittest.TestCase):
         resource_value = mock.Mock()
         custody = MODULE.ResourceCustody(label="registration")
         custody._resources = AppendThenRaise()  # type: ignore[assignment]
-        with self.assertRaisesRegex(KeyboardInterrupt, "append committed then interrupted"):
-            custody.own_closeable(resource_value)
+        with mock.patch.object(
+            MODULE.socket,
+            "socket",
+            return_value=resource_value,
+        ), self.assertRaisesRegex(
+            KeyboardInterrupt,
+            "append committed then interrupted",
+        ):
+            custody.socket()
         resource_value.close.assert_called_once_with()
         self.assertEqual(custody._resources, [])
 
@@ -2239,93 +2404,428 @@ class ProcessUniverseTest(unittest.TestCase):
 
         custody = MODULE.ResourceCustody(label="registration")
         custody._resources = AppendThenRaiseAndFailPop()  # type: ignore[assignment]
-        with mock.patch.object(MODULE.os, "close") as close, self.assertRaisesRegex(
+        with mock.patch.object(MODULE.os, "open", return_value=40), mock.patch.object(
+            MODULE.os,
+            "close",
+        ) as close, self.assertRaisesRegex(
             KeyboardInterrupt,
             "append committed then interrupted",
         ) as raised:
-            custody.own_descriptor(40)
+            custody.open("descriptor", os.O_RDONLY)
         self.assertIn("rollback pop failed", "\n".join(raised.exception.__notes__))
         close.assert_called_once_with(40)
         self.assertEqual(custody._resources, [])
 
-    def test_true_duplicate_registration_preserves_existing_owner(self) -> None:
+    def test_registration_rollback_retires_duplicate_identity_aliases_once(self) -> None:
+        class AppendTwiceThenRaise(list[object]):
+            def append(self, value: object) -> None:
+                super().append(value)
+                super().append(value)
+                raise KeyboardInterrupt("append duplicated then interrupted")
+
         custody = MODULE.ResourceCustody(label="registration")
-        custody.own_descriptor(40)
-        with mock.patch.object(MODULE.os, "close") as close, self.assertRaisesRegex(
-            MODULE.DrainError,
-            "registration is duplicated",
-        ):
-            custody.own_descriptor(40)
-        close.assert_not_called()
-        with mock.patch.object(MODULE.os, "close") as close:
-            custody.close()
+        custody._resources = AppendTwiceThenRaise()  # type: ignore[assignment]
+        with mock.patch.object(MODULE.os, "open", return_value=40), mock.patch.object(
+            MODULE.os,
+            "close",
+        ) as close, self.assertRaisesRegex(
+            KeyboardInterrupt,
+            "append duplicated then interrupted",
+        ) as raised:
+            custody.open("descriptor", os.O_RDONLY)
+        self.assertIn(
+            "retired 2 aliases of one identity token",
+            "\n".join(raised.exception.__notes__),
+        )
+        close.assert_called_once_with(40)
+        self.assertEqual(custody._resources, [])
+        custody.close()
         close.assert_called_once_with(40)
 
-    def test_duplicate_batch_closes_each_unique_unowned_descriptor_once(self) -> None:
-        for descriptors, expected in (
-            ((40, 41, 40), [mock.call(40), mock.call(41)]),
-            ((40, 41, 41), [mock.call(40), mock.call(41)]),
-        ):
-            custody = MODULE.ResourceCustody(label="adoption")
-            with self.subTest(descriptors=descriptors), mock.patch.object(
+    def test_registration_rejects_silent_duplicate_or_absent_identity(self) -> None:
+        class DuplicateAppend(list[object]):
+            def append(self, value: object) -> None:
+                super().append(value)
+                super().append(value)
+
+        class DroppedAppend(list[object]):
+            def append(self, _value: object) -> None:
+                return
+
+        for roster in (DuplicateAppend(), DroppedAppend()):
+            custody = MODULE.ResourceCustody(label="registration")
+            custody._resources = roster  # type: ignore[assignment]
+            with self.subTest(roster=type(roster).__name__), mock.patch.object(
+                MODULE.os,
+                "open",
+                return_value=40,
+            ), mock.patch.object(
                 MODULE.os,
                 "close",
             ) as close, self.assertRaisesRegex(
                 MODULE.DrainError,
-                "not unique and exact",
+                "registration token is absent or duplicated",
             ):
-                custody.own_descriptors(descriptors)
-            self.assertEqual(close.call_args_list, expected)
+                custody.open("descriptor", os.O_RDONLY)
+            close.assert_called_once_with(40)
             self.assertEqual(custody._resources, [])
 
-    def test_preowned_batch_member_is_preserved_while_others_converge(self) -> None:
-        custody = MODULE.ResourceCustody(label="adoption")
-        custody.own_descriptor(40)
-        with mock.patch.object(MODULE.os, "close") as close, self.assertRaisesRegex(
+    def test_registration_duplicate_alias_pop_failure_falls_back_once(self) -> None:
+        class AppendTwiceThenRaiseAndFailPop(list[object]):
+            def append(self, value: object) -> None:
+                super().append(value)
+                super().append(value)
+                raise KeyboardInterrupt("append duplicated then interrupted")
+
+            def pop(self, index: int = -1) -> object:
+                raise MemoryError(f"rollback pop failed at {index}")
+
+        custody = MODULE.ResourceCustody(label="registration")
+        custody._resources = AppendTwiceThenRaiseAndFailPop()  # type: ignore[assignment]
+        with mock.patch.object(MODULE.os, "open", return_value=40), mock.patch.object(
+            MODULE.os,
+            "close",
+        ) as close, self.assertRaisesRegex(
+            KeyboardInterrupt,
+            "append duplicated then interrupted",
+        ) as raised:
+            custody.open("descriptor", os.O_RDONLY)
+        notes = "\n".join(raised.exception.__notes__)
+        self.assertIn("rollback pop failed", notes)
+        self.assertIn("fallback retired 2 aliases", notes)
+        close.assert_called_once_with(40)
+        self.assertEqual(custody._resources, [])
+
+    def test_bool_alias_does_not_hide_the_exact_integer_descriptor(self) -> None:
+        custody = MODULE.ResourceCustody(label="exact descriptor roster")
+        acquire_test_descriptor(custody, 1)
+        with mock.patch.object(MODULE.os, "close") as close:
+            with self.assertRaisesRegex(MODULE.DrainError, "close roster is invalid"):
+                custody.close_descriptors((True, 1))
+            close.assert_not_called()
+            custody.close()
+        close.assert_called_once_with(1)
+
+    def test_hostile_int_subclass_rejects_before_equality_or_close(self) -> None:
+        equality_called = False
+
+        class HostileDescriptor(int):
+            def __eq__(self, _other: object) -> bool:
+                nonlocal equality_called
+                equality_called = True
+                raise KeyboardInterrupt("hostile equality ran")
+
+        custody = MODULE.ResourceCustody(label="exact descriptor")
+        with mock.patch.object(
+            MODULE.os,
+            "open",
+            return_value=HostileDescriptor(40),
+        ), mock.patch.object(MODULE.os, "close") as close, self.assertRaisesRegex(
             MODULE.DrainError,
-            "registration is duplicated",
+            "descriptor registration is invalid",
         ):
-            custody.own_descriptors((41, 40, 42))
-        close.assert_called_once_with(42)
-        with mock.patch.object(MODULE.os, "close") as close:
-            custody.close()
-        self.assertEqual(close.call_args_list, [mock.call(41), mock.call(40)])
+            custody.open("descriptor", os.O_RDONLY)
+        self.assertFalse(equality_called)
+        self.assertEqual(close.call_count, 1)
+        closed_value = close.call_args.args[0]
+        self.assertIs(type(closed_value), HostileDescriptor)
+        self.assertEqual(int(closed_value), 40)
 
-    def test_batch_release_validates_before_releasing_any_descriptor(self) -> None:
-        custody = MODULE.ResourceCustody(label="transfer")
-        custody.own_descriptors((40, 41))
-        with self.assertRaisesRegex(MODULE.DrainError, "unowned or ambiguous"):
-            custody.release_descriptors((40, 99))
-        with mock.patch.object(MODULE.os, "close") as close:
-            custody.close()
-        self.assertEqual(close.call_args_list, [mock.call(41), mock.call(40)])
+    def test_pop_removes_then_raises_and_fallback_failure_still_closes_once(self) -> None:
+        class PopRemovesThenRaises(list[object]):
+            fallback = False
 
-    def test_singular_release_rejects_ambiguous_internal_ownership(self) -> None:
-        custody = MODULE.ResourceCustody(label="transfer")
-        custody._resources = [  # type: ignore[assignment]
-            MODULE.ResourceRegistration("descriptor", 40),
-            MODULE.ResourceRegistration("descriptor", 40),
-        ]
-        with self.assertRaisesRegex(MODULE.DrainError, "unowned or ambiguous"):
-            custody.release_descriptor(40)
-        self.assertEqual(
-            [(owned.kind, owned.value) for owned in custody._resources],
-            [("descriptor", 40), ("descriptor", 40)],
+            def append(self, value: object) -> None:
+                super().append(value)
+                raise KeyboardInterrupt("append committed then interrupted")
+
+            def pop(self, index: int = -1) -> object:
+                value = super().pop(index)
+                self.fallback = True
+                raise MemoryError(f"rollback pop failed after removing {value!r}")
+
+            def __iter__(self):  # type: ignore[no-untyped-def]
+                if self.fallback:
+                    raise MemoryError("rollback fallback iteration failed")
+                return super().__iter__()
+
+        roster = PopRemovesThenRaises()
+        custody = MODULE.ResourceCustody(label="registration")
+        custody._resources = roster  # type: ignore[assignment]
+        with mock.patch.object(MODULE.os, "open", return_value=40), mock.patch.object(
+            MODULE.os,
+            "close",
+        ) as close, self.assertRaisesRegex(
+            KeyboardInterrupt,
+            "append committed then interrupted",
+        ) as raised:
+            custody.open("descriptor", os.O_RDONLY)
+        notes = "\n".join(raised.exception.__notes__)
+        self.assertIn("rollback pop failed", notes)
+        self.assertIn("fallback iteration failed", notes)
+        close.assert_called_once_with(40)
+        self.assertEqual(len(roster), 0)
+
+    def test_registration_pop_line_interrupt_cannot_replace_primary_or_leak(self) -> None:
+        tree = ast.parse(MODULE_PATH.read_text(encoding="utf-8"))
+        custody_class = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "ResourceCustody"
+        )
+        rollback = next(
+            node
+            for node in custody_class.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_rollback_registration"
+        )
+        pop_call = next(
+            node
+            for node in ast.walk(rollback)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "pop"
+        )
+        boundary_line = min(
+            node.lineno
+            for node in ast.walk(rollback)
+            if isinstance(node, ast.Return) and node.lineno > pop_call.lineno
         )
 
-    def test_batch_adoption_rejects_non_tuple_without_materializing_it(self) -> None:
-        class ExplodingSequence:
-            def __iter__(self) -> object:
-                raise AssertionError("non-tuple sequence was materialized")
+        class AppendThenRaise(list[object]):
+            def append(self, value: object) -> None:
+                super().append(value)
+                raise KeyboardInterrupt("registration append remains primary")
 
-        custody = MODULE.ResourceCustody(label="adoption")
+        custody = MODULE.ResourceCustody(label="registration pop boundary")
+        custody._resources = AppendThenRaise()  # type: ignore[assignment]
+        interrupted = False
+
+        def trace(frame: object, event: str, _arg: object):  # type: ignore[no-untyped-def]
+            nonlocal interrupted
+            if (
+                event == "line"
+                and getattr(frame, "f_code")
+                is MODULE.ResourceCustody._rollback_registration.__code__
+                and getattr(frame, "f_lineno") == boundary_line
+                and not interrupted
+            ):
+                interrupted = True
+                sys.settrace(None)
+                raise KeyboardInterrupt("registration interrupted immediately after pop")
+            return trace
+
+        with mock.patch.object(MODULE.os, "open", return_value=40), mock.patch.object(
+            MODULE.os,
+            "close",
+        ) as close, self.assertRaisesRegex(
+            KeyboardInterrupt,
+            "registration append remains primary",
+        ) as raised:
+            sys.settrace(trace)
+            try:
+                custody.open("descriptor", os.O_RDONLY)
+            finally:
+                sys.settrace(None)
+        self.assertTrue(interrupted)
+        self.assertIn("immediately after pop", "\n".join(raised.exception.__notes__))
+        close.assert_called_once_with(40)
+        self.assertEqual(custody._resources, [])
+
+    def test_cleanup_retires_identity_and_resource_aliases_at_most_once(self) -> None:
+        same_token = MODULE.ResourceRegistration("descriptor", 40)
+        same_token.state = "owned"
+        custody = MODULE.ResourceCustody(label="same token aliases")
+        custody._resources = [same_token, same_token]
+        with mock.patch.object(MODULE.os, "close") as close:
+            custody.close()
+        close.assert_called_once_with(40)
+
+        first = MODULE.ResourceRegistration("descriptor", 41)
+        second = MODULE.ResourceRegistration("descriptor", 41)
+        first.state = second.state = "owned"
+        custody = MODULE.ResourceCustody(label="same descriptor aliases")
+        custody._resources = [first, second]
         with mock.patch.object(MODULE.os, "close") as close, self.assertRaisesRegex(
             MODULE.DrainError,
-            "exact tuple",
+            "cleanup failed",
         ):
-            custody.own_descriptors(ExplodingSequence())  # type: ignore[arg-type]
-        close.assert_not_called()
+            custody.close()
+        close.assert_called_once_with(41)
         self.assertEqual(custody._resources, [])
+
+    def test_closeable_reentrancy_cannot_register_or_recurse_cleanup(self) -> None:
+        custody = MODULE.ResourceCustody(label="reentrant closeable")
+
+        class ReentrantCloseable:
+            calls = 0
+
+            def close(self) -> None:
+                self.calls += 1
+                custody.close()
+
+        reentrant = ReentrantCloseable()
+        with mock.patch.object(MODULE.socket, "socket", return_value=reentrant):
+            self.assertIs(custody.socket(), reentrant)
+        custody.close()
+        self.assertEqual(reentrant.calls, 1)
+        self.assertEqual(custody._state, "closed")
+
+        custody = MODULE.ResourceCustody(label="self-registering closeable")
+        intruder = mock.Mock()
+
+        class SelfRegisteringCloseable:
+            calls = 0
+
+            def close(self) -> None:
+                self.calls += 1
+                custody.socket()
+
+        self_registering = SelfRegisteringCloseable()
+        with mock.patch.object(
+            MODULE.socket,
+            "socket",
+            side_effect=(self_registering, intruder),
+        ):
+            custody.socket()
+            with self.assertRaisesRegex(MODULE.DrainError, "cleanup failed"):
+                custody.close()
+        self.assertEqual(self_registering.calls, 1)
+        intruder.close.assert_called_once_with()
+        self.assertEqual(custody._state, "closed")
+
+    def test_closed_custody_rejects_new_acquisition_and_cleans_raw_result(self) -> None:
+        custody = MODULE.ResourceCustody(label="closed custody")
+        custody.close()
+        with mock.patch.object(MODULE.os, "open", return_value=40), mock.patch.object(
+            MODULE.os,
+            "close",
+        ) as close, self.assertRaisesRegex(MODULE.DrainError, "while custody is closed"):
+            custody.open("descriptor", os.O_RDONLY)
+        close.assert_called_once_with(40)
+        custody.close()
+        close.assert_called_once_with(40)
+
+    def test_hostile_add_note_override_cannot_mask_primary_error(self) -> None:
+        class HostilePrimary(RuntimeError):
+            def add_note(self, _note: str) -> None:
+                raise MemoryError("hostile add_note override")
+
+        primary = HostilePrimary("body remains primary")
+        custody = MODULE.ResourceCustody(label="primary preservation")
+        acquire_test_descriptor(custody, 40)
+        with mock.patch.object(
+            MODULE.os,
+            "close",
+            side_effect=OSError("cleanup failed"),
+        ):
+            custody.__exit__(HostilePrimary, primary, None)
+        self.assertEqual(str(primary), "body remains primary")
+        self.assertIn("cleanup also failed", "\n".join(primary.__notes__))
+
+    def test_custody_api_has_no_raw_adoption_release_or_transfer_escape(self) -> None:
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        custody_class = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "ResourceCustody"
+        )
+        public_methods = {
+            node.name
+            for node in custody_class.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and not node.name.startswith("_")
+        }
+        self.assertEqual(
+            public_methods,
+            {
+                "open",
+                "pidfd_open",
+                "dup",
+                "socket",
+                "close_descriptor",
+                "close_descriptors",
+                "close",
+            },
+        )
+        forbidden_attributes = {
+            node.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute)
+            and node.attr.startswith(("own_", "release_", "transfer_"))
+        }
+        self.assertEqual(forbidden_attributes, set())
+        self.assertNotIn(
+            "RuntimeLease",
+            {
+                node.name
+                for node in tree.body
+                if isinstance(node, ast.ClassDef)
+            },
+        )
+
+    def test_borrowed_views_have_no_cleanup_or_context_authority(self) -> None:
+        for borrowed in (
+            MODULE.CapturedTask,
+            MODULE.ProcessReferenceObservation,
+            MODULE.TaskNamespaceCensus,
+            MODULE.ControlAuthority,
+            MODULE.RecordedPersistentRoots,
+            MODULE.RuntimeEntryProof,
+        ):
+            with self.subTest(borrowed=borrowed.__name__):
+                self.assertFalse(hasattr(borrowed, "close"))
+                self.assertFalse(hasattr(borrowed, "__enter__"))
+                self.assertFalse(hasattr(borrowed, "__exit__"))
+
+    def test_every_descriptor_producing_helper_takes_caller_custody_first(self) -> None:
+        tree = ast.parse(MODULE_PATH.read_text(encoding="utf-8"))
+        functions = {
+            node.name: node
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        expected = {
+            "capture_task",
+            "stable_task_namespace_census",
+            "process_reference_scan",
+            "runtime_root_descriptors",
+            "_recorded_directory_pair",
+            "recorded_evidence_descriptors",
+            "recorded_config_descriptors",
+            "recorded_persistent_root_descriptors",
+            "_verify_runtime_entry_no_follow",
+            "_open_bound_runtime_directory",
+            "_read_regular_at",
+            "_create_root_tmpfile",
+            "open_or_publish_prepared_archive",
+            "publish_control_capsule",
+            "acquire_runtime_lease",
+        }
+        self.assertTrue(expected <= functions.keys())
+        for name in sorted(expected):
+            arguments = functions[name].args.args
+            with self.subTest(helper=name):
+                self.assertGreaterEqual(len(arguments), 1)
+                self.assertTrue(arguments[0].arg.endswith("custody"))
+
+        control_class = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "ControlAuthority"
+        )
+        methods = {
+            node.name: node
+            for node in control_class.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        for name in ("create", "open"):
+            arguments = methods[name].args.args
+            with self.subTest(helper=f"ControlAuthority.{name}"):
+                self.assertGreaterEqual(len(arguments), 2)
+                self.assertEqual(arguments[0].arg, "cls")
+                self.assertEqual(arguments[1].arg, "custody")
 
     def test_exact_process_status_uses_the_real_exact_vocabulary(self) -> None:
         recorded = captured_process().authority
@@ -2336,10 +2836,15 @@ class ProcessUniverseTest(unittest.TestCase):
 
     def test_socket_owner_permission_denial_is_not_treated_as_absence(self) -> None:
         task = mock.Mock(process_fd=10, pidfd=11)
+
+        def capture(custody: MODULE.ResourceCustody, *_args: object) -> object:
+            acquire_test_descriptors(custody, task.pidfd, task.process_fd)
+            return task
+
         with mock.patch.object(
             MODULE, "process_task_coordinates_once", return_value=((1, 3),)
         ), mock.patch.object(
-            MODULE, "capture_task", return_value=task
+            MODULE, "capture_task", side_effect=capture
         ), mock.patch.object(
             MODULE.os, "open", return_value=12
         ), mock.patch.object(
@@ -2356,10 +2861,15 @@ class ProcessUniverseTest(unittest.TestCase):
     def test_nonleader_unshared_socket_fd_is_owned_by_its_thread_group(self) -> None:
         task = mock.Mock(process_fd=10, pidfd=11)
         edge = mock.Mock(st_dev=1, st_ino=2, st_mode=stat.S_IFSOCK | 0o600)
+
+        def capture(custody: MODULE.ResourceCustody, *_args: object) -> object:
+            acquire_test_descriptors(custody, task.pidfd, task.process_fd)
+            return task
+
         with mock.patch.object(
             MODULE, "process_task_coordinates_once", return_value=((100, 101),)
         ), mock.patch.object(
-            MODULE, "capture_task", return_value=task
+            MODULE, "capture_task", side_effect=capture
         ), mock.patch.object(
             MODULE.os, "open", return_value=12
         ), mock.patch.object(
@@ -2495,15 +3005,17 @@ class RuntimeSymlinkAuthorityTest(unittest.TestCase):
             MODULE.DrainError,
             "link authority changed",
         ):
-            MODULE._verify_runtime_entry_no_follow(
-                20,
-                "work",
-                MODULE.EXPECTED_CONTAINERD_WORK_RELATIVE,
-                expected=None,
-                marker_identity=None,
-                forbid_docker_socket=False,
-                label="test work",
-            )
+            with MODULE.ResourceCustody(label="runtime entry test") as custody:
+                MODULE._verify_runtime_entry_no_follow(
+                    custody,
+                    20,
+                    "work",
+                    MODULE.EXPECTED_CONTAINERD_WORK_RELATIVE,
+                    expected=None,
+                    marker_identity=None,
+                    forbid_docker_socket=False,
+                    label="test work",
+                )
         opened.assert_called_once_with(
             "work",
             os.O_PATH | os.O_NOFOLLOW,
@@ -2514,13 +3026,19 @@ class RuntimeSymlinkAuthorityTest(unittest.TestCase):
     def test_reducer_reproves_and_unlinks_only_the_symlink_entry(self) -> None:
         events: list[str] = []
         proof = mock.Mock(
+            descriptor=31,
             observed=self.symlink_identity(),
             link_target=MODULE.EXPECTED_CONTAINERD_WORK_TARGET,
         )
+
+        def verify(custody: MODULE.ResourceCustody, *_args: object, **_kwargs: object) -> object:
+            acquire_test_descriptor(custody, proof.descriptor)
+            return proof
+
         with mock.patch.object(
             MODULE.os, "listdir", return_value=("work",)
         ), mock.patch.object(
-            MODULE, "_verify_runtime_entry_no_follow", return_value=proof
+            MODULE, "_verify_runtime_entry_no_follow", side_effect=verify
         ), mock.patch.object(
             MODULE,
             "_reprove_runtime_entry_name",
@@ -2533,7 +3051,10 @@ class RuntimeSymlinkAuthorityTest(unittest.TestCase):
             MODULE.os, "rmdir"
         ) as rmdir, mock.patch.object(
             MODULE.os, "open"
-        ) as opened, mock.patch.object(MODULE.os, "fsync"):
+        ) as opened, mock.patch.object(MODULE.os, "fsync"), mock.patch.object(
+            MODULE.os,
+            "close",
+        ) as close:
             MODULE._reduce_runtime_directory(
                 20,
                 {MODULE.EXPECTED_CONTAINERD_WORK_RELATIVE: {}},
@@ -2544,22 +3065,31 @@ class RuntimeSymlinkAuthorityTest(unittest.TestCase):
         unlink.assert_called_once_with("work", dir_fd=20)
         rmdir.assert_not_called()
         opened.assert_not_called()
-        proof.close.assert_called_once_with()
+        close.assert_called_once_with(31)
 
     def test_name_swap_blocks_before_unlink_and_absence_is_replay(self) -> None:
         proof = mock.Mock(
+            descriptor=31,
             observed=self.symlink_identity(),
             link_target=MODULE.EXPECTED_CONTAINERD_WORK_TARGET,
         )
+
+        def verify(custody: MODULE.ResourceCustody, *_args: object, **_kwargs: object) -> object:
+            acquire_test_descriptor(custody, proof.descriptor)
+            return proof
+
         with mock.patch.object(
             MODULE.os, "listdir", return_value=("work",)
         ), mock.patch.object(
-            MODULE, "_verify_runtime_entry_no_follow", return_value=proof
+            MODULE, "_verify_runtime_entry_no_follow", side_effect=verify
         ), mock.patch.object(
             MODULE,
             "_reprove_runtime_entry_name",
             side_effect=MODULE.DrainError("name binding differs"),
-        ), mock.patch.object(MODULE.os, "unlink") as unlink, self.assertRaisesRegex(
+        ), mock.patch.object(MODULE.os, "unlink") as unlink, mock.patch.object(
+            MODULE.os,
+            "close",
+        ) as close, self.assertRaisesRegex(
             MODULE.DrainError,
             "name binding differs",
         ):
@@ -2570,7 +3100,7 @@ class RuntimeSymlinkAuthorityTest(unittest.TestCase):
                 marker_identity={},
             )
         unlink.assert_not_called()
-        proof.close.assert_called_once_with()
+        close.assert_called_once_with(31)
 
         with mock.patch.object(
             MODULE.os, "listdir", return_value=()
@@ -3698,11 +4228,70 @@ class DestructiveBoundaryTest(unittest.TestCase):
             "close",
             side_effect=(OSError("root close failed"), None),
         ) as close, self.assertRaisesRegex(RuntimeError, "root capture failed"):
-            MODULE.runtime_root_descriptors(
-                runtime_control,
-                require_root_owned=None,
-            )
+            with MODULE.ResourceCustody(label="runtime root caller") as custody:
+                MODULE.runtime_root_descriptors(
+                    custody,
+                    runtime_control,
+                    require_root_owned=None,
+                )
         self.assertEqual(close.call_args_list, [mock.call(31), mock.call(30)])
+
+    def test_runtime_root_helper_is_caller_owned_across_return_and_partial_interrupt(self) -> None:
+        runtime_control = {
+            "authority": {
+                "runtime": {
+                    "rootIdentity": {
+                        "device": 1,
+                        "inode": 2,
+                        "uid": 1000,
+                        "gid": 1000,
+                    }
+                }
+            }
+        }
+        observed = mock.Mock(
+            st_mode=stat.S_IFDIR | 0o700,
+            st_dev=1,
+            st_ino=2,
+            st_uid=1000,
+            st_gid=1000,
+        )
+        literal = mock.Mock(st_dev=1, st_ino=2)
+        with mock.patch.object(MODULE.os, "open", side_effect=(30, 31)), mock.patch.object(
+            MODULE.os,
+            "fstat",
+            return_value=observed,
+        ), mock.patch.object(MODULE.os, "stat", return_value=literal), mock.patch.object(
+            MODULE.os,
+            "close",
+        ) as close, self.assertRaisesRegex(KeyboardInterrupt, "caller interrupted"):
+            with MODULE.ResourceCustody(label="runtime root caller") as custody:
+                self.assertEqual(
+                    MODULE.runtime_root_descriptors(
+                        custody,
+                        runtime_control,
+                        require_root_owned=False,
+                    ),
+                    (30, 31),
+                )
+                raise KeyboardInterrupt("caller interrupted")
+        self.assertEqual(close.call_args_list, [mock.call(31), mock.call(30)])
+
+        with mock.patch.object(
+            MODULE.os,
+            "open",
+            side_effect=(30, KeyboardInterrupt("root open interrupted")),
+        ), mock.patch.object(MODULE.os, "close") as close, self.assertRaisesRegex(
+            KeyboardInterrupt,
+            "root open interrupted",
+        ):
+            with MODULE.ResourceCustody(label="partial runtime root") as custody:
+                MODULE.runtime_root_descriptors(
+                    custody,
+                    runtime_control,
+                    require_root_owned=False,
+                )
+        close.assert_called_once_with(30)
 
         state = mock.Mock(st_mode=stat.S_IFDIR, st_dev=1, st_ino=2)
         literal = mock.Mock(st_dev=1, st_ino=2)
@@ -3735,11 +4324,13 @@ class DestructiveBoundaryTest(unittest.TestCase):
             "close",
             side_effect=(OSError("child close failed"), None),
         ) as close, self.assertRaisesRegex(RuntimeError, "child capture failed"):
-            MODULE._recorded_directory_pair(
-                directory_control,
-                child_name="evidence",
-                authority_key="evidenceRootIdentity",
-            )
+            with MODULE.ResourceCustody(label="recorded root caller") as custody:
+                MODULE._recorded_directory_pair(
+                    custody,
+                    directory_control,
+                    child_name="evidence",
+                    authority_key="evidenceRootIdentity",
+                )
         self.assertEqual(close.call_args_list, [mock.call(31), mock.call(30)])
 
     def test_source_has_one_explicit_descriptor_ownership_authority(self) -> None:
@@ -3799,10 +4390,13 @@ class DestructiveBoundaryTest(unittest.TestCase):
         self.assertNotIn("close_closeable_preserving_active", source)
 
     def test_control_publication_closes_initial_existing_validation_failure(self) -> None:
+        def open_parent(custody: MODULE.ResourceCustody) -> int:
+            return acquire_test_descriptor(custody, 10)
+
         with mock.patch.object(
             MODULE,
             "open_run_parent",
-            return_value=10,
+            side_effect=open_parent,
         ), mock.patch.object(
             MODULE.os,
             "open",
@@ -3819,17 +4413,22 @@ class DestructiveBoundaryTest(unittest.TestCase):
             RuntimeError,
             "existing validation failed",
         ) as raised:
-            MODULE.publish_control_capsule({}, {})
+            with MODULE.ResourceCustody(label="control publication caller") as custody:
+                MODULE.publish_control_capsule(custody, {}, {})
         self.assertEqual(close.call_args_list, [mock.call(11), mock.call(10)])
         self.assertIn("cleanup also failed", "\n".join(raised.exception.__notes__))
 
     def test_control_publication_closes_raced_existing_validation_failure(self) -> None:
         control = {"sourceSha256": "d" * 64}
         allowed = {MODULE.SNAPSHOT_NAME, MODULE.CONTROL_NAME, MODULE.STATE_NAME}
+
+        def open_parent(custody: MODULE.ResourceCustody) -> int:
+            return acquire_test_descriptor(custody, 10)
+
         with mock.patch.object(
             MODULE,
             "open_run_parent",
-            return_value=10,
+            side_effect=open_parent,
         ), mock.patch.object(
             MODULE.os,
             "open",
@@ -3870,7 +4469,8 @@ class DestructiveBoundaryTest(unittest.TestCase):
             RuntimeError,
             "race validation failed",
         ) as raised:
-            MODULE.publish_control_capsule(control, {})
+            with MODULE.ResourceCustody(label="control publication caller") as custody:
+                MODULE.publish_control_capsule(custody, control, {})
         self.assertEqual(
             close.call_args_list,
             [mock.call(12), mock.call(13), mock.call(10)],
@@ -4074,6 +4674,15 @@ class DestructiveBoundaryTest(unittest.TestCase):
             st_ino=10,
             st_size=len(raw),
         )
+
+        def read(
+            custody: MODULE.ResourceCustody,
+            *_args: object,
+            **_kwargs: object,
+        ) -> tuple[int, object, bytes]:
+            acquire_test_descriptor(custody, 31)
+            return 31, substituted, raw
+
         with mock.patch.object(
             MODULE,
             "EXPECTED_RECEIPT_SHA256",
@@ -4081,7 +4690,7 @@ class DestructiveBoundaryTest(unittest.TestCase):
         ), mock.patch.object(
             MODULE,
             "_read_regular_at",
-            return_value=(31, substituted, raw),
+            side_effect=read,
         ), mock.patch.object(
             MODULE.os,
             "close",
@@ -4134,6 +4743,15 @@ class DestructiveBoundaryTest(unittest.TestCase):
             st_size=len(raw),
         )
         custody = MODULE.ResourceCustody(label="recovery test")
+
+        def read(
+            owner: MODULE.ResourceCustody,
+            *_args: object,
+            **_kwargs: object,
+        ) -> tuple[int, object, bytes]:
+            acquire_test_descriptor(owner, 31)
+            return 31, substituted, raw
+
         with mock.patch.object(
             MODULE,
             "EXPECTED_RECEIPT_SHA256",
@@ -4141,7 +4759,7 @@ class DestructiveBoundaryTest(unittest.TestCase):
         ), mock.patch.object(
             MODULE,
             "_read_regular_at",
-            return_value=(31, substituted, raw),
+            side_effect=read,
         ), mock.patch.object(
             MODULE,
             "_create_root_tmpfile",
@@ -4204,10 +4822,19 @@ class DestructiveBoundaryTest(unittest.TestCase):
                 st_size=len(tombstone),
             )
             substituted = mock.Mock(st_dev=7, st_ino=10)
+
+            def read(
+                custody: MODULE.ResourceCustody,
+                *_args: object,
+                **_kwargs: object,
+            ) -> tuple[int, object, bytes]:
+                acquire_test_descriptor(custody, 31)
+                return 31, initial, raw
+
             with mock.patch.object(
                 MODULE,
                 "_read_regular_at",
-                return_value=(31, initial, raw),
+                side_effect=read,
             ), mock.patch.object(
                 MODULE.os,
                 "read",
@@ -4311,24 +4938,35 @@ class DestructiveBoundaryTest(unittest.TestCase):
     def test_prepared_archive_response_loss_is_settled_before_return(self) -> None:
         events: list[str] = []
         observed = mock.Mock()
+
+        def read(
+            custody: MODULE.ResourceCustody,
+            *_args: object,
+            **_kwargs: object,
+        ) -> tuple[int, object, bytes]:
+            events.append("read")
+            acquire_test_descriptor(custody, 31)
+            return 31, observed, b"receipt"
+
         with mock.patch.object(
             MODULE, "recorded_legacy_receipt_bytes", return_value=b"receipt"
         ), mock.patch.object(
             MODULE,
             "_read_regular_at",
-            side_effect=lambda *_args, **_kwargs: events.append("read")
-            or (31, observed, b"receipt"),
+            side_effect=read,
         ), mock.patch.object(
             MODULE, "_require_legacy_receipt"
         ), mock.patch.object(
             MODULE.os,
             "fsync",
             side_effect=lambda _fd: events.append("fsync"),
-        ):
-            descriptor = MODULE.open_or_publish_prepared_archive(
-                {"authority": {"legacyReceipt": {}}},
-                20,
-            )
+        ), mock.patch.object(MODULE.os, "close"):
+            with MODULE.ResourceCustody(label="prepared archive caller") as custody:
+                descriptor = MODULE.open_or_publish_prepared_archive(
+                    custody,
+                    {"authority": {"legacyReceipt": {}}},
+                    20,
+                )
         self.assertEqual(descriptor, 31)
         self.assertEqual(events[:2], ["fsync", "read"])
 
@@ -4336,13 +4974,30 @@ class DestructiveBoundaryTest(unittest.TestCase):
         events: list[str] = []
         observed = mock.Mock()
         values = iter((None, (31, observed, b"archive")))
+
+        def evidence(
+            custody: MODULE.ResourceCustody,
+            _control: object,
+        ) -> tuple[int, int]:
+            return acquire_test_descriptors(custody, 10, 20)
+
+        def read(
+            custody: MODULE.ResourceCustody,
+            *_args: object,
+            **_kwargs: object,
+        ) -> object:
+            events.append("read")
+            value = next(values)
+            if value is not None:
+                acquire_test_descriptor(custody, value[0])
+            return value
+
         with mock.patch.object(
-            MODULE, "recorded_evidence_descriptors", return_value=(10, 20)
+            MODULE, "recorded_evidence_descriptors", side_effect=evidence
         ), mock.patch.object(
             MODULE,
             "_read_regular_at",
-            side_effect=lambda *_args, **_kwargs: events.append("read")
-            or next(values),
+            side_effect=read,
         ), mock.patch.object(
             MODULE, "_require_legacy_receipt"
         ), mock.patch.object(
@@ -4359,10 +5014,20 @@ class DestructiveBoundaryTest(unittest.TestCase):
         live_and_archive = iter(
             ((30, observed, b"legacy"), (31, observed, b"archive"))
         )
+
+        def read_coexisting(
+            custody: MODULE.ResourceCustody,
+            *_args: object,
+            **_kwargs: object,
+        ) -> object:
+            value = next(live_and_archive)
+            acquire_test_descriptor(custody, value[0])
+            return value
+
         with mock.patch.object(
-            MODULE, "recorded_evidence_descriptors", return_value=(10, 20)
+            MODULE, "recorded_evidence_descriptors", side_effect=evidence
         ), mock.patch.object(
-            MODULE, "_read_regular_at", side_effect=lambda *_args, **_kwargs: next(live_and_archive)
+            MODULE, "_read_regular_at", side_effect=read_coexisting
         ), mock.patch.object(
             MODULE, "_require_legacy_receipt"
         ), mock.patch.object(
@@ -4524,10 +5189,12 @@ class DestructiveBoundaryTest(unittest.TestCase):
             MODULE.DrainError,
             "projection is too large",
         ):
-            MODULE.ControlAuthority.create(
-                verification,
-                expected_verification_sha256=digest,
-            )
+            with MODULE.ResourceCustody(label="control creation caller") as custody:
+                MODULE.ControlAuthority.create(
+                    custody,
+                    verification,
+                    expected_verification_sha256=digest,
+                )
         publish.assert_not_called()
 
     def test_existing_oversized_projection_closes_authority_before_return(self) -> None:
@@ -4575,13 +5242,17 @@ class DestructiveBoundaryTest(unittest.TestCase):
             "verificationSha256": control["verificationSha256"],
             "authority": control["authority"],
         }
+
+        def open_control(custody: MODULE.ResourceCustody) -> int:
+            return acquire_test_descriptor(custody, 31)
+
         with mock.patch.dict(
             MODULE.__dict__,
             {"__legacy_pinned_source_bytes__": source},
         ), mock.patch.object(
             MODULE,
             "open_control_root",
-            return_value=31,
+            side_effect=open_control,
         ), mock.patch.object(
             MODULE,
             "read_at",
@@ -4601,15 +5272,21 @@ class DestructiveBoundaryTest(unittest.TestCase):
             MODULE.DrainError,
             "projection is too large",
         ):
-            MODULE.ControlAuthority.create(
-                verification,
-                expected_verification_sha256=str(control["verificationSha256"]),
-            )
+            with MODULE.ResourceCustody(label="existing control caller") as custody:
+                MODULE.ControlAuthority.create(
+                    custody,
+                    verification,
+                    expected_verification_sha256=str(control["verificationSha256"]),
+                )
         close.assert_called_once_with(31)
 
+        held_owner = mock.Mock()
         with mock.patch.dict(
             MODULE.__dict__,
-            {"__legacy_control_root_fd__": 30},
+            {
+                "__legacy_control_root_fd__": 30,
+                "__legacy_control_root_owner__": held_owner,
+            },
         ), mock.patch.object(
             MODULE.os,
             "dup",
@@ -4633,8 +5310,10 @@ class DestructiveBoundaryTest(unittest.TestCase):
             MODULE.DrainError,
             "projection is too large",
         ):
-            MODULE.ControlAuthority.open()
+            with MODULE.ResourceCustody(label="resume control caller") as custody:
+                MODULE.ControlAuthority.open(custody)
         close.assert_called_once_with(31)
+        held_owner.close.assert_called_once_with()
 
     def test_runtime_and_pidfile_have_complete_preflight_before_unlink(self) -> None:
         source = MODULE_PATH.read_text(encoding="utf-8")
@@ -4695,7 +5374,10 @@ class DestructiveBoundaryTest(unittest.TestCase):
         self.assertIn("process_cutoff[\"related\"] == []", recovery)
         self.assertNotIn("require_no_boot_recovery_related_processes", recovery)
         self.assertIn(
-            "persistent_owner = recorded_persistent_root_descriptors(stored_control)",
+            "persistent_owner = recorded_persistent_root_descriptors(\n"
+            "            custody,\n"
+            "            stored_control,\n"
+            "        )",
             recovery,
         )
         self.assertIn(
@@ -4717,6 +5399,33 @@ class DestructiveBoundaryTest(unittest.TestCase):
 
 
 class WrapperBoundaryTest(unittest.TestCase):
+    @staticmethod
+    def _descriptor_custody_type() -> type:
+        source = WRAPPER.read_text(encoding="utf-8")
+        loader = source.split(
+            "read -r -d '' pinned_loader <<'PY' || true\n",
+            1,
+        )[1].split("\nPY\n", 1)[0]
+        tree = ast.parse(loader)
+        selected = [
+            node
+            for node in tree.body
+            if (
+                isinstance(node, ast.FunctionDef)
+                and node.name == "add_error_note"
+            )
+            or (
+                isinstance(node, ast.ClassDef)
+                and node.name in {"DescriptorRegistration", "DescriptorCustody"}
+            )
+        ]
+        extracted = ast.fix_missing_locations(
+            ast.Module(body=selected, type_ignores=[])
+        )
+        namespace = {"os": os}
+        exec(compile(extracted, "<loader-custody>", "exec"), namespace, namespace)
+        return namespace["DescriptorCustody"]
+
     def test_wrapper_exposes_only_verify_drain_resume(self) -> None:
         source = WRAPPER.read_text(encoding="utf-8")
         cases = set()
@@ -4750,7 +5459,7 @@ class WrapperBoundaryTest(unittest.TestCase):
         ]
         self.assertLess(
             resume.index('control["bootId"] == state["bootId"] == boot_id'),
-            resume.index("execute_source(source, display_name, control_root_fd)"),
+            resume.index("execute_source(source, display_name, control_root_fd, custody)"),
         )
         self.assertLess(
             resume.index("control_root_fd = custody.open("),
@@ -4758,7 +5467,7 @@ class WrapperBoundaryTest(unittest.TestCase):
         )
         self.assertLess(
             resume.index("terminal_projection = terminal_projection_value_for("),
-            resume.index("execute_source(source, display_name, control_root_fd)"),
+            resume.index("execute_source(source, display_name, control_root_fd, custody)"),
         )
 
     def test_loader_and_reducer_share_exact_canonical_bytes(self) -> None:
@@ -4931,53 +5640,23 @@ class WrapperBoundaryTest(unittest.TestCase):
         self.assertEqual(offenders, [])
 
     def test_loader_custody_preserves_body_error_on_close_failure(self) -> None:
-        source = WRAPPER.read_text(encoding="utf-8")
-        loader = source.split(
-            "read -r -d '' pinned_loader <<'PY' || true\n",
-            1,
-        )[1].split("\nPY\n", 1)[0]
-        tree = ast.parse(loader)
-        descriptor_custody = next(
-            node
-            for node in tree.body
-            if isinstance(node, ast.ClassDef) and node.name == "DescriptorCustody"
-        )
-        extracted = ast.fix_missing_locations(
-            ast.Module(body=[descriptor_custody], type_ignores=[])
-        )
-        namespace = {"os": os}
-        exec(compile(extracted, "<loader-custody>", "exec"), namespace, namespace)
-        custody = namespace["DescriptorCustody"]("loader fault injection")
-        custody.descriptors.append((object(), 40))
+        custody = self._descriptor_custody_type()("loader fault injection")
+        with mock.patch.object(os, "open", return_value=40):
+            custody.open("ignored", os.O_RDONLY)
         primary = RuntimeError("loader body failed")
         with mock.patch.object(os, "close", side_effect=OSError("close failed")):
             custody.__exit__(RuntimeError, primary, None)
         self.assertIn("cleanup also failed", "\n".join(primary.__notes__))
 
     def test_loader_custody_rolls_back_post_commit_append_failure(self) -> None:
-        source = WRAPPER.read_text(encoding="utf-8")
-        loader = source.split(
-            "read -r -d '' pinned_loader <<'PY' || true\n",
-            1,
-        )[1].split("\nPY\n", 1)[0]
-        tree = ast.parse(loader)
-        descriptor_custody = next(
-            node
-            for node in tree.body
-            if isinstance(node, ast.ClassDef) and node.name == "DescriptorCustody"
-        )
-        extracted = ast.fix_missing_locations(
-            ast.Module(body=[descriptor_custody], type_ignores=[])
-        )
-        namespace = {"os": os}
-        exec(compile(extracted, "<loader-custody>", "exec"), namespace, namespace)
+        descriptor_custody = self._descriptor_custody_type()
 
         class AppendThenRaise(list[object]):
             def append(self, value: object) -> None:
                 super().append(value)
                 raise KeyboardInterrupt("loader append committed then interrupted")
 
-        custody = namespace["DescriptorCustody"]("loader registration")
+        custody = descriptor_custody("loader registration")
         custody.descriptors = AppendThenRaise()
         with mock.patch.object(os, "open", return_value=40), mock.patch.object(
             os,
@@ -4996,7 +5675,7 @@ class WrapperBoundaryTest(unittest.TestCase):
             def pop(self, index: int = -1) -> object:
                 raise MemoryError(f"loader rollback pop failed at {index}")
 
-        custody = namespace["DescriptorCustody"]("loader registration")
+        custody = descriptor_custody("loader registration")
         custody.descriptors = AppendThenRaiseAndFailPop()
         with mock.patch.object(os, "open", return_value=41), mock.patch.object(
             os,
@@ -5009,6 +5688,235 @@ class WrapperBoundaryTest(unittest.TestCase):
         self.assertIn("rollback pop failed", "\n".join(raised.exception.__notes__))
         close.assert_called_once_with(41)
         self.assertEqual(custody.descriptors, [])
+
+    def test_loader_custody_retires_duplicate_identity_aliases_once(self) -> None:
+        descriptor_custody = self._descriptor_custody_type()
+
+        class AppendTwiceThenRaiseAndFailPop(list[object]):
+            def append(self, value: object) -> None:
+                super().append(value)
+                super().append(value)
+                raise KeyboardInterrupt("loader append duplicated then interrupted")
+
+            def pop(self, index: int = -1) -> object:
+                raise MemoryError(f"loader rollback pop failed at {index}")
+
+        custody = descriptor_custody("loader registration")
+        custody.descriptors = AppendTwiceThenRaiseAndFailPop()
+        with mock.patch.object(os, "open", return_value=40), mock.patch.object(
+            os,
+            "close",
+        ) as close, self.assertRaisesRegex(
+            KeyboardInterrupt,
+            "loader append duplicated then interrupted",
+        ) as raised:
+            custody.open("ignored", os.O_RDONLY)
+        notes = "\n".join(raised.exception.__notes__)
+        self.assertIn("rollback pop failed", notes)
+        self.assertIn("fallback retired 2 aliases", notes)
+        close.assert_called_once_with(40)
+        self.assertEqual(custody.descriptors, [])
+
+    def test_loader_custody_rejects_silent_duplicate_or_absent_identity(self) -> None:
+        descriptor_custody = self._descriptor_custody_type()
+
+        class DuplicateAppend(list[object]):
+            def append(self, value: object) -> None:
+                super().append(value)
+                super().append(value)
+
+        class DroppedAppend(list[object]):
+            def append(self, _value: object) -> None:
+                return
+
+        for roster in (DuplicateAppend(), DroppedAppend()):
+            custody = descriptor_custody("loader registration")
+            custody.descriptors = roster
+            with self.subTest(roster=type(roster).__name__), mock.patch.object(
+                os,
+                "open",
+                return_value=40,
+            ), mock.patch.object(os, "close") as close, self.assertRaisesRegex(
+                SystemExit,
+                "registration token is absent or duplicated",
+            ):
+                custody.open("ignored", os.O_RDONLY)
+            close.assert_called_once_with(40)
+            self.assertEqual(custody.descriptors, [])
+
+    def test_loader_pop_line_interrupt_preserves_primary_and_closes_once(self) -> None:
+        descriptor_custody = self._descriptor_custody_type()
+        loader = WRAPPER.read_text(encoding="utf-8").split(
+            "read -r -d '' pinned_loader <<'PY' || true\n",
+            1,
+        )[1].split("\nPY\n", 1)[0]
+        tree = ast.parse(loader)
+        custody_class = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "DescriptorCustody"
+        )
+        rollback = next(
+            node
+            for node in custody_class.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_rollback"
+        )
+        pop_call = next(
+            node
+            for node in ast.walk(rollback)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "pop"
+        )
+        boundary_line = min(
+            node.lineno
+            for node in ast.walk(rollback)
+            if isinstance(node, ast.Return) and node.lineno > pop_call.lineno
+        )
+
+        class AppendThenRaise(list[object]):
+            def append(self, value: object) -> None:
+                super().append(value)
+                raise KeyboardInterrupt("loader append remains primary")
+
+        custody = descriptor_custody("loader pop boundary")
+        custody.descriptors = AppendThenRaise()
+        interrupted = False
+
+        def trace(frame: object, event: str, _arg: object):  # type: ignore[no-untyped-def]
+            nonlocal interrupted
+            if (
+                event == "line"
+                and getattr(frame, "f_code") is descriptor_custody._rollback.__code__
+                and getattr(frame, "f_lineno") == boundary_line
+                and not interrupted
+            ):
+                interrupted = True
+                sys.settrace(None)
+                raise KeyboardInterrupt("loader interrupted immediately after pop")
+            return trace
+
+        with mock.patch.object(os, "open", return_value=40), mock.patch.object(
+            os,
+            "close",
+        ) as close, self.assertRaisesRegex(
+            KeyboardInterrupt,
+            "loader append remains primary",
+        ) as raised:
+            sys.settrace(trace)
+            try:
+                custody.open("ignored", os.O_RDONLY)
+            finally:
+                sys.settrace(None)
+        self.assertTrue(interrupted)
+        self.assertIn("immediately after pop", "\n".join(raised.exception.__notes__))
+        close.assert_called_once_with(40)
+        self.assertEqual(custody.descriptors, [])
+
+    def test_loader_close_line_interrupt_retries_without_double_close(self) -> None:
+        descriptor_custody = self._descriptor_custody_type()
+        loader = WRAPPER.read_text(encoding="utf-8").split(
+            "read -r -d '' pinned_loader <<'PY' || true\n",
+            1,
+        )[1].split("\nPY\n", 1)[0]
+        tree = ast.parse(loader)
+        custody_class = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "DescriptorCustody"
+        )
+        close_method = next(
+            node
+            for node in custody_class.body
+            if isinstance(node, ast.FunctionDef) and node.name == "close"
+        )
+        completed_line = next(
+            node.lineno
+            for node in ast.walk(close_method)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "completed"
+                for target in node.targets
+            )
+            and isinstance(node.value, ast.Constant)
+            and node.value.value is True
+        )
+        custody = descriptor_custody("loader close boundary")
+        with mock.patch.object(os, "open", return_value=40):
+            custody.open("ignored", os.O_RDONLY)
+        interrupted = False
+
+        def trace(frame: object, event: str, _arg: object):  # type: ignore[no-untyped-def]
+            nonlocal interrupted
+            if (
+                event == "line"
+                and getattr(frame, "f_code") is descriptor_custody.close.__code__
+                and getattr(frame, "f_lineno") == completed_line
+                and not interrupted
+            ):
+                interrupted = True
+                sys.settrace(None)
+                raise KeyboardInterrupt("loader close traversal interrupted")
+            return trace
+
+        primary = RuntimeError("loader body remains primary")
+        with mock.patch.object(os, "close") as close:
+            sys.settrace(trace)
+            try:
+                custody.__exit__(RuntimeError, primary, None)
+            finally:
+                sys.settrace(None)
+        self.assertTrue(interrupted)
+        close.assert_called_once_with(40)
+        self.assertEqual(custody.state, "closed")
+        self.assertEqual(str(primary), "loader body remains primary")
+        self.assertIn("close traversal interrupted", "\n".join(primary.__notes__))
+
+    def test_loader_distinct_tokens_aliasing_one_fd_close_at_most_once(self) -> None:
+        descriptor_custody = self._descriptor_custody_type()
+        registration_type = descriptor_custody.close.__globals__["DescriptorRegistration"]
+        custody = descriptor_custody("loader descriptor aliases")
+        custody.descriptors = [registration_type(40), registration_type(40)]
+        with mock.patch.object(os, "close") as close, self.assertRaisesRegex(
+            SystemExit,
+            "aliases one descriptor",
+        ):
+            custody.close()
+        close.assert_called_once_with(40)
+        self.assertEqual(custody.descriptors, [])
+        self.assertEqual(custody.state, "closed")
+
+    def test_resume_success_cannot_precede_loader_owner_settlement(self) -> None:
+        wrapper = WRAPPER.read_text(encoding="utf-8")
+        resume = wrapper[
+            wrapper.index("def execute_resume_owned")
+            : wrapper.index('if mode == "repo":\n    execute_source')
+        ]
+        self.assertIn(
+            "execute_source(source, display_name, control_root_fd, custody)",
+            resume,
+        )
+        reducer = MODULE_PATH.read_text(encoding="utf-8")
+        authority_open = reducer[
+            reducer.index("    def open(cls, custody: ResourceCustody)")
+            : reducer.index(
+                "    @property\n    def phase",
+                reducer.index("class ControlAuthority"),
+            )
+        ]
+        self.assertLess(
+            authority_open.index("held_owner.close()"),
+            authority_open.index("return cls(descriptor, control, state)"),
+        )
+        operation_resume = reducer[
+            reducer.index("def operation_resume") : reducer.index("def parser")
+        ]
+        self.assertIn("control = ControlAuthority.open(control_custody)", operation_resume)
+        main = reducer[reducer.index("def main()") : reducer.index('if __name__ == "__main__"')]
+        self.assertLess(
+            main.index("result = operation_resume"),
+            main.index("print(json.dumps(result"),
+        )
 
     def test_verify_only_has_no_output_file_argument(self) -> None:
         source = WRAPPER.read_text(encoding="utf-8")

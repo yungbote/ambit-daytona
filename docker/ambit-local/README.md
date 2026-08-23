@@ -327,12 +327,23 @@ verifier's own exactly single-threaded FD table, are re-proved at each borrowed
 consumer boundary, and close on every success or failure path. Transient open
 FD counts are preflight telemetry, not durable authority, so holding the global
 lease cannot change an otherwise identical verification digest.
-Every acquired descriptor or closeable enters one LIFO custody authority at
-acquisition. Owner construction precedes atomic transfer, registration failure
-closes the current and all not-yet-registered batch resources, and cleanup
-attempts the complete roster. The custody context receives the exact immediate
-body exception, so a caller's already-handled exception cannot suppress a
-normal cleanup failure or let a cleanup failure replace the primary error.
+Every acquired descriptor or closeable enters its lifetime-matching lexical
+custody in the same helper that performs the acquisition. Descriptor-producing
+helpers receive that custody before opening anything and return only borrowed
+views that are already registered; there is no raw-return/adoption interval,
+unowned release state, or custody-to-custody transfer mechanism. Each
+registration has one identity token and one cleanup-attempt state. Missing or
+duplicated append publication, an interrupted rollback, repeated token aliases,
+and distinct aliases of one numeric descriptor all converge to at most one
+close attempt. Cleanup enters `OPEN -> CLOSING -> CLOSED`, rejects and settles
+new acquisitions while closing, treats reentrant close as the outer traversal's
+responsibility, attempts the complete distinct roster, and never retries an
+ambiguous failed numeric close that the kernel may already have consumed. The
+custody context receives the exact immediate body exception, and supplemental
+notes are best-effort through the base exception implementation, so neither a
+caller's already-handled exception nor hostile note behavior can hide a normal
+cleanup failure or replace the primary error. Any close ambiguity fails the
+transition closed before further mutation.
 Each recorded role uses that same complete ten-entry namespace map. Process-bound
 sharing or an FD match in any canonical kind therefore creates the same legacy
 relation as mount/network/PID/user sharing; there is no four-kind ownership
@@ -389,7 +400,14 @@ is running; static tests do not turn this concurrency assumption into a proof.
 `drain` recomputes that proof under the same boot-global lease used by v5 and
 requires the caller-supplied verification digest. Its sanitized in-sudo loader
 reads, hashes, compiles, and executes one exact source byte buffer; that same
-buffer becomes its root-custodied snapshot. Source, control, and initial state
+buffer becomes its root-custodied snapshot. The loader's `/run` and boot-ID
+descriptors use independent nested scopes. Its retained control-root owner is
+passed into the pinned reducer, which first duplicates the descriptor into its
+own lexical custody and then settles the loader owner; the operation's control
+and global-lease custodies likewise exit before `main` can print success. A
+final close failure therefore blocks before any successful result becomes
+observable instead of producing success text with a failing wrapper status.
+Source, control, and initial state
 are built in one fixed root-owned staging capsule, file- and directory-fsynced,
 then published together with `RENAME_NOREPLACE` and `/run` fsync. The final
 capsule is therefore absent or complete, never a visible sequential prefix,

@@ -39,7 +39,7 @@ caller_gid=$(/usr/bin/id -g)
 script_source=$(/usr/bin/realpath -e -- "${BASH_SOURCE[0]}")
 script_dir=${script_source%/*}
 tool=${script_dir}/legacy_v3_drain.py
-tool_sha256=aca5581a04ed68c3fccc6ba59f6ec95ed79d987653812ed7a1c6d72e5e036588
+tool_sha256=e81963e81ab819aa920fd2252cb6f4523c1e7e7aa1e2cd0d5bf899c4776b383f
 control_root=/run/ambit-c16b-legacy-v3-drain-1577287b8182
 
 read -r -d '' pinned_loader <<'PY' || true
@@ -95,98 +95,192 @@ def terminal_projection_value_for(control, *, observed_at, boot_id):
         "forceKillPerformed": False,
     }
 
+def add_error_note(active_error, note):
+    try:
+        BaseException.add_note(active_error, note)
+    except BaseException:
+        pass
+
+class DescriptorRegistration:
+    def __init__(self, descriptor):
+        self.descriptor = descriptor
+        self.cleanup_attempted = False
+
 class DescriptorCustody:
     def __init__(self, label):
         self.label = label
         self.descriptors = []
+        self.state = "open"
 
     def open(self, *args, **kwargs):
         descriptor = os.open(*args, **kwargs)
-        token = None
+        registration = DescriptorRegistration(descriptor)
         append_started = False
         try:
-            token = object()
-            registration = (token, descriptor)
+            if type(descriptor) is not int or descriptor < 0:
+                raise SystemExit(self.label + " acquired descriptor is invalid")
+            if self.state != "open":
+                raise SystemExit(self.label + " registration is unavailable while " + self.state)
+            if any(owned.descriptor == descriptor for owned in self.descriptors):
+                raise SystemExit(self.label + " descriptor registration is duplicated")
             append_started = True
             self.descriptors.append(registration)
+            registration_count = sum(
+                owned is registration for owned in self.descriptors
+            )
+            if registration_count != 1:
+                raise SystemExit(self.label + " registration token is absent or duplicated")
         except BaseException as error:
-            rollback_complete = True
-            if append_started and token is not None:
-                rollback_complete = self._rollback(token, error)
-            if rollback_complete:
+            if append_started:
                 try:
-                    os.close(descriptor)
-                except BaseException as cleanup_error:
-                    error.add_note(self.label + " registration cleanup also failed: " + str(cleanup_error))
+                    self._rollback(registration, error)
+                except BaseException as rollback_error:
+                    add_error_note(
+                        error,
+                        self.label + " registration rollback escaped: "
+                        + str(rollback_error),
+                    )
+            try:
+                self._close_once(registration, error)
+            except BaseException as cleanup_error:
+                add_error_note(
+                    error,
+                    self.label + " registration cleanup escaped: "
+                    + str(cleanup_error),
+                )
             raise
         return descriptor
 
-    def _rollback(self, token, active_error):
+    def _rollback(self, registration, active_error):
         try:
-            found_index = -1
+            found_indices = []
             for index in range(len(self.descriptors)):
-                if self.descriptors[index][0] is token:
-                    if found_index != -1:
-                        raise SystemExit(self.label + " registration token is duplicated")
-                    found_index = index
-            if found_index != -1:
-                self.descriptors.pop(found_index)
-            return True
+                if self.descriptors[index] is registration:
+                    found_indices.append(index)
+            if len(found_indices) > 1:
+                add_error_note(
+                    active_error,
+                    self.label + " registration rollback retired "
+                    + str(len(found_indices)) + " aliases of one identity token"
+                )
+            for index in reversed(found_indices):
+                self.descriptors.pop(index)
+            return
         except BaseException as rollback_error:
-            active_error.add_note(self.label + " registration rollback also failed: " + str(rollback_error))
+            add_error_note(
+                active_error,
+                self.label + " registration rollback also failed: "
+                + str(rollback_error),
+            )
         try:
             replacement = []
             removed = 0
-            for registration in self.descriptors:
-                if registration[0] is token:
+            for owned in self.descriptors:
+                if owned is registration:
                     removed += 1
                 else:
-                    replacement.append(registration)
-            if removed > 1:
-                raise SystemExit(self.label + " registration token is duplicated")
+                    replacement.append(owned)
             self.descriptors = replacement
-            return True
+            if removed > 1:
+                add_error_note(
+                    active_error,
+                    self.label + " registration rollback fallback retired "
+                    + str(removed) + " aliases of one identity token"
+                )
+            return
         except BaseException as fallback_error:
-            active_error.add_note(self.label + " registration rollback fallback also failed: " + str(fallback_error))
-            return False
+            add_error_note(
+                active_error,
+                self.label + " registration rollback fallback also failed: "
+                + str(fallback_error),
+            )
 
-    def release(self, descriptor):
-        matches = [
-            index
-            for index, registration in enumerate(self.descriptors)
-            if registration[1] == descriptor
-        ]
-        if len(matches) != 1:
-            raise SystemExit(self.label + " transfer is unowned or ambiguous")
-        self.descriptors.pop(matches[0])
-        return descriptor
-
-    def close_descriptor(self, descriptor):
-        self.release(descriptor)
-        os.close(descriptor)
+    def _close_once(self, registration, active_error=None):
+        if registration.cleanup_attempted:
+            return
+        registration.cleanup_attempted = True
+        try:
+            os.close(registration.descriptor)
+        except BaseException as cleanup_error:
+            if active_error is None:
+                raise
+            add_error_note(active_error, self.label + " cleanup also failed: " + str(cleanup_error))
 
     def close(self):
+        if self.state == "closed":
+            return
+        if self.state == "closing":
+            return
+        self.state = "closing"
         first_error = None
-        while self.descriptors:
-            _token, descriptor = self.descriptors.pop()
-            try:
-                os.close(descriptor)
-            except BaseException as error:
-                if first_error is None:
-                    first_error = error
+        completed = False
+        try:
+            roster = list.copy(self.descriptors)
+            unique = []
+            seen_tokens = set()
+            seen_descriptors = set()
+            for registration in reversed(roster):
+                token = id(registration)
+                if token in seen_tokens:
+                    continue
+                seen_tokens.add(token)
+                descriptor = registration.descriptor
+                if type(descriptor) is not int or descriptor < 0:
+                    registration.cleanup_attempted = True
+                    if first_error is None:
+                        first_error = SystemExit(self.label + " cleanup descriptor is invalid")
+                    continue
+                if descriptor in seen_descriptors:
+                    registration.cleanup_attempted = True
+                    if first_error is None:
+                        first_error = SystemExit(
+                            self.label + " cleanup roster aliases one descriptor"
+                        )
+                    continue
+                seen_descriptors.add(descriptor)
+                unique.append(registration)
+            for registration in unique:
+                try:
+                    self._close_once(registration)
+                except BaseException as error:
+                    if first_error is None:
+                        first_error = error
+                    else:
+                        add_error_note(
+                            first_error,
+                            self.label + " additional cleanup also failed: "
+                            + str(error),
+                        )
+            completed = True
+        finally:
+            if completed:
+                self.descriptors = []
+                self.state = "closed"
+            else:
+                self.state = "open"
         if first_error is not None:
             raise first_error
 
     def __enter__(self):
+        if self.state != "open":
+            raise SystemExit(self.label + " custody is not open")
         return self
 
     def __exit__(self, _exception_type, active_error, _traceback):
         try:
             self.close()
         except BaseException as cleanup_error:
+            try:
+                self.close()
+            except BaseException as retry_error:
+                add_error_note(
+                    cleanup_error,
+                    self.label + " cleanup retry also failed: "
+                    + str(retry_error),
+                )
             if active_error is None:
                 raise
-            active_error.add_note(self.label + " cleanup also failed: " + str(cleanup_error))
+            add_error_note(active_error, self.label + " cleanup also failed: " + str(cleanup_error))
 
 def read_bound_at(directory_fd, name, maximum, *, expected_device=None):
     with DescriptorCustody("legacy-v3 bound read " + name) as custody:
@@ -221,7 +315,7 @@ def read_bound_at(directory_fd, name, maximum, *, expected_device=None):
             raise SystemExit("legacy-v3 capsule file changed during read: " + name)
         return bytes(source)
 
-def execute_source(source, display_name, control_root_fd=None):
+def execute_source(source, display_name, control_root_fd=None, control_root_owner=None):
     if not hmac.compare_digest(hashlib.sha256(source).hexdigest(), expected_sha256):
         raise SystemExit("legacy-v3 pinned Python source digest differs")
     os.chdir("/")
@@ -238,7 +332,10 @@ def execute_source(source, display_name, control_root_fd=None):
         "__legacy_pinned_source_bytes__": source,
     }
     if control_root_fd is not None:
+        if control_root_owner is None:
+            raise SystemExit("legacy-v3 control-root owner is absent")
         namespace["__legacy_control_root_fd__"] = control_root_fd
+        namespace["__legacy_control_root_owner__"] = control_root_owner
     exec(compile(source, display_name, "exec"), namespace, namespace)
 
 if mode == "repo":
@@ -276,35 +373,35 @@ if mode == "repo":
 def execute_resume_owned(custody):
     if authority_path != "/run/ambit-c16b-legacy-v3-drain-1577287b8182":
         raise SystemExit("legacy-v3 control-root path differs")
-    run_fd = custody.open("/run", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    run_identity = os.fstat(run_fd)
-    if not (
-        stat.S_ISDIR(run_identity.st_mode)
-        and run_identity.st_uid == 0
-        and run_identity.st_gid == 0
-        and stat.S_IMODE(run_identity.st_mode) & 0o022 == 0
-    ):
-        raise SystemExit("legacy-v3 control parent differs")
-    control_root_fd = custody.open(
-        "ambit-c16b-legacy-v3-drain-1577287b8182",
-        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-        dir_fd=run_fd,
-    )
-    root = os.fstat(control_root_fd)
-    literal = os.stat(
-        "ambit-c16b-legacy-v3-drain-1577287b8182",
-        dir_fd=run_fd,
-        follow_symlinks=False,
-    )
-    if not (
-        stat.S_ISDIR(root.st_mode)
-        and root.st_uid == 0
-        and root.st_gid == 0
-        and stat.S_IMODE(root.st_mode) == 0o700
-        and (literal.st_dev, literal.st_ino) == (root.st_dev, root.st_ino)
-    ):
-        raise SystemExit("legacy-v3 root control identity differs")
-    custody.close_descriptor(run_fd)
+    with DescriptorCustody("legacy-v3 resume control parent") as run_custody:
+        run_fd = run_custody.open("/run", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        run_identity = os.fstat(run_fd)
+        if not (
+            stat.S_ISDIR(run_identity.st_mode)
+            and run_identity.st_uid == 0
+            and run_identity.st_gid == 0
+            and stat.S_IMODE(run_identity.st_mode) & 0o022 == 0
+        ):
+            raise SystemExit("legacy-v3 control parent differs")
+        control_root_fd = custody.open(
+            "ambit-c16b-legacy-v3-drain-1577287b8182",
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=run_fd,
+        )
+        root = os.fstat(control_root_fd)
+        literal = os.stat(
+            "ambit-c16b-legacy-v3-drain-1577287b8182",
+            dir_fd=run_fd,
+            follow_symlinks=False,
+        )
+        if not (
+            stat.S_ISDIR(root.st_mode)
+            and root.st_uid == 0
+            and root.st_gid == 0
+            and stat.S_IMODE(root.st_mode) == 0o700
+            and (literal.st_dev, literal.st_ino) == (root.st_dev, root.st_ino)
+        ):
+            raise SystemExit("legacy-v3 root control identity differs")
     allowed = {
         "legacy_v3_drain.py", "control.json", "state.json",
         ".legacy_v3_drain.py.pending", ".control.json.pending", ".state.json.pending",
@@ -328,24 +425,24 @@ def execute_resume_owned(custody):
     }:
         raise SystemExit("legacy-v3 root state shape differs")
     boot_path = "/proc/sys/kernel/random/boot_id"
-    boot_fd = custody.open(boot_path, os.O_RDONLY | os.O_NOFOLLOW)
-    boot_before = os.fstat(boot_fd)
-    boot_raw = os.read(boot_fd, 129)
-    boot_tail = os.read(boot_fd, 1)
-    boot_after = os.fstat(boot_fd)
-    boot_literal = os.stat(boot_path, follow_symlinks=False)
-    if not (
-        stat.S_ISREG(boot_before.st_mode)
-        and boot_before.st_uid == 0
-        and boot_before.st_gid == 0
-        and not boot_tail
-        and 0 < len(boot_raw) <= 128
-        and (boot_after.st_dev, boot_after.st_ino, stat.S_IFMT(boot_after.st_mode))
-        == (boot_before.st_dev, boot_before.st_ino, stat.S_IFMT(boot_before.st_mode))
-        == (boot_literal.st_dev, boot_literal.st_ino, stat.S_IFMT(boot_literal.st_mode))
-    ):
-        raise SystemExit("legacy-v3 boot identity file differs")
-    custody.close_descriptor(boot_fd)
+    with DescriptorCustody("legacy-v3 resume boot identity") as boot_custody:
+        boot_fd = boot_custody.open(boot_path, os.O_RDONLY | os.O_NOFOLLOW)
+        boot_before = os.fstat(boot_fd)
+        boot_raw = os.read(boot_fd, 129)
+        boot_tail = os.read(boot_fd, 1)
+        boot_after = os.fstat(boot_fd)
+        boot_literal = os.stat(boot_path, follow_symlinks=False)
+        if not (
+            stat.S_ISREG(boot_before.st_mode)
+            and boot_before.st_uid == 0
+            and boot_before.st_gid == 0
+            and not boot_tail
+            and 0 < len(boot_raw) <= 128
+            and (boot_after.st_dev, boot_after.st_ino, stat.S_IFMT(boot_after.st_mode))
+            == (boot_before.st_dev, boot_before.st_ino, stat.S_IFMT(boot_before.st_mode))
+            == (boot_literal.st_dev, boot_literal.st_ino, stat.S_IFMT(boot_literal.st_mode))
+        ):
+            raise SystemExit("legacy-v3 boot identity file differs")
     boot_id = boot_raw.decode("ascii", "strict").strip()
     phases = {
         "stopping_intent_final", "runtime_custody_transferred", "docker_api_revoked",
@@ -387,7 +484,7 @@ def execute_resume_owned(custody):
     if not (0 < len(canonical(terminal_projection)) <= 2 * 1024 * 1024):
         raise SystemExit("legacy-v3 terminal projection is too large")
     display_name = authority_path + "/legacy_v3_drain.py"
-    execute_source(source, display_name, control_root_fd)
+    execute_source(source, display_name, control_root_fd, custody)
 
 if mode == "repo":
     execute_source(source, display_name)
