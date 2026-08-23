@@ -257,7 +257,11 @@ class CleanupOutcome:
         descriptor: int | None = None,
     ) -> None:
         if self.primary is None:
-            self.primary = cleanup_error
+            mask = suspend_python_interruptions()
+            try:
+                self.primary = cleanup_error
+            finally:
+                restore_python_interruptions(mask)
             return
         if self.primary is cleanup_error:
             return
@@ -271,30 +275,65 @@ class CleanupOutcome:
 class InterruptionMask:
     trace: Any
     profile: Any
-    signal_mask: set[signal.Signals]
+    signal_mask: set[signal.Signals] | None
 
 
 def suspend_python_interruptions() -> InterruptionMask:
     trace = sys.gettrace()
     profile = sys.getprofile()
-    sys.settrace(None)
-    sys.setprofile(None)
+    mask = InterruptionMask(trace, profile, None)
+    first_error: BaseException | None = None
+    try:
+        sys.settrace(None)
+    except BaseException as error:
+        first_error = error
+    try:
+        sys.setprofile(None)
+    except BaseException as error:
+        if first_error is None:
+            first_error = error
+        else:
+            _add_cleanup_validation_note(first_error, error)
+    if first_error is not None:
+        restore_python_interruptions(mask, first_error)
+        raise first_error
     blockable = signal.valid_signals() - {signal.SIGKILL, signal.SIGSTOP}
     try:
         previous = signal.pthread_sigmask(signal.SIG_BLOCK, blockable)
-    except BaseException:
-        sys.setprofile(profile)
-        sys.settrace(trace)
+    except BaseException as error:
+        restore_python_interruptions(mask, error)
         raise
     return InterruptionMask(trace, profile, previous)
 
 
-def restore_python_interruptions(mask: InterruptionMask) -> None:
+def restore_python_interruptions(
+    mask: InterruptionMask,
+    first_error: BaseException | None = None,
+) -> None:
+    if mask.signal_mask is not None:
+        try:
+            signal.pthread_sigmask(signal.SIG_SETMASK, mask.signal_mask)
+        except BaseException as error:
+            if first_error is None:
+                first_error = error
+            else:
+                _add_cleanup_validation_note(first_error, error)
     try:
-        signal.pthread_sigmask(signal.SIG_SETMASK, mask.signal_mask)
-    finally:
-        sys.setprofile(mask.profile)
-        sys.settrace(mask.trace)
+        sys.settrace(mask.trace); sys.setprofile(mask.profile)  # noqa: E702
+    except BaseException as error:
+        if first_error is None:
+            first_error = error
+        else:
+            _add_cleanup_validation_note(first_error, error)
+        try:
+            sys.setprofile(mask.profile)
+        except BaseException as profile_error:
+            if first_error is None:
+                first_error = profile_error
+            elif profile_error is not first_error:
+                _add_cleanup_validation_note(first_error, profile_error)
+    if first_error is not None:
+        raise first_error
 
 
 class DescriptorCustody:
@@ -312,6 +351,7 @@ class DescriptorCustody:
         self._merged_failure_count = 0
         self._cleanup_primary: BaseException | None = None
         self._primary_reported = False
+        self._ambiguous_close = False
         self._closed = False
 
     def acquire(self, factory: Callable[[], object]) -> int:
@@ -343,6 +383,16 @@ class DescriptorCustody:
     def failures(self) -> tuple[tuple[int, BaseException], ...]:
         return tuple(self._failures)
 
+    @property
+    def disposition(self) -> str:
+        if self._owned:
+            return "pending"
+        if self._ambiguous_close:
+            return "ambiguous"
+        if self._closed:
+            return "complete"
+        return "open"
+
     def _close_next(self) -> tuple[int, BaseException] | None:
         descriptor = self._owned[-1]
         if descriptor in self._attempted:
@@ -357,11 +407,15 @@ class DescriptorCustody:
             except BaseException as error:
                 cleanup_error = error
             self._owned.pop()
+            if cleanup_error is not None:
+                self._ambiguous_close = True
+                self._record_cleanup_error(cleanup_error, descriptor)
+                failure = (descriptor, cleanup_error)
+                self._failures.append(failure)
+                self._merged_failure_count = len(self._failures)
         finally:
             restore_python_interruptions(mask)
         if cleanup_error is not None:
-            failure = (descriptor, cleanup_error)
-            self._failures.append(failure)
             return failure
         return None
 
@@ -403,6 +457,7 @@ class DescriptorCustody:
             try:
                 failure = self._close_next()
             except BaseException as driver_error:
+                self._merge_recorded_failures()
                 self._record_cleanup_error(
                     driver_error,
                     None,
@@ -445,6 +500,48 @@ class DescriptorCustody:
     ) -> bool:
         outcome = CleanupOutcome(primary)
         _close_custody_roster_failure_total((self,), outcome)
+        if primary is None and outcome.primary is not None:
+            raise outcome.primary
+        return False
+
+
+class DescriptorCustodyGate:
+    """Outer retry boundary for an interrupt before custody ``__exit__`` starts."""
+
+    def __init__(self) -> None:
+        self.custody = DescriptorCustody()
+
+    def __enter__(self) -> "DescriptorCustodyGate":
+        return self
+
+    def __exit__(
+        self,
+        _exception_type: object,
+        primary: BaseException | None,
+        _traceback: object,
+    ) -> bool:
+        durable_primary = self.custody._cleanup_primary
+        if (
+            durable_primary is None
+            and primary is not None
+            and primary.__context__ is not None
+            and not self.custody.attempted
+        ):
+            durable_primary = primary.__context__
+        effective_primary = (
+            durable_primary if durable_primary is not None else primary
+        )
+        if (
+            effective_primary is not None
+            and primary is not None
+            and effective_primary is not primary
+        ):
+            _add_cleanup_validation_note(effective_primary, primary)
+        outcome = CleanupOutcome(effective_primary)
+        if self.custody.owned:
+            _close_custody_roster_failure_total((self.custody,), outcome)
+        if outcome.primary is not None and outcome.primary is not primary:
+            raise outcome.primary
         if primary is None and outcome.primary is not None:
             raise outcome.primary
         return False
@@ -586,7 +683,7 @@ def read_pinned_source(path: Path, expected_sha256: str) -> bytes:
         SHA256_RE.fullmatch(expected_sha256) is not None,
         "pinned source digest is invalid",
     )
-    with DescriptorCustody() as descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
         descriptor = descriptors.acquire(lambda: os.open(path, os.O_RDONLY | os.O_NOFOLLOW))
         identity = os.fstat(descriptor)
         require(stat.S_ISREG(identity.st_mode), "pinned source is not regular")
@@ -783,18 +880,7 @@ class StateAuthority:
             raise
 
     def close(self, primary: BaseException | None = None) -> None:
-        close_runtime_authorities(state=self, lease=None, primary=primary)
-
-    def __enter__(self) -> "StateAuthority":
-        return self
-
-    def __exit__(
-        self,
-        _exception_type: object,
-        primary: BaseException | None,
-        _traceback: object,
-    ) -> None:
-        self.close(primary)
+        settle_runtime_authorities(state=self, lease=None, primary=primary)
 
     def identity_json(self) -> dict[str, object]:
         root = os.fstat(self.root_fd)
@@ -826,7 +912,7 @@ class StateAuthority:
             return False
 
     def unlink_regular(self, name: str) -> None:
-        with DescriptorCustody() as descriptors:
+        with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
             descriptor = descriptors.acquire(
                 lambda: os.open(
                     name,
@@ -867,7 +953,7 @@ class StateAuthority:
                 f"evidence pending entry identity differs: {temporary}",
             )
             self.unlink_regular(temporary)
-        with DescriptorCustody() as descriptors:
+        with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
             descriptor = descriptors.acquire(
                 lambda: os.open(
                     temporary,
@@ -1060,21 +1146,14 @@ class RuntimeLease:
             self.device = -1
             self.inode = -1
             self._descriptors.close(primary)
+            if self._descriptors.disposition != "complete":
+                raise SupervisorError(
+                    "runtime lease cleanup is ambiguous; retry is forbidden"
+                ) from primary
             raise
 
     def close(self, primary: BaseException | None = None) -> None:
-        close_runtime_authorities(state=None, lease=self, primary=primary)
-
-    def __enter__(self) -> "RuntimeLease":
-        return self
-
-    def __exit__(
-        self,
-        _exception_type: object,
-        primary: BaseException | None,
-        _traceback: object,
-    ) -> None:
-        self.close(primary)
+        settle_runtime_authorities(state=None, lease=self, primary=primary)
 
 
 def _authority_descriptor_pair(
@@ -1116,11 +1195,15 @@ def _close_custody_roster_failure_total(
     custodies: tuple[DescriptorCustody, ...],
     outcome: CleanupOutcome,
 ) -> None:
-    try:
-        _close_custody_roster(custodies, outcome)
-    except BaseException as driver_error:
-        outcome.record(driver_error)
-        _close_custody_roster_failure_total(custodies, outcome)
+    while any(custody.owned for custody in custodies):
+        try:
+            _close_custody_roster(custodies, outcome)
+        except BaseException as driver_error:
+            outcome.record(driver_error)
+    for custody in custodies:
+        if custody._cleanup_primary is not None and not custody._primary_reported:
+            outcome.record(custody._cleanup_primary)
+            custody._primary_reported = True
 
 
 def _retire_and_close_authorities(
@@ -1159,24 +1242,22 @@ def _retire_and_close_authorities_failure_total(
     custodies: tuple[DescriptorCustody, ...],
     outcome: CleanupOutcome,
 ) -> None:
-    try:
-        _retire_and_close_authorities(
-            state=state,
-            lease=lease,
-            custodies=custodies,
-            outcome=outcome,
-        )
-    except BaseException as driver_error:
-        outcome.record(driver_error)
-        _retire_and_close_authorities_failure_total(
-            state=state,
-            lease=lease,
-            custodies=custodies,
-            outcome=outcome,
-        )
+    while True:
+        try:
+            _retire_and_close_authorities(
+                state=state,
+                lease=lease,
+                custodies=custodies,
+                outcome=outcome,
+            )
+        except BaseException as driver_error:
+            outcome.record(driver_error)
+            if any(custody.owned for custody in custodies):
+                continue
+        return
 
 
-def close_runtime_authorities(
+def _close_runtime_authorities_once(
     *,
     state: StateAuthority | None,
     lease: RuntimeLease | None,
@@ -1250,6 +1331,40 @@ def close_runtime_authorities(
     return True
 
 
+def settle_runtime_authorities(
+    *,
+    state: StateAuthority | None,
+    lease: RuntimeLease | None,
+    primary: BaseException | None = None,
+) -> bool:
+    """Outer iterative retry/fail-stop gate for composed authority cleanup."""
+
+    outcome = CleanupOutcome(primary)
+    attempted = False
+    while (
+        not attempted
+        or (state is not None and bool(state._descriptors.owned))
+        or (lease is not None and bool(lease._descriptors.owned))
+    ):
+        attempted = True
+        try:
+            settled = _close_runtime_authorities_once(
+                state=state,
+                lease=lease,
+                primary=outcome.primary,
+            )
+        except BaseException as cleanup_error:
+            outcome.record(cleanup_error)
+            continue
+        if not settled:
+            if primary is None and outcome.primary is not None:
+                raise outcome.primary
+            return False
+    if primary is None and outcome.primary is not None:
+        raise outcome.primary
+    return True
+
+
 def runtime_id_for(state_root: Path) -> str:
     return hashlib.sha256(str(state_root).encode()).hexdigest()[:12]
 
@@ -1292,13 +1407,13 @@ def _read_fd_all(descriptor: int, *, limit: int = 64 * 1024) -> bytes:
 
 
 def _read_at(directory_fd: int, name: str) -> str:
-    with DescriptorCustody() as descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
         descriptor = descriptors.acquire(lambda: os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd))
         return _read_fd_all(descriptor).decode("ascii", "strict")
 
 
 def _write_at(directory_fd: int, name: str, value: bytes) -> None:
-    with DescriptorCustody() as descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
         descriptor = descriptors.acquire(lambda: os.open(name, os.O_WRONLY | os.O_NOFOLLOW, dir_fd=directory_fd))
         offset = 0
         while offset < len(value):
@@ -1311,7 +1426,7 @@ def create_cgroup(state_root: Path) -> CgroupIdentity:
         CGROUP_PATH_RE.fullmatch(str(path)) is not None,
         "runtime cgroup path is invalid",
     )
-    with DescriptorCustody() as descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
         parent_fd = descriptors.acquire(lambda: os.open(CGROUP_PARENT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW))
         descriptor: int | None = None
         try:
@@ -1439,7 +1554,7 @@ def current_cgroup_path() -> str:
 
 
 def open_execution_cgroup(identity: CgroupIdentity, *, custody: DescriptorCustody) -> int:
-    with DescriptorCustody() as roots:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as roots:
         root_fd = open_cgroup(identity, custody=roots)
         descriptor = custody.acquire(
             lambda: os.open(
@@ -1460,7 +1575,7 @@ def open_execution_cgroup(identity: CgroupIdentity, *, custody: DescriptorCustod
 
 
 def enter_cgroup(identity: CgroupIdentity) -> None:
-    with DescriptorCustody() as descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
         descriptor = open_execution_cgroup(identity, custody=descriptors)
         _write_at(descriptor, "cgroup.procs", f"{os.getpid()}\n".encode("ascii"))
     require(
@@ -1470,7 +1585,7 @@ def enter_cgroup(identity: CgroupIdentity) -> None:
 
 
 def cgroup_events(identity: CgroupIdentity) -> dict[str, str]:
-    with DescriptorCustody() as descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
         descriptor = open_cgroup(identity, custody=descriptors)
         fields: dict[str, str] = {}
         for line in _read_at(descriptor, "cgroup.events").splitlines():
@@ -1490,7 +1605,7 @@ def cgroup_is_populated(identity: CgroupIdentity) -> bool:
 
 
 def freeze_cgroup_and_wait(identity: CgroupIdentity, *, timeout: float = 30.0) -> None:
-    with DescriptorCustody() as descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
         descriptor = open_cgroup(identity, custody=descriptors)
         _write_at(descriptor, "cgroup.freeze", b"1\n")
     deadline = time.monotonic() + timeout
@@ -1502,7 +1617,7 @@ def freeze_cgroup_and_wait(identity: CgroupIdentity, *, timeout: float = 30.0) -
 
 
 def kill_cgroup_and_wait(identity: CgroupIdentity, *, timeout: float = 30.0) -> None:
-    with DescriptorCustody() as descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
         descriptor = open_cgroup(identity, custody=descriptors)
         _write_at(descriptor, "cgroup.kill", b"1\n")
     deadline = time.monotonic() + timeout
@@ -1515,10 +1630,10 @@ def kill_cgroup_and_wait(identity: CgroupIdentity, *, timeout: float = 30.0) -> 
 
 def remove_empty_cgroup(identity: CgroupIdentity) -> None:
     require(not cgroup_is_populated(identity), "runtime cgroup is still populated")
-    with DescriptorCustody() as descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
         root_fd = open_cgroup(identity, custody=descriptors)
         remove_empty_cgroup_children(root_fd)
-    with DescriptorCustody() as descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
         parent_fd = descriptors.acquire(lambda: os.open(CGROUP_PARENT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW))
         literal = os.stat(identity.path.name, dir_fd=parent_fd, follow_symlinks=False)
         require(
@@ -1537,7 +1652,7 @@ def remove_empty_cgroup_children(directory_fd: int) -> None:
             value.st_uid == 0 and value.st_gid == 0 and stat.S_IMODE(value.st_mode) & 0o022 == 0,
             f"child cgroup authority differs: {name}",
         )
-        with DescriptorCustody() as descriptors:
+        with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
             child = descriptors.acquire(
                 lambda: os.open(
                     name,
@@ -1562,7 +1677,7 @@ def create_runtime_root(path: Path) -> RuntimeIdentity:
         "runtime parent authority differs",
     )
     os.mkdir(path, 0o700)
-    with DescriptorCustody() as descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
         descriptor = descriptors.acquire(lambda: os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW))
         observed = os.fstat(descriptor)
         identity = RuntimeIdentity(
@@ -1640,7 +1755,7 @@ def verify_runtime_entries(descriptor: int) -> None:
 
 
 def reject_legacy_v4_runtime_roster(runtime_identity: RuntimeIdentity) -> None:
-    with DescriptorCustody() as descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
         descriptor = verify_runtime_root(runtime_identity, custody=descriptors)
         roster = set(os.listdir(descriptor))
     if (
@@ -2156,7 +2271,7 @@ def read_mountinfo_for_namespace(
 
 
 def runtime_netns_entry_roster(runtime: RuntimeIdentity) -> tuple[str, ...]:
-    with DescriptorCustody() as descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
         runtime_fd = verify_runtime_root(runtime, custody=descriptors)
         try:
             docker_exec_fd = descriptors.acquire(
@@ -2485,7 +2600,7 @@ def _remove_tree_entry(directory_fd: int, name: str) -> None:
     value = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
     require(value.st_uid == 0, f"runtime cleanup entry owner differs: {name}")
     if stat.S_ISDIR(value.st_mode):
-        with DescriptorCustody() as descriptors:
+        with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
             child = descriptors.acquire(
                 lambda: os.open(
                     name,
@@ -2510,7 +2625,7 @@ def _remove_tree_entry(directory_fd: int, name: str) -> None:
             os.rmdir(name, dir_fd=directory_fd)
     elif stat.S_ISREG(value.st_mode) or stat.S_ISSOCK(value.st_mode) or stat.S_ISLNK(value.st_mode):
         require(hasattr(os, "O_PATH"), "descriptor-only runtime cleanup is unavailable")
-        with DescriptorCustody() as descriptors:
+        with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
             leaf = descriptors.acquire(
                 lambda: os.open(
                     name,
@@ -2541,7 +2656,7 @@ def reduce_runtime_removal_root(state_root: Path) -> bool:
         )
     except FileNotFoundError:
         return False
-    with DescriptorCustody() as descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
         descriptor = verify_runtime_root(
             identity,
             custody=descriptors,
@@ -2576,7 +2691,7 @@ def remove_runtime_root(identity: RuntimeIdentity, state_root: Path) -> None:
         identity.path == runtime_root_for(state_root),
         "runtime removal state path differs",
     )
-    with DescriptorCustody() as descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
         descriptor = verify_runtime_root(identity, custody=descriptors)
         parent_fd = descriptors.acquire(
             lambda: os.open(
@@ -2617,7 +2732,7 @@ def create_socket_root(path: Path, caller_gid: int) -> SocketPathIdentity:
         SOCKET_ROOT_RE.fullmatch(str(path)) is not None,
         "Docker API root path is invalid",
     )
-    with DescriptorCustody() as descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
         parent_fd = descriptors.acquire(
             lambda: os.open(
                 RUNTIME_PARENT,
@@ -2708,7 +2823,7 @@ def capture_socket_identity(
     root: SocketPathIdentity,
     caller_gid: int,
 ) -> SocketPathIdentity:
-    with DescriptorCustody() as descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
         descriptor = verify_socket_root(root, caller_gid, custody=descriptors)
         require(os.listdir(descriptor) == [SOCKET_NAME], "Docker API root roster differs")
         observed = os.stat(SOCKET_NAME, dir_fd=descriptor, follow_symlinks=False)
@@ -2756,7 +2871,7 @@ def remove_socket_root(
     socket_identity: SocketPathIdentity | None,
     caller_gid: int,
 ) -> None:
-    with DescriptorCustody() as descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
         parent_fd = descriptors.acquire(
             lambda: os.open(
                 RUNTIME_PARENT,
@@ -2828,7 +2943,7 @@ def classify_recovery_socket(
             "Docker API root is absent without durable stopping authority",
         )
         return False, None
-    with DescriptorCustody() as descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
         descriptor = verify_socket_root(root, caller_gid, custody=descriptors)
         roster = tuple(sorted(os.listdir(descriptor)))
         require(roster in ((), (SOCKET_NAME,)), "Docker API root contains a foreign entry")
@@ -2857,7 +2972,7 @@ def ensure_storage_directory(
         os.mkdir(name, required_mode, dir_fd=parent_fd)
     except FileExistsError:
         pass
-    with DescriptorCustody() as descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
         descriptor = descriptors.acquire(
             lambda: os.open(
                 name,
@@ -2892,7 +3007,7 @@ def write_runtime_bytes(
 ) -> tuple[Path, str]:
     require("/" not in name and name not in ("", ".", ".."), "runtime file name is invalid")
     require(mode in (0o400, 0o600), "runtime file mode is invalid")
-    with DescriptorCustody() as descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
         descriptor = descriptors.acquire(
             lambda: os.open(
                 name,
@@ -2970,7 +3085,7 @@ def write_root_manifest(
 ) -> str:
     encoded = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
     require(0 < len(encoded) <= 2 * 1024 * 1024, "root manifest size is invalid")
-    with DescriptorCustody() as runtime_descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as runtime_descriptors:
         runtime_fd = verify_runtime_root(runtime_identity, custody=runtime_descriptors)
         pending_name = _root_manifest_pending(name)
         require(
@@ -2978,7 +3093,7 @@ def write_root_manifest(
             f"root manifest already exists: {name}",
         )
         remove_root_manifest_pending(runtime_fd, name)
-        with DescriptorCustody() as pending_descriptors:
+        with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as pending_descriptors:
             descriptor = pending_descriptors.acquire(
                 lambda: os.open(
                     pending_name,
@@ -3077,7 +3192,7 @@ def _legacy_v3_regular_digest(
     *,
     require_terminal_identity: bool,
 ) -> bool:
-    with DescriptorCustody() as descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
         try:
             descriptor = descriptors.acquire(lambda: os.open(path, os.O_RDONLY | os.O_NOFOLLOW))
         except (FileNotFoundError, OSError):
@@ -3098,7 +3213,7 @@ def _legacy_v3_regular_digest_at(
     *,
     require_terminal_identity: bool,
 ) -> bool:
-    with DescriptorCustody() as descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
         try:
             descriptor = descriptors.acquire(
                 lambda: os.open(
@@ -3245,7 +3360,7 @@ def _require_runtime_lease_custody(lease: RuntimeLease) -> None:
 
 def settle_legacy_v3_terminal_archive(lease: RuntimeLease) -> dict[str, bool]:
     _require_runtime_lease_custody(lease)
-    with DescriptorCustody() as descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
         state_fd = descriptors.acquire(
             lambda: os.open(
                 LEGACY_V3_STATE_ROOT,
@@ -3347,7 +3462,7 @@ def read_root_manifest(runtime_identity: RuntimeIdentity, name: str) -> dict[str
         ),
         "root manifest name is invalid",
     )
-    with DescriptorCustody() as runtime_descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as runtime_descriptors:
         runtime_fd = verify_runtime_root(runtime_identity, custody=runtime_descriptors)
         if not _entry_exists(runtime_fd, name):
             return None
@@ -3361,7 +3476,7 @@ def read_root_manifest(runtime_identity: RuntimeIdentity, name: str) -> dict[str
             and 0 < value.st_size <= 2 * 1024 * 1024,
             f"root manifest identity differs: {name}",
         )
-        with DescriptorCustody() as manifest_descriptors:
+        with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as manifest_descriptors:
             descriptor = manifest_descriptors.acquire(
                 lambda: os.open(
                     name,
@@ -4047,7 +4162,7 @@ def existing_runtime_identity(
     path_pattern: re.Pattern[str] = RUNTIME_ROOT_RE,
 ) -> RuntimeIdentity:
     require(path_pattern.fullmatch(str(path)) is not None, "runtime root path is invalid")
-    with DescriptorCustody() as descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
         descriptor = descriptors.acquire(lambda: os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW))
         observed = os.fstat(descriptor)
         require(
@@ -4570,7 +4685,7 @@ def validate_stop_authority(
 
 
 def _validate_snapshot_prefix(path: Path, expected: bytes) -> None:
-    with DescriptorCustody() as descriptors:
+    with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
         descriptor = descriptors.acquire(lambda: os.open(path, os.O_RDONLY | os.O_NOFOLLOW))
         observed = os.fstat(descriptor)
         require(
@@ -4622,7 +4737,7 @@ def reduce_precontrol_runtime(
         runtime = None
     if runtime is not None:
         if runtime.mode == 0o000:
-            with DescriptorCustody() as descriptors:
+            with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
                 descriptor = descriptors.acquire(
                     lambda: os.open(
                         runtime.path,
@@ -4639,7 +4754,7 @@ def reduce_precontrol_runtime(
                 runtime.gid,
                 0o700,
             )
-        with DescriptorCustody() as descriptors:
+        with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
             runtime_fd = verify_runtime_root(runtime, custody=descriptors)
             roster = set(os.listdir(runtime_fd))
             classify_precontrol_roster(roster)
@@ -4708,7 +4823,7 @@ def reduce_precontrol_runtime(
             and stat.S_IMODE(socket_stat.st_mode) in (0o000, 0o700, 0o750),
             "pre-control Docker API root identity differs",
         )
-        with DescriptorCustody() as descriptors:
+        with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
             socket_fd = descriptors.acquire(
                 lambda: os.open(
                     socket_path,
@@ -5275,7 +5390,7 @@ class RuntimeSupervisor:
             self.script_directory / STORAGE_IDENTITY_VERIFIER_NAME,
             STORAGE_IDENTITY_VERIFIER_SHA256,
         )
-        with DescriptorCustody() as descriptors:
+        with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
             runtime_fd = verify_runtime_root(self.runtime_identity, custody=descriptors)
             _, supervisor_digest = write_runtime_bytes(
                 runtime_fd,
@@ -5314,7 +5429,7 @@ class RuntimeSupervisor:
         require(self.runtime_identity is not None, "runtime identity is absent")
         require(self.storage is not None, "storage activation is absent")
         require(self.cgroup_identity is not None, "runtime cgroup authority is absent")
-        with DescriptorCustody() as descriptors:
+        with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
             target_fd = descriptors.acquire(
                 lambda: os.open(
                     MOUNT_TARGET,
@@ -5366,7 +5481,7 @@ class RuntimeSupervisor:
                 "inner runner data-root projection changed",
             )
 
-        with DescriptorCustody() as descriptors:
+        with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
             authority_fd = descriptors.acquire(
                 lambda: os.open(
                     AUTHORITY_ROOT,
@@ -5388,7 +5503,7 @@ class RuntimeSupervisor:
                 recoverable_modes={0o700},
             )
 
-        with DescriptorCustody() as descriptors:
+        with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
             runtime_fd = verify_runtime_root(self.runtime_identity, custody=descriptors)
             runtime = self.runtime_identity.path
             require(self.socket_root_identity is not None, "Docker API root is absent")
@@ -5793,7 +5908,7 @@ class RuntimeSupervisor:
             raise SupervisorError("unsupported daemon shutdown authority")
         require(hasattr(os, "pidfd_open"), "pidfd process custody is unavailable")
         require(hasattr(signal, "pidfd_send_signal"), "pidfd signal delivery is unavailable")
-        with DescriptorCustody() as descriptors:
+        with DescriptorCustodyGate() as _descriptor_gate, _descriptor_gate.custody as descriptors:
             pidfd = descriptors.acquire(lambda: os.pidfd_open(process.pid, 0))
             observed_identity = self.process_verifier(
                 process.pid,
@@ -6032,7 +6147,7 @@ class RuntimeSupervisor:
         finally:
             state = self.state if isinstance(self.state, StateAuthority) else None
             lease = self.lease
-            settled = close_runtime_authorities(
+            settled = settle_runtime_authorities(
                 state=state,
                 lease=lease,
                 primary=primary,
@@ -6192,7 +6307,8 @@ def _validated_orphaned_authorities(
 
 def runtime_status(state_root: Path, caller_uid: int, caller_gid: int) -> dict[str, object]:
     state = StateAuthority.pending(state_root, caller_uid, caller_gid)
-    with state:
+    primary: BaseException | None = None
+    try:
         state.acquire()
         try:
             require_no_other_task_runtime(state_root)
@@ -6263,6 +6379,15 @@ def runtime_status(state_root: Path, caller_uid: int, caller_gid: int) -> dict[s
             "rootReadySha256": canonical_document_digest(ready["ready"]),
             "ready": ready["ready"],
         }
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        settle_runtime_authorities(
+            state=state,
+            lease=None,
+            primary=primary,
+        )
 
 
 def acquire_runtime_lease_until(
@@ -6393,7 +6518,7 @@ def ensure_runtime_stopped(
         primary = error
         raise
     finally:
-        close_runtime_authorities(
+        settle_runtime_authorities(
             state=state,
             lease=lease,
             primary=primary,
@@ -6451,7 +6576,7 @@ def ensure_orphaned_runtime_stopped(
             primary = error
             raise
         finally:
-            close_runtime_authorities(
+            settle_runtime_authorities(
                 state=None,
                 lease=lease,
                 primary=primary,
@@ -6519,7 +6644,7 @@ def ensure_orphaned_runtime_stopped(
         primary = error
         raise
     finally:
-        close_runtime_authorities(
+        settle_runtime_authorities(
             state=None,
             lease=lease,
             primary=primary,
