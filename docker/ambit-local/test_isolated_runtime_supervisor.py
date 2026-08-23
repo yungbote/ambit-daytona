@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import ast
 import contextlib
 import copy
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import re
@@ -210,7 +212,7 @@ def storage_operation(outcome: str = "activated") -> dict[str, object]:
 
 class RuntimeSupervisorPureContractTest(unittest.TestCase):
     def test_orphan_absent_cleanup_is_serialized_by_the_global_lease(self) -> None:
-        lease = mock.Mock()
+        lease = MODULE.RuntimeLease(Path("/run/example.lock"), 90, 91, 1, 2)
         with mock.patch.object(
             MODULE,
             "path_exists_nofollow",
@@ -223,7 +225,7 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
             MODULE, "require_no_other_task_runtime"
         ) as singleton, mock.patch.object(
             MODULE, "reduce_runtime_removal_root", return_value=False
-        ):
+        ), mock.patch.object(MODULE.os, "close") as close:
             result = MODULE.ensure_orphaned_runtime_stopped(STATE_ROOT, 1000, 1000)
         self.assertEqual(result["outcome"], "passed")
         acquire.assert_called_once_with(STATE_ROOT)
@@ -231,9 +233,9 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
             singleton.call_args_list,
             [mock.call(STATE_ROOT), mock.call(STATE_ROOT, lease=lease)],
         )
-        lease.close.assert_called_once_with()
+        self.assertEqual(close.call_args_list, [mock.call(91), mock.call(90)])
 
-        competing = mock.Mock()
+        competing = MODULE.RuntimeLease(Path("/run/example.lock"), 92, 93, 1, 2)
         with mock.patch.object(
             MODULE,
             "path_exists_nofollow",
@@ -244,12 +246,12 @@ class RuntimeSupervisorPureContractTest(unittest.TestCase):
             return_value=competing,
         ), mock.patch.object(
             MODULE, "require_no_other_task_runtime"
-        ), self.assertRaisesRegex(
+        ), mock.patch.object(MODULE.os, "close") as close, self.assertRaisesRegex(
             MODULE.SupervisorError,
             "appeared while acquiring the global lease",
         ):
             MODULE.ensure_orphaned_runtime_stopped(STATE_ROOT, 1000, 1000)
-        competing.close.assert_called_once_with()
+        self.assertEqual(close.call_args_list, [mock.call(93), mock.call(92)])
 
     def test_root_control_binds_boot_state_runtime_socket_cgroup_and_sources(self) -> None:
         value, runtime, socket_root, cgroup = control_authority()
@@ -2146,6 +2148,349 @@ class RuntimeSupervisorShutdownTest(unittest.TestCase):
                 supervisor.recover_existing_runtime()
         kill.assert_not_called()
         freeze.assert_not_called()
+
+
+class DescriptorCustodyTest(unittest.TestCase):
+    def test_first_oserror_is_primary_and_every_descriptor_is_attempted_once(self) -> None:
+        owner = MODULE.DescriptorCustody((10, 11, 12))
+        first = OSError("first close failed")
+        later = KeyboardInterrupt("later close failed")
+        calls: list[int] = []
+
+        def close(descriptor: int) -> None:
+            self.assertEqual(owner.attempted, (12, 11, 10))
+            calls.append(descriptor)
+            if descriptor == 12:
+                raise first
+            if descriptor == 11:
+                raise later
+
+        with mock.patch.object(MODULE.os, "close", side_effect=close):
+            with self.assertRaises(OSError) as raised:
+                owner.close()
+            self.assertIs(raised.exception, first)
+            owner.close()
+
+        self.assertEqual(calls, [12, 11, 10])
+        self.assertEqual(owner.failures, ((12, first), (11, later)))
+        self.assertTrue(
+            any("fd 11" in note for note in getattr(first, "__notes__", ()))
+        )
+
+    def test_first_keyboard_interrupt_remains_primary_after_later_oserror(self) -> None:
+        owner = MODULE.DescriptorCustody((20, 21))
+        first = KeyboardInterrupt("first close interrupted")
+        later = OSError("later close failed")
+        calls: list[int] = []
+
+        def close(descriptor: int) -> None:
+            calls.append(descriptor)
+            raise first if descriptor == 21 else later
+
+        with mock.patch.object(MODULE.os, "close", side_effect=close):
+            with self.assertRaises(KeyboardInterrupt) as raised:
+                owner.close()
+            self.assertIs(raised.exception, first)
+            owner.close()
+
+        self.assertEqual(calls, [21, 20])
+        self.assertEqual(owner.failures, ((21, first), (20, later)))
+
+    def test_active_body_exception_survives_close_failures_and_hostile_add_note(self) -> None:
+        class HostileBodyError(RuntimeError):
+            def add_note(self, note: str) -> None:
+                raise SystemExit(f"hostile add_note: {note}")
+
+        owner = MODULE.DescriptorCustody((30, 31, 32))
+        primary = HostileBodyError("body failed")
+        calls: list[int] = []
+
+        def close(descriptor: int) -> None:
+            calls.append(descriptor)
+            if descriptor == 32:
+                raise OSError("first cleanup failed")
+            if descriptor == 31:
+                raise KeyboardInterrupt("second cleanup failed")
+
+        caught: BaseException | None = None
+        with mock.patch.object(MODULE.os, "close", side_effect=close):
+            try:
+                with owner:
+                    raise primary
+            except BaseException as error:
+                caught = error
+            owner.close()
+
+        self.assertIs(caught, primary)
+        self.assertEqual(calls, [32, 31, 30])
+
+    def test_descriptor_tokens_and_duplicate_aliases_are_rejected_before_close(self) -> None:
+        class IntSubclass(int):
+            pass
+
+        invalid_rosters: tuple[tuple[object, ...], ...] = (
+            (-1,),
+            (False,),
+            (IntSubclass(4),),
+            ("4",),
+            (4, 4),
+        )
+        with mock.patch.object(MODULE.os, "close") as close:
+            for roster in invalid_rosters:
+                with self.subTest(roster=roster), self.assertRaisesRegex(
+                    MODULE.SupervisorError,
+                    "descriptor|duplicate",
+                ):
+                    MODULE.DescriptorCustody(roster)
+            close.assert_not_called()
+
+            owner = MODULE.DescriptorCustody((40,))
+            with self.assertRaisesRegex(MODULE.SupervisorError, "duplicate"):
+                owner.own(40)
+            close.assert_not_called()
+            owner.close()
+            owner.close()
+            close.assert_called_once_with(40)
+
+        state = MODULE.StateAuthority(STATE_ROOT, 1000, 1000, 41, 42)
+        lease = MODULE.RuntimeLease(Path("/run/example.lock"), 43, 42, 1, 2)
+        primary = RuntimeError("active body failure")
+        with mock.patch.object(MODULE.os, "close") as close:
+            with self.assertRaisesRegex(MODULE.SupervisorError, "duplicate"):
+                MODULE.close_runtime_authorities(state=state, lease=lease)
+            close.assert_not_called()
+            MODULE.close_runtime_authorities(
+                state=state,
+                lease=lease,
+                primary=primary,
+            )
+            close.assert_not_called()
+        self.assertEqual((state.root_fd, state.evidence_fd), (41, 42))
+        self.assertEqual((lease.parent_fd, lease.descriptor), (43, 42))
+        self.assertTrue(
+            any("validation failed" in note for note in getattr(primary, "__notes__", ()))
+        )
+
+    def test_state_authority_marks_both_fields_closed_before_first_syscall(self) -> None:
+        state = MODULE.StateAuthority(Path("/home/example/state"), 1000, 1000, 50, 51)
+        calls: list[int] = []
+
+        def close(descriptor: int) -> None:
+            self.assertEqual((state.root_fd, state.evidence_fd), (-1, -1))
+            calls.append(descriptor)
+            if descriptor == 51:
+                raise OSError("evidence close failed")
+
+        with mock.patch.object(MODULE.os, "close", side_effect=close):
+            with self.assertRaisesRegex(OSError, "evidence close failed"):
+                state.close()
+            state.close()
+
+        self.assertEqual(calls, [51, 50])
+
+    def test_runtime_lease_marks_both_fields_closed_before_first_syscall(self) -> None:
+        lease = MODULE.RuntimeLease(Path("/run/example.lock"), 60, 61, 1, 2)
+        calls: list[int] = []
+
+        def close(descriptor: int) -> None:
+            self.assertEqual((lease.parent_fd, lease.descriptor), (-1, -1))
+            calls.append(descriptor)
+            if descriptor == 61:
+                raise KeyboardInterrupt("lease close interrupted")
+
+        with mock.patch.object(MODULE.os, "close", side_effect=close):
+            with self.assertRaisesRegex(KeyboardInterrupt, "lease close interrupted"):
+                lease.close()
+            lease.close()
+
+        self.assertEqual(calls, [61, 60])
+
+    def test_composed_state_and_lease_are_retired_before_all_attempt_cleanup(self) -> None:
+        state = MODULE.StateAuthority(Path("/home/example/state"), 1000, 1000, 70, 71)
+        lease = MODULE.RuntimeLease(Path("/run/example.lock"), 72, 73, 1, 2)
+        first = OSError("state evidence close failed")
+        later = KeyboardInterrupt("lease descriptor close failed")
+        calls: list[int] = []
+
+        def close(descriptor: int) -> None:
+            self.assertEqual((state.root_fd, state.evidence_fd), (-1, -1))
+            self.assertEqual((lease.parent_fd, lease.descriptor), (-1, -1))
+            calls.append(descriptor)
+            if descriptor == 71:
+                raise first
+            if descriptor == 73:
+                raise later
+
+        with mock.patch.object(MODULE.os, "close", side_effect=close):
+            with self.assertRaises(OSError) as raised:
+                MODULE.close_runtime_authorities(state=state, lease=lease)
+            self.assertIs(raised.exception, first)
+            MODULE.close_runtime_authorities(state=state, lease=lease)
+
+        self.assertEqual(calls, [71, 70, 73, 72])
+        self.assertTrue(
+            any("fd 73" in note for note in getattr(first, "__notes__", ()))
+        )
+
+    def test_supervisor_run_preserves_body_primary_while_closing_both_authorities(self) -> None:
+        supervisor = MODULE.RuntimeSupervisor(STATE_ROOT, 1000, 1000)
+        state = MODULE.StateAuthority(STATE_ROOT, 1000, 1000, 80, 81)
+        lease = MODULE.RuntimeLease(Path("/run/example.lock"), 82, 83, 1, 2)
+        supervisor.state = state
+        primary = RuntimeError("setup body failed")
+        calls: list[int] = []
+
+        def close(descriptor: int) -> None:
+            calls.append(descriptor)
+            if descriptor == 81:
+                raise OSError("state close failed")
+            if descriptor == 83:
+                raise KeyboardInterrupt("lease close failed")
+
+        caught: BaseException | None = None
+        with (
+            mock.patch.object(MODULE.RuntimeLease, "acquire", return_value=lease),
+            mock.patch.object(supervisor, "setup", side_effect=primary),
+            mock.patch.object(MODULE.os, "close", side_effect=close),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            try:
+                supervisor.run()
+            except BaseException as error:
+                caught = error
+
+        self.assertIs(caught, primary)
+        self.assertEqual(calls, [81, 80, 83, 82])
+        self.assertIsNone(supervisor.state)
+        self.assertIsNone(supervisor.lease)
+        self.assertEqual((state.root_fd, state.evidence_fd), (-1, -1))
+        self.assertEqual((lease.parent_fd, lease.descriptor), (-1, -1))
+
+    def test_every_multi_descriptor_seam_uses_the_shared_custody_authority(self) -> None:
+        tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
+        parents: dict[ast.AST, ast.AST] = {}
+        for node in ast.walk(tree):
+            for child in ast.iter_child_nodes(node):
+                parents[child] = node
+
+        functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            parent = parents.get(node)
+            prefix = f"{parent.name}." if isinstance(parent, ast.ClassDef) else ""
+            functions[f"{prefix}{node.name}"] = node
+
+        migrated = {
+            "StateAuthority.open",
+            "RuntimeLease.acquire",
+            "close_runtime_authorities",
+            "create_cgroup",
+            "open_cgroup",
+            "open_execution_cgroup",
+            "remove_empty_cgroup",
+            "verify_runtime_root",
+            "runtime_netns_entry_roster",
+            "_remove_tree_entry",
+            "reduce_runtime_removal_root",
+            "remove_runtime_root",
+            "create_socket_root",
+            "verify_socket_root",
+            "remove_socket_root",
+            "write_root_manifest",
+            "settle_legacy_v3_terminal_archive",
+            "read_root_manifest",
+            "reduce_precontrol_runtime",
+            "RuntimeSupervisor.prepare_daemon_configuration",
+        }
+        self.assertTrue(migrated <= functions.keys())
+        for name in migrated:
+            custody_calls = [
+                call
+                for call in ast.walk(functions[name])
+                if isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Name)
+                and call.func.id == "DescriptorCustody"
+            ]
+            self.assertTrue(custody_calls, name)
+
+        raw_close_by_function: dict[str, list[int]] = {}
+        for name, function in functions.items():
+            raw_close_by_function[name] = [
+                call.lineno
+                for call in ast.walk(function)
+                if isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and isinstance(call.func.value, ast.Name)
+                and call.func.value.id == "os"
+                and call.func.attr == "close"
+            ]
+        self.assertEqual(
+            {
+                name: lines
+                for name, lines in raw_close_by_function.items()
+                if len(lines) > 1
+            },
+            {},
+        )
+        for name in migrated:
+            self.assertEqual(raw_close_by_function[name], [], name)
+
+        routed_closers = {
+            "StateAuthority.close",
+            "RuntimeLease.close",
+            "RuntimeSupervisor.run",
+            "ensure_runtime_stopped",
+            "ensure_orphaned_runtime_stopped",
+        }
+        self.assertTrue(routed_closers <= functions.keys())
+        for name in routed_closers:
+            calls = [
+                call
+                for call in ast.walk(functions[name])
+                if isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Name)
+                and call.func.id == "close_runtime_authorities"
+            ]
+            self.assertTrue(calls, name)
+        source = SCRIPT.read_text(encoding="utf-8")
+        for forbidden in (
+            "state.close(",
+            "lease.close(",
+            "self.state.close(",
+            "self.lease.close(",
+        ):
+            self.assertNotIn(forbidden, source)
+
+        fd_factories = {
+            "open",
+            "open_cgroup",
+            "open_execution_cgroup",
+            "verify_runtime_root",
+            "verify_socket_root",
+        }
+        for name in migrated:
+            for call in ast.walk(functions[name]):
+                if not isinstance(call, ast.Call):
+                    continue
+                called_name: str | None = None
+                if isinstance(call.func, ast.Name):
+                    called_name = call.func.id
+                elif (
+                    isinstance(call.func, ast.Attribute)
+                    and isinstance(call.func.value, ast.Name)
+                    and call.func.value.id == "os"
+                ):
+                    called_name = call.func.attr
+                if called_name not in fd_factories:
+                    continue
+                parent = parents.get(call)
+                self.assertTrue(
+                    isinstance(parent, ast.Call)
+                    and isinstance(parent.func, ast.Attribute)
+                    and parent.func.attr == "own",
+                    f"{name}:{call.lineno}",
+                )
 
 
 class RuntimeSupervisorSourceBoundaryTest(unittest.TestCase):
