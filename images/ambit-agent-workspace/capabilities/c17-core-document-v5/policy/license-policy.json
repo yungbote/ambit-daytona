@@ -18,7 +18,8 @@
   },
   "nativeCanvas": {
     "disposition": "unavailable",
-    "requiredBeforeAdmission": "exact-native-binary-skia-and-complete-third-party-license-closure"
+    "candidate": "@napi-rs/canvas-linux-x64-gnu@1.0.7",
+    "requiredBeforeAdmission": "exact-native-binary-skia-cargo-source-and-complete-third-party-license-closure"
   },
   "promotionWithoutCompleteInventory": "forbidden"
 }
