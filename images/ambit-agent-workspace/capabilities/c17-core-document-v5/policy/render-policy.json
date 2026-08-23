@@ -26,6 +26,9 @@
     "maximumPixelsPerPage": 100000000,
     "maximumTotalPixels": 536870912,
     "maximumTotalOutputBytes": 536870912,
+    "rasterScale": 2,
+    "background": "#ffffff",
+    "pngEncoding": "napi-rs-canvas-png-default-v1",
     "orderedZeroBasedRosterRequired": true,
     "exactPngSha256Required": true
   },
@@ -35,6 +38,12 @@
     "workerVersionMustEqualApiVersion": true,
     "standardFonts": "unsupported-until-license-corrected-and-frozen",
     "popplerFallback": "forbidden",
+    "requiredGlobals": [
+      "DOMMatrix",
+      "ImageData",
+      "Path2D"
+    ],
+    "canvasFactory": "ambit.pdfjs-canvas-factory/napi-rs@1",
     "executionState": "unavailable"
   },
   "canonicalArtifactBoundary": "external-commit-only",

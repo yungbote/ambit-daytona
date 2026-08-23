@@ -1,0 +1,287 @@
+import { createHash } from 'node:crypto'
+import { constants as fsConstants } from 'node:fs'
+import {
+  lstat,
+  open,
+  readdir,
+  realpath,
+} from 'node:fs/promises'
+import { createRequire } from 'node:module'
+import { isAbsolute, join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+
+import {
+  admitBackendComponentLineageEnvelope,
+  admitInstalledEngineLineage,
+  admitRenderPolicy,
+  canonicalJson,
+  composeRenderExecutionLineage,
+  createRenderManifest,
+} from './render-contracts.mjs'
+import {
+  admitCanvasModule,
+  admitPdfjsModule,
+  CORE_DOCUMENT_V5_PACK_ROOT,
+  renderPdfBytes,
+} from './pdfjs-page-renderer.mjs'
+
+const POLICY_PATH = join(
+  CORE_DOCUMENT_V5_PACK_ROOT,
+  'policy/render-policy.json',
+)
+const PDFJS_MODULE_PATH = join(
+  CORE_DOCUMENT_V5_PACK_ROOT,
+  'renderer/pdfjs/legacy/build/pdf.mjs',
+)
+const CANVAS_MODULE_PATH = join(
+  CORE_DOCUMENT_V5_PACK_ROOT,
+  'renderer/node_modules/@napi-rs/canvas',
+)
+const CANVAS_PACKAGE_PATH = join(CANVAS_MODULE_PATH, 'package.json')
+const ENGINE_LINEAGE_PATH = join(
+  CORE_DOCUMENT_V5_PACK_ROOT,
+  'lineage/installed-render-engine-lineage.json',
+)
+const EXPECTED_NODE_VERSION = 'v24.19.0'
+const OUTPUT_MANIFEST_NAME = 'render-manifest.json'
+
+function sha256(bytes) {
+  return `sha256:${createHash('sha256').update(bytes).digest('hex')}`
+}
+
+export async function readRegularNoFollow(path, maximumBytes) {
+  if (!isAbsolute(path)) {
+    throw new TypeError('Input path must be absolute.')
+  }
+  const handle = await open(
+    path,
+    fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_CLOEXEC,
+  )
+  try {
+    const before = await handle.stat({ bigint: true })
+    if (
+      !before.isFile() ||
+      before.nlink !== 1n ||
+      (before.mode & 0o222n) !== 0n ||
+      before.size <= 0n ||
+      before.size > BigInt(maximumBytes)
+    ) {
+      throw new TypeError('Input must be one bounded immutable regular file.')
+    }
+    const bytes = await handle.readFile()
+    const after = await handle.stat({ bigint: true })
+    if (
+      bytes.byteLength !== Number(before.size) ||
+      !sameFileIdentity(before, after)
+    ) {
+      throw new TypeError('Input identity changed while it was being read.')
+    }
+    return bytes
+  } finally {
+    await handle.close()
+  }
+}
+
+function sameFileIdentity(left, right) {
+  return [
+    'ctimeNs',
+    'dev',
+    'gid',
+    'ino',
+    'mode',
+    'mtimeNs',
+    'nlink',
+    'size',
+    'uid',
+  ].every((key) => left[key] === right[key])
+}
+
+function sameDirectoryIdentity(left, right) {
+  return ['dev', 'gid', 'ino', 'mode', 'uid'].every(
+    (key) => left[key] === right[key],
+  )
+}
+
+export async function admitEmptyOutputDirectory(path) {
+  if (!isAbsolute(path)) {
+    throw new TypeError('Output path must be absolute.')
+  }
+  const handle = await open(
+    path,
+    fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,
+  )
+  try {
+    const identity = await handle.stat({ bigint: true })
+    if (
+      !identity.isDirectory() ||
+      identity.uid !== BigInt(process.getuid()) ||
+      (identity.mode & 0o777n) !== 0o700n ||
+      (await realpath(path)) !== path ||
+      (await readdir(path)).length !== 0
+    ) {
+      throw new TypeError(
+        'Output must be one canonical empty task-private directory.',
+      )
+    }
+    await reproveOutputDirectory(path, identity)
+    return Object.freeze({ path, handle, identity })
+  } catch (error) {
+    await handle.close()
+    throw error
+  }
+}
+
+export async function reproveOutputDirectory(path, expected) {
+  const observed = await lstat(path, { bigint: true })
+  if (
+    !observed.isDirectory() ||
+    observed.isSymbolicLink() ||
+    !sameDirectoryIdentity(expected, observed)
+  ) {
+    throw new TypeError('Output directory identity changed during rendering.')
+  }
+}
+
+export async function writeDurableOutput(output, filename, bytes) {
+  if (!/^(?:page-[0-9]{4}\.png|render-manifest\.json)$/.test(filename)) {
+    throw new TypeError('Output filename is not canonical.')
+  }
+  await reproveOutputDirectory(output.path, output.identity)
+  const path = join(output.path, filename)
+  const handle = await open(
+    path,
+    fsConstants.O_WRONLY |
+      fsConstants.O_CREAT |
+      fsConstants.O_EXCL |
+      fsConstants.O_NOFOLLOW |
+      fsConstants.O_CLOEXEC,
+    0o444,
+  )
+  try {
+    await handle.writeFile(bytes)
+    await handle.sync()
+    const metadata = await handle.stat({ bigint: true })
+    if (
+      !metadata.isFile() ||
+      metadata.nlink !== 1n ||
+      metadata.size !== BigInt(Buffer.byteLength(bytes)) ||
+      (metadata.mode & 0o222n) !== 0n
+    ) {
+      throw new TypeError('Durable output file identity is invalid.')
+    }
+  } finally {
+    await handle.close()
+  }
+  await reproveOutputDirectory(output.path, output.identity)
+  await output.handle.sync()
+}
+
+function readCanonicalInput(bytes, admit, label) {
+  const text = bytes.toString('utf8')
+  const value = JSON.parse(text)
+  if (`${canonicalJson(value)}\n` !== text) {
+    throw new TypeError(`${label} bytes are not canonical JSON.`)
+  }
+  return admit(value)
+}
+
+async function loadExactEngine() {
+  if (process.version !== EXPECTED_NODE_VERSION) {
+    throw new TypeError('The exact Node runtime is unavailable.')
+  }
+  const require = createRequire(import.meta.url)
+  const canvasPackage = require(CANVAS_PACKAGE_PATH)
+  const admittedCanvas = admitCanvasModule(
+    require(CANVAS_MODULE_PATH),
+    canvasPackage,
+  )
+  const canvas = admittedCanvas.module
+  globalThis.DOMMatrix = canvas.DOMMatrix
+  globalThis.ImageData = canvas.ImageData
+  globalThis.Path2D = canvas.Path2D
+  const pdfjs = admitPdfjsModule(await import(pathToFileURL(PDFJS_MODULE_PATH)))
+  return { pdfjs, canvas, canvasPackage }
+}
+
+export function parseArguments(argv) {
+  if (
+    argv.length !== 6 ||
+    argv[0] !== '--input' ||
+    argv[2] !== '--output' ||
+    argv[4] !== '--backend-lineage'
+  ) {
+    throw new TypeError(
+      'Expected --input PATH --output DIRECTORY --backend-lineage PATH.',
+    )
+  }
+  return { input: argv[1], output: argv[3], backendLineage: argv[5] }
+}
+
+async function main() {
+  const args = parseArguments(process.argv.slice(2))
+  const policyBytes = await readRegularNoFollow(POLICY_PATH, 1048576)
+  const policy = admitRenderPolicy(JSON.parse(policyBytes.toString('utf8')))
+  if (policy.pdfjs.executionState !== 'available') {
+    throw new TypeError('The exact PDF.js execution evidence remains unavailable.')
+  }
+  const pdfBytes = await readRegularNoFollow(
+    args.input,
+    policy.input.maximumBytes,
+  )
+  const backendLineageBytes = await readRegularNoFollow(
+    args.backendLineage,
+    1048576,
+  )
+  const backendComponentLineage = readCanonicalInput(
+    backendLineageBytes,
+    admitBackendComponentLineageEnvelope,
+    'Backend component lineage envelope',
+  )
+  const installedEngineBytes = await readRegularNoFollow(
+    ENGINE_LINEAGE_PATH,
+    1048576,
+  )
+  const installedEngineLineage = readCanonicalInput(
+    installedEngineBytes,
+    admitInstalledEngineLineage,
+    'Installed render engine lineage',
+  )
+  const executionLineage = composeRenderExecutionLineage({
+    backendComponentLineage,
+    installedEngineLineage,
+  })
+  const output = await admitEmptyOutputDirectory(args.output)
+  try {
+    const { pdfjs, canvas, canvasPackage } = await loadExactEngine()
+    const pages = await renderPdfBytes({
+      pdfBytes,
+      policy,
+      pdfjs,
+      canvas,
+      canvasPackage,
+      sink: async (page) =>
+        writeDurableOutput(output, page.evidence.filename, page.bytes),
+    })
+    const manifest = createRenderManifest({
+      intermediatePdfSha256: sha256(pdfBytes),
+      intermediatePdfBytes: pdfBytes.byteLength,
+      policySha256: sha256(policyBytes),
+      pages,
+      policy,
+      executionLineage,
+    })
+    const manifestBytes = `${canonicalJson(manifest)}\n`
+    await writeDurableOutput(output, OUTPUT_MANIFEST_NAME, manifestBytes)
+    await reproveOutputDirectory(output.path, output.identity)
+    process.stdout.write(manifestBytes)
+  } finally {
+    await output.handle.close()
+  }
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    process.stderr.write(`core-document@5 render unavailable: ${error.message}\n`)
+    process.exitCode = 1
+  })
+}

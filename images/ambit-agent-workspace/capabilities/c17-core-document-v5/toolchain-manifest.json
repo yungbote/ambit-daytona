@@ -7,8 +7,11 @@
     "architecture": "amd64"
   },
   "baseOciLock": "locks/base-oci.lock.json",
+  "backendLineageInputLock": "locks/backend-lineage-input.lock.json",
   "debianInputLock": "locks/debian-input.lock.json",
   "pdfjsInputLock": "locks/pdfjs-input.lock.json",
+  "nodeInputLock": "locks/node-input.lock.json",
+  "canvasInputLock": "locks/canvas-input.lock.json",
   "captureHelperInputLock": "locks/capture-helper-input.lock.json",
   "libreOffice": {
     "package": "libreoffice-writer-nogui",
@@ -29,10 +32,22 @@
   },
   "pdfjs": {
     "version": "6.2.108",
-    "delivery": "direct-static-content-addressed-assets",
-    "runtimeNode": "absent",
+    "delivery": "direct-content-addressed-node-assets",
+    "runtimeNode": "24.19.0",
     "runtimeNpm": "absent",
-    "nativeCanvas": "unavailable"
+    "nativeCanvas": "@napi-rs/canvas-linux-x64-gnu@1.0.7-unavailable"
+  },
+  "installedEngineLineage": {
+    "state": "unavailable",
+    "runtimePath": "/opt/ambit/runtime-pack/core-document-v5/lineage/installed-render-engine-lineage.json",
+    "callerSuppliedEnginePins": "forbidden",
+    "derivedFrom": [
+      "exact-node-binary-lock",
+      "exact-pdfjs-roster-lock",
+      "exact-canvas-source-and-native-locks",
+      "exact-libreoffice-debian-closure-lock",
+      "exact-font-manifest-lock"
+    ]
   },
   "runtime": {
     "user": "daytona",
@@ -43,11 +58,13 @@
     "workspacePublication": "external-atomic-materialization-authority-only"
   },
   "knownBlockers": [
+    "authoritative-backend-component-lineage-contract-unavailable",
     "capture-helper-external-authority-unavailable",
     "debian-binary-source-and-license-closure-unfrozen",
     "font-file-fontconfig-and-license-rosters-unfrozen",
     "pdfjs-static-file-roster-unfrozen",
-    "pdfjs-canvas-execution-component-unavailable",
+    "node-release-dynamic-license-and-vulnerability-evidence-incomplete",
+    "pdfjs-canvas-native-source-license-and-vulnerability-evidence-incomplete",
     "per-page-pixel-conformance-unproved",
     "final-oci-identities-unavailable"
   ],

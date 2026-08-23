@@ -66,6 +66,14 @@ class SourceContractTests(unittest.TestCase):
             lambda value: value["platform"].__setitem__("architecture", "arm64"),
         )
 
+    def test_canonical_base_digest_substitution_is_rejected(self) -> None:
+        self.assert_rejected(
+            "locks/base-oci.lock.json",
+            lambda value: value["platform"].__setitem__(
+                "manifestDigest", f"sha256:{'0' * 64}"
+            ),
+        )
+
     def test_mutable_base_reference_is_rejected(self) -> None:
         self.assert_rejected(
             "locks/base-oci.lock.json",
@@ -104,6 +112,22 @@ class SourceContractTests(unittest.TestCase):
         self.assert_rejected(
             "locks/pdfjs-input.lock.json",
             lambda value: value["execution"].__setitem__("state", "available"),
+        )
+
+    def test_node_and_canvas_binary_substitutions_are_rejected(self) -> None:
+        self.assert_rejected(
+            "locks/node-input.lock.json",
+            lambda value: value["binary"].__setitem__(
+                "nodeSha256", f"sha256:{'0' * 64}"
+            ),
+        )
+        shutil.rmtree(self.root)
+        shutil.copytree(ROOT, self.root)
+        self.assert_rejected(
+            "locks/canvas-input.lock.json",
+            lambda value: value["platformArchive"].__setitem__(
+                "nativeSha256", f"sha256:{'0' * 64}"
+            ),
         )
 
     def test_refreshed_manifest_cannot_authorize_unknown_nested_field(self) -> None:
