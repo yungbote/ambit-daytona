@@ -308,16 +308,20 @@ non-signal action cutoff.
 Task namespace and mount discovery use one shared stable census rather than
 separate recorded-process, drain-process, and per-root allowlists. A typed
 namespace FD is ambient observation authority—not a legacy relation—only when
-its exact device/inode is also a current namespace of a captured live task.
+its exact device/inode is also a current or for-children namespace entry of a
+captured live task.
 The privileged verifier must remain single-threaded so proof-owned FD numbers
 cannot alias an unshared sibling FD table. Before capture it freezes one task
 coordinate roster and fails closed unless `RLIMIT_NOFILE` has a source-bounded
-ten-descriptor-per-task budget (one thread pidfd, one bound task procfd, and
-all eight current Linux namespace kinds: cgroup, IPC, mount, network, PID,
-time, user, and UTS), plus explicit baseline, prior-pass, and two-descriptor
-root/fdinfo-or-mountinfo transient reserves.
+twelve-descriptor-per-task budget (one thread pidfd, one bound task procfd, and
+all ten observable task namespace entries across the eight canonical Linux
+namespace kinds: cgroup, IPC, mount, network, PID, time, user, and UTS), plus
+explicit baseline, prior-pass, and two-descriptor root/fdinfo-or-mountinfo
+transient reserves. `pid_for_children` and `time_for_children` are bound as
+PID/time aliases and may differ from the current PID/time entries; their exact
+per-task assignments participate in both census-pass digests and held reproof.
 It retains every task pidfd/proc descriptor through the pass commit and one
-typed nsfs descriptor per unique current namespace through all shared FD and
+typed nsfs descriptor per unique process-bound namespace through all shared FD and
 mount consumers. Those proof-created namespace FDs are excluded only from the
 verifier's own exactly single-threaded FD table, are re-proved at each borrowed
 consumer boundary, and close on every success or failure path. Transient open
@@ -329,6 +333,10 @@ closes the current and all not-yet-registered batch resources, and cleanup
 attempts the complete roster. The custody context receives the exact immediate
 body exception, so a caller's already-handled exception cannot suppress a
 normal cleanup failure or let a cleanup failure replace the primary error.
+Each recorded role uses that same complete ten-entry namespace map. Process-bound
+sharing or an FD match in any canonical kind therefore creates the same legacy
+relation as mount/network/PID/user sharing; there is no four-kind ownership
+subset beside the complete census.
 For each mount namespace, one representative whose `/proc/<tid>/root` link is
 exactly `/`, whose held root descriptor `mnt_id` equals the mountinfo `/`
 record, and whose descriptor device/type binds that record's `/` source root
@@ -359,6 +367,9 @@ is likewise a manual blocker. The legacy tool observes but never mutates a
 cgroup. A residual matching v5 cgroup therefore requires a separate v5-owned,
 exact-empty reconciliation before this drain; teaching the legacy reducer to
 adopt it would cross the authority boundary and is deliberately not a fallback.
+The exclusion barrier also reserves the complete v5 storage namespace under
+`/home`: the authority root, `.pending-claim`, and every `.claim.<sha>` state
+all block even when the authority directory has not yet been published.
 
 The pidfd/edge, socket, and mount rosters are deterministic stable-sample
 proofs, not a claim that Linux freezes every root-capable actor between two
@@ -366,6 +377,9 @@ syscalls. The reducer retains admitted pidfds for every thread in each
 admitted role's thread group, repeats full edge proofs
 immediately before and after non-signal actions, closes the caller's path
 ingress through root custody, and fails closed on post-action drift. A
+post-action reproof is attempted even when the action itself raises after a
+partial mutation; the action error stays primary and any reproof or cleanup
+failure is attached as secondary evidence. A
 concurrent privileged actor could still create and release a transient edge
 inside that interval; excluding that requires cgroup freeze or a broader host
 quiescence authority, both deliberately outside this no-cgroup compatibility
@@ -426,6 +440,10 @@ the original state, evidence, config, persistent-root, process, mount, pidfile,
 and registry bindings; this lets reboot recovery reject a substituted
 caller-owned state tree. The immutable control retains the exact original
 receipt bytes.
+The state root and all three recorded persistent-root descriptors remain held
+through the terminal handoff. Registry inventory traverses the held registry
+descriptor, and every literal persistent child name/inode is re-proved before
+and after projection, tombstone, and archive work, including exceptional exits.
 Before the control capsule is published—and again whenever an existing capsule
 is opened—the reducer and pinned resume loader construct the complete future
 projection and prove its canonical bytes fit the common 2 MiB document bound.
@@ -438,7 +456,7 @@ and fsyncs it first at the fixed hidden `*.prepared` recovery coordinate,
 descriptor-rewrites the old live inode to a deterministic non-legacy
 tombstone (including partial-tombstone replay), returns that tombstone to the
 ordinary caller-owned mode-0600 projection identity accepted by v5 cleanup,
-proves that the live path no longer has the legacy digest, and hard-links the
+positively re-proves that exact tombstone inode and bytes, and hard-links the
 held prepared inode to
 `outer-docker-receipt.legacy-v3-c7b6f7f5f77ae556.json`. That no-replace link is
 the final authority mutation, followed only by evidence-directory fsync and
@@ -454,7 +472,10 @@ pinned repository bytes,
 revalidates the root-owned projection plus prepared original bytes and the
 absent legacy runtime/PIDs, completes the caller-owned tombstone if necessary,
 and performs the same final no-replace link. Boot-independent tombstone replay
-reuses the ordinary live-receipt disposition contract, binds the held and
+must prove the live file is the recorded receipt inode before it may create or
+link the prepared archive; prepared bytes come from immutable control, not
+from a digest-only pathname. It then reuses the ordinary live-receipt
+disposition contract, binds the held and
 literal live file to the control's exact recorded device/inode before and after
 mutation, and then reopens a second exact type/link/size/owner/mode/tombstone
 observation before archive publication; copied bytes on a substituted inode

@@ -39,7 +39,7 @@ caller_gid=$(/usr/bin/id -g)
 script_source=$(/usr/bin/realpath -e -- "${BASH_SOURCE[0]}")
 script_dir=${script_source%/*}
 tool=${script_dir}/legacy_v3_drain.py
-tool_sha256=ec6e71b739a56ab6958ce3e9d3699a5e39033ec0b7fe50684534a4415610e334
+tool_sha256=5990d1e868bd854463bbcf537101273195d7b80d60d63a9b21485526b83ad3c3
 control_root=/run/ambit-c16b-legacy-v3-drain-1577287b8182
 
 read -r -d '' pinned_loader <<'PY' || true
@@ -285,8 +285,26 @@ def execute_resume_owned(custody):
         "netnsMarkerIdentity",
     }:
         raise SystemExit("legacy-v3 root state shape differs")
-    with open("/proc/sys/kernel/random/boot_id", encoding="ascii") as boot_file:
-        boot_id = boot_file.read().strip()
+    boot_path = "/proc/sys/kernel/random/boot_id"
+    boot_fd = custody.open(boot_path, os.O_RDONLY | os.O_NOFOLLOW)
+    boot_before = os.fstat(boot_fd)
+    boot_raw = os.read(boot_fd, 129)
+    boot_tail = os.read(boot_fd, 1)
+    boot_after = os.fstat(boot_fd)
+    boot_literal = os.stat(boot_path, follow_symlinks=False)
+    if not (
+        stat.S_ISREG(boot_before.st_mode)
+        and boot_before.st_uid == 0
+        and boot_before.st_gid == 0
+        and not boot_tail
+        and 0 < len(boot_raw) <= 128
+        and (boot_after.st_dev, boot_after.st_ino, stat.S_IFMT(boot_after.st_mode))
+        == (boot_before.st_dev, boot_before.st_ino, stat.S_IFMT(boot_before.st_mode))
+        == (boot_literal.st_dev, boot_literal.st_ino, stat.S_IFMT(boot_literal.st_mode))
+    ):
+        raise SystemExit("legacy-v3 boot identity file differs")
+    custody.close_descriptor(boot_fd)
+    boot_id = boot_raw.decode("ascii", "strict").strip()
     phases = {
         "stopping_intent_final", "runtime_custody_transferred", "docker_api_revoked",
         "dockerd_stop_requested", "dockerd_stopped", "container_graph_quiesced",

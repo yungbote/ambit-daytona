@@ -96,6 +96,54 @@ def encoded_receipt(value: dict[str, object] | None = None) -> bytes:
     return MODULE.canonical_json(receipt() if value is None else value)
 
 
+def task_namespaces(*, first_inode: int = 19) -> dict[str, dict[str, object]]:
+    return {
+        entry: {
+            "kind": kind,
+            "device": 4,
+            "inode": first_inode + index,
+        }
+        for index, (entry, kind) in enumerate(MODULE.TASK_NAMESPACE_ENTRIES)
+    }
+
+
+def task_namespace_binding(
+    *,
+    thread_group_id: int = 100,
+    task_id: int = 100,
+    inode: int = 100,
+) -> dict[str, object]:
+    return {
+        "threadGroupId": thread_group_id,
+        "taskId": task_id,
+        "namespaces": {
+            entry: {"kind": kind, "device": 4, "inode": inode}
+            for entry, kind in MODULE.TASK_NAMESPACE_ENTRIES
+        },
+    }
+
+
+def task_namespace_bindings_for_kinds(
+    identities: dict[str, MODULE.NamespaceIdentity],
+    coordinates: tuple[tuple[int, int], ...],
+) -> tuple[dict[str, object], ...]:
+    return tuple(
+        {
+            "threadGroupId": thread_group_id,
+            "taskId": task_id,
+            "namespaces": {
+                entry: {
+                    "kind": kind,
+                    "device": identities[kind].device,
+                    "inode": identities[kind].inode,
+                }
+                for entry, kind in MODULE.TASK_NAMESPACE_ENTRIES
+            },
+        }
+        for thread_group_id, task_id in coordinates
+    )
+
+
 def captured_process(
     *,
     pid: int = 960217,
@@ -113,10 +161,7 @@ def captured_process(
             "executable": executable,
             "argumentsSha256": arguments_sha
             or str(MODULE.EXPECTED_PROCESS_CANDIDATES["dockerd"]["argumentsSha256"]),
-            "mountNamespace": {"device": 4, "inode": 19},
-            "networkNamespace": {"device": 4, "inode": 20},
-            "pidNamespace": {"device": 4, "inode": 21},
-            "userNamespace": {"device": 4, "inode": 22},
+            "taskNamespaces": task_namespaces(),
             "cgroup": "/user.slice/task.scope",
             "credentialProfile": "root-runtime-full-capability",
             "credentialProfileSha256": MODULE.MEASURED_TASK_SECURITY_PROFILE_SHA256[
@@ -140,6 +185,7 @@ def namespace_census(
     namespace_fds: tuple[MODULE.NamespaceIdentity, ...] = (),
     mounts: tuple[MODULE.MountNamespaceAuthority, ...] = (),
     digest: str = "9" * 64,
+    task_namespace_rows: tuple[dict[str, object], ...] = (),
 ) -> MODULE.TaskNamespaceCensus:
     result = MODULE.TaskNamespaceCensus(
         frozenset(current),
@@ -147,11 +193,12 @@ def namespace_census(
         mounts,
         digest,
         {
-            "currentNamespaceCount": len(current),
+            "processBoundNamespaceCount": len(current),
             "namespaceFdCount": len(namespace_fds),
             "mountNamespaceCount": len(mounts),
             "proofSha256": digest,
         },
+        task_namespaces=task_namespace_rows,
     )
     result.require_open = mock.Mock()  # type: ignore[method-assign]
     return result
@@ -857,6 +904,66 @@ class ProcessUniverseTest(unittest.TestCase):
                 pass
         task.close.assert_called_once_with()
 
+    def test_action_error_remains_primary_while_post_cutoff_reproof_runs(self) -> None:
+        security_state = self._root_security()
+        proof = {
+            "related": [
+                {
+                    "pid": 1,
+                    "taskId": 2,
+                    "parentPid": 0,
+                    "startTimeTicks": 10,
+                    "securityState": security_state,
+                }
+            ]
+        }
+        task = mock.Mock(
+            parent_pid=0,
+            start_ticks=10,
+            pidfd=31,
+            security_state=security_state,
+        )
+        with mock.patch.object(
+            MODULE,
+            "require_related_process_cutoff",
+            side_effect=(
+                proof,
+                proof,
+                MODULE.ManualRecoveryRequired("post-action universe drift"),
+            ),
+        ) as cutoff, mock.patch.object(
+            MODULE,
+            "capture_task",
+            return_value=task,
+        ), mock.patch.object(
+            MODULE,
+            "pidfd_exited",
+            return_value=False,
+        ), mock.patch.object(
+            MODULE,
+            "reprove_captured_task",
+        ) as reprove, mock.patch.object(
+            MODULE,
+            "process_authority",
+            return_value={},
+        ), mock.patch.object(
+            MODULE,
+            "exact_process_status",
+            return_value="exact",
+        ), self.assertRaisesRegex(
+            RuntimeError,
+            "action failed after mutation",
+        ) as raised:
+            with MODULE.hold_related_process_cutoff(
+                {"authority": {}},
+                allowed_roles={"dockerd"},
+            ):
+                raise RuntimeError("action failed after mutation")
+        self.assertEqual(cutoff.call_count, 3)
+        self.assertEqual(reprove.call_count, 3)
+        self.assertIn("post-action universe drift", "\n".join(raised.exception.__notes__))
+        task.close.assert_called_once_with()
+
     def test_task_roster_includes_nonleader_threads(self) -> None:
         with mock.patch.object(
             MODULE.os,
@@ -991,7 +1098,7 @@ class ProcessUniverseTest(unittest.TestCase):
             )
         reopened.assert_not_called()
 
-    def test_captured_task_close_attempts_procfd_and_pidfd_after_one_failure(self) -> None:
+    def test_captured_task_close_attempts_all_after_base_exception(self) -> None:
         task = MODULE.CapturedTask(
             100,
             101,
@@ -1004,7 +1111,7 @@ class ProcessUniverseTest(unittest.TestCase):
         with mock.patch.object(
             MODULE.os,
             "close",
-            side_effect=(OSError("proc close failed"), None),
+            side_effect=(KeyboardInterrupt("proc close interrupted"), None),
         ) as close, self.assertRaisesRegex(
             MODULE.DrainError,
             "captured task descriptor close failed",
@@ -1027,12 +1134,7 @@ class ProcessUniverseTest(unittest.TestCase):
 
     def test_nonleader_edge_is_in_the_related_task_proof(self) -> None:
         root_security = self._root_security()
-        namespaces = {
-            "mountNamespace": {"device": 4, "inode": 1},
-            "networkNamespace": {"device": 4, "inode": 2},
-            "pidNamespace": {"device": 4, "inode": 3},
-            "userNamespace": {"device": 4, "inode": 4},
-        }
+        namespaces = {"taskNamespaces": task_namespaces(first_inode=1)}
         processes = {
             "dockerd": {
                 "pid": 100,
@@ -1052,7 +1154,7 @@ class ProcessUniverseTest(unittest.TestCase):
             "parentPid": 1,
             "startTimeTicks": 10,
             "securityState": root_security,
-            "namespaces": {},
+            "namespaces": namespaces["taskNamespaces"],
             "namespaceFds": [],
             "relations": [],
         }
@@ -1062,7 +1164,7 @@ class ProcessUniverseTest(unittest.TestCase):
             "parentPid": 1,
             "startTimeTicks": 11,
             "securityState": root_security,
-            "namespaces": {},
+            "namespaces": namespaces["taskNamespaces"],
             "namespaceFds": [],
             "relations": ["runtimeFdInode"],
         }
@@ -1072,7 +1174,7 @@ class ProcessUniverseTest(unittest.TestCase):
             "parentPid": 1,
             "startTimeTicks": 12,
             "securityState": root_security,
-            "namespaces": {},
+            "namespaces": namespaces["taskNamespaces"],
             "namespaceFds": [],
             "relations": [],
         }
@@ -1096,11 +1198,21 @@ class ProcessUniverseTest(unittest.TestCase):
         ), mock.patch.object(
             MODULE.os, "getpid", return_value=999
         ), mock.patch.object(
-            MODULE.os, "stat", return_value=mock.Mock(st_dev=4, st_ino=1)
+            MODULE.os,
+            "stat",
+            side_effect=lambda path: mock.Mock(
+                st_dev=4,
+                st_ino=int(
+                    namespaces["taskNamespaces"][Path(path).name]["inode"]
+                ),
+            ),
         ), mock.patch.object(
             MODULE.os,
             "readlink",
-            side_effect=lambda path: f"{Path(path).name}:[1]",
+            side_effect=lambda path: (
+                f"{MODULE.TASK_NAMESPACE_ENTRY_KINDS[Path(path).name]}:"
+                f"[{namespaces['taskNamespaces'][Path(path).name]['inode']}]"
+            ),
         ), mock.patch.object(
             MODULE, "reprove_captured_task"
         ), mock.patch.object(MODULE.os, "close"):
@@ -1108,13 +1220,152 @@ class ProcessUniverseTest(unittest.TestCase):
                 processes,
                 {"tree": [], "rootIdentity": {"device": 1, "inode": 2}},
                 {"unixRecords": []},
-                namespace_census(),
+                namespace_census(
+                    current=tuple(
+                        MODULE.NamespaceIdentity(
+                            str(identity["kind"]),
+                            int(identity["device"]),
+                            int(identity["inode"]),
+                        )
+                        for identity in namespaces["taskNamespaces"].values()
+                    ),
+                    task_namespace_rows=tuple(
+                        {
+                            "threadGroupId": int(row["pid"]),
+                            "taskId": int(row["taskId"]),
+                            "namespaces": row["namespaces"],
+                        }
+                        for row in (leader, worker, verifier)
+                    ),
+                ),
                 allowed_roles={"dockerd"},
             )
         self.assertEqual(
             [(row["pid"], row["taskId"]) for row in proof["related"]],
             [(100, 100), (100, 101)],
         )
+
+    def test_foreign_sharer_of_any_role_task_namespace_kind_rejects(self) -> None:
+        root_security = self._root_security()
+        ambient = task_namespaces(first_inode=1)
+        process = {
+            "pid": 100,
+            "parentPid": 1,
+            "startTimeTicks": 10,
+            "credentialProfile": "root-runtime-full-capability",
+            "credentialProfileSha256": MODULE.MEASURED_TASK_SECURITY_PROFILE_SHA256[
+                "root-runtime-full-capability"
+            ],
+            "credentials": root_security,
+            "taskNamespaces": ambient,
+        }
+
+        for kind_index, kind in enumerate(MODULE.NAMESPACE_KINDS, start=1):
+            entry = next(
+                entry
+                for entry, entry_kind in MODULE.TASK_NAMESPACE_ENTRIES
+                if entry_kind == kind
+            )
+            private = json.loads(json.dumps(ambient))
+            private[entry]["inode"] = 10_000 + kind_index
+            rows = (
+                {
+                    "pid": 100,
+                    "taskId": 100,
+                    "parentPid": 1,
+                    "startTimeTicks": 10,
+                    "securityState": root_security,
+                    "namespaces": ambient,
+                    "namespaceFds": [],
+                    "relations": [],
+                },
+                {
+                    "pid": 100,
+                    "taskId": 101,
+                    "parentPid": 1,
+                    "startTimeTicks": 11,
+                    "securityState": root_security,
+                    "namespaces": private,
+                    "namespaceFds": [],
+                    "relations": [],
+                },
+                {
+                    "pid": 999,
+                    "taskId": 999,
+                    "parentPid": 1,
+                    "startTimeTicks": 12,
+                    "securityState": root_security,
+                    "namespaces": private,
+                    "namespaceFds": [],
+                    "relations": [],
+                },
+            )
+            observations = tuple(
+                MODULE.ProcessReferenceObservation(row, 30 + index, 40 + index)
+                for index, row in enumerate(rows)
+            )
+            current = {
+                MODULE.NamespaceIdentity(
+                    str(identity["kind"]),
+                    int(identity["device"]),
+                    int(identity["inode"]),
+                )
+                for row in rows
+                for identity in row["namespaces"].values()
+            }
+            with self.subTest(kind=kind), mock.patch.object(
+                MODULE,
+                "process_task_coordinates_once",
+                return_value=((100, 100), (100, 101), (999, 999)),
+            ), mock.patch.object(
+                MODULE,
+                "process_reference_scan",
+                side_effect=observations,
+            ), mock.patch.object(
+                MODULE.os,
+                "getpid",
+                return_value=999,
+            ), mock.patch.object(
+                MODULE.os,
+                "stat",
+                side_effect=lambda path: mock.Mock(
+                    st_dev=4,
+                    st_ino=int(ambient[Path(path).name]["inode"]),
+                ),
+            ), mock.patch.object(
+                MODULE.os,
+                "readlink",
+                side_effect=lambda path: (
+                    f"{MODULE.TASK_NAMESPACE_ENTRY_KINDS[Path(path).name]}:"
+                    f"[{ambient[Path(path).name]['inode']}]"
+                ),
+            ), mock.patch.object(
+                MODULE,
+                "reprove_captured_task",
+            ), mock.patch.object(
+                MODULE.os,
+                "close",
+            ), self.assertRaisesRegex(
+                MODULE.ManualRecoveryRequired,
+                "unrecognized legacy-related task: 999/999",
+            ):
+                MODULE._related_process_universe_once(
+                    {"dockerd": process},
+                    {"tree": [], "rootIdentity": {"device": 1, "inode": 2}},
+                    {"unixRecords": []},
+                    namespace_census(
+                        current=tuple(current),
+                        task_namespace_rows=tuple(
+                            {
+                                "threadGroupId": int(row["pid"]),
+                                "taskId": int(row["taskId"]),
+                                "namespaces": row["namespaces"],
+                            }
+                            for row in rows
+                        ),
+                    ),
+                    allowed_roles={"dockerd"},
+                )
 
     def test_recorded_role_rejects_every_nonleader_security_divergence(self) -> None:
         expected = self._root_security()
@@ -1292,7 +1543,7 @@ class ProcessUniverseTest(unittest.TestCase):
         )
         self.assertNotIn("unclassifiedNamespaceFd", source)
         self.assertNotIn("mount namespace visibility differs across representatives", source)
-        self.assertIn('"ambient_current"', source)
+        self.assertIn('"ambient_process_bound"', source)
         self.assertIn('"queuedScmRightsNamespaceFds"', source)
         self.assertNotIn("def source_anchors(", source)
         self.assertNotIn("def mount_reference_records(", source)
@@ -1306,15 +1557,15 @@ class ProcessUniverseTest(unittest.TestCase):
         self.assertEqual(
             MODULE.classify_namespace_fd(
                 ambient,
-                current=current,
+                process_bound=current,
                 owned=frozenset((owned,)),
             ),
-            "ambient_current",
+            "ambient_process_bound",
         )
         self.assertEqual(
             MODULE.classify_namespace_fd(
                 owned,
-                current=current,
+                process_bound=current,
                 owned=frozenset((owned,)),
             ),
             "owned",
@@ -1322,7 +1573,7 @@ class ProcessUniverseTest(unittest.TestCase):
         self.assertEqual(
             MODULE.classify_namespace_fd(
                 detached,
-                current=current,
+                process_bound=current,
                 owned=frozenset((owned,)),
             ),
             "detached",
@@ -1333,15 +1584,15 @@ class ProcessUniverseTest(unittest.TestCase):
         self.assertEqual(
             MODULE.classify_namespace_fd(
                 ambient,
-                current=current,
+                process_bound=current,
                 owned=owned_relation,
             ),
-            "ambient_current",
+            "ambient_process_bound",
         )
         self.assertEqual(
             MODULE.classify_namespace_fd(
                 owned,
-                current=current,
+                process_bound=current,
                 owned=owned_relation,
             ),
             "owned",
@@ -1349,7 +1600,7 @@ class ProcessUniverseTest(unittest.TestCase):
         self.assertEqual(
             MODULE.classify_namespace_fd(
                 owned,
-                current=frozenset((ambient,)),
+                process_bound=frozenset((ambient,)),
                 owned=frozenset((owned,)),
             ),
             "detached",
@@ -1390,7 +1641,7 @@ class ProcessUniverseTest(unittest.TestCase):
                     label="test",
                 )
 
-    def test_every_current_linux_namespace_kind_is_typed_and_censused(self) -> None:
+    def test_every_process_bound_linux_namespace_entry_is_typed_and_censused(self) -> None:
         self.assertEqual(
             MODULE.NAMESPACE_KINDS,
             ("cgroup", "ipc", "mnt", "net", "pid", "time", "user", "uts"),
@@ -1419,10 +1670,51 @@ class ProcessUniverseTest(unittest.TestCase):
             source.index("def process_reference_scan")
             : source.index("def _related_process_universe_once")
         ]
-        self.assertIn("for kind in NAMESPACE_KINDS", census)
-        self.assertIn("for name in NAMESPACE_KINDS", process_scan)
-        self.assertNotIn("pid_for_children", MODULE.NAMESPACE_KINDS)
-        self.assertNotIn("time_for_children", MODULE.NAMESPACE_KINDS)
+        self.assertEqual(
+            MODULE.TASK_NAMESPACE_ENTRY_KINDS["pid_for_children"],
+            "pid",
+        )
+        self.assertEqual(
+            MODULE.TASK_NAMESPACE_ENTRY_KINDS["time_for_children"],
+            "time",
+        )
+        self.assertIn("for entry, _kind in TASK_NAMESPACE_ENTRIES", census)
+        self.assertIn("for entry, _kind in TASK_NAMESPACE_ENTRIES", process_scan)
+
+        task = mock.Mock(thread_group_id=100, task_id=101, process_fd=31)
+        with mock.patch.object(
+            MODULE.os,
+            "stat",
+            return_value=mock.Mock(st_dev=4, st_ino=100),
+        ), mock.patch.object(
+            MODULE.os,
+            "readlink",
+            return_value="pid:[100]",
+        ):
+            self.assertEqual(
+                MODULE.current_task_namespace_identity(task, "pid_for_children"),
+                MODULE.NamespaceIdentity("pid", 4, 100),
+            )
+
+    def test_recorded_role_ownership_covers_every_kind_and_child_alias(self) -> None:
+        process = {"taskNamespaces": task_namespaces(first_inode=100)}
+        owned = MODULE.recorded_process_namespace_identities(process)
+        self.assertEqual({identity.kind for identity in owned}, set(MODULE.NAMESPACE_KINDS))
+        self.assertEqual(len(owned), len(MODULE.TASK_NAMESPACE_ENTRIES))
+        for kind in MODULE.NAMESPACE_KINDS:
+            target = next(identity for identity in owned if identity.kind == kind)
+            drain_current = frozenset(owned - {target})
+            private = owned - drain_current
+            with self.subTest(kind=kind):
+                self.assertTrue(frozenset({target}) & private)
+                self.assertEqual(
+                    MODULE.classify_namespace_fd(
+                        target,
+                        process_bound=owned,
+                        owned=private,
+                    ),
+                    "owned",
+                )
 
     def test_census_owned_namespace_pins_are_excluded_from_self_fd_roster(self) -> None:
         task = mock.Mock(process_fd=10, pidfd=11, thread_group_id=100, task_id=100)
@@ -1518,31 +1810,38 @@ class ProcessUniverseTest(unittest.TestCase):
         scan.assert_not_called()
 
     def test_borrowed_namespace_census_reproves_held_descriptor_identity(self) -> None:
-        identity = MODULE.NamespaceIdentity("mnt", 4, 100)
+        identities = tuple(
+            MODULE.NamespaceIdentity(kind, 4, 100)
+            for kind in MODULE.NAMESPACE_KINDS
+        )
+        binding = task_namespace_binding()
         preimage = MODULE.task_namespace_census_preimage(
-            {identity},
+            set(identities),
             set(),
             (),
             1,
+            (binding,),
         )
         digest = hashlib.sha256(MODULE.canonical_json(preimage)).hexdigest()
         summary = {
-            "currentNamespaceCount": 1,
+            "processBoundNamespaceCount": len(identities),
             "namespaceFdCount": 0,
             "mountNamespaceCount": 0,
             "proofSha256": digest,
             "processlessMountNamespaces": "not_observable_and_not_admitted",
             "queuedScmRightsNamespaceFds": "not_observable_and_not_admitted",
             "taskCount": 1,
+            "taskNamespaceBindingCount": 1,
         }
         census = MODULE.TaskNamespaceCensus(
-            frozenset((identity,)),
+            frozenset(identities),
             frozenset(),
             (),
             digest,
             summary,
-            (40,),
+            tuple(range(40, 40 + len(identities))),
             preimage,
+            (binding,),
         )
         observed = mock.Mock(
             st_mode=stat.S_IFREG | 0o444,
@@ -1556,7 +1855,7 @@ class ProcessUniverseTest(unittest.TestCase):
         ), mock.patch.object(
             MODULE.os,
             "readlink",
-            return_value="mnt:[100]",
+            side_effect=[f"{identity.kind}:[100]" for identity in sorted(identities)],
         ):
             census.require_open()
         with mock.patch.object(
@@ -1599,13 +1898,14 @@ class ProcessUniverseTest(unittest.TestCase):
         )
         digest = hashlib.sha256(MODULE.canonical_json(preimage)).hexdigest()
         summary = {
-            "currentNamespaceCount": 0,
+            "processBoundNamespaceCount": 0,
             "namespaceFdCount": 0,
             "mountNamespaceCount": 0,
             "proofSha256": digest,
             "processlessMountNamespaces": "not_observable_and_not_admitted",
             "queuedScmRightsNamespaceFds": "not_observable_and_not_admitted",
             "taskCount": 0,
+            "taskNamespaceBindingCount": 0,
         }
         census = MODULE.TaskNamespaceCensus(
             frozenset(),
@@ -1621,6 +1921,46 @@ class ProcessUniverseTest(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.DrainError, "digest or summary differs"):
             census.require_open()
 
+    def test_child_namespace_alias_swap_changes_census_preimage(self) -> None:
+        namespaces = task_namespaces(first_inode=100)
+        binding = {
+            "threadGroupId": 100,
+            "taskId": 100,
+            "namespaces": namespaces,
+        }
+        current = {
+            MODULE.NamespaceIdentity(
+                str(identity["kind"]),
+                int(identity["device"]),
+                int(identity["inode"]),
+            )
+            for identity in namespaces.values()
+        }
+        first = MODULE.task_namespace_census_preimage(
+            current,
+            set(),
+            (),
+            1,
+            (binding,),
+        )
+        changed = json.loads(json.dumps(binding))
+        changed_namespaces = changed["namespaces"]
+        changed_namespaces["pid"], changed_namespaces["pid_for_children"] = (
+            changed_namespaces["pid_for_children"],
+            changed_namespaces["pid"],
+        )
+        second = MODULE.task_namespace_census_preimage(
+            current,
+            set(),
+            (),
+            1,
+            (changed,),
+        )
+        self.assertNotEqual(
+            MODULE.sha256_bytes(MODULE.canonical_json(first)),
+            MODULE.sha256_bytes(MODULE.canonical_json(second)),
+        )
+
     def test_census_enter_failure_closes_before_python_can_call_exit(self) -> None:
         preimage = MODULE.task_namespace_census_preimage(set(), set(), (), 0)
         digest = hashlib.sha256(MODULE.canonical_json(preimage)).hexdigest()
@@ -1630,13 +1970,14 @@ class ProcessUniverseTest(unittest.TestCase):
             (),
             digest,
             {
-                "currentNamespaceCount": 0,
+                "processBoundNamespaceCount": 0,
                 "namespaceFdCount": 0,
                 "mountNamespaceCount": 0,
                 "proofSha256": digest,
                 "processlessMountNamespaces": "not_observable_and_not_admitted",
                 "queuedScmRightsNamespaceFds": "not_observable_and_not_admitted",
                 "taskCount": 0,
+                "taskNamespaceBindingCount": 0,
             },
             (40,),
             preimage,
@@ -1661,15 +2002,15 @@ class ProcessUniverseTest(unittest.TestCase):
             return_value="mnt:[101]",
         ), self.assertRaisesRegex(
             MODULE.DrainError,
-            "current namespace changed during census",
+            "namespace entry changed during census",
         ):
-            MODULE.require_current_task_namespace_identity(task, expected)
+            MODULE.require_current_task_namespace_identity(task, "mnt", expected)
 
     def test_namespace_census_fd_budget_fails_before_descriptor_custody(self) -> None:
         with mock.patch.object(
             MODULE.resource,
             "getrlimit",
-            return_value=(230, 256),
+            return_value=(250, 256),
         ), mock.patch.object(
             MODULE.os,
             "listdir",
@@ -1680,18 +2021,18 @@ class ProcessUniverseTest(unittest.TestCase):
                 {
                     "taskCount": 10,
                     "baselineDescriptorReserve": 128,
-                    "perTaskDescriptorReserve": 10,
+                    "perTaskDescriptorReserve": 12,
                     "transientDescriptorReserve": 2,
                     "externallyHeldDescriptorCount": 0,
-                    "requiredDescriptorLimit": 230,
-                    "softDescriptorLimit": 230,
+                    "requiredDescriptorLimit": 250,
+                    "softDescriptorLimit": 250,
                     "hardDescriptorLimit": 256,
                 },
             )
         with mock.patch.object(
             MODULE.resource,
             "getrlimit",
-            return_value=(229, 256),
+            return_value=(249, 256),
         ), mock.patch.object(
             MODULE.os,
             "listdir",
@@ -1705,7 +2046,7 @@ class ProcessUniverseTest(unittest.TestCase):
         with mock.patch.object(
             MODULE.resource,
             "getrlimit",
-            return_value=(230, 256),
+            return_value=(250, 256),
         ), mock.patch.object(
             MODULE.os,
             "listdir",
@@ -1721,7 +2062,7 @@ class ProcessUniverseTest(unittest.TestCase):
         with mock.patch.object(
             MODULE.resource,
             "getrlimit",
-            return_value=(232, 256),
+            return_value=(252, 256),
         ), mock.patch.object(
             MODULE.os,
             "listdir",
@@ -1732,7 +2073,7 @@ class ProcessUniverseTest(unittest.TestCase):
                     10,
                     externally_held=2,
                 )["requiredDescriptorLimit"],
-                232,
+                252,
             )
 
     def test_self_fd_exclusion_requires_a_single_threaded_drain(self) -> None:
@@ -1841,6 +2182,33 @@ class ProcessUniverseTest(unittest.TestCase):
         with mock.patch.object(MODULE.os, "close") as close:
             custody.close()
         self.assertEqual(close.call_args_list, [mock.call(41), mock.call(40)])
+
+    def test_singular_release_rejects_ambiguous_internal_ownership(self) -> None:
+        custody = MODULE.ResourceCustody(label="transfer")
+        custody._resources = [  # type: ignore[assignment]
+            ("descriptor", 40),
+            ("descriptor", 40),
+        ]
+        with self.assertRaisesRegex(MODULE.DrainError, "unowned or ambiguous"):
+            custody.release_descriptor(40)
+        self.assertEqual(
+            custody._resources,
+            [("descriptor", 40), ("descriptor", 40)],
+        )
+
+    def test_batch_adoption_rejects_non_tuple_without_materializing_it(self) -> None:
+        class ExplodingSequence:
+            def __iter__(self) -> object:
+                raise AssertionError("non-tuple sequence was materialized")
+
+        custody = MODULE.ResourceCustody(label="adoption")
+        with mock.patch.object(MODULE.os, "close") as close, self.assertRaisesRegex(
+            MODULE.DrainError,
+            "exact tuple",
+        ):
+            custody.own_descriptors(ExplodingSequence())  # type: ignore[arg-type]
+        close.assert_not_called()
+        self.assertEqual(custody._resources, [])
 
     def test_exact_process_status_uses_the_real_exact_vocabulary(self) -> None:
         recorded = captured_process().authority
@@ -2454,12 +2822,22 @@ class MountAuthorityTest(unittest.TestCase):
     def test_namespace_census_emits_the_exact_digest_preimage_outside_control(self) -> None:
         identity, full, _restricted = self.canonical_and_restricted_views()
         net = MODULE.NamespaceIdentity("net", 4, 4026531833)
+        identities = {
+            kind: MODULE.NamespaceIdentity(kind, 4, 500 + index)
+            for index, kind in enumerate(MODULE.NAMESPACE_KINDS)
+        }
+        identities.update({"mnt": identity, "net": net})
+        bindings = task_namespace_bindings_for_kinds(
+            identities,
+            ((100, 100), (200, 200)),
+        )
         census = MODULE._task_namespace_census_from_observations(
-            {identity, net},
+            set(identities.values()),
             set(),
             {identity: [full]},
             2,
             (),
+            bindings,
         )
         self.assertEqual(
             hashlib.sha256(MODULE.canonical_json(census.preimage)).hexdigest(),
@@ -2470,14 +2848,24 @@ class MountAuthorityTest(unittest.TestCase):
     def test_borrowed_census_rejects_same_count_mount_and_fd_replacements(self) -> None:
         identity, full, _restricted = self.canonical_and_restricted_views()
         net = MODULE.NamespaceIdentity("net", 4, 4026531833)
+        identities = {
+            kind: MODULE.NamespaceIdentity(kind, 4, 500 + index)
+            for index, kind in enumerate(MODULE.NAMESPACE_KINDS)
+        }
+        identities.update({"mnt": identity, "net": net})
+        bindings = task_namespace_bindings_for_kinds(
+            identities,
+            ((100, 100), (200, 200)),
+        )
 
         def fresh() -> MODULE.TaskNamespaceCensus:
             return MODULE._task_namespace_census_from_observations(
-                {identity, net},
+                set(identities.values()),
                 {net},
                 {identity: [full]},
                 2,
                 (),
+                bindings,
             )
 
         changed_fd = fresh()
@@ -2923,7 +3311,7 @@ class ReducerStateMachineTest(unittest.TestCase):
         }
         current = {
             "namespaceCensusSha256": "b" * 64,
-            "currentNamespaces": [],
+            "processBoundNamespaces": [],
             "namespaceFds": [],
             "related": [],
         }
@@ -3048,6 +3436,130 @@ class ReducerStateMachineTest(unittest.TestCase):
 
 
 class DestructiveBoundaryTest(unittest.TestCase):
+    def test_v5_barrier_covers_root_pending_and_final_claim_names(self) -> None:
+        names = (
+            ".ambit-c16b-runner-storage",
+            ".ambit-c16b-runner-storage.pending-claim",
+            f".ambit-c16b-runner-storage.claim.{'a' * 64}",
+            ".ambit-c16b-runner-storage.claim.malformed",
+        )
+        for name in names:
+            with self.subTest(name=name), mock.patch.object(
+                MODULE.os,
+                "listdir",
+                side_effect=((), (name,), (), (MODULE.EXPECTED_RUNTIME_ROOT.name,)),
+            ), self.assertRaisesRegex(
+                MODULE.ManualRecoveryRequired,
+                "current v5 authority coexists",
+            ):
+                MODULE.require_v5_absent(allow_global_lease=True)
+
+        with mock.patch.object(
+            MODULE.os,
+            "listdir",
+            side_effect=(
+                (),
+                (".unrelated-runner-storage.claim",),
+                (),
+                (MODULE.EXPECTED_RUNTIME_ROOT.name,),
+            ),
+        ):
+            self.assertEqual(
+                MODULE.require_v5_absent(allow_global_lease=True)["v5Authorities"],
+                [],
+            )
+
+    def test_persistent_root_reproof_rejects_same_content_name_swap(self) -> None:
+        state = mock.Mock(
+            st_mode=stat.S_IFDIR | 0o700,
+            st_dev=1,
+            st_ino=2,
+            st_uid=1000,
+            st_gid=1000,
+            st_nlink=5,
+        )
+        expected_roots: dict[str, object] = {}
+        roots: dict[str, int] = {}
+        observed_roots: list[object] = []
+        literal_roots: list[object] = []
+        for index, path in enumerate(MODULE.PERSISTENT_ROOTS, start=1):
+            expected_roots[str(path)] = {
+                "device": 1,
+                "inode": 10 + index,
+                "uid": 1000,
+                "gid": 1000,
+                "mode": 0o700,
+                "type": stat.S_IFDIR,
+                "links": 2,
+            }
+            roots[str(path)] = 20 + index
+            observed_roots.append(
+                mock.Mock(
+                    st_mode=stat.S_IFDIR | 0o700,
+                    st_dev=1,
+                    st_ino=10 + index,
+                    st_uid=1000,
+                    st_gid=1000,
+                    st_nlink=2,
+                )
+            )
+            literal_roots.append(mock.Mock(st_dev=1, st_ino=10 + index))
+        literal_roots[-1] = mock.Mock(st_dev=1, st_ino=999)
+        control = {
+            "authority": {
+                "stateRootIdentity": {
+                    "device": 1,
+                    "inode": 2,
+                    "uid": 1000,
+                    "gid": 1000,
+                    "mode": 0o700,
+                    "type": stat.S_IFDIR,
+                    "links": 5,
+                },
+                "persistentRoots": expected_roots,
+            }
+        }
+        with mock.patch.object(
+            MODULE.os,
+            "fstat",
+            side_effect=(state, *observed_roots),
+        ), mock.patch.object(
+            MODULE.os,
+            "stat",
+            side_effect=(mock.Mock(st_dev=1, st_ino=2), *literal_roots),
+        ), self.assertRaisesRegex(
+            MODULE.DrainError,
+            "name binding differs",
+        ):
+            MODULE.require_recorded_persistent_root_bindings(control, 20, roots)
+
+    def test_archive_holds_and_reproofs_persistent_registry_on_action_error(self) -> None:
+        control = ReducerStateMachineTest.FakeControl("archive_intent_final")
+        roots = {str(MODULE.EXPECTED_STATE_ROOT / "registry"): 30}
+        with mock.patch.object(
+            MODULE,
+            "hold_recorded_persistent_roots",
+            return_value=contextlib.nullcontext(roots),
+        ), mock.patch.object(
+            MODULE,
+            "registry_inventory_matches",
+            side_effect=(None, MODULE.DrainError("registry changed after action")),
+        ) as registry, mock.patch.object(
+            MODULE,
+            "_archive_receipt_with_persistent_roots",
+            side_effect=RuntimeError("archive action failed"),
+        ), self.assertRaisesRegex(
+            RuntimeError,
+            "archive action failed",
+        ) as raised:
+            MODULE.archive_receipt(control)
+        self.assertEqual(registry.call_count, 2)
+        self.assertIn("registry changed after action", "\n".join(raised.exception.__notes__))
+        self.assertEqual(
+            MODULE.bound_registry_storage(roots),
+            Path("/proc/self/fd/30/docker/registry/v2"),
+        )
+
     def test_root_pair_acquisition_failure_attempts_every_descriptor_close(self) -> None:
         runtime_control = {
             "authority": {
@@ -3479,6 +3991,59 @@ class DestructiveBoundaryTest(unittest.TestCase):
         chown.assert_not_called()
         chmod.assert_not_called()
 
+    def test_recovery_prepared_archive_rejects_substituted_live_inode(self) -> None:
+        raw = b"receipt\n"
+        digest = hashlib.sha256(raw).hexdigest()
+        control = {
+            "authority": {
+                "legacyReceipt": {
+                    "device": 7,
+                    "inode": 9,
+                    "uid": 1000,
+                    "gid": 1000,
+                    "mode": 0o600,
+                    "size": len(raw),
+                },
+                "legacyReceiptBytes": raw.decode(),
+            }
+        }
+        substituted = mock.Mock(
+            st_mode=stat.S_IFREG | 0o600,
+            st_uid=1000,
+            st_gid=1000,
+            st_nlink=1,
+            st_dev=7,
+            st_ino=10,
+            st_size=len(raw),
+        )
+        custody = MODULE.ResourceCustody(label="recovery test")
+        with mock.patch.object(
+            MODULE,
+            "EXPECTED_RECEIPT_SHA256",
+            digest,
+        ), mock.patch.object(
+            MODULE,
+            "_read_regular_at",
+            return_value=(31, substituted, raw),
+        ), mock.patch.object(
+            MODULE,
+            "_create_root_tmpfile",
+        ) as create, mock.patch.object(
+            MODULE,
+            "link_tmpfile_noreplace_at",
+        ) as link, mock.patch.object(
+            MODULE.os,
+            "close",
+        ) as close, self.assertRaisesRegex(
+            MODULE.DrainError,
+            "live identity differs",
+        ):
+            with custody:
+                MODULE.recover_prepared_archive_from_live(control, 20, custody)
+        create.assert_not_called()
+        link.assert_not_called()
+        close.assert_called_once_with(31)
+
     def test_recovery_tombstone_rejects_post_mutation_name_substitution(self) -> None:
         raw = b"receipt\n"
         digest = hashlib.sha256(raw).hexdigest()
@@ -3580,7 +4145,14 @@ class DestructiveBoundaryTest(unittest.TestCase):
             MODULE, "write_projection"
         ) as write, mock.patch.object(
             MODULE, "rename_noreplace_at"
-        ) as rename:
+        ) as rename, mock.patch.object(
+            MODULE,
+            "hold_recorded_persistent_roots",
+            return_value=contextlib.nullcontext({}),
+        ), mock.patch.object(
+            MODULE,
+            "registry_inventory_matches",
+        ):
             first = MODULE.archive_receipt(control)
             second = MODULE.archive_receipt(control)
         self.assertEqual(first, second)
@@ -4005,10 +4577,26 @@ class DestructiveBoundaryTest(unittest.TestCase):
         self.assertIn("require_related_process_cutoff(\n            stored_control", recovery)
         self.assertIn("process_cutoff[\"related\"] == []", recovery)
         self.assertNotIn("require_no_boot_recovery_related_processes", recovery)
-        self.assertIn("registry_inventory() == authority", recovery)
+        self.assertIn(
+            "persistent_owner = recorded_persistent_root_descriptors(stored_control)",
+            recovery,
+        )
+        self.assertIn(
+            "registry_inventory_matches(stored_control, persistent_roots)",
+            recovery,
+        )
         self.assertIn("anchors_from_document(recorded_mounts)", recovery)
         last_binding = recovery.rindex("require_recovery_state_binding")
         self.assertLess(last_binding, recovery.index("link_tmpfile_noreplace_at(\n            prepared_fd"))
+        self.assertIn("recover_prepared_archive_from_live(", recovery)
+        prepared_recovery = source[
+            source.index("def recover_prepared_archive_from_live")
+            : source.index("def recover_terminal_archive_without_control")
+        ]
+        self.assertLess(
+            prepared_recovery.index("_require_legacy_receipt("),
+            prepared_recovery.index("_create_root_tmpfile("),
+        )
 
 
 class WrapperBoundaryTest(unittest.TestCase):
@@ -4200,7 +4788,12 @@ class WrapperBoundaryTest(unittest.TestCase):
                 parents[child] = node
         offenders: list[tuple[int, str]] = []
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            if not isinstance(node, ast.Call):
+                continue
+            if isinstance(node.func, ast.Name) and node.func.id == "open":
+                offenders.append((node.lineno, "builtins.open"))
+                continue
+            if not isinstance(node.func, ast.Attribute):
                 continue
             if not isinstance(node.func.value, ast.Name):
                 continue

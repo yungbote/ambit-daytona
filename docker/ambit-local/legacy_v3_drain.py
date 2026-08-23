@@ -282,6 +282,7 @@ RUNTIME_NAME_RE = re.compile(r"^ambit-c16b-docker-[0-9a-f]{12}$")
 V5_RUNTIME_RE = re.compile(
     r"^ambit-c16b-docker-(?:api-|removing-)?[0-9a-f]{12}$"
 )
+V5_STORAGE_AUTHORITY_PREFIX = ".ambit-c16b-runner-storage"
 OPAQUE_MOUNT_ROOT_RE = re.compile(r"^[a-z][a-z0-9_-]*:\[[1-9][0-9]*\]$")
 MOUNT_DEVICE_RE = re.compile(r"^[0-9]+:[0-9]+$")
 MAX_JSON_BYTES = 2 * 1024 * 1024
@@ -292,18 +293,22 @@ LIBC = ctypes.CDLL(None, use_errno=True)
 RENAME_NOREPLACE = 1
 AT_EMPTY_PATH = 0x1000
 PIDFD_THREAD = os.O_EXCL
-NAMESPACE_KINDS = (
-    "cgroup",
-    "ipc",
-    "mnt",
-    "net",
-    "pid",
-    "time",
-    "user",
-    "uts",
+TASK_NAMESPACE_ENTRIES = (
+    ("cgroup", "cgroup"),
+    ("ipc", "ipc"),
+    ("mnt", "mnt"),
+    ("net", "net"),
+    ("pid", "pid"),
+    ("pid_for_children", "pid"),
+    ("time", "time"),
+    ("time_for_children", "time"),
+    ("user", "user"),
+    ("uts", "uts"),
 )
+TASK_NAMESPACE_ENTRY_KINDS = dict(TASK_NAMESPACE_ENTRIES)
+NAMESPACE_KINDS = tuple(sorted(set(TASK_NAMESPACE_ENTRY_KINDS.values())))
 NAMESPACE_TOKEN_RE = re.compile(
-    r"(cgroup|ipc|mnt|net|pid|time|user|uts):\[([1-9][0-9]*)\]"
+    r"(" + "|".join(NAMESPACE_KINDS) + r"):\[([1-9][0-9]*)\]"
 )
 NETLINK_SOCK_DIAG = 4
 SOCK_DIAG_BY_FAMILY = 20
@@ -712,9 +717,16 @@ def stat_identity(stat_bytes: bytes) -> tuple[int, int]:
     return int(fields[1]), int(fields[19])
 
 
-def namespace_identity(process_fd: int, name: str) -> dict[str, int]:
-    observed = os.stat(f"ns/{name}", dir_fd=process_fd)
-    return {"device": observed.st_dev, "inode": observed.st_ino}
+def namespace_identity(process_fd: int, entry: str) -> dict[str, object]:
+    kind = TASK_NAMESPACE_ENTRY_KINDS.get(entry)
+    require(kind is not None, "task namespace entry is invalid")
+    observed = os.stat(f"ns/{entry}", dir_fd=process_fd)
+    require(
+        os.readlink(f"ns/{entry}", dir_fd=process_fd)
+        == f"{kind}:[{observed.st_ino}]",
+        f"task namespace entry identity differs: {entry}",
+    )
+    return {"kind": kind, "device": observed.st_dev, "inode": observed.st_ino}
 
 
 def pidfd_exited(pidfd: int) -> bool:
@@ -925,21 +937,22 @@ def require_recorded_role_task_security(
 
 
 def close_all_descriptors(
-    descriptors: int | Sequence[int],
+    descriptors: int | tuple[int, ...],
     *,
     label: str,
 ) -> None:
     if isinstance(descriptors, int):
         try:
             os.close(descriptors)
-        except OSError as error:
+        except BaseException as error:
             raise DrainError(f"{label} descriptor close failed") from error
         return
-    first_error: OSError | None = None
+    require(type(descriptors) is tuple, f"{label} descriptor roster is not exact")
+    first_error: BaseException | None = None
     for descriptor in descriptors:
         try:
             os.close(descriptor)
-        except OSError as error:
+        except BaseException as error:
             if first_error is None:
                 first_error = error
     if first_error is not None:
@@ -981,8 +994,12 @@ class ResourceCustody:
         self._register("descriptor", descriptor)
         return descriptor
 
-    def own_descriptors(self, descriptors: Sequence[int]) -> tuple[int, ...]:
-        result = tuple(descriptors)
+    def own_descriptors(self, descriptors: tuple[int, ...]) -> tuple[int, ...]:
+        require(
+            type(descriptors) is tuple,
+            f"{self.label} descriptor adoption requires an exact tuple",
+        )
+        result = descriptors
         for index, descriptor in enumerate(result):
             try:
                 self._register("descriptor", descriptor)
@@ -1008,6 +1025,18 @@ class ResourceCustody:
         return resource_value
 
     def _register(self, kind: str, resource_value: int | Closeable) -> None:
+        require(
+            not any(
+                owned_kind == kind
+                and (
+                    owned_value == resource_value
+                    if kind == "descriptor"
+                    else owned_value is resource_value
+                )
+                for owned_kind, owned_value in self._resources
+            ),
+            f"{self.label} resource registration is duplicated",
+        )
         try:
             self._resources.append((kind, resource_value))
         except BaseException as error:
@@ -1032,8 +1061,12 @@ class ResourceCustody:
         self._release("descriptor", descriptor)
         close_all_descriptors(descriptor, label=self.label)
 
-    def release_descriptors(self, descriptors: Sequence[int]) -> tuple[int, ...]:
-        result = tuple(descriptors)
+    def release_descriptors(self, descriptors: tuple[int, ...]) -> tuple[int, ...]:
+        require(
+            type(descriptors) is tuple,
+            f"{self.label} descriptor transfer requires an exact tuple",
+        )
+        result = descriptors
         indices: list[int] = []
         for descriptor in result:
             matches = [
@@ -1059,17 +1092,21 @@ class ResourceCustody:
         resource_value.close()
 
     def _release(self, kind: str, resource_value: int | Closeable) -> None:
-        for index in range(len(self._resources) - 1, -1, -1):
-            owned_kind, owned_value = self._resources[index]
-            same_value = (
+        matches = [
+            index
+            for index, (owned_kind, owned_value) in enumerate(self._resources)
+            if owned_kind == kind
+            and (
                 owned_value == resource_value
                 if kind == "descriptor"
                 else owned_value is resource_value
             )
-            if owned_kind == kind and same_value:
-                self._resources.pop(index)
-                return
-        raise DrainError(f"{self.label} resource transfer is unowned")
+        ]
+        require(
+            len(matches) == 1,
+            f"{self.label} resource transfer is unowned or ambiguous",
+        )
+        self._resources.pop(matches[0])
 
     def close(self) -> None:
         first_error: BaseException | None = None
@@ -1245,10 +1282,10 @@ def capture_process(candidate: Mapping[str, object]) -> CapturedProcess:
         process_dir = os.fstat(process_fd)
         first_stat = read_at(process_fd, "stat")
         parent_pid, start_ticks = stat_identity(first_stat)
-        mount_namespace = namespace_identity(process_fd, "mnt")
-        network_namespace = namespace_identity(process_fd, "net")
-        pid_namespace = namespace_identity(process_fd, "pid")
-        user_namespace = namespace_identity(process_fd, "user")
+        task_namespaces = {
+            entry: namespace_identity(process_fd, entry)
+            for entry, _kind in TASK_NAMESPACE_ENTRIES
+        }
         executable_raw = os.readlink("exe", dir_fd=process_fd)
         require(Path(executable_raw).is_absolute(), f"candidate executable path is invalid: {pid}")
         executable_stat = os.stat("exe", dir_fd=process_fd)
@@ -1292,10 +1329,11 @@ def capture_process(candidate: Mapping[str, object]) -> CapturedProcess:
         second_stat = read_at(process_fd, "stat")
         require(
             stat_identity(second_stat) == (parent_pid, start_ticks)
-            and namespace_identity(process_fd, "mnt") == mount_namespace
-            and namespace_identity(process_fd, "net") == network_namespace
-            and namespace_identity(process_fd, "pid") == pid_namespace
-            and namespace_identity(process_fd, "user") == user_namespace
+            and {
+                entry: namespace_identity(process_fd, entry)
+                for entry, _kind in TASK_NAMESPACE_ENTRIES
+            }
+            == task_namespaces
             and parse_task_status(
                 read_at(process_fd, "status").decode("ascii", "strict")
             )
@@ -1341,10 +1379,7 @@ def capture_process(candidate: Mapping[str, object]) -> CapturedProcess:
                 "executable": executable_raw,
                 "executableIdentity": executable_identity,
                 "argumentsSha256": arguments_sha,
-                "mountNamespace": mount_namespace,
-                "networkNamespace": network_namespace,
-                "pidNamespace": pid_namespace,
-                "userNamespace": user_namespace,
+                "taskNamespaces": task_namespaces,
                 "cgroup": cgroup_lines[0][3:],
                 "credentialProfile": credential_profile,
                 "credentialProfileSha256": credential_profile_sha256,
@@ -1498,41 +1533,43 @@ def namespace_fd_identity(
 
 def current_task_namespace_identity(
     task: CapturedTask,
-    kind: str,
+    entry: str,
 ) -> NamespaceIdentity:
-    require(kind in NAMESPACE_KINDS, "namespace kind is invalid")
-    observed = os.stat(f"ns/{kind}", dir_fd=task.process_fd)
+    kind = TASK_NAMESPACE_ENTRY_KINDS.get(entry)
+    require(kind is not None, "task namespace entry is invalid")
+    observed = os.stat(f"ns/{entry}", dir_fd=task.process_fd)
     identity = NamespaceIdentity(kind, observed.st_dev, observed.st_ino)
     require(
-        os.readlink(f"ns/{kind}", dir_fd=task.process_fd)
+        os.readlink(f"ns/{entry}", dir_fd=task.process_fd)
         == f"{kind}:[{identity.inode}]",
-        "process task current namespace identity differs: "
-        f"{task.thread_group_id}/{task.task_id}/{kind}",
+        "process task namespace entry identity differs: "
+        f"{task.thread_group_id}/{task.task_id}/{entry}",
     )
     return identity
 
 
 def open_current_task_namespace(
     task: CapturedTask,
-    kind: str,
+    entry: str,
 ) -> tuple[NamespaceIdentity, int]:
-    require(kind in NAMESPACE_KINDS, "namespace kind is invalid")
-    first_link = os.readlink(f"ns/{kind}", dir_fd=task.process_fd)
+    kind = TASK_NAMESPACE_ENTRY_KINDS.get(entry)
+    require(kind is not None, "task namespace entry is invalid")
+    first_link = os.readlink(f"ns/{entry}", dir_fd=task.process_fd)
     with ResourceCustody(label="current task namespace acquisition") as custody:
         descriptor = custody.open(
-            f"ns/{kind}",
+            f"ns/{entry}",
             os.O_RDONLY | os.O_CLOEXEC,
             dir_fd=task.process_fd,
         )
         observed = os.fstat(descriptor)
-        second_link = os.readlink(f"ns/{kind}", dir_fd=task.process_fd)
+        second_link = os.readlink(f"ns/{entry}", dir_fd=task.process_fd)
         identity = NamespaceIdentity(kind, observed.st_dev, observed.st_ino)
         require(
             stat.S_ISREG(observed.st_mode)
             and first_link == second_link == f"{kind}:[{identity.inode}]"
-            and current_task_namespace_identity(task, kind) == identity,
+            and current_task_namespace_identity(task, entry) == identity,
             "process task namespace descriptor binding differs: "
-            f"{task.thread_group_id}/{task.task_id}/{kind}",
+            f"{task.thread_group_id}/{task.task_id}/{entry}",
         )
         result = (identity, descriptor)
         custody.release_descriptor(descriptor)
@@ -1541,12 +1578,13 @@ def open_current_task_namespace(
 
 def require_current_task_namespace_identity(
     task: CapturedTask,
+    entry: str,
     expected: NamespaceIdentity,
 ) -> None:
     require(
-        current_task_namespace_identity(task, expected.kind) == expected,
-        "process task current namespace changed during census: "
-        f"{task.thread_group_id}/{task.task_id}/{expected.kind}",
+        current_task_namespace_identity(task, entry) == expected,
+        "process task namespace entry changed during census: "
+        f"{task.thread_group_id}/{task.task_id}/{entry}",
     )
 
 
@@ -1568,7 +1606,7 @@ class MountNamespaceAuthority:
 
 @dataclass
 class TaskNamespaceCensus:
-    current: frozenset[NamespaceIdentity]
+    process_bound: frozenset[NamespaceIdentity]
     namespace_fds: frozenset[NamespaceIdentity]
     mounts: tuple[MountNamespaceAuthority, ...]
     proof_sha256: str
@@ -1580,6 +1618,11 @@ class TaskNamespaceCensus:
     )
     preimage: dict[str, object] = field(
         default_factory=dict,
+        repr=False,
+        compare=False,
+    )
+    task_namespaces: tuple[dict[str, object], ...] = field(
+        default=(),
         repr=False,
         compare=False,
     )
@@ -1604,26 +1647,30 @@ class TaskNamespaceCensus:
             "task namespace census task count differs",
         )
         reconstructed = task_namespace_census_preimage(
-            set(self.current),
+            set(self.process_bound),
             set(self.namespace_fds),
             self.mounts,
             task_count,
+            self.task_namespaces,
         )
         require(
             canonical_json(reconstructed) == canonical_json(self.preimage)
             and sha256_bytes(canonical_json(self.preimage)) == self.proof_sha256
             and self.proof.get("proofSha256") == self.proof_sha256
-            and self.proof.get("currentNamespaceCount") == len(self.current)
+            and self.proof.get("processBoundNamespaceCount")
+            == len(self.process_bound)
             and self.proof.get("namespaceFdCount") == len(self.namespace_fds)
             and self.proof.get("mountNamespaceCount") == len(self.mounts)
             and self.proof.get("taskCount") == self.preimage.get("taskCount")
+            and self.proof.get("taskNamespaceBindingCount")
+            == len(self.task_namespaces)
             and self.proof.get("processlessMountNamespaces")
             == "not_observable_and_not_admitted"
             and self.proof.get("queuedScmRightsNamespaceFds")
             == "not_observable_and_not_admitted",
             "task namespace census digest or summary differs",
         )
-        identities = tuple(sorted(self.current))
+        identities = tuple(sorted(self.process_bound))
         require(
             len(identities) == len(self.namespace_descriptors),
             "task namespace census descriptor roster differs",
@@ -1967,7 +2014,7 @@ def _mount_authority_document(
 
 def require_mounted_namespace_representatives(
     mounts: Sequence[MountNamespaceAuthority],
-    current: set[NamespaceIdentity],
+    process_bound: set[NamespaceIdentity],
 ) -> set[NamespaceIdentity]:
     mounted_namespace_pins: set[NamespaceIdentity] = set()
     for authority in mounts:
@@ -1985,7 +2032,7 @@ def require_mounted_namespace_representatives(
                     int(match.group(2)),
                 )
             )
-    processless_pins = mounted_namespace_pins - current
+    processless_pins = mounted_namespace_pins - process_bound
     manual(
         not processless_pins,
         "a mounted namespace has no live representative: "
@@ -1998,18 +2045,103 @@ def require_mounted_namespace_representatives(
 
 
 def task_namespace_census_preimage(
-    current: set[NamespaceIdentity],
+    process_bound: set[NamespaceIdentity],
     namespace_fds: set[NamespaceIdentity],
     mounts: Sequence[MountNamespaceAuthority],
     task_count: int,
+    task_namespaces: tuple[Mapping[str, object], ...] = (),
 ) -> dict[str, object]:
+    require(
+        type(task_namespaces) is tuple,
+        "task namespace binding roster is not exact",
+    )
+    normalized_task_namespaces: list[dict[str, object]] = []
+    coordinates: set[tuple[int, int]] = set()
+    bound_process_namespaces: set[NamespaceIdentity] = set()
+    for index, value in enumerate(task_namespaces):
+        row = exact_keys(
+            value,
+            {"threadGroupId", "taskId", "namespaces"},
+            f"task namespace binding {index}",
+        )
+        thread_group_id = plain_int(
+            row["threadGroupId"],
+            f"task namespace binding TGID {index}",
+            positive=True,
+        )
+        task_id = plain_int(
+            row["taskId"],
+            f"task namespace binding TID {index}",
+            positive=True,
+        )
+        coordinate = (thread_group_id, task_id)
+        require(
+            coordinate not in coordinates,
+            "task namespace binding coordinate is duplicated",
+        )
+        coordinates.add(coordinate)
+        namespaces = row["namespaces"]
+        require(
+            isinstance(namespaces, dict)
+            and set(namespaces) == set(TASK_NAMESPACE_ENTRY_KINDS),
+            f"task namespace binding entry roster differs: {index}",
+        )
+        assert isinstance(namespaces, dict)
+        normalized_namespaces: dict[str, object] = {}
+        for entry, kind in TASK_NAMESPACE_ENTRIES:
+            identity = exact_keys(
+                namespaces[entry],
+                {"kind", "device", "inode"},
+                f"task namespace binding {index}/{entry}",
+            )
+            require(
+                identity["kind"] == kind,
+                f"task namespace binding kind differs: {index}/{entry}",
+            )
+            normalized_namespaces[entry] = {
+                "kind": kind,
+                "device": plain_int(
+                    identity["device"],
+                    f"task namespace binding device {index}/{entry}",
+                ),
+                "inode": plain_int(
+                    identity["inode"],
+                    f"task namespace binding inode {index}/{entry}",
+                    positive=True,
+                ),
+            }
+            bound_process_namespaces.add(
+                NamespaceIdentity(
+                    kind,
+                    int(normalized_namespaces[entry]["device"]),
+                    int(normalized_namespaces[entry]["inode"]),
+                )
+            )
+        normalized_task_namespaces.append(
+            {
+                "threadGroupId": thread_group_id,
+                "taskId": task_id,
+                "namespaces": normalized_namespaces,
+            }
+        )
+    require(
+        len(normalized_task_namespaces) == task_count,
+        "task namespace binding count differs",
+    )
+    require(
+        bound_process_namespaces == process_bound,
+        "task namespace bindings differ from the process-bound namespace roster",
+    )
+    normalized_task_namespaces.sort(
+        key=lambda value: (int(value["threadGroupId"]), int(value["taskId"]))
+    )
     mounted_namespace_pins = require_mounted_namespace_representatives(
         mounts,
-        current,
+        process_bound,
     )
     return {
-        "currentNamespaces": [
-            _namespace_identity_document(value) for value in sorted(current)
+        "processBoundNamespaces": [
+            _namespace_identity_document(value) for value in sorted(process_bound)
         ],
         "namespaceFds": [
             _namespace_identity_document(value) for value in sorted(namespace_fds)
@@ -2024,6 +2156,7 @@ def task_namespace_census_preimage(
         "processlessMountNamespaces": "not_observable_and_not_admitted",
         "queuedScmRightsNamespaceFds": "not_observable_and_not_admitted",
         "taskCount": task_count,
+        "taskNamespaces": normalized_task_namespaces,
     }
 
 
@@ -2035,7 +2168,7 @@ def require_task_namespace_census_fd_budget(
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     open_count = len(os.listdir("/proc/self/fd"))
     baseline_reserve = 128
-    per_task_reserve = 2 + len(NAMESPACE_KINDS)
+    per_task_reserve = 2 + len(TASK_NAMESPACE_ENTRIES)
     transient_reserve = 2
     required = (
         task_count * per_task_reserve
@@ -2097,7 +2230,7 @@ def admit_held_namespace_descriptor(
                 observed.st_ino,
                 stat.S_IFMT(observed.st_mode),
             ),
-            "current namespace descriptor identity diverges",
+            "process-bound namespace descriptor identity diverges",
         )
         return False
 
@@ -2111,12 +2244,14 @@ def _held_task_namespace_observations(
     dict[NamespaceIdentity, list[MountNamespaceView]],
     int,
     tuple[int, ...],
+    tuple[dict[str, object], ...],
 ]:
-    current: set[NamespaceIdentity] = set()
+    process_bound: set[NamespaceIdentity] = set()
     namespace_fds: set[NamespaceIdentity] = set()
     mount_views: dict[NamespaceIdentity, list[MountNamespaceView]] = {}
     held: list[CapturedTask] = []
     held_namespaces: dict[NamespaceIdentity, int] = {}
+    task_namespace_bindings: list[dict[str, object]] = []
     proofs: list[
         tuple[
             CapturedTask,
@@ -2139,8 +2274,8 @@ def _held_task_namespace_observations(
             custody.own_closeable(task)
             held.append(task)
             namespaces: dict[str, NamespaceIdentity] = {}
-            for kind in NAMESPACE_KINDS:
-                identity, namespace_fd = open_current_task_namespace(task, kind)
+            for entry, _kind in TASK_NAMESPACE_ENTRIES:
+                identity, namespace_fd = open_current_task_namespace(task, entry)
                 retained = admit_held_namespace_descriptor(
                     held_namespaces,
                     identity,
@@ -2148,8 +2283,18 @@ def _held_task_namespace_observations(
                 )
                 if retained:
                     custody.own_descriptor(namespace_fd)
-                namespaces[kind] = identity
-                current.add(identity)
+                namespaces[entry] = identity
+                process_bound.add(identity)
+            task_namespace_bindings.append(
+                {
+                    "threadGroupId": thread_group_id,
+                    "taskId": task_id,
+                    "namespaces": {
+                        entry: _namespace_identity_document(identity)
+                        for entry, identity in namespaces.items()
+                    },
+                }
+            )
             view = _task_mount_view(task)
             mount_views.setdefault(namespaces["mnt"], []).append(view)
             excluded = (
@@ -2171,8 +2316,8 @@ def _held_task_namespace_observations(
                 )
             proofs.append((task, namespaces, view, namespace_fd_rows))
         for task, namespaces, view, namespace_fd_rows in proofs:
-            for identity in namespaces.values():
-                require_current_task_namespace_identity(task, identity)
+            for entry, identity in namespaces.items():
+                require_current_task_namespace_identity(task, entry, identity)
             manual(
                 _task_mount_view(task) == view,
                 "process task root or mount view changed before census commit: "
@@ -2206,11 +2351,12 @@ def _held_task_namespace_observations(
             held_namespaces[identity] for identity in sorted(held_namespaces)
         )
         result = (
-            current,
+            process_bound,
             namespace_fds,
             mount_views,
             int(fd_budget["taskCount"]),
             descriptors,
+            tuple(task_namespace_bindings),
         )
         for task in tuple(held):
             custody.close_closeable(task)
@@ -2219,14 +2365,15 @@ def _held_task_namespace_observations(
 
 
 def _task_namespace_census_from_observations(
-    current: set[NamespaceIdentity],
+    process_bound: set[NamespaceIdentity],
     namespace_fds: set[NamespaceIdentity],
     mount_views: dict[NamespaceIdentity, list[MountNamespaceView]],
     task_count: int,
     namespace_descriptors: tuple[int, ...],
+    task_namespaces: tuple[dict[str, object], ...],
 ) -> TaskNamespaceCensus:
-    manual(current, "no current process namespace was observable")
-    detached = namespace_fds - current
+    manual(process_bound, "no process-bound namespace was observable")
+    detached = namespace_fds - process_bound
     manual(
         not detached,
         "a detached or processless namespace FD is not observable: "
@@ -2239,28 +2386,31 @@ def _task_namespace_census_from_observations(
         for identity in sorted(mount_views)
     )
     proof = task_namespace_census_preimage(
-        current,
+        process_bound,
         namespace_fds,
         mounts,
         task_count,
+        task_namespaces,
     )
     digest = sha256_bytes(canonical_json(proof))
     return TaskNamespaceCensus(
-        frozenset(current),
+        frozenset(process_bound),
         frozenset(namespace_fds),
         mounts,
         digest,
         {
-            "currentNamespaceCount": len(current),
+            "processBoundNamespaceCount": len(process_bound),
             "namespaceFdCount": len(namespace_fds),
             "mountNamespaceCount": len(mounts),
             "proofSha256": digest,
             "processlessMountNamespaces": "not_observable_and_not_admitted",
             "queuedScmRightsNamespaceFds": "not_observable_and_not_admitted",
             "taskCount": task_count,
+            "taskNamespaceBindingCount": len(task_namespaces),
         },
         namespace_descriptors,
         proof,
+        task_namespaces,
     )
 
 
@@ -2307,12 +2457,12 @@ def stable_task_namespace_census() -> TaskNamespaceCensus:
 def classify_namespace_fd(
     identity: NamespaceIdentity,
     *,
-    current: frozenset[NamespaceIdentity],
+    process_bound: frozenset[NamespaceIdentity],
     owned: frozenset[NamespaceIdentity],
 ) -> str:
-    if identity not in current:
+    if identity not in process_bound:
         return "detached"
-    return "owned" if identity in owned else "ambient_current"
+    return "owned" if identity in owned else "ambient_process_bound"
 
 
 def source_anchors_from_records(
@@ -3164,17 +3314,21 @@ def process_reference_scan(
             relations = _structured_argument_relations(raw_arguments)
             namespace_fds: list[dict[str, object]] = []
             captured_namespace_identities = {
-                name: current_task_namespace_identity(task, name)
-                for name in NAMESPACE_KINDS
+                entry: current_task_namespace_identity(task, entry)
+                for entry, _kind in TASK_NAMESPACE_ENTRIES
             }
             namespaces = {
-                name: {"device": identity.device, "inode": identity.inode}
-                for name, identity in captured_namespace_identities.items()
+                entry: {
+                    "kind": identity.kind,
+                    "device": identity.device,
+                    "inode": identity.inode,
+                }
+                for entry, identity in captured_namespace_identities.items()
             }
-            current_namespace_identities = {
+            process_bound_namespace_identities = {
                 identity for identity in captured_namespace_identities.values()
             }
-            if current_namespace_identities & private_namespace_identities:
+            if process_bound_namespace_identities & private_namespace_identities:
                 relations.add("privateRuntimeNamespace")
             for label, name in (("cwd", "cwd"), ("root", "root"), ("exe", "exe")):
                 try:
@@ -3285,7 +3439,7 @@ def process_reference_scan(
                         if namespace_identity_value is not None:
                             classification = classify_namespace_fd(
                                 namespace_identity_value,
-                                current=observable_namespace_identities,
+                                process_bound=observable_namespace_identities,
                                 owned=owned_relation_namespace_identities,
                             )
                             namespace_fds.append(
@@ -3331,8 +3485,8 @@ def process_reference_scan(
             }
             if EXPECTED_CONTAINER_ID in cgroup_components:
                 relations.add("containerCgroup")
-            for identity in captured_namespace_identities.values():
-                require_current_task_namespace_identity(task, identity)
+            for entry, identity in captured_namespace_identities.items():
+                require_current_task_namespace_identity(task, entry, identity)
             reprove_captured_task(task)
             row = {
                 "pid": thread_group_id,
@@ -3365,6 +3519,44 @@ def process_reference_scan(
             raise
 
 
+def recorded_process_namespace_identities(
+    process: Mapping[str, object],
+) -> frozenset[NamespaceIdentity]:
+    value = process.get("taskNamespaces")
+    require(
+        isinstance(value, dict)
+        and set(value) == set(TASK_NAMESPACE_ENTRY_KINDS),
+        "recorded process namespace entry roster differs",
+    )
+    assert isinstance(value, dict)
+    result: set[NamespaceIdentity] = set()
+    for entry, expected_kind in TASK_NAMESPACE_ENTRIES:
+        row = exact_keys(
+            value[entry],
+            {"kind", "device", "inode"},
+            f"recorded process namespace entry {entry}",
+        )
+        require(
+            row["kind"] == expected_kind,
+            f"recorded process namespace entry kind differs: {entry}",
+        )
+        result.add(
+            NamespaceIdentity(
+                expected_kind,
+                plain_int(
+                    row["device"],
+                    f"recorded process namespace entry device {entry}",
+                ),
+                plain_int(
+                    row["inode"],
+                    f"recorded process namespace entry inode {entry}",
+                    positive=True,
+                ),
+            )
+        )
+    return frozenset(result)
+
+
 def _related_process_universe_once(
     processes: Mapping[str, Mapping[str, object]],
     runtime: Mapping[str, object],
@@ -3381,30 +3573,19 @@ def _related_process_universe_once(
     socket_inodes = {
         int(item["inode"]) for item in sockets["unixRecords"]
     } | {int(inode) for inode in sockets.get("relatedUnixInodes", [])}
-    owned_namespace_identities = frozenset(
-        NamespaceIdentity(
-            name,
-            int(value[field]["device"]),
-            int(value[field]["inode"]),
-        )
-        for value in processes.values()
-        for name, field in (
-            ("mnt", "mountNamespace"),
-            ("net", "networkNamespace"),
-            ("pid", "pidNamespace"),
-            ("user", "userNamespace"),
-        )
+    owned_namespace_identities = frozenset().union(
+        *(recorded_process_namespace_identities(value) for value in processes.values())
     )
     own_namespace_identities: set[NamespaceIdentity] = set()
-    for name in NAMESPACE_KINDS:
-        observed = os.stat(f"/proc/self/ns/{name}")
+    for entry, kind in TASK_NAMESPACE_ENTRIES:
+        observed = os.stat(f"/proc/self/ns/{entry}")
         require(
-            os.readlink(f"/proc/self/ns/{name}")
-            == f"{name}:[{observed.st_ino}]",
-            f"drain current namespace identity differs: {name}",
+            os.readlink(f"/proc/self/ns/{entry}")
+            == f"{kind}:[{observed.st_ino}]",
+            f"drain task namespace entry identity differs: {entry}",
         )
         own_namespace_identities.add(
-            NamespaceIdentity(name, observed.st_dev, observed.st_ino)
+            NamespaceIdentity(kind, observed.st_dev, observed.st_ino)
         )
     private_namespace_identities = (
         owned_namespace_identities - frozenset(own_namespace_identities)
@@ -3423,7 +3604,7 @@ def _related_process_universe_once(
                 runtime_inodes=runtime_inodes,
                 socket_inodes=socket_inodes,
                 private_namespace_identities=private_namespace_identities,
-                observable_namespace_identities=namespace_census.current,
+                observable_namespace_identities=namespace_census.process_bound,
                 owned_relation_namespace_identities=frozenset(
                     private_namespace_identities
                 ),
@@ -3439,6 +3620,27 @@ def _related_process_universe_once(
         require(
             len(rows) == len(observations),
             "process task census contains a duplicate coordinate",
+        )
+        observed_task_namespaces = tuple(
+            sorted(
+                (
+                    {
+                        "threadGroupId": int(row["pid"]),
+                        "taskId": int(row["taskId"]),
+                        "namespaces": row["namespaces"],
+                    }
+                    for row in rows.values()
+                ),
+                key=lambda value: (
+                    int(value["threadGroupId"]),
+                    int(value["taskId"]),
+                ),
+            )
+        )
+        require(
+            canonical_json(observed_task_namespaces)
+            == canonical_json(namespace_census.task_namespaces),
+            "task namespace bindings changed after the stable namespace census",
         )
         known_by_tgid = {
             int(value["pid"]): role for role, value in processes.items()
@@ -3457,6 +3659,10 @@ def _related_process_universe_once(
                 == (recorded["parentPid"], recorded["startTimeTicks"]),
                 f"recorded legacy process PID was reused: {role}",
             )
+            manual(
+                row["namespaces"] == recorded["taskNamespaces"],
+                f"recorded legacy process namespace authority changed: {role}",
+            )
         for (thread_group_id, task_id), row in rows.items():
             role = known_by_tgid.get(thread_group_id)
             if role is None:
@@ -3468,6 +3674,50 @@ def _related_process_universe_once(
                 thread_group_id=thread_group_id,
                 task_id=task_id,
             )
+        complete_owned_namespaces = set(owned_namespace_identities)
+        for (thread_group_id, _task_id), row in rows.items():
+            if thread_group_id not in known_by_tgid:
+                continue
+            complete_owned_namespaces.update(
+                NamespaceIdentity(
+                    str(identity["kind"]),
+                    int(identity["device"]),
+                    int(identity["inode"]),
+                )
+                for identity in row["namespaces"].values()
+            )
+        private_namespace_identities = frozenset(
+            complete_owned_namespaces - own_namespace_identities
+        )
+        for row in rows.values():
+            relations = set(row["relations"])
+            current_identities = {
+                NamespaceIdentity(
+                    str(identity["kind"]),
+                    int(identity["device"]),
+                    int(identity["inode"]),
+                )
+                for identity in row["namespaces"].values()
+            }
+            if current_identities & private_namespace_identities:
+                relations.add("privateRuntimeNamespace")
+            for item in row["namespaceFds"]:
+                identity = NamespaceIdentity(
+                    str(item["kind"]),
+                    int(item["device"]),
+                    int(item["inode"]),
+                )
+                classification = classify_namespace_fd(
+                    identity,
+                    process_bound=namespace_census.process_bound,
+                    owned=private_namespace_identities,
+                )
+                item["classification"] = classification
+                if classification == "owned":
+                    relations.add("runtimeNamespaceFd")
+                elif classification == "detached":
+                    relations.add("detachedNamespaceFd")
+            row["relations"] = sorted(relations)
         related = {
             coordinate
             for coordinate, row in rows.items()
@@ -3486,18 +3736,18 @@ def _related_process_universe_once(
                 for thread_group_id, task_id in detached_namespaces
             ),
         )
-        observed_current_namespaces = frozenset(
+        observed_process_bound_namespaces = frozenset(
             NamespaceIdentity(
-                str(kind),
+                str(identity["kind"]),
                 int(identity["device"]),
                 int(identity["inode"]),
             )
             for row in rows.values()
-            for kind, identity in row["namespaces"].items()
+            for identity in row["namespaces"].values()
         )
         require(
-            observed_current_namespaces == namespace_census.current,
-            "current namespace roster changed after the stable namespace census",
+            observed_process_bound_namespaces == namespace_census.process_bound,
+            "process-bound namespace roster changed after the stable namespace census",
         )
         observed_namespace_fds = frozenset(
             NamespaceIdentity(
@@ -3565,7 +3815,7 @@ def _related_process_universe_once(
                 runtime_inodes=runtime_inodes,
                 socket_inodes=socket_inodes,
                 private_namespace_identities=private_namespace_identities,
-                observable_namespace_identities=namespace_census.current,
+                observable_namespace_identities=namespace_census.process_bound,
                 owned_relation_namespace_identities=frozenset(
                     private_namespace_identities
                 ),
@@ -3589,16 +3839,16 @@ def _related_process_universe_once(
             _namespace_identity_document(value)
             for value in sorted(observed_namespace_fds)
         ]
-        current_namespace_proof = [
+        process_bound_namespace_proof = [
             _namespace_identity_document(value)
-            for value in sorted(observed_current_namespaces)
+            for value in sorted(observed_process_bound_namespaces)
         ]
         proof_digest = sha256_bytes(
             canonical_json(
                 {
                     "related": proof,
                     "namespaceCensusSha256": namespace_census.proof_sha256,
-                    "currentNamespaces": current_namespace_proof,
+                    "processBoundNamespaces": process_bound_namespace_proof,
                     "namespaceFds": namespace_fd_proof,
                 }
             )
@@ -3608,7 +3858,7 @@ def _related_process_universe_once(
             "related": proof,
             "proofSha256": proof_digest,
             "namespaceCensusSha256": namespace_census.proof_sha256,
-            "currentNamespaces": current_namespace_proof,
+            "processBoundNamespaces": process_bound_namespace_proof,
             "namespaceFds": namespace_fd_proof,
         }
 
@@ -3721,9 +3971,11 @@ def runtime_tree_snapshot() -> dict[str, object]:
     }
 
 
-def registry_inventory() -> dict[str, object]:
-    repositories = REGISTRY_STORAGE / "repositories"
-    blobs = REGISTRY_STORAGE / "blobs/sha256"
+def registry_inventory(
+    registry_storage: Path = REGISTRY_STORAGE,
+) -> dict[str, object]:
+    repositories = registry_storage / "repositories"
+    blobs = registry_storage / "blobs/sha256"
     directory_identity(repositories, expected_uid=0, expected_gid=0, expected_modes={0o755})
     directory_identity(blobs, expected_uid=0, expected_gid=0, expected_modes={0o755})
     revisions: dict[str, set[str]] = {}
@@ -3783,9 +4035,7 @@ def require_v5_absent(
         if V5_RUNTIME_RE.fullmatch(name) is not None:
             foreign.append(str(Path("/run") / name))
     for name in os.listdir("/home"):
-        if name == ".ambit-c16b-runner-storage" or name.startswith(
-            ".ambit-c16b-runner-storage-claim"
-        ):
+        if name.startswith(V5_STORAGE_AUTHORITY_PREFIX):
             foreign.append(str(Path("/home") / name))
     for name in os.listdir(CGROUP_PARENT):
         if CGROUP_NAME_RE.fullmatch(name) is not None:
@@ -4958,8 +5208,8 @@ def hold_related_process_cutoff(
                 task,
                 expected_security_state=row["securityState"],
             )
-        yield proof
-        if revalidate_after:
+
+        def require_post_action_reproof() -> None:
             for task, row in held:
                 reprove_captured_task(
                     task,
@@ -4984,6 +5234,21 @@ def hold_related_process_cutoff(
                     task,
                     expected_security_state=row["securityState"],
                 )
+
+        try:
+            yield proof
+        except BaseException as action_error:
+            if revalidate_after:
+                try:
+                    require_post_action_reproof()
+                except BaseException as reproof_error:
+                    action_error.add_note(
+                        "post-action related-process reproof also failed: "
+                        f"{reproof_error}"
+                    )
+            raise
+        if revalidate_after:
+            require_post_action_reproof()
 
 
 def exact_process_status(recorded: Mapping[str, object]) -> str:
@@ -5221,6 +5486,144 @@ def require_recorded_entry(
         ),
         f"{label} identity differs",
     )
+
+
+def require_recorded_persistent_root_bindings(
+    control: Mapping[str, object],
+    state_fd: int,
+    roots: Mapping[str, int],
+) -> None:
+    authority = control["authority"]
+    assert isinstance(authority, dict)
+    state_expected = authority["stateRootIdentity"]
+    expected_roots = authority["persistentRoots"]
+    require(
+        isinstance(state_expected, dict)
+        and isinstance(expected_roots, dict)
+        and set(expected_roots) == {str(path) for path in PERSISTENT_ROOTS}
+        and set(roots) == set(expected_roots),
+        "recorded persistent-root roster differs",
+    )
+    state_observed = os.fstat(state_fd)
+    state_literal = os.stat(EXPECTED_STATE_ROOT, follow_symlinks=False)
+    require_recorded_entry(
+        state_observed,
+        state_expected,
+        label="persistent-root state",
+    )
+    require(
+        stat.S_ISDIR(state_observed.st_mode)
+        and (state_observed.st_dev, state_observed.st_ino)
+        == (state_expected["device"], state_expected["inode"])
+        == (state_literal.st_dev, state_literal.st_ino),
+        "persistent-root state binding differs",
+    )
+    for path in PERSISTENT_ROOTS:
+        expected = expected_roots[str(path)]
+        require(
+            isinstance(expected, dict) and path.parent == EXPECTED_STATE_ROOT,
+            f"recorded persistent-root authority is invalid: {path}",
+        )
+        descriptor = roots[str(path)]
+        observed = os.fstat(descriptor)
+        literal = os.stat(
+            path.name,
+            dir_fd=state_fd,
+            follow_symlinks=False,
+        )
+        require_recorded_entry(
+            observed,
+            expected,
+            label=f"recorded persistent root {path}",
+        )
+        require(
+            stat.S_ISDIR(observed.st_mode)
+            and (literal.st_dev, literal.st_ino)
+            == (observed.st_dev, observed.st_ino),
+            f"recorded persistent-root name binding differs: {path}",
+        )
+
+
+@dataclass
+class RecordedPersistentRoots:
+    state_fd: int
+    rows: tuple[tuple[str, int], ...]
+    descriptors: tuple[int, ...]
+    _closed: bool = field(default=False, init=False, repr=False, compare=False)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        try:
+            close_all_descriptors(
+                self.descriptors,
+                label="recorded persistent roots",
+            )
+        finally:
+            self._closed = True
+
+
+def recorded_persistent_root_descriptors(
+    control: Mapping[str, object],
+) -> RecordedPersistentRoots:
+    with ResourceCustody(label="recorded persistent-root acquisition") as custody:
+        state_fd = custody.open(
+            EXPECTED_STATE_ROOT,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        )
+        rows: list[tuple[str, int]] = []
+        for path in PERSISTENT_ROOTS:
+            descriptor = custody.open(
+                path.name,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=state_fd,
+            )
+            rows.append((str(path), descriptor))
+        result_rows = tuple(rows)
+        roots = dict(result_rows)
+        require_recorded_persistent_root_bindings(control, state_fd, roots)
+        descriptors = (
+            state_fd,
+            *(descriptor for _path, descriptor in result_rows),
+        )
+        result = RecordedPersistentRoots(state_fd, result_rows, descriptors)
+        custody.release_descriptors(descriptors)
+        return result
+
+
+@contextlib.contextmanager
+def hold_recorded_persistent_roots(
+    control: Mapping[str, object],
+) -> Iterator[dict[str, int]]:
+    with ResourceCustody(label="held recorded persistent roots") as custody:
+        owner = recorded_persistent_root_descriptors(control)
+        custody.own_closeable(owner)
+        roots = dict(owner.rows)
+        try:
+            yield roots
+        except BaseException as action_error:
+            try:
+                require_recorded_persistent_root_bindings(
+                    control,
+                    owner.state_fd,
+                    roots,
+                )
+            except BaseException as reproof_error:
+                action_error.add_note(
+                    "post-action persistent-root reproof also failed: "
+                    f"{reproof_error}"
+                )
+            raise
+        require_recorded_persistent_root_bindings(control, owner.state_fd, roots)
+
+
+def bound_registry_storage(roots: Mapping[str, int]) -> Path:
+    descriptor = roots.get(str(EXPECTED_STATE_ROOT / "registry"))
+    require(
+        isinstance(descriptor, int) and descriptor >= 0,
+        "held registry persistent root is absent",
+    )
+    return Path(f"/proc/self/fd/{descriptor}/docker/registry/v2")
 
 
 @dataclass
@@ -6900,6 +7303,55 @@ def require_recovery_state_binding(state_fd: int, evidence_fd: int) -> None:
     )
 
 
+def recover_prepared_archive_from_live(
+    control: Mapping[str, object],
+    evidence_fd: int,
+    custody: ResourceCustody,
+) -> tuple[int, os.stat_result, bytes]:
+    authority = control["authority"]
+    assert isinstance(authority, dict)
+    expected = authority["legacyReceipt"]
+    live = _read_regular_at(
+        evidence_fd,
+        RECEIPT_PATH.name,
+        maximum=MAX_JSON_BYTES,
+    )
+    manual(live is not None, "prepared archive and exact live receipt are both absent")
+    assert live is not None
+    custody.own_descriptor(live[0])
+    _require_legacy_receipt(
+        live[1],
+        live[2],
+        expected,
+        terminal=False,
+    )
+    recorded = recorded_legacy_receipt_bytes(control)
+    temporary = custody.own_descriptor(
+        _create_root_tmpfile(
+            evidence_fd,
+            recorded,
+            expected_sha256=EXPECTED_RECEIPT_SHA256,
+        )
+    )
+    link_tmpfile_noreplace_at(
+        temporary,
+        evidence_fd,
+        PREPARED_ARCHIVE_PATH.name,
+    )
+    settle_linked_publication_replay(evidence_fd)
+    custody.close_descriptor(temporary)
+    custody.close_descriptor(live[0])
+    prepared = _read_regular_at(
+        evidence_fd,
+        PREPARED_ARCHIVE_PATH.name,
+        maximum=MAX_JSON_BYTES,
+    )
+    require(prepared is not None, "prepared legacy archive disappeared")
+    assert prepared is not None
+    custody.own_descriptor(prepared[0])
+    return prepared
+
+
 def recover_terminal_archive_without_control() -> dict[str, object]:
     manual(
         not exists_nofollow(CONTROL_ROOT),
@@ -7023,47 +7475,10 @@ def recover_terminal_archive_without_control() -> dict[str, object]:
         )
         custody.close_descriptor(pidfile_value[0])
         custody.close_descriptor(config_fd)
-        for path, expected in authority["persistentRoots"].items():
-            expected_path = Path(path)
-            require(
-                expected_path.parent == EXPECTED_STATE_ROOT,
-                "legacy recovery persistent root path differs",
-            )
-            persistent_fd = custody.open(
-                expected_path.name,
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                dir_fd=state_fd,
-            )
-            observed = os.fstat(persistent_fd)
-            literal = os.stat(
-                expected_path.name,
-                dir_fd=state_fd,
-                follow_symlinks=False,
-            )
-            require(
-                (
-                    observed.st_dev,
-                    observed.st_ino,
-                    observed.st_uid,
-                    observed.st_gid,
-                    stat.S_IMODE(observed.st_mode),
-                )
-                == (
-                    expected["device"],
-                    expected["inode"],
-                    expected["uid"],
-                    expected["gid"],
-                    expected["mode"],
-                )
-                and (literal.st_dev, literal.st_ino)
-                == (observed.st_dev, observed.st_ino),
-                f"legacy recovery persistent root differs: {path}",
-            )
-            custody.close_descriptor(persistent_fd)
-        require(
-            registry_inventory() == authority["registryInventory"],
-            "legacy recovery registry inventory differs",
-        )
+        persistent_owner = recorded_persistent_root_descriptors(stored_control)
+        custody.own_closeable(persistent_owner)
+        persistent_roots = dict(persistent_owner.rows)
+        registry_inventory_matches(stored_control, persistent_roots)
         for key, root in (
             ("runtime", EXPECTED_RUNTIME_ROOT),
             ("outerDocker", EXPECTED_STATE_ROOT / "outer-docker"),
@@ -7099,6 +7514,12 @@ def recover_terminal_archive_without_control() -> dict[str, object]:
                 not _live_path_has_exact_legacy_bytes(evidence_fd),
                 "live and terminal legacy receipt bytes coexist",
             )
+            require_recorded_persistent_root_bindings(
+                stored_control,
+                persistent_owner.state_fd,
+                persistent_roots,
+            )
+            registry_inventory_matches(stored_control, persistent_roots)
             return projection
         prepared = _read_regular_at(
             evidence_fd,
@@ -7109,40 +7530,11 @@ def recover_terminal_archive_without_control() -> dict[str, object]:
             custody.own_descriptor(prepared[0])
         if prepared is None:
             require_recovery_state_binding(state_fd, evidence_fd)
-            live = _read_regular_at(
+            prepared = recover_prepared_archive_from_live(
+                stored_control,
                 evidence_fd,
-                RECEIPT_PATH.name,
-                maximum=MAX_JSON_BYTES,
+                custody,
             )
-            manual(
-                live is not None
-                and sha256_bytes(live[2]) == EXPECTED_RECEIPT_SHA256,
-                "prepared archive and exact live receipt are both absent",
-            )
-            assert live is not None
-            custody.own_descriptor(live[0])
-            temporary = custody.own_descriptor(
-                _create_root_tmpfile(
-                    evidence_fd,
-                    live[2],
-                    expected_sha256=EXPECTED_RECEIPT_SHA256,
-                )
-            )
-            link_tmpfile_noreplace_at(
-                temporary,
-                evidence_fd,
-                PREPARED_ARCHIVE_PATH.name,
-            )
-            settle_linked_publication_replay(evidence_fd)
-            custody.close_descriptor(temporary)
-            custody.close_descriptor(live[0])
-            prepared = _read_regular_at(
-                evidence_fd,
-                PREPARED_ARCHIVE_PATH.name,
-                maximum=MAX_JSON_BYTES,
-            )
-            if prepared is not None:
-                custody.own_descriptor(prepared[0])
         require(prepared is not None, "prepared legacy archive disappeared")
         prepared_fd, prepared_stat, prepared_raw = prepared
         require(
@@ -7181,6 +7573,12 @@ def recover_terminal_archive_without_control() -> dict[str, object]:
             and sha256_bytes(final_raw) == EXPECTED_RECEIPT_SHA256,
             "terminal legacy archive recovery binding differs",
         )
+        require_recorded_persistent_root_bindings(
+            stored_control,
+            persistent_owner.state_fd,
+            persistent_roots,
+        )
+        registry_inventory_matches(stored_control, persistent_roots)
         return projection
 
 
@@ -7250,6 +7648,26 @@ def write_projection(control: ControlAuthority) -> dict[str, object]:
 
 
 def archive_receipt(control: ControlAuthority) -> dict[str, object]:
+    with hold_recorded_persistent_roots(control.control) as persistent_roots:
+        registry_inventory_matches(control.control, persistent_roots)
+        try:
+            result = _archive_receipt_with_persistent_roots(control)
+        except BaseException as action_error:
+            try:
+                registry_inventory_matches(control.control, persistent_roots)
+            except BaseException as reproof_error:
+                action_error.add_note(
+                    "post-action registry inventory reproof also failed: "
+                    f"{reproof_error}"
+                )
+            raise
+        registry_inventory_matches(control.control, persistent_roots)
+        return result
+
+
+def _archive_receipt_with_persistent_roots(
+    control: ControlAuthority,
+) -> dict[str, object]:
     require(control.phase == "archive_intent_final", "legacy archive intent is absent")
     receipt_state, _ = legacy_receipt_state(control.control)
     if receipt_state == "archived":
@@ -7335,11 +7753,19 @@ def archive_receipt(control: ControlAuthority) -> dict[str, object]:
 
 
 
-def registry_inventory_matches(control: Mapping[str, object]) -> None:
+def registry_inventory_matches(
+    control: Mapping[str, object],
+    persistent_roots: Mapping[str, int] | None = None,
+) -> None:
     authority = control["authority"]
     assert isinstance(authority, dict)
     require(
-        registry_inventory() == authority["registryInventory"],
+        registry_inventory(
+            bound_registry_storage(persistent_roots)
+            if persistent_roots is not None
+            else REGISTRY_STORAGE
+        )
+        == authority["registryInventory"],
         "registry custody changed during legacy drain",
     )
 
