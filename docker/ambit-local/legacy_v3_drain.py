@@ -4,7 +4,8 @@
 This is deliberately a remove-only compatibility boundary for the one live
 legacy-v3 runtime created on 2026-08-20.  It never starts Docker, adopts old
 storage as current authority, changes a cgroup, force-kills a process, or
-removes persistent data.  `verify-only` performs no writes.  `drain` and
+removes persistent data.  `verify-only` performs no application mutation;
+read-induced filesystem atime effects remain possible.  `drain` and
 `resume` require root, the current v5 global lease, a durable legacy-specific
 control record, pidfd process custody, and exact mount/socket postconditions.
 """
@@ -943,10 +944,22 @@ class Closeable(Protocol):
     def close(self) -> None: ...
 
 
-def add_error_note(active_error: BaseException, note: str) -> None:
+def add_error_note(
+    active_error: BaseException,
+    prefix: str,
+    detail: object | None = None,
+) -> None:
     """Attach diagnostics without allowing annotation failure to mask a primary."""
 
     try:
+        if detail is None:
+            note = prefix
+        else:
+            try:
+                rendered = str(detail)
+            except BaseException:
+                rendered = f"<unprintable {type(detail).__name__}>"
+            note = prefix + rendered
         BaseException.add_note(active_error, note)
     except BaseException:
         # Supplemental diagnostics are never allowed to replace the active error.
@@ -961,8 +974,10 @@ def exact_descriptor(value: object) -> bool:
 class ResourceRegistration:
     kind: str
     value: int | Closeable
-    state: str = field(default="pending", init=False)
-    cleanup_attempted: bool = field(default=False, init=False)
+    published: bool = field(default=False, init=False)
+    close_started: bool = field(default=False, init=False)
+    close_finished: bool = field(default=False, init=False)
+    close_error: BaseException | None = field(default=None, init=False)
 
 
 class ResourceCustody:
@@ -972,115 +987,152 @@ class ResourceCustody:
         self.label = label
         self._resources: list[ResourceRegistration] = []
         self._state = "open"
+        self._cleanup_error: BaseException | None = None
 
     def open(self, *args: object, **kwargs: object) -> int:
-        descriptor = os.open(*args, **kwargs)  # type: ignore[arg-type]
-        require(
-            self._register("descriptor", descriptor),
-            f"{self.label} resource registration is duplicated",
+        return self._acquire(
+            "descriptor",
+            lambda: os.open(*args, **kwargs),  # type: ignore[arg-type]
         )
-        return descriptor
 
     def pidfd_open(self, pid: int, flags: int) -> int:
-        descriptor = os.pidfd_open(pid, flags)
-        require(
-            self._register("descriptor", descriptor),
-            f"{self.label} resource registration is duplicated",
-        )
-        return descriptor
+        return self._acquire("descriptor", lambda: os.pidfd_open(pid, flags))
 
     def dup(self, descriptor: int) -> int:
-        duplicate = os.dup(descriptor)
-        require(
-            self._register("descriptor", duplicate),
-            f"{self.label} resource registration is duplicated",
-        )
-        return duplicate
+        return self._acquire("descriptor", lambda: os.dup(descriptor))
 
     def socket(self, *args: object, **kwargs: object) -> socket.socket:
-        resource_value = socket.socket(*args, **kwargs)  # type: ignore[arg-type]
-        require(
-            self._register("closeable", resource_value),
-            f"{self.label} resource registration is duplicated",
+        return self._acquire(
+            "closeable",
+            lambda: socket.socket(*args, **kwargs),  # type: ignore[arg-type]
         )
-        return resource_value
 
-    def _register(self, kind: str, resource_value: int | Closeable) -> bool:
-        registration = ResourceRegistration(kind, resource_value)
-        append_started = False
-        cleanup_required = True
+    def _acquire(
+        self,
+        kind: str,
+        producer: Callable[[], int | Closeable],
+    ) -> int | Closeable:
+        baseline = list.copy(self._resources)
+        resource_value: int | Closeable | None = None
+        registration: ResourceRegistration | None = None
+        acquired = False
         try:
-            require(kind in {"descriptor", "closeable"}, "resource kind is invalid")
-            if kind == "descriptor":
-                require(
-                    exact_descriptor(resource_value),
-                    f"{self.label} descriptor registration is invalid",
-                )
-            else:
-                require(
-                    not isinstance(resource_value, int),
-                    f"{self.label} closeable registration is invalid",
-                )
-            try:
-                duplicate = any(
-                    (owned.state == "owned" or self._state != "open")
-                    and self._registration_matches(owned, kind, resource_value)
-                    for owned in self._resources
-                )
-            except BaseException as scan_error:
-                fallback = self._builtin_roster_snapshot(scan_error)
-                duplicate = (
-                    any(
-                        (owned.state == "owned" or self._state != "open")
-                        and self._registration_matches(owned, kind, resource_value)
-                        for owned in fallback
-                    )
-                    if fallback is not None
-                    else True
-                )
-                cleanup_required = not duplicate
-                raise
-            if duplicate:
-                return False
-            require(
-                self._state == "open",
-                f"{self.label} registration is unavailable while custody is "
-                f"{self._state}",
-            )
-            append_started = True
-            self._resources.append(registration)
-            registration_count = sum(
-                owned is registration for owned in self._resources
-            )
-            require(
-                registration_count == 1,
-                f"{self.label} registration token is absent or duplicated",
-            )
-            registration.state = "owned"
+            # One source line prevents a line-trace gap between result and guard.
+            resource_value = producer(); acquired = True
+            registration = ResourceRegistration(kind, resource_value)
+            self._publish_registration(registration, baseline)
+            return resource_value
         except BaseException as error:
-            if append_started:
+            if not acquired:
+                raise
+            if registration is None:
                 try:
-                    self._rollback_registration(
-                        registration,
-                        error,
-                    )
-                except BaseException as rollback_error:
+                    assert resource_value is not None
+                    registration = ResourceRegistration(kind, resource_value)
+                except BaseException as registration_error:
                     add_error_note(
                         error,
-                        f"{self.label} registration rollback escaped: "
-                        f"{rollback_error}",
+                        f"{self.label} registration construction also failed: ",
+                        registration_error,
                     )
-            if cleanup_required:
+                    registration = object.__new__(ResourceRegistration)
+                    registration.kind = kind
+                    registration.value = resource_value
+                    registration.published = False
+                    registration.close_started = False
+                    registration.close_finished = False
+                    registration.close_error = None
+            for _attempt in range(2):
                 try:
-                    self._cleanup_registration_once(registration, error)
-                except BaseException as cleanup_error:
+                    self._restore_roster(baseline, registration, error)
+                    break
+                except BaseException as escaped_restore:
                     add_error_note(
                         error,
-                        f"{self.label} registration cleanup escaped: "
-                        f"{cleanup_error}",
+                        f"{self.label} roster restoration escaped: ",
+                        escaped_restore,
                     )
+            cleanup_error: BaseException | None = None
+            for _attempt in range(2):
+                try:
+                    cleanup_error = self._settle_registration_once(registration)
+                    break
+                except BaseException as escaped_cleanup:
+                    cleanup_error = escaped_cleanup
+                    add_error_note(
+                        error,
+                        f"{self.label} registration cleanup escaped: ",
+                        escaped_cleanup,
+                    )
+                    if registration.close_started:
+                        break
+            if cleanup_error is not None:
+                add_error_note(
+                    error,
+                    f"{self.label} registration cleanup also failed: ",
+                    cleanup_error,
+                )
             raise
-        return True
+
+    def _publish_registration(
+        self,
+        registration: ResourceRegistration,
+        baseline: list[ResourceRegistration],
+    ) -> None:
+        require(
+            self._state == "open" and self._cleanup_error is None,
+            f"{self.label} registration is unavailable while custody is "
+            f"{self._state} or cleanup is ambiguous",
+        )
+        if registration.kind == "descriptor":
+            require(
+                exact_descriptor(registration.value),
+                f"{self.label} descriptor registration is invalid",
+            )
+        else:
+            require(
+                registration.kind == "closeable"
+                and not isinstance(registration.value, int),
+                f"{self.label} closeable registration is invalid",
+            )
+        candidate = list.copy(baseline)
+        candidate.append(registration)
+        self._resources = candidate
+        registration.published = True
+
+    def _restore_roster(
+        self,
+        baseline: list[ResourceRegistration],
+        registration: ResourceRegistration,
+        active_error: BaseException,
+    ) -> None:
+        first_error: BaseException | None = None
+        for _attempt in range(2):
+            try:
+                # Restore roster and publication state at one trace boundary.
+                self._resources = list.copy(baseline); registration.published = False
+                if first_error is not None:
+                    add_error_note(
+                        active_error,
+                        f"{self.label} roster restoration first failed: ",
+                        first_error,
+                    )
+                return
+            except BaseException as restore_error:
+                if first_error is None:
+                    first_error = restore_error
+                else:
+                    add_error_note(
+                        active_error,
+                        f"{self.label} roster restoration also failed: ",
+                        restore_error,
+                    )
+        if first_error is not None:
+            add_error_note(
+                active_error,
+                f"{self.label} roster restoration remained incomplete: ",
+                first_error,
+            )
 
     @staticmethod
     def _registration_matches(
@@ -1094,101 +1146,138 @@ class ResourceCustody:
             else registration.value is resource_value
         )
 
-    def _builtin_roster_snapshot(
-        self,
-        active_error: BaseException,
-    ) -> list[ResourceRegistration] | None:
-        try:
-            return list.copy(self._resources)
-        except BaseException as fallback_error:
-            add_error_note(
-                active_error,
-                f"{self.label} ownership scan fallback also failed: {fallback_error}",
-            )
-            return None
-
     def _cleanup_registration_once(
         self,
         registration: ResourceRegistration,
-        active_error: BaseException | None = None,
-    ) -> None:
-        if registration.cleanup_attempted:
-            return
-        registration.cleanup_attempted = True
-        registration.state = "cleanup_attempted"
-        try:
-            if registration.kind == "descriptor":
-                descriptor = registration.value
-                assert isinstance(descriptor, int)
-                try:
-                    os.close(descriptor)
-                except BaseException as error:
-                    raise DrainError(
-                        f"{self.label} descriptor close failed"
-                    ) from error
-            else:
-                resource_value = registration.value
-                assert not isinstance(resource_value, int)
-                resource_value.close()
-        except BaseException as cleanup_error:
-            if active_error is None:
-                raise
-            add_error_note(
-                active_error,
-                f"{self.label} cleanup also failed: {cleanup_error}",
+    ) -> BaseException | None:
+        if registration.close_started:
+            return None
+        if registration.kind == "descriptor":
+            if not isinstance(registration.value, int):
+                registration.close_started = True
+                registration.close_finished = True
+                registration.close_error = DrainError(
+                    f"{self.label} cleanup descriptor is invalid"
+                )
+                return registration.close_error
+        elif isinstance(registration.value, int):
+            registration.close_started = True
+            registration.close_finished = True
+            registration.close_error = DrainError(
+                f"{self.label} cleanup closeable is invalid"
             )
+            return registration.close_error
+        preinvoke_error: BaseException | None = None
+        while not registration.close_started:
+            try:
+                # Publish syscall entry and invoke it at one trace boundary.
+                if registration.kind == "descriptor":
+                    registration.close_started = True; os.close(registration.value)
+                else:
+                    registration.close_started = True; registration.value.close()
+                registration.close_finished = True
+            except BaseException as cleanup_error:
+                if not registration.close_started:
+                    if preinvoke_error is None:
+                        preinvoke_error = cleanup_error
+                    else:
+                        add_error_note(
+                            preinvoke_error,
+                            f"{self.label} repeated pre-close interruption: ",
+                            cleanup_error,
+                        )
+                    continue
+                registration.close_error = cleanup_error; registration.close_finished = True
+                if preinvoke_error is not None:
+                    add_error_note(
+                        preinvoke_error,
+                        f"{self.label} cleanup also failed: ",
+                        cleanup_error,
+                    )
+                    registration.close_error = preinvoke_error
+                    return preinvoke_error
+                return registration.close_error
+        if preinvoke_error is not None:
+            registration.close_error = preinvoke_error
+        return registration.close_error
 
-    def _rollback_registration(
+    def _settle_registration_once(
         self,
         registration: ResourceRegistration,
-        active_error: BaseException,
-    ) -> None:
-        try:
-            found_indices: list[int] = []
-            for index in range(len(self._resources)):
-                if self._resources[index] is registration:
-                    found_indices.append(index)
-            if len(found_indices) > 1:
+    ) -> BaseException | None:
+        first_error: BaseException | None = None
+        for _attempt in range(2):
+            try:
+                observed_error = self._cleanup_registration_once(registration)
+            except BaseException as escaped_error:
+                observed_error = escaped_error
+            if (
+                registration.close_started
+                and registration.close_error is None
+                and observed_error is not None
+                and isinstance(observed_error.__context__, BaseException)
+            ):
+                registration.close_error = observed_error.__context__
+                registration.close_finished = True
                 add_error_note(
-                    active_error,
-                    f"{self.label} registration rollback retired "
-                    f"{len(found_indices)} aliases of one identity token",
+                    registration.close_error,
+                    f"{self.label} cleanup persistence also failed: ",
+                    observed_error,
                 )
-            for index in reversed(found_indices):
-                self._resources.pop(index)
-            return
-        except BaseException as rollback_error:
-            add_error_note(
-                active_error,
-                f"{self.label} registration rollback also failed: {rollback_error}",
-            )
-        try:
-            replacement: list[ResourceRegistration] = []
-            removed = 0
-            for owned in self._resources:
-                if owned is registration:
-                    removed += 1
-                else:
-                    replacement.append(owned)
-            self._resources = replacement
-            if removed > 1:
+            if registration.close_started and registration.close_error is not None:
+                if observed_error is not None and observed_error is not registration.close_error:
+                    add_error_note(
+                        registration.close_error,
+                        f"{self.label} cleanup settlement also failed: ",
+                        observed_error,
+                    )
+                observed_error = registration.close_error
+            if first_error is None and observed_error is not None:
+                first_error = observed_error
+            elif observed_error is not None and observed_error is not first_error:
+                assert first_error is not None
                 add_error_note(
-                    active_error,
-                    f"{self.label} registration rollback fallback retired "
-                    f"{removed} aliases of one identity token",
+                    first_error,
+                    f"{self.label} cleanup retry also failed: ",
+                    observed_error,
                 )
+            if registration.close_started:
+                return first_error
+        return first_error
+
+    def _cleanup_is_active(self, registration: ResourceRegistration) -> bool:
+        frame = sys._getframe(1)
+        try:
+            while frame is not None:
+                if (
+                    frame.f_code
+                    is ResourceCustody._cleanup_registration_once.__code__
+                    and frame.f_locals.get("self") is self
+                    and frame.f_locals.get("registration") is registration
+                ):
+                    return True
+                frame = frame.f_back
+            return False
+        finally:
+            del frame
+
+    def _record_cleanup_error(self, error: BaseException) -> None:
+        if self._cleanup_error is None:
+            self._cleanup_error = error
             return
-        except BaseException as fallback_error:
+        if self._cleanup_error is not error:
             add_error_note(
-                active_error,
-                f"{self.label} registration rollback fallback also failed: "
-                f"{fallback_error}",
+                self._cleanup_error,
+                f"{self.label} additional cleanup also failed: ",
+                error,
             )
 
+    def _raise_cleanup_error(self, message: str) -> None:
+        if self._cleanup_error is not None:
+            raise DrainError(message) from self._cleanup_error
+
     def close_descriptor(self, descriptor: int) -> None:
-        require(exact_descriptor(descriptor), "descriptor close is invalid")
-        registration = self._owned_registration("descriptor", descriptor)
-        self._close_owned_registration(registration)
+        self.close_descriptors((descriptor,))
 
     def close_descriptors(self, descriptors: tuple[int, ...]) -> None:
         require(
@@ -1201,41 +1290,34 @@ class ResourceCustody:
             self._owned_registration("descriptor", descriptor)
             for descriptor in descriptors
         )
-        self._state = "closing"
-        first_error: BaseException | None = None
+        completed = False
         try:
+            self._state = "closing"
             for registration in registrations:
-                try:
-                    self._cleanup_registration_once(registration)
-                except BaseException as error:
-                    if first_error is None:
-                        first_error = error
-                    else:
-                        add_error_note(
-                            first_error,
-                            f"{self.label} additional descriptor close also failed: "
-                            f"{error}",
-                        )
-        finally:
-            try:
-                for registration in registrations:
-                    if not registration.cleanup_attempted:
-                        continue
+                cleanup_error = self._settle_registration_once(registration)
+                if cleanup_error is not None:
                     try:
-                        self._remove_registration_aliases(registration)
-                    except BaseException as retirement_error:
-                        if first_error is None:
-                            first_error = retirement_error
-                        else:
-                            add_error_note(
-                                first_error,
-                                f"{self.label} descriptor retirement also failed: "
-                                f"{retirement_error}",
-                            )
-            finally:
+                        self._record_cleanup_error(cleanup_error)
+                    except BaseException as record_error:
+                        if self._cleanup_error is None:
+                            self._cleanup_error = cleanup_error
+                        add_error_note(
+                            cleanup_error,
+                            f"{self.label} cleanup error recording also failed: ",
+                            record_error,
+                        )
+            completed = True
+        finally:
+            if completed:
+                retired = {id(registration) for registration in registrations}
+                self._resources = [
+                    owned for owned in self._resources if id(owned) not in retired
+                ]
+                # Roster retirement precedes returning to an OPEN owner.
                 self._state = "open"
-        if first_error is not None:
-            raise DrainError(f"{self.label} descriptor close failed") from first_error
+            else:
+                self._state = "open"
+        self._raise_cleanup_error(f"{self.label} descriptor close failed")
 
     def _owned_registration(
         self,
@@ -1243,15 +1325,16 @@ class ResourceCustody:
         resource_value: int | Closeable,
     ) -> ResourceRegistration:
         require(
-            self._state == "open",
+            self._state == "open" and self._cleanup_error is None,
             f"{self.label} resource mutation is unavailable while custody is "
-            f"{self._state}",
+            f"{self._state} or cleanup is ambiguous",
         )
         matches = [
             owned
             for owned in self._resources
             if self._registration_matches(owned, kind, resource_value)
-            and owned.state == "owned"
+            and owned.published
+            and not owned.close_started
         ]
         require(
             len(matches) == 1,
@@ -1259,52 +1342,13 @@ class ResourceCustody:
         )
         return matches[0]
 
-    def _remove_registration_aliases(
-        self,
-        registration: ResourceRegistration,
-    ) -> None:
-        roster = list.copy(self._resources)
-        self._resources = [
-            owned for owned in roster if owned is not registration
-        ]
-
-    def _close_owned_registration(
-        self,
-        registration: ResourceRegistration,
-    ) -> None:
-        self._state = "closing"
-        cleanup_error: BaseException | None = None
-        try:
-            try:
-                self._cleanup_registration_once(registration)
-            except BaseException as error:
-                cleanup_error = error
-        finally:
-            if registration.cleanup_attempted:
-                try:
-                    self._remove_registration_aliases(registration)
-                except BaseException as roster_error:
-                    if cleanup_error is None:
-                        cleanup_error = roster_error
-                    else:
-                        add_error_note(
-                            cleanup_error,
-                            f"{self.label} registration retirement also failed: "
-                            f"{roster_error}",
-                        )
-            self._state = "open"
-        if cleanup_error is not None:
-            raise cleanup_error
-
     def close(self) -> None:
         if self._state == "closed":
+            self._raise_cleanup_error(f"{self.label} cleanup failed")
             return
-        if self._state == "closing":
-            return
-        self._state = "closing"
-        first_error: BaseException | None = None
         completed = False
         try:
+            self._state = "closing"
             roster = list.copy(self._resources)
             unique: list[ResourceRegistration] = []
             seen_tokens: set[int] = set()
@@ -1314,6 +1358,26 @@ class ResourceCustody:
                 if token_identity in seen_tokens:
                     continue
                 seen_tokens.add(token_identity)
+                if registration.close_started:
+                    if self._cleanup_is_active(registration):
+                        continue
+                    resumed_error = registration.close_error
+                    if resumed_error is None and not registration.close_finished:
+                        resumed_error = DrainError(
+                            f"{self.label} cleanup invocation is ambiguous"
+                        )
+                    if resumed_error is not None:
+                        try:
+                            self._record_cleanup_error(resumed_error)
+                        except BaseException as record_error:
+                            if self._cleanup_error is None:
+                                self._cleanup_error = resumed_error
+                            add_error_note(
+                                resumed_error,
+                                f"{self.label} resumed error recording failed: ",
+                                record_error,
+                            )
+                    continue
                 resource_identity = (
                     registration.kind,
                     int(registration.value)
@@ -1321,38 +1385,51 @@ class ResourceCustody:
                     else id(registration.value),
                 )
                 if resource_identity in seen_resources:
-                    registration.cleanup_attempted = True
-                    registration.state = "cleanup_attempted"
-                    if first_error is None:
-                        first_error = DrainError(
-                            f"{self.label} cleanup roster aliases one resource"
+                    registration.close_started = True
+                    registration.close_finished = True
+                    alias_error = DrainError(
+                        f"{self.label} cleanup roster aliases one resource"
+                    )
+                    try:
+                        self._record_cleanup_error(alias_error)
+                    except BaseException as record_error:
+                        if self._cleanup_error is None:
+                            self._cleanup_error = alias_error
+                        add_error_note(
+                            alias_error,
+                            f"{self.label} alias error recording also failed: ",
+                            record_error,
                         )
                     continue
                 seen_resources.add(resource_identity)
                 unique.append(registration)
             for registration in unique:
-                try:
-                    self._cleanup_registration_once(registration)
-                except BaseException as error:
-                    if first_error is None:
-                        first_error = error
-                    else:
+                cleanup_error = self._settle_registration_once(registration)
+                if cleanup_error is not None:
+                    try:
+                        self._record_cleanup_error(cleanup_error)
+                    except BaseException as record_error:
+                        if self._cleanup_error is None:
+                            self._cleanup_error = cleanup_error
                         add_error_note(
-                            first_error,
-                            f"{self.label} additional cleanup also failed: {error}",
+                            cleanup_error,
+                            f"{self.label} cleanup error recording also failed: ",
+                            record_error,
                         )
             completed = True
         finally:
             if completed:
-                self._resources = []
-                self._state = "closed"
+                # An interrupted line leaves CLOSING resumable with the old roster.
+                self._resources = []; self._state = "closed"
             else:
                 self._state = "open"
-        if first_error is not None:
-            raise DrainError(f"{self.label} cleanup failed") from first_error
+        self._raise_cleanup_error(f"{self.label} cleanup failed")
 
     def __enter__(self) -> "ResourceCustody":
-        require(self._state == "open", f"{self.label} custody is not open")
+        require(
+            self._state == "open" and self._cleanup_error is None,
+            f"{self.label} custody is not safely open",
+        )
         return self
 
     def __exit__(
@@ -1361,38 +1438,74 @@ class ResourceCustody:
         active_error: BaseException | None,
         _traceback: object,
     ) -> None:
-        try:
-            self.close()
-        except BaseException as cleanup_error:
+        cleanup_error: BaseException | None = None
+        for _attempt in range(2):
             try:
                 self.close()
-            except BaseException as retry_error:
+                break
+            except BaseException as observed_error:
+                if cleanup_error is None:
+                    cleanup_error = observed_error
+                else:
+                    add_error_note(
+                        cleanup_error,
+                        f"{self.label} cleanup retry also failed: ",
+                        observed_error,
+                    )
+        if self._cleanup_error is not None:
+            persisted = DrainError(f"{self.label} cleanup failed")
+            persisted.__cause__ = self._cleanup_error
+            if cleanup_error is not None:
                 add_error_note(
+                    persisted,
+                    f"{self.label} settlement also failed: ",
                     cleanup_error,
-                    f"{self.label} cleanup retry also failed: {retry_error}",
                 )
+            cleanup_error = persisted
+        if cleanup_error is not None:
             if active_error is None:
-                raise
+                raise cleanup_error
             add_error_note(
                 active_error,
-                f"{self.label} cleanup also failed: {cleanup_error}",
+                f"{self.label} cleanup also failed: ",
+                cleanup_error,
             )
 
-    def _close_after_error(self, active_error: BaseException) -> None:
-        try:
-            self.close()
-        except BaseException as cleanup_error:
+    def _close_after_error(
+        self,
+        active_error: BaseException,
+    ) -> BaseException | None:
+        cleanup_error: BaseException | None = None
+        for _attempt in range(2):
             try:
                 self.close()
-            except BaseException as retry_error:
+                break
+            except BaseException as observed_error:
+                if cleanup_error is None:
+                    cleanup_error = observed_error
+                else:
+                    add_error_note(
+                        cleanup_error,
+                        f"{self.label} cleanup retry also failed: ",
+                        observed_error,
+                    )
+        if self._cleanup_error is not None:
+            persisted = DrainError(f"{self.label} cleanup failed")
+            persisted.__cause__ = self._cleanup_error
+            if cleanup_error is not None:
                 add_error_note(
+                    persisted,
+                    f"{self.label} settlement also failed: ",
                     cleanup_error,
-                    f"{self.label} cleanup retry also failed: {retry_error}",
                 )
+            cleanup_error = persisted
+        if cleanup_error is not None:
             add_error_note(
                 active_error,
-                f"{self.label} cleanup also failed: {cleanup_error}",
+                f"{self.label} cleanup also failed: ",
+                cleanup_error,
             )
+        return cleanup_error
 
 
 def read_path_bytes(path: Path, *, maximum: int) -> bytes:
@@ -1535,12 +1648,14 @@ def capture_process(candidate: Mapping[str, object]) -> CapturedProcess:
     require(hasattr(os, "pidfd_open"), "pidfd custody is unavailable")
     custody = ResourceCustody(label="captured process")
     try:
-        pidfd = custody.pidfd_open(pid, 0)
-    except OSError as error:
-        if error.errno == errno.ESRCH:
-            raise ProcessUnavailable(f"candidate process is absent: {pid}") from error
-        raise
-    try:
+        try:
+            pidfd = custody.pidfd_open(pid, 0)
+        except OSError as error:
+            if error.errno == errno.ESRCH:
+                raise ProcessUnavailable(
+                    f"candidate process is absent: {pid}"
+                ) from error
+            raise
         require(not pidfd_exited(pidfd), f"candidate process exited: {pid}")
         process_fd = custody.open(
             Path("/proc") / str(pid),
@@ -1656,7 +1771,11 @@ def capture_process(candidate: Mapping[str, object]) -> CapturedProcess:
         )
     except FileNotFoundError as error:
         translated = ProcessUnavailable(f"candidate process disappeared: {pid}")
-        custody._close_after_error(translated)
+        cleanup_error = custody._close_after_error(translated)
+        if cleanup_error is not None:
+            raise DrainError(
+                f"candidate process cleanup is ambiguous: {pid}"
+            ) from cleanup_error
         raise translated from error
     except BaseException as error:
         custody._close_after_error(error)
@@ -1816,9 +1935,9 @@ def current_task_namespace_identity(
 
 
 def open_current_task_namespace(
+    custody: ResourceCustody,
     task: CapturedTask,
     entry: str,
-    custody: ResourceCustody,
 ) -> tuple[NamespaceIdentity, int]:
     kind = TASK_NAMESPACE_ENTRY_KINDS.get(entry)
     require(kind is not None, "task namespace entry is invalid")
@@ -2053,21 +2172,20 @@ def is_proven_full_root_view(root_link: str, root_record: MountRecord) -> bool:
 
 
 def _task_mount_view(task: CapturedTask) -> MountNamespaceView:
-    custody = ResourceCustody(label="process task mount view")
-    try:
-        first_link = os.readlink("root", dir_fd=task.process_fd)
-        first_stat = os.stat("root", dir_fd=task.process_fd)
-        root_fd = custody.open(
-            "root",
-            os.O_PATH | os.O_DIRECTORY,
-            dir_fd=task.process_fd,
-        )
-    except (FileNotFoundError, ProcessLookupError) as error:
-        raise ManualRecoveryRequired(
-            "process task root view is absent: "
-            f"{task.thread_group_id}/{task.task_id}"
-        ) from error
-    with custody:
+    with ResourceCustody(label="process task mount view") as custody:
+        try:
+            first_link = os.readlink("root", dir_fd=task.process_fd)
+            first_stat = os.stat("root", dir_fd=task.process_fd)
+            root_fd = custody.open(
+                "root",
+                os.O_PATH | os.O_DIRECTORY,
+                dir_fd=task.process_fd,
+            )
+        except (FileNotFoundError, ProcessLookupError) as error:
+            raise ManualRecoveryRequired(
+                "process task root view is absent: "
+                f"{task.thread_group_id}/{task.task_id}"
+            ) from error
         bound = os.fstat(root_fd)
         root_mount_id = fd_mount_id(root_fd)
         raw = read_at(task.process_fd, "mountinfo", maximum=16 * 1024 * 1024)
@@ -2504,9 +2622,9 @@ def _held_task_namespace_observations(
             namespaces: dict[str, NamespaceIdentity] = {}
             for entry, _kind in TASK_NAMESPACE_ENTRIES:
                 identity, namespace_fd = open_current_task_namespace(
+                    destination_custody,
                     task,
                     entry,
-                    destination_custody,
                 )
                 retained = admit_held_namespace_descriptor(
                     destination_custody,
@@ -3095,9 +3213,8 @@ def socket_inode_owners(inodes: set[int]) -> dict[int, tuple[int, ...]]:
             task = capture_task(task_custody, thread_group_id, task_id)
             if task is None:
                 continue
-            fd_custody = ResourceCustody(label="process task socket FD table")
             try:
-                fd_root = fd_custody.open(
+                fd_root = task_custody.open(
                     "fd",
                     os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
                     dir_fd=task.process_fd,
@@ -3114,44 +3231,43 @@ def socket_inode_owners(inodes: set[int]) -> dict[int, tuple[int, ...]]:
                     "process task FD table is unreadable: "
                     f"{thread_group_id}/{task_id}"
                 ) from error
-            with fd_custody:
-                for name in tuple(os.listdir(fd_root)):
-                    try:
-                        observed = os.stat(name, dir_fd=fd_root)
-                        target = os.readlink(name, dir_fd=fd_root)
-                    except (FileNotFoundError, ProcessLookupError):
-                        continue
-                    except PermissionError as error:
-                        raise ManualRecoveryRequired(
-                            "process task socket FD is unreadable: "
-                            f"{thread_group_id}/{task_id}/{name}"
-                        ) from error
-                    match = re.fullmatch(r"socket:\[([1-9][0-9]*)\]", target)
-                    if match is not None and int(match.group(1)) in owners:
-                        owners[int(match.group(1))].add(thread_group_id)
-                    try:
-                        stable = os.stat(name, dir_fd=fd_root)
-                    except (FileNotFoundError, ProcessLookupError):
-                        if pidfd_exited(task.pidfd):
-                            break
-                        raise ManualRecoveryRequired(
-                            "process task socket FD changed: "
-                            f"{thread_group_id}/{task_id}/{name}"
-                        )
-                    require(
-                        (
-                            stable.st_dev,
-                            stable.st_ino,
-                            stat.S_IFMT(stable.st_mode),
-                        )
-                        == (
-                            observed.st_dev,
-                            observed.st_ino,
-                            stat.S_IFMT(observed.st_mode),
-                        ),
+            for name in tuple(os.listdir(fd_root)):
+                try:
+                    observed = os.stat(name, dir_fd=fd_root)
+                    target = os.readlink(name, dir_fd=fd_root)
+                except (FileNotFoundError, ProcessLookupError):
+                    continue
+                except PermissionError as error:
+                    raise ManualRecoveryRequired(
+                        "process task socket FD is unreadable: "
+                        f"{thread_group_id}/{task_id}/{name}"
+                    ) from error
+                match = re.fullmatch(r"socket:\[([1-9][0-9]*)\]", target)
+                if match is not None and int(match.group(1)) in owners:
+                    owners[int(match.group(1))].add(thread_group_id)
+                try:
+                    stable = os.stat(name, dir_fd=fd_root)
+                except (FileNotFoundError, ProcessLookupError):
+                    if pidfd_exited(task.pidfd):
+                        break
+                    raise ManualRecoveryRequired(
                         "process task socket FD changed: "
-                        f"{thread_group_id}/{task_id}/{name}",
+                        f"{thread_group_id}/{task_id}/{name}"
                     )
+                require(
+                    (
+                        stable.st_dev,
+                        stable.st_ino,
+                        stat.S_IFMT(stable.st_mode),
+                    )
+                    == (
+                        observed.st_dev,
+                        observed.st_ino,
+                        stat.S_IFMT(observed.st_mode),
+                    ),
+                    "process task socket FD changed: "
+                    f"{thread_group_id}/{task_id}/{name}",
+                )
             require(
                 not pidfd_exited(task.pidfd),
                 f"process task exited during socket ownership proof: {task_id}",
@@ -3582,9 +3698,8 @@ def process_reference_scan(
                     relations.add(label)
                 if (observed.st_dev, observed.st_ino) in runtime_inodes:
                     relations.add(f"{label}Inode")
-            fd_custody = ResourceCustody(label="process reference FD table")
             try:
-                fd_directory = fd_custody.open(
+                fd_directory = task_custody.open(
                     "fd",
                     os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
                     dir_fd=task.process_fd,
@@ -3604,7 +3719,7 @@ def process_reference_scan(
                     f"{thread_group_id}/{actual_task_id}"
                 ) from error
             if fd_directory is not None:
-                with fd_custody:
+                try:
                     for fd_name in tuple(os.listdir(fd_directory)):
                         try:
                             observed = os.stat(fd_name, dir_fd=fd_directory)
@@ -3699,6 +3814,8 @@ def process_reference_scan(
                             "live process task FD edge changed: "
                             f"{thread_group_id}/{actual_task_id}",
                         )
+                finally:
+                    task_custody.close_descriptor(fd_directory)
             try:
                 maps = read_at(task.process_fd, "maps", maximum=16 * 1024 * 1024)
             except (FileNotFoundError, ProcessLookupError):
@@ -4198,6 +4315,76 @@ def runtime_tree_snapshot() -> dict[str, object]:
     }
 
 
+def bound_regular_tree(
+    root: Path,
+    *,
+    maximum_depth: int,
+    maximum_entries: int,
+) -> tuple[Path, ...]:
+    require(
+        maximum_depth > 0 and maximum_entries > 0,
+        "bound tree capacity is invalid",
+    )
+    result: list[Path] = []
+    observed_entries = 0
+
+    def scan(directory_fd: int, relative: tuple[str, ...], depth: int) -> None:
+        nonlocal observed_entries
+        names = tuple(sorted(os.listdir(directory_fd)))
+        observed_entries += len(names)
+        require(
+            observed_entries <= maximum_entries,
+            f"bound tree entry capacity is exceeded: {root}",
+        )
+        for name in names:
+            observed = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            parts = (*relative, name)
+            if stat.S_ISREG(observed.st_mode):
+                result.append(root.joinpath(*parts))
+                continue
+            if not stat.S_ISDIR(observed.st_mode):
+                continue
+            require(depth < maximum_depth, f"bound tree is too deep: {root}")
+            with ResourceCustody(
+                label=f"bound tree directory {root.joinpath(*parts)}"
+            ) as custody:
+                child_fd = custody.open(
+                    name,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=directory_fd,
+                )
+                bound = os.fstat(child_fd)
+                literal = os.stat(
+                    name,
+                    dir_fd=directory_fd,
+                    follow_symlinks=False,
+                )
+                require(
+                    stat.S_ISDIR(bound.st_mode)
+                    and (bound.st_dev, bound.st_ino)
+                    == (observed.st_dev, observed.st_ino)
+                    == (literal.st_dev, literal.st_ino),
+                    f"bound tree directory changed: {root.joinpath(*parts)}",
+                )
+                scan(child_fd, parts, depth + 1)
+
+    with ResourceCustody(label=f"bound tree root {root}") as custody:
+        root_fd = custody.open(
+            root,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        )
+        observed = os.fstat(root_fd)
+        literal = os.stat(root, follow_symlinks=False)
+        require(
+            stat.S_ISDIR(observed.st_mode)
+            and (observed.st_dev, observed.st_ino)
+            == (literal.st_dev, literal.st_ino),
+            f"bound tree root changed: {root}",
+        )
+        scan(root_fd, (), 0)
+    return tuple(result)
+
+
 def registry_inventory(
     registry_storage: Path = REGISTRY_STORAGE,
 ) -> dict[str, object]:
@@ -4206,10 +4393,21 @@ def registry_inventory(
     directory_identity(repositories, expected_uid=0, expected_gid=0, expected_modes={0o755})
     directory_identity(blobs, expected_uid=0, expected_gid=0, expected_modes={0o755})
     revisions: dict[str, set[str]] = {}
-    for link in sorted(repositories.glob("**/_manifests/revisions/sha256/*/link")):
+    repository_files = bound_regular_tree(
+        repositories,
+        maximum_depth=64,
+        maximum_entries=2_000_000,
+    )
+    for link in repository_files:
         relative = link.relative_to(repositories)
         parts = relative.parts
-        marker = parts.index("_manifests")
+        if len(parts) < 6 or parts[-5:-2] != (
+            "_manifests",
+            "revisions",
+            "sha256",
+        ) or parts[-1] != "link":
+            continue
+        marker = len(parts) - 5
         repository = "/".join(parts[:marker])
         digest = parts[marker + 3]
         require(SHA256_RE.fullmatch(digest) is not None, "registry revision digest is invalid")
@@ -4224,7 +4422,15 @@ def registry_inventory(
     for repository, required in EXPECTED_REGISTRY_MANIFESTS.items():
         manual(required <= revisions.get(repository, set()), f"required registry manifest is absent: {repository}")
     blob_rows: list[dict[str, object]] = []
-    for data in sorted(blobs.glob("*/*/data")):
+    blob_files = bound_regular_tree(
+        blobs,
+        maximum_depth=3,
+        maximum_entries=2_000_000,
+    )
+    for data in blob_files:
+        relative = data.relative_to(blobs)
+        if len(relative.parts) != 3 or relative.parts[-1] != "data":
+            continue
         digest = data.parent.name
         require(SHA256_RE.fullmatch(digest) is not None, "registry blob path is invalid")
         actual, size, observed = hash_regular(data, maximum=2 * 1024**3)
@@ -5414,8 +5620,8 @@ def hold_related_process_cutoff(
                 except BaseException as reproof_error:
                     add_error_note(
                         action_error,
-                        "post-action related-process reproof also failed: "
-                        f"{reproof_error}",
+                        "post-action related-process reproof also failed: ",
+                        reproof_error,
                     )
             raise
         if revalidate_after:
@@ -5760,8 +5966,8 @@ def hold_recorded_persistent_roots(
             except BaseException as reproof_error:
                 add_error_note(
                     action_error,
-                    "post-action persistent-root reproof also failed: "
-                    f"{reproof_error}",
+                    "post-action persistent-root reproof also failed: ",
+                    reproof_error,
                 )
             raise
         require_recorded_persistent_root_bindings(control, owner.state_fd, roots)
@@ -7781,8 +7987,8 @@ def archive_receipt(control: ControlAuthority) -> dict[str, object]:
             except BaseException as reproof_error:
                 add_error_note(
                     action_error,
-                    "post-action registry inventory reproof also failed: "
-                    f"{reproof_error}",
+                    "post-action registry inventory reproof also failed: ",
+                    reproof_error,
                 )
             raise
         registry_inventory_matches(control.control, persistent_roots)

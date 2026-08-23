@@ -221,6 +221,54 @@ def acquire_test_descriptors(
     return tuple(acquire_test_descriptor(custody, value) for value in descriptors)
 
 
+@contextlib.contextmanager
+def interrupt_once_on_line(
+    code: object,
+    line: int,
+    message: str,
+):  # type: ignore[no-untyped-def]
+    """Inject one asynchronous-style interruption at an AST-derived boundary."""
+
+    previous = sys.gettrace()
+    fired = [False]
+
+    def trace(frame: object, event: str, _argument: object):  # type: ignore[no-untyped-def]
+        if (
+            not fired[0]
+            and event == "line"
+            and getattr(frame, "f_code") is code
+            and getattr(frame, "f_lineno") == line
+        ):
+            fired[0] = True
+            sys.settrace(previous)
+            raise KeyboardInterrupt(message)
+        return trace
+
+    sys.settrace(trace)
+    try:
+        yield fired
+    finally:
+        sys.settrace(previous)
+
+
+def class_method_ast(
+    source: str,
+    class_name: str,
+    method_name: str,
+) -> ast.FunctionDef:
+    tree = ast.parse(source)
+    selected_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == class_name
+    )
+    return next(
+        node
+        for node in selected_class.body
+        if isinstance(node, ast.FunctionDef) and node.name == method_name
+    )
+
+
 class ReceiptContractTest(unittest.TestCase):
     def test_exact_v3_receipt_passes(self) -> None:
         parsed = MODULE.parse_legacy_receipt(encoded_receipt())
@@ -340,6 +388,33 @@ class ProcessAuthorityTest(unittest.TestCase):
         ) as close, self.assertRaisesRegex(RuntimeError, "capture failed"):
             MODULE.capture_process(candidate)
         self.assertEqual(close.call_args_list, [mock.call(31), mock.call(30)])
+
+    def test_disappeared_process_with_ambiguous_cleanup_is_not_reported_absent(self) -> None:
+        candidate = MODULE.EXPECTED_PROCESS_CANDIDATES["dockerd"]
+        with mock.patch.object(
+            MODULE.os,
+            "pidfd_open",
+            return_value=30,
+        ), mock.patch.object(
+            MODULE,
+            "pidfd_exited",
+            return_value=False,
+        ), mock.patch.object(
+            MODULE.os,
+            "open",
+            side_effect=FileNotFoundError("process disappeared"),
+        ), mock.patch.object(
+            MODULE.os,
+            "close",
+            side_effect=OSError("pidfd close is ambiguous"),
+        ) as close, self.assertRaisesRegex(
+            MODULE.DrainError,
+            "cleanup is ambiguous",
+        ) as raised:
+            MODULE.capture_process(candidate)
+        close.assert_called_once_with(30)
+        self.assertNotIsInstance(raised.exception, MODULE.ProcessUnavailable)
+        self.assertIsInstance(raised.exception.__cause__, MODULE.DrainError)
 
     def test_stable_process_field_substitution_rejects(self) -> None:
         parsed = MODULE.parse_legacy_receipt(encoded_receipt())["dockerd"]
@@ -2297,204 +2372,264 @@ class ProcessUniverseTest(unittest.TestCase):
         ), self.assertRaisesRegex(MODULE.DrainError, "cleanup failed"):
             custody.__exit__(None, None, None)
 
-    def test_resource_registration_failure_closes_current_and_prior_owner(self) -> None:
-        class FailSecondAppend(list[object]):
-            def __init__(self) -> None:
-                super().__init__()
-                self.calls = 0
+    def test_resource_acquisition_copy_swap_ignores_hostile_private_roster(self) -> None:
+        prior = MODULE.ResourceRegistration("descriptor", 39)
+        prior.published = True
 
-            def append(self, value: object) -> None:
-                self.calls += 1
-                if self.calls == 2:
-                    raise MemoryError("registration failed")
-                super().append(value)
+        class SubstitutingRoster(list[object]):
+            def copy(self) -> object:
+                raise AssertionError("virtual copy must not control publication")
 
-        custody = MODULE.ResourceCustody(label="registration")
-        custody._resources = FailSecondAppend()  # type: ignore[assignment]
-        with mock.patch.object(MODULE.os, "open", side_effect=(40, 41)), mock.patch.object(
+            def append(self, _value: object) -> None:
+                raise AssertionError("private roster append must not be used")
+
+            def __iter__(self):  # type: ignore[no-untyped-def]
+                raise AssertionError("private roster scan must not be used")
+
+            def __getitem__(self, _index: object) -> object:
+                raise AssertionError("private roster token substitution must not run")
+
+        custody = MODULE.ResourceCustody(label="generation publication")
+        hostile = SubstitutingRoster([prior])
+        custody._resources = hostile  # type: ignore[assignment]
+        with mock.patch.object(MODULE.os, "open", return_value=40), mock.patch.object(
             MODULE.os,
             "close",
         ) as close:
-            custody.open("first", os.O_RDONLY)
-            with self.assertRaisesRegex(MemoryError, "registration failed"):
-                custody.open("second", os.O_RDONLY)
-            self.assertEqual(close.call_args_list, [mock.call(41)])
+            self.assertEqual(custody.open("descriptor", os.O_RDONLY), 40)
+            self.assertIs(type(custody._resources), list)
+            self.assertEqual(len(custody._resources), 2)
+            self.assertIs(custody._resources[0], prior)
+            fresh = custody._resources[1]
+            self.assertIsNot(fresh, prior)
+            self.assertEqual(fresh.value, 40)
+            self.assertTrue(fresh.published)
+            self.assertEqual(hostile, [prior])
             custody.close()
-            self.assertEqual(
-                close.call_args_list,
-                [mock.call(41), mock.call(40)],
-            )
+        self.assertEqual(close.call_args_list, [mock.call(40), mock.call(39)])
 
-    def test_resource_registration_preflight_failure_closes_incoming_owner(self) -> None:
-        class ExplodingOwnershipScan(list[object]):
-            def __iter__(self) -> object:
-                raise MemoryError("ownership scan failed")
-
-        custody = MODULE.ResourceCustody(label="registration")
-        custody._resources = ExplodingOwnershipScan()  # type: ignore[assignment]
-        with mock.patch.object(
-            MODULE.os,
-            "open",
-            return_value=40,
-        ), mock.patch.object(
-            MODULE.os,
-            "close",
-        ) as close, self.assertRaisesRegex(
-            MemoryError,
-            "ownership scan failed",
-        ):
-            custody.open("ignored", MODULE.os.O_RDONLY)
-        close.assert_called_once_with(40)
-
-        resource_value = mock.Mock()
-        custody = MODULE.ResourceCustody(label="registration")
-        custody._resources = ExplodingOwnershipScan()  # type: ignore[assignment]
-        with mock.patch.object(
-            MODULE.socket,
-            "socket",
-            return_value=resource_value,
-        ), self.assertRaisesRegex(MemoryError, "ownership scan failed"):
-            custody.socket()
-        resource_value.close.assert_called_once_with()
-
-    def test_post_commit_append_failure_rolls_back_before_cleanup(self) -> None:
-        class AppendThenRaise(list[object]):
-            def append(self, value: object) -> None:
-                super().append(value)
-                raise KeyboardInterrupt("append committed then interrupted")
-
-        custody = MODULE.ResourceCustody(label="registration")
-        custody._resources = AppendThenRaise()  # type: ignore[assignment]
-        with mock.patch.object(MODULE.os, "open", return_value=40), mock.patch.object(
-            MODULE.os,
-            "close",
-        ) as close, self.assertRaisesRegex(
-            KeyboardInterrupt,
-            "append committed then interrupted",
-        ):
-            custody.open("descriptor", os.O_RDONLY)
-        close.assert_called_once_with(40)
-        self.assertEqual(custody._resources, [])
-        custody.close()
-        close.assert_called_once_with(40)
-
-        resource_value = mock.Mock()
-        custody = MODULE.ResourceCustody(label="registration")
-        custody._resources = AppendThenRaise()  # type: ignore[assignment]
-        with mock.patch.object(
-            MODULE.socket,
-            "socket",
-            return_value=resource_value,
-        ), self.assertRaisesRegex(
-            KeyboardInterrupt,
-            "append committed then interrupted",
-        ):
-            custody.socket()
-        resource_value.close.assert_called_once_with()
-        self.assertEqual(custody._resources, [])
-
-    def test_registration_rollback_pop_failure_uses_identity_fallback(self) -> None:
-        class AppendThenRaiseAndFailPop(list[object]):
-            def append(self, value: object) -> None:
-                super().append(value)
-                raise KeyboardInterrupt("append committed then interrupted")
-
-            def pop(self, index: int = -1) -> object:
-                raise MemoryError(f"rollback pop failed at {index}")
-
-        custody = MODULE.ResourceCustody(label="registration")
-        custody._resources = AppendThenRaiseAndFailPop()  # type: ignore[assignment]
-        with mock.patch.object(MODULE.os, "open", return_value=40), mock.patch.object(
-            MODULE.os,
-            "close",
-        ) as close, self.assertRaisesRegex(
-            KeyboardInterrupt,
-            "append committed then interrupted",
-        ) as raised:
-            custody.open("descriptor", os.O_RDONLY)
-        self.assertIn("rollback pop failed", "\n".join(raised.exception.__notes__))
-        close.assert_called_once_with(40)
-        self.assertEqual(custody._resources, [])
-
-    def test_registration_rollback_retires_duplicate_identity_aliases_once(self) -> None:
-        class AppendTwiceThenRaise(list[object]):
-            def append(self, value: object) -> None:
-                super().append(value)
-                super().append(value)
-                raise KeyboardInterrupt("append duplicated then interrupted")
-
-        custody = MODULE.ResourceCustody(label="registration")
-        custody._resources = AppendTwiceThenRaise()  # type: ignore[assignment]
-        with mock.patch.object(MODULE.os, "open", return_value=40), mock.patch.object(
-            MODULE.os,
-            "close",
-        ) as close, self.assertRaisesRegex(
-            KeyboardInterrupt,
-            "append duplicated then interrupted",
-        ) as raised:
-            custody.open("descriptor", os.O_RDONLY)
-        self.assertIn(
-            "retired 2 aliases of one identity token",
-            "\n".join(raised.exception.__notes__),
+    def test_resource_acquisition_has_no_roster_scan_or_rollback_fallback(self) -> None:
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        custody = next(
+            node
+            for node in ast.parse(source).body
+            if isinstance(node, ast.ClassDef) and node.name == "ResourceCustody"
         )
-        close.assert_called_once_with(40)
-        self.assertEqual(custody._resources, [])
-        custody.close()
-        close.assert_called_once_with(40)
+        methods = {
+            node.name
+            for node in custody.body
+            if isinstance(node, ast.FunctionDef)
+        }
+        self.assertFalse(
+            methods
+            & {
+                "_register",
+                "_rollback",
+                "_rollback_registration",
+                "_builtin_roster_snapshot",
+            }
+        )
+        acquire = next(
+            node
+            for node in custody.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_acquire"
+        )
+        publish = next(
+            node
+            for node in custody.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_publish_registration"
+        )
+        self.assertFalse(
+            any(isinstance(node, (ast.ListComp, ast.GeneratorExp)) for node in ast.walk(acquire))
+        )
+        self.assertFalse(
+            any(isinstance(node, (ast.ListComp, ast.GeneratorExp)) for node in ast.walk(publish))
+        )
 
-    def test_registration_rejects_silent_duplicate_or_absent_identity(self) -> None:
-        class DuplicateAppend(list[object]):
-            def append(self, value: object) -> None:
-                super().append(value)
-                super().append(value)
+    def test_resource_acquisition_generation_boundary_matrix_is_failure_total(self) -> None:
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        acquire = class_method_ast(source, "ResourceCustody", "_acquire")
+        publish = class_method_ast(source, "ResourceCustody", "_publish_registration")
+        acquire_registration = next(
+            node
+            for node in ast.walk(acquire)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "registration"
+                for target in node.targets
+            )
+            and isinstance(node.value, ast.Call)
+        )
+        acquire_publish = next(
+            node
+            for node in ast.walk(acquire)
+            if isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and node.value.func.attr == "_publish_registration"
+        )
+        acquire_return = next(
+            node
+            for node in ast.walk(acquire)
+            if isinstance(node, ast.Return) and isinstance(node.value, ast.Name)
+        )
+        candidate_assignment = next(
+            node
+            for node in ast.walk(publish)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "candidate"
+                for target in node.targets
+            )
+        )
+        candidate_append = next(
+            node
+            for node in ast.walk(publish)
+            if isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and node.value.func.attr == "append"
+        )
+        roster_swap = next(
+            node
+            for node in ast.walk(publish)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Attribute) and target.attr == "_resources"
+                for target in node.targets
+            )
+        )
+        published = next(
+            node
+            for node in ast.walk(publish)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Attribute) and target.attr == "published"
+                for target in node.targets
+            )
+        )
+        cases = (
+            (
+                "after_syscall_before_token",
+                MODULE.ResourceCustody._acquire.__code__,
+                acquire_registration.lineno,
+            ),
+            (
+                "after_token_before_publication",
+                MODULE.ResourceCustody._acquire.__code__,
+                acquire_publish.lineno,
+            ),
+            (
+                "before_candidate_copy",
+                MODULE.ResourceCustody._publish_registration.__code__,
+                candidate_assignment.lineno,
+            ),
+            (
+                "before_candidate_append",
+                MODULE.ResourceCustody._publish_registration.__code__,
+                candidate_append.lineno,
+            ),
+            (
+                "before_roster_swap",
+                MODULE.ResourceCustody._publish_registration.__code__,
+                roster_swap.lineno,
+            ),
+            (
+                "after_swap_before_published",
+                MODULE.ResourceCustody._publish_registration.__code__,
+                published.lineno,
+            ),
+            (
+                "after_publication_before_return",
+                MODULE.ResourceCustody._acquire.__code__,
+                acquire_return.lineno,
+            ),
+        )
+        for label, code, line in cases:
+            prior = MODULE.ResourceRegistration("descriptor", 39)
+            prior.published = True
+            custody = MODULE.ResourceCustody(label=label)
+            custody._resources = [prior]
+            with self.subTest(boundary=label), mock.patch.object(
+                MODULE.os,
+                "open",
+                return_value=40,
+            ), mock.patch.object(MODULE.os, "close") as close, self.assertRaisesRegex(
+                KeyboardInterrupt,
+                label,
+            ):
+                with interrupt_once_on_line(code, line, label) as fired:
+                    custody.open("descriptor", os.O_RDONLY)
+            self.assertTrue(fired[0])
+            close.assert_called_once_with(40)
+            self.assertEqual(custody._resources, [prior])
+            self.assertTrue(prior.published)
 
-        class DroppedAppend(list[object]):
-            def append(self, _value: object) -> None:
-                return
-
-        for roster in (DuplicateAppend(), DroppedAppend()):
-            custody = MODULE.ResourceCustody(label="registration")
-            custody._resources = roster  # type: ignore[assignment]
-            with self.subTest(roster=type(roster).__name__), mock.patch.object(
+    def test_resource_roster_restore_boundary_matrix_preserves_primary(self) -> None:
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        restore = class_method_ast(source, "ResourceCustody", "_restore_roster")
+        restore_assignment = next(
+            node
+            for node in ast.walk(restore)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Attribute) and target.attr == "_resources"
+                for target in node.targets
+            )
+        )
+        restore_return = next(
+            node
+            for node in ast.walk(restore)
+            if isinstance(node, ast.Return) and node.lineno > restore_assignment.lineno
+        )
+        after_restore = min(
+            (
+                node
+                for node in ast.walk(restore)
+                if isinstance(node, ast.If)
+                and isinstance(node.test, ast.Compare)
+                and any(
+                    isinstance(value, ast.Name) and value.id == "first_error"
+                    for value in ast.walk(node.test)
+                )
+                and restore_assignment.lineno < node.lineno < restore_return.lineno
+            ),
+            key=lambda node: node.lineno,
+        )
+        for label, line in (
+            ("before_restore_swap", restore_assignment.lineno),
+            ("after_restore_swap", after_restore.lineno),
+            ("before_restore_return", restore_return.lineno),
+        ):
+            prior = MODULE.ResourceRegistration("descriptor", 39)
+            prior.published = True
+            custody = MODULE.ResourceCustody(label=label)
+            custody._resources = [prior]
+            primary = RuntimeError("publication remains primary")
+            with self.subTest(boundary=label), mock.patch.object(
                 MODULE.os,
                 "open",
                 return_value=40,
             ), mock.patch.object(
-                MODULE.os,
-                "close",
-            ) as close, self.assertRaisesRegex(
-                MODULE.DrainError,
-                "registration token is absent or duplicated",
-            ):
-                custody.open("descriptor", os.O_RDONLY)
+                custody,
+                "_publish_registration",
+                side_effect=primary,
+            ), mock.patch.object(MODULE.os, "close") as close, self.assertRaisesRegex(
+                RuntimeError,
+                "publication remains primary",
+            ) as raised:
+                with interrupt_once_on_line(
+                    MODULE.ResourceCustody._restore_roster.__code__,
+                    line,
+                    label,
+                ) as fired:
+                    custody.open("descriptor", os.O_RDONLY)
+            self.assertTrue(fired[0])
+            self.assertIs(raised.exception, primary)
+            self.assertIn(label, "\n".join(raised.exception.__notes__))
             close.assert_called_once_with(40)
-            self.assertEqual(custody._resources, [])
-
-    def test_registration_duplicate_alias_pop_failure_falls_back_once(self) -> None:
-        class AppendTwiceThenRaiseAndFailPop(list[object]):
-            def append(self, value: object) -> None:
-                super().append(value)
-                super().append(value)
-                raise KeyboardInterrupt("append duplicated then interrupted")
-
-            def pop(self, index: int = -1) -> object:
-                raise MemoryError(f"rollback pop failed at {index}")
-
-        custody = MODULE.ResourceCustody(label="registration")
-        custody._resources = AppendTwiceThenRaiseAndFailPop()  # type: ignore[assignment]
-        with mock.patch.object(MODULE.os, "open", return_value=40), mock.patch.object(
-            MODULE.os,
-            "close",
-        ) as close, self.assertRaisesRegex(
-            KeyboardInterrupt,
-            "append duplicated then interrupted",
-        ) as raised:
-            custody.open("descriptor", os.O_RDONLY)
-        notes = "\n".join(raised.exception.__notes__)
-        self.assertIn("rollback pop failed", notes)
-        self.assertIn("fallback retired 2 aliases", notes)
-        close.assert_called_once_with(40)
-        self.assertEqual(custody._resources, [])
+            self.assertEqual(custody._resources, [prior])
 
     def test_bool_alias_does_not_hide_the_exact_integer_descriptor(self) -> None:
         custody = MODULE.ResourceCustody(label="exact descriptor roster")
@@ -2531,110 +2666,421 @@ class ProcessUniverseTest(unittest.TestCase):
         self.assertIs(type(closed_value), HostileDescriptor)
         self.assertEqual(int(closed_value), 40)
 
-    def test_pop_removes_then_raises_and_fallback_failure_still_closes_once(self) -> None:
-        class PopRemovesThenRaises(list[object]):
-            fallback = False
-
-            def append(self, value: object) -> None:
-                super().append(value)
-                raise KeyboardInterrupt("append committed then interrupted")
-
-            def pop(self, index: int = -1) -> object:
-                value = super().pop(index)
-                self.fallback = True
-                raise MemoryError(f"rollback pop failed after removing {value!r}")
-
-            def __iter__(self):  # type: ignore[no-untyped-def]
-                if self.fallback:
-                    raise MemoryError("rollback fallback iteration failed")
-                return super().__iter__()
-
-        roster = PopRemovesThenRaises()
-        custody = MODULE.ResourceCustody(label="registration")
-        custody._resources = roster  # type: ignore[assignment]
-        with mock.patch.object(MODULE.os, "open", return_value=40), mock.patch.object(
-            MODULE.os,
-            "close",
-        ) as close, self.assertRaisesRegex(
-            KeyboardInterrupt,
-            "append committed then interrupted",
-        ) as raised:
-            custody.open("descriptor", os.O_RDONLY)
-        notes = "\n".join(raised.exception.__notes__)
-        self.assertIn("rollback pop failed", notes)
-        self.assertIn("fallback iteration failed", notes)
-        close.assert_called_once_with(40)
-        self.assertEqual(len(roster), 0)
-
-    def test_registration_pop_line_interrupt_cannot_replace_primary_or_leak(self) -> None:
-        tree = ast.parse(MODULE_PATH.read_text(encoding="utf-8"))
-        custody_class = next(
-            node
-            for node in tree.body
-            if isinstance(node, ast.ClassDef) and node.name == "ResourceCustody"
+    def test_all_public_close_paths_cover_preinvoke_and_postinvoke_boundaries(self) -> None:
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        cleanup = class_method_ast(
+            source,
+            "ResourceCustody",
+            "_cleanup_registration_once",
         )
-        rollback = next(
-            node
-            for node in custody_class.body
-            if isinstance(node, ast.FunctionDef)
-            and node.name == "_rollback_registration"
-        )
-        pop_call = next(
-            node
-            for node in ast.walk(rollback)
+        descriptor_invoke_line = next(
+            node.lineno
+            for node in ast.walk(cleanup)
             if isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "pop"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "os"
+            and node.func.attr == "close"
         )
-        boundary_line = min(
+        closeable_invoke_line = next(
             node.lineno
-            for node in ast.walk(rollback)
-            if isinstance(node, ast.Return) and node.lineno > pop_call.lineno
+            for node in ast.walk(cleanup)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "close"
+            and not isinstance(node.func.value, ast.Name)
+        )
+        finished_line = next(
+            node.lineno
+            for node in ast.walk(cleanup)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Attribute) and target.attr == "close_finished"
+                for target in node.targets
+            )
+            and node.lineno > max(descriptor_invoke_line, closeable_invoke_line)
         )
 
-        class AppendThenRaise(list[object]):
-            def append(self, value: object) -> None:
-                super().append(value)
-                raise KeyboardInterrupt("registration append remains primary")
+        def close_one(custody: MODULE.ResourceCustody) -> None:
+            custody.close_descriptor(40)
 
-        custody = MODULE.ResourceCustody(label="registration pop boundary")
-        custody._resources = AppendThenRaise()  # type: ignore[assignment]
-        interrupted = False
+        def close_many(custody: MODULE.ResourceCustody) -> None:
+            custody.close_descriptors((40,))
 
-        def trace(frame: object, event: str, _arg: object):  # type: ignore[no-untyped-def]
-            nonlocal interrupted
-            if (
-                event == "line"
-                and getattr(frame, "f_code")
-                is MODULE.ResourceCustody._rollback_registration.__code__
-                and getattr(frame, "f_lineno") == boundary_line
-                and not interrupted
+        def close_all(custody: MODULE.ResourceCustody) -> None:
+            custody.close()
+
+        for path_name, close_path in (
+            ("close_descriptor", close_one),
+            ("close_descriptors", close_many),
+            ("close", close_all),
+        ):
+            for boundary, line in (
+                ("pre_close_before_syscall", descriptor_invoke_line),
+                ("after_close_before_finished", finished_line),
             ):
-                interrupted = True
-                sys.settrace(None)
-                raise KeyboardInterrupt("registration interrupted immediately after pop")
-            return trace
+                custody = MODULE.ResourceCustody(
+                    label=f"{path_name} {boundary}"
+                )
+                acquire_test_descriptor(custody, 40)
+                with self.subTest(path=path_name, boundary=boundary), mock.patch.object(
+                    MODULE.os,
+                    "close",
+                ) as close:
+                    with self.assertRaisesRegex(
+                        MODULE.DrainError,
+                        "close failed|cleanup failed",
+                    ) as first:
+                        with interrupt_once_on_line(
+                            MODULE.ResourceCustody._cleanup_registration_once.__code__,
+                            line,
+                            f"{path_name} {boundary}",
+                        ) as fired:
+                            close_path(custody)
+                    self.assertTrue(fired[0])
+                    close.assert_called_once_with(40)
+                    persisted = first.exception.__cause__
+                    self.assertIsInstance(persisted, KeyboardInterrupt)
+                    self.assertIn(boundary, str(persisted))
+                    self.assertEqual(custody._resources, [])
+                    expected_state = "closed" if path_name == "close" else "open"
+                    self.assertEqual(custody._state, expected_state)
+                    with self.assertRaisesRegex(MODULE.DrainError, "cleanup failed") as retried:
+                        custody.close()
+                    self.assertIs(retried.exception.__cause__, persisted)
+                    close.assert_called_once_with(40)
 
-        with mock.patch.object(MODULE.os, "open", return_value=40), mock.patch.object(
-            MODULE.os,
-            "close",
-        ) as close, self.assertRaisesRegex(
-            KeyboardInterrupt,
-            "registration append remains primary",
-        ) as raised:
-            sys.settrace(trace)
-            try:
-                custody.open("descriptor", os.O_RDONLY)
-            finally:
-                sys.settrace(None)
-        self.assertTrue(interrupted)
-        self.assertIn("immediately after pop", "\n".join(raised.exception.__notes__))
+        for boundary, line in (
+            ("closeable_pre_close_before_syscall", closeable_invoke_line),
+            ("closeable_after_close_before_finished", finished_line),
+        ):
+            custody = MODULE.ResourceCustody(label=boundary)
+            resource_value = mock.Mock()
+            with mock.patch.object(
+                MODULE.socket,
+                "socket",
+                return_value=resource_value,
+            ):
+                custody.socket()
+            with self.subTest(path="closeable", boundary=boundary), self.assertRaisesRegex(
+                MODULE.DrainError,
+                "cleanup failed",
+            ) as first:
+                with interrupt_once_on_line(
+                    MODULE.ResourceCustody._cleanup_registration_once.__code__,
+                    line,
+                    boundary,
+                ) as fired:
+                    custody.close()
+            self.assertTrue(fired[0])
+            resource_value.close.assert_called_once_with()
+            self.assertIsInstance(first.exception.__cause__, KeyboardInterrupt)
+            self.assertEqual(custody._resources, [])
+            self.assertEqual(custody._state, "closed")
+
+    def test_close_open_to_closing_and_final_settlement_are_resumable(self) -> None:
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        close_ast = class_method_ast(source, "ResourceCustody", "close")
+        transition = next(
+            node
+            for node in ast.walk(close_ast)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Attribute) and target.attr == "_state"
+                for target in node.targets
+            )
+            and isinstance(node.value, ast.Constant)
+            and node.value.value == "closing"
+        )
+        after_transition = min(
+            node.lineno
+            for node in ast.walk(close_ast)
+            if isinstance(node, ast.stmt) and node.lineno > transition.lineno
+        )
+        completed = next(
+            node
+            for node in ast.walk(close_ast)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "completed"
+                for target in node.targets
+            )
+            and isinstance(node.value, ast.Constant)
+            and node.value.value is True
+        )
+        final_settlement = min(
+            node.lineno
+            for node in ast.walk(close_ast)
+            if isinstance(node, ast.stmt) and node.lineno > completed.lineno
+        )
+        for label, line in (
+            ("after_open_to_closing", after_transition),
+            ("after_completed_before_settlement", final_settlement),
+        ):
+            custody = MODULE.ResourceCustody(label=label)
+            acquire_test_descriptor(custody, 40)
+            with self.subTest(boundary=label), mock.patch.object(
+                MODULE.os,
+                "close",
+            ) as close:
+                with self.assertRaisesRegex(KeyboardInterrupt, label):
+                    with interrupt_once_on_line(
+                        MODULE.ResourceCustody.close.__code__,
+                        line,
+                        label,
+                    ) as fired:
+                        custody.close()
+                self.assertTrue(fired[0])
+                custody.close()
+                close.assert_called_once_with(40)
+                self.assertEqual(custody._resources, [])
+                self.assertEqual(custody._state, "closed")
+
+    def test_cleanup_entry_retries_before_start_but_return_does_not_retry_after_start(self) -> None:
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        cleanup_ast = class_method_ast(
+            source,
+            "ResourceCustody",
+            "_cleanup_registration_once",
+        )
+        entry_line = min(
+            node.lineno
+            for node in cleanup_ast.body
+            if isinstance(node, ast.stmt)
+        )
+        return_line = max(
+            node.lineno
+            for node in ast.walk(cleanup_ast)
+            if isinstance(node, ast.Return)
+        )
+        for label, line, expected_calls in (
+            ("cleanup_entry_before_start", entry_line, 2),
+            ("cleanup_return_after_start", return_line, 1),
+        ):
+            custody = MODULE.ResourceCustody(label=label)
+            acquire_test_descriptor(custody, 40)
+            cleanup = custody._cleanup_registration_once
+            with self.subTest(boundary=label), mock.patch.object(
+                custody,
+                "_cleanup_registration_once",
+                wraps=cleanup,
+            ) as cleanup_calls, mock.patch.object(
+                MODULE.os,
+                "close",
+            ) as close, self.assertRaisesRegex(
+                MODULE.DrainError,
+                "cleanup failed",
+            ) as raised:
+                with interrupt_once_on_line(
+                    MODULE.ResourceCustody._cleanup_registration_once.__code__,
+                    line,
+                    label,
+                ) as fired:
+                    custody.close()
+            self.assertTrue(fired[0])
+            self.assertEqual(cleanup_calls.call_count, expected_calls)
+            close.assert_called_once_with(40)
+            self.assertIsInstance(raised.exception.__cause__, KeyboardInterrupt)
+            self.assertEqual(custody._resources, [])
+            self.assertEqual(custody._state, "closed")
+
+    def test_cleanup_error_return_interruption_preserves_syscall_failure(self) -> None:
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        cleanup_ast = class_method_ast(
+            source,
+            "ResourceCustody",
+            "_cleanup_registration_once",
+        )
+        descriptor_close_line = next(
+            node.lineno
+            for node in ast.walk(cleanup_ast)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "os"
+            and node.func.attr == "close"
+        )
+        error_return = min(
+            (
+                node
+                for node in ast.walk(cleanup_ast)
+                if isinstance(node, ast.Return)
+                and isinstance(node.value, ast.Attribute)
+                and node.value.attr == "close_error"
+                and node.lineno > descriptor_close_line
+            ),
+            key=lambda node: node.lineno,
+        )
+        error_persistence = min(
+            (
+                node
+                for node in ast.walk(cleanup_ast)
+                if isinstance(node, ast.Assign)
+                and any(
+                    isinstance(target, ast.Attribute)
+                    and target.attr == "close_error"
+                    for target in node.targets
+                )
+                and node.lineno > descriptor_close_line
+            ),
+            key=lambda node: node.lineno,
+        )
+        for label, line in (
+            ("before_cleanup_error_persistence", error_persistence.lineno),
+            ("cleanup_error_return_interrupted", error_return.lineno),
+        ):
+            first = OSError("descriptor close failed first")
+            custody = MODULE.ResourceCustody(label=label)
+            acquire_test_descriptor(custody, 40)
+            with self.subTest(boundary=label), mock.patch.object(
+                MODULE.os,
+                "close",
+                side_effect=first,
+            ) as close, self.assertRaises(BaseException) as raised:
+                with interrupt_once_on_line(
+                    MODULE.ResourceCustody._cleanup_registration_once.__code__,
+                    line,
+                    label,
+                ) as fired:
+                    custody.close()
+            self.assertTrue(fired[0])
+            close.assert_called_once_with(40)
+            self.assertIsInstance(raised.exception, MODULE.DrainError)
+            self.assertIs(raised.exception.__cause__, first)
+            self.assertIn(label, "\n".join(first.__notes__))
+            self.assertEqual(custody._resources, [])
+            self.assertEqual(custody._state, "closed")
+
+    def test_cleanup_activation_bookkeeping_cannot_veto_the_syscall(self) -> None:
+        class FailingActivationRoster(set[int]):
+            def add(self, _value: int) -> None:
+                raise MemoryError("activation roster allocation failed")
+
+        custody = MODULE.ResourceCustody(label="cleanup activation")
+        custody._active_cleanup_tokens = FailingActivationRoster()
+        acquire_test_descriptor(custody, 40)
+        with mock.patch.object(MODULE.os, "close") as close:
+            custody.close()
         close.assert_called_once_with(40)
         self.assertEqual(custody._resources, [])
+        self.assertEqual(custody._state, "closed")
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        cleanup_ast = class_method_ast(
+            source,
+            "ResourceCustody",
+            "_cleanup_registration_once",
+        )
+        self.assertNotIn("_active_cleanup_tokens", source)
+        self.assertFalse(
+            any(
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in {"add", "discard"}
+                for node in ast.walk(cleanup_ast)
+            )
+        )
+        self.assertNotIn("_active_cleanup", source)
+        self.assertTrue(hasattr(MODULE.ResourceCustody, "_cleanup_is_active"))
+
+        custody = MODULE.ResourceCustody(label="abandoned cleanup generation")
+        acquire_test_descriptor(custody, 41)
+        registration = custody._resources[0]
+        registration.close_started = True
+        registration.close_finished = False
+        registration.close_error = None
+        self.assertFalse(custody._cleanup_is_active(registration))
+        with mock.patch.object(MODULE.os, "close") as close, self.assertRaisesRegex(
+            MODULE.DrainError,
+            "cleanup failed",
+        ) as raised:
+            custody.close()
+        close.assert_not_called()
+        self.assertIsInstance(raised.exception.__cause__, MODULE.DrainError)
+        self.assertIn("invocation is ambiguous", str(raised.exception.__cause__))
+        self.assertEqual(custody._resources, [])
+        self.assertEqual(custody._state, "closed")
+
+    def test_three_resource_cleanup_preserves_first_error_and_formats_hostile_error(self) -> None:
+        class HostileCleanupError(OSError):
+            def __str__(self) -> str:
+                raise MemoryError("hostile cleanup rendering")
+
+        first = OSError("first cleanup failure")
+        hostile = HostileCleanupError()
+        custody = MODULE.ResourceCustody(label="three-resource cleanup")
+        acquire_test_descriptors(custody, 40, 41, 42)
+        with mock.patch.object(
+            MODULE.os,
+            "close",
+            side_effect=(first, hostile, None),
+        ) as close, self.assertRaisesRegex(
+            MODULE.DrainError,
+            "descriptor close failed",
+        ) as raised:
+            custody.close_descriptors((40, 41, 42))
+        self.assertEqual(close.call_args_list, [mock.call(40), mock.call(41), mock.call(42)])
+        self.assertIs(raised.exception.__cause__, first)
+        self.assertIn(
+            "<unprintable HostileCleanupError>",
+            "\n".join(first.__notes__),
+        )
+        self.assertEqual(custody._resources, [])
+
+    def test_actual_kernel_reentrant_same_fd_generation_is_closed(self) -> None:
+        baseline = set(os.listdir("/proc/self/fd"))
+        custody = MODULE.ResourceCustody(label="same-fd generation")
+        observed_error: list[BaseException] = []
+        opened_generations: list[int] = []
+        leaked: int | None = None
+        kernel_open = os.open
+
+        def observed_open(*args: object, **kwargs: object) -> int:
+            descriptor = kernel_open(*args, **kwargs)  # type: ignore[arg-type]
+            opened_generations.append(descriptor)
+            return descriptor
+
+        class ReusingCloseable:
+            def close(self) -> None:
+                nonlocal leaked
+                try:
+                    leaked = custody.open("/dev/null", os.O_RDONLY)
+                except BaseException as error:
+                    observed_error.append(error)
+
+        reusing = ReusingCloseable()
+        try:
+            with mock.patch.object(
+                MODULE.socket,
+                "socket",
+                return_value=reusing,
+            ), mock.patch.object(MODULE.os, "open", side_effect=observed_open):
+                custody.socket()
+                old_generation = custody.open("/dev/null", os.O_RDONLY)
+                custody.close()
+            self.assertEqual(len(observed_error), 1)
+            self.assertIsInstance(observed_error[0], MODULE.DrainError)
+            self.assertIn("while custody is closing", str(observed_error[0]))
+            self.assertEqual(opened_generations, [old_generation, old_generation])
+            self.assertEqual(custody._resources, [])
+            self.assertEqual(custody._state, "closed")
+            with self.assertRaises(OSError):
+                os.fstat(old_generation)
+            self.assertEqual(set(os.listdir("/proc/self/fd")), baseline)
+        finally:
+            if custody._state != "closed":
+                try:
+                    custody.close()
+                except BaseException:
+                    pass
+            if leaked is not None:
+                try:
+                    os.close(leaked)
+                except OSError:
+                    pass
 
     def test_cleanup_retires_identity_and_resource_aliases_at_most_once(self) -> None:
         same_token = MODULE.ResourceRegistration("descriptor", 40)
-        same_token.state = "owned"
+        same_token.published = True
         custody = MODULE.ResourceCustody(label="same token aliases")
         custody._resources = [same_token, same_token]
         with mock.patch.object(MODULE.os, "close") as close:
@@ -2643,7 +3089,7 @@ class ProcessUniverseTest(unittest.TestCase):
 
         first = MODULE.ResourceRegistration("descriptor", 41)
         second = MODULE.ResourceRegistration("descriptor", 41)
-        first.state = second.state = "owned"
+        first.published = second.published = True
         custody = MODULE.ResourceCustody(label="same descriptor aliases")
         custody._resources = [first, second]
         with mock.patch.object(MODULE.os, "close") as close, self.assertRaisesRegex(
@@ -2788,6 +3234,7 @@ class ProcessUniverseTest(unittest.TestCase):
         }
         expected = {
             "capture_task",
+            "open_current_task_namespace",
             "stable_task_namespace_census",
             "process_reference_scan",
             "runtime_root_descriptors",
@@ -2802,6 +3249,8 @@ class ProcessUniverseTest(unittest.TestCase):
             "open_or_publish_prepared_archive",
             "publish_control_capsule",
             "acquire_runtime_lease",
+            "open_run_parent",
+            "open_control_root",
         }
         self.assertTrue(expected <= functions.keys())
         for name in sorted(expected):
@@ -4388,6 +4837,115 @@ class DestructiveBoundaryTest(unittest.TestCase):
         self.assertNotIn("sys.exception()", source)
         self.assertNotIn("close_all_descriptors_preserving_active", source)
         self.assertNotIn("close_closeable_preserving_active", source)
+        forbidden_path_traversal = [
+            (node.lineno, node.attr)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute)
+            and node.attr in {"glob", "rglob", "read_text", "read_bytes"}
+        ]
+        self.assertEqual(forbidden_path_traversal, [])
+
+    def test_local_custody_acquisition_never_precedes_its_settlement_scope(self) -> None:
+        tree = ast.parse(MODULE_PATH.read_text(encoding="utf-8"))
+        parents: dict[ast.AST, ast.AST] = {}
+        for node in ast.walk(tree):
+            for child in ast.iter_child_nodes(node):
+                parents[child] = node
+        local_custodies: list[tuple[ast.FunctionDef, ast.Assign, str]] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
+                continue
+            if not isinstance(node.value.func, ast.Name) or node.value.func.id != "ResourceCustody":
+                continue
+            target = next(
+                (
+                    target.id
+                    for target in node.targets
+                    if isinstance(target, ast.Name)
+                ),
+                None,
+            )
+            if target is None:
+                continue
+            parent: ast.AST | None = node
+            while parent is not None and not isinstance(parent, ast.FunctionDef):
+                parent = parents.get(parent)
+            self.assertIsInstance(parent, ast.FunctionDef)
+            assert isinstance(parent, ast.FunctionDef)
+            local_custodies.append((parent, node, target))
+
+        self.assertEqual(
+            [(function.name, target) for function, _assignment, target in local_custodies],
+            [("capture_process", "custody")],
+        )
+        function, assignment, target = local_custodies[0]
+        containing_body = function.body
+        assignment_index = containing_body.index(assignment)
+        self.assertIsInstance(containing_body[assignment_index + 1], ast.Try)
+        settlement_scope = containing_body[assignment_index + 1]
+        assert isinstance(settlement_scope, ast.Try)
+        acquisitions = {
+            node.attr
+            for node in ast.walk(settlement_scope)
+            if isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == target
+            and node.attr in {"open", "pidfd_open", "dup", "socket"}
+        }
+        self.assertEqual(acquisitions, {"open", "pidfd_open"})
+        unprotected = [
+            (node.lineno, node.attr)
+            for node in ast.walk(function)
+            if isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == target
+            and node.attr in {"open", "pidfd_open", "dup", "socket"}
+            and node not in set(ast.walk(settlement_scope))
+        ]
+        self.assertEqual(unprotected, [])
+
+    def test_bound_regular_tree_is_no_follow_bounded_and_failure_total(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            nested = root / "nested"
+            deeper = nested / "deeper"
+            deeper.mkdir(parents=True)
+            (root / "a.txt").write_bytes(b"a")
+            (nested / "b.bin").write_bytes(b"b")
+            (deeper / "c.dat").write_bytes(b"c")
+            (root / "file-link").symlink_to(root / "a.txt")
+            (root / "directory-link").symlink_to(nested, target_is_directory=True)
+            baseline = set(os.listdir("/proc/self/fd"))
+
+            self.assertEqual(
+                MODULE.bound_regular_tree(
+                    root,
+                    maximum_depth=3,
+                    maximum_entries=16,
+                ),
+                (
+                    root / "a.txt",
+                    nested / "b.bin",
+                    deeper / "c.dat",
+                ),
+            )
+            self.assertEqual(set(os.listdir("/proc/self/fd")), baseline)
+
+            with self.assertRaisesRegex(MODULE.DrainError, "too deep"):
+                MODULE.bound_regular_tree(
+                    root,
+                    maximum_depth=1,
+                    maximum_entries=16,
+                )
+            self.assertEqual(set(os.listdir("/proc/self/fd")), baseline)
+
+            with self.assertRaisesRegex(MODULE.DrainError, "entry capacity"):
+                MODULE.bound_regular_tree(
+                    root,
+                    maximum_depth=3,
+                    maximum_entries=1,
+                )
+            self.assertEqual(set(os.listdir("/proc/self/fd")), baseline)
 
     def test_control_publication_closes_initial_existing_validation_failure(self) -> None:
         def open_parent(custody: MODULE.ResourceCustody) -> int:
@@ -5422,7 +5980,7 @@ class WrapperBoundaryTest(unittest.TestCase):
         extracted = ast.fix_missing_locations(
             ast.Module(body=selected, type_ignores=[])
         )
-        namespace = {"os": os}
+        namespace = {"os": os, "sys": sys}
         exec(compile(extracted, "<loader-custody>", "exec"), namespace, namespace)
         return namespace["DescriptorCustody"]
 
@@ -5648,190 +6206,483 @@ class WrapperBoundaryTest(unittest.TestCase):
             custody.__exit__(RuntimeError, primary, None)
         self.assertIn("cleanup also failed", "\n".join(primary.__notes__))
 
-    def test_loader_custody_rolls_back_post_commit_append_failure(self) -> None:
+    def test_loader_copy_swap_ignores_hostile_private_roster_and_has_no_fallback(self) -> None:
         descriptor_custody = self._descriptor_custody_type()
+        registration_type = descriptor_custody.close.__globals__["DescriptorRegistration"]
+        prior = registration_type(39)
+        prior.published = True
 
-        class AppendThenRaise(list[object]):
-            def append(self, value: object) -> None:
-                super().append(value)
-                raise KeyboardInterrupt("loader append committed then interrupted")
+        class SubstitutingRoster(list[object]):
+            def copy(self) -> object:
+                raise AssertionError("virtual copy must not control loader publication")
 
-        custody = descriptor_custody("loader registration")
-        custody.descriptors = AppendThenRaise()
-        with mock.patch.object(os, "open", return_value=40), mock.patch.object(
-            os,
-            "close",
-        ) as close, self.assertRaisesRegex(
-            KeyboardInterrupt,
-            "loader append committed then interrupted",
-        ):
-            custody.open("ignored", os.O_RDONLY)
-        close.assert_called_once_with(40)
-        self.assertEqual(custody.descriptors, [])
-        custody.close()
-        close.assert_called_once_with(40)
-
-        class AppendThenRaiseAndFailPop(AppendThenRaise):
-            def pop(self, index: int = -1) -> object:
-                raise MemoryError(f"loader rollback pop failed at {index}")
-
-        custody = descriptor_custody("loader registration")
-        custody.descriptors = AppendThenRaiseAndFailPop()
-        with mock.patch.object(os, "open", return_value=41), mock.patch.object(
-            os,
-            "close",
-        ) as close, self.assertRaisesRegex(
-            KeyboardInterrupt,
-            "loader append committed then interrupted",
-        ) as raised:
-            custody.open("ignored", os.O_RDONLY)
-        self.assertIn("rollback pop failed", "\n".join(raised.exception.__notes__))
-        close.assert_called_once_with(41)
-        self.assertEqual(custody.descriptors, [])
-
-    def test_loader_custody_retires_duplicate_identity_aliases_once(self) -> None:
-        descriptor_custody = self._descriptor_custody_type()
-
-        class AppendTwiceThenRaiseAndFailPop(list[object]):
-            def append(self, value: object) -> None:
-                super().append(value)
-                super().append(value)
-                raise KeyboardInterrupt("loader append duplicated then interrupted")
-
-            def pop(self, index: int = -1) -> object:
-                raise MemoryError(f"loader rollback pop failed at {index}")
-
-        custody = descriptor_custody("loader registration")
-        custody.descriptors = AppendTwiceThenRaiseAndFailPop()
-        with mock.patch.object(os, "open", return_value=40), mock.patch.object(
-            os,
-            "close",
-        ) as close, self.assertRaisesRegex(
-            KeyboardInterrupt,
-            "loader append duplicated then interrupted",
-        ) as raised:
-            custody.open("ignored", os.O_RDONLY)
-        notes = "\n".join(raised.exception.__notes__)
-        self.assertIn("rollback pop failed", notes)
-        self.assertIn("fallback retired 2 aliases", notes)
-        close.assert_called_once_with(40)
-        self.assertEqual(custody.descriptors, [])
-
-    def test_loader_custody_rejects_silent_duplicate_or_absent_identity(self) -> None:
-        descriptor_custody = self._descriptor_custody_type()
-
-        class DuplicateAppend(list[object]):
-            def append(self, value: object) -> None:
-                super().append(value)
-                super().append(value)
-
-        class DroppedAppend(list[object]):
             def append(self, _value: object) -> None:
-                return
+                raise AssertionError("private loader roster append must not run")
 
-        for roster in (DuplicateAppend(), DroppedAppend()):
-            custody = descriptor_custody("loader registration")
-            custody.descriptors = roster
-            with self.subTest(roster=type(roster).__name__), mock.patch.object(
+            def __iter__(self):  # type: ignore[no-untyped-def]
+                raise AssertionError("private loader roster scan must not run")
+
+            def __getitem__(self, _index: object) -> object:
+                raise AssertionError("private loader token substitution must not run")
+
+        custody = descriptor_custody("loader generation publication")
+        hostile = SubstitutingRoster([prior])
+        custody.descriptors = hostile
+        with mock.patch.object(os, "open", return_value=40), mock.patch.object(
+            os,
+            "close",
+        ) as close:
+            self.assertEqual(custody.open("ignored", os.O_RDONLY), 40)
+            self.assertIs(type(custody.descriptors), list)
+            self.assertEqual(len(custody.descriptors), 2)
+            self.assertIs(custody.descriptors[0], prior)
+            self.assertIsNot(custody.descriptors[1], prior)
+            self.assertEqual(custody.descriptors[1].descriptor, 40)
+            self.assertTrue(custody.descriptors[1].published)
+            self.assertEqual(hostile, [prior])
+            custody.close()
+        self.assertEqual(close.call_args_list, [mock.call(40), mock.call(39)])
+
+        loader = WRAPPER.read_text(encoding="utf-8").split(
+            "read -r -d '' pinned_loader <<'PY' || true\n",
+            1,
+        )[1].split("\nPY\n", 1)[0]
+        custody_ast = next(
+            node
+            for node in ast.parse(loader).body
+            if isinstance(node, ast.ClassDef) and node.name == "DescriptorCustody"
+        )
+        methods = {
+            node.name
+            for node in custody_ast.body
+            if isinstance(node, ast.FunctionDef)
+        }
+        self.assertFalse(methods & {"_rollback", "_scan", "_fallback"})
+
+    def test_loader_acquisition_generation_boundary_matrix_is_failure_total(self) -> None:
+        descriptor_custody = self._descriptor_custody_type()
+        loader = WRAPPER.read_text(encoding="utf-8").split(
+            "read -r -d '' pinned_loader <<'PY' || true\n",
+            1,
+        )[1].split("\nPY\n", 1)[0]
+        open_ast = class_method_ast(loader, "DescriptorCustody", "open")
+        registration = next(
+            node
+            for node in ast.walk(open_ast)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "registration"
+                for target in node.targets
+            )
+            and isinstance(node.value, ast.Call)
+        )
+        first_validation = next(
+            node
+            for node in ast.walk(open_ast)
+            if isinstance(node, ast.If) and node.lineno > registration.lineno
+        )
+        candidate = next(
+            node
+            for node in ast.walk(open_ast)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "candidate"
+                for target in node.targets
+            )
+        )
+        append = next(
+            node
+            for node in ast.walk(open_ast)
+            if isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and node.value.func.attr == "append"
+        )
+        swap = next(
+            node
+            for node in ast.walk(open_ast)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Attribute) and target.attr == "descriptors"
+                for target in node.targets
+            )
+        )
+        published = next(
+            node
+            for node in ast.walk(open_ast)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Attribute) and target.attr == "published"
+                for target in node.targets
+            )
+        )
+        returned = next(
+            node
+            for node in ast.walk(open_ast)
+            if isinstance(node, ast.Return) and isinstance(node.value, ast.Name)
+        )
+        cases = (
+            ("loader_after_syscall_before_token", registration.lineno),
+            ("loader_after_token_before_validation", first_validation.lineno),
+            ("loader_before_candidate_copy", candidate.lineno),
+            ("loader_before_candidate_append", append.lineno),
+            ("loader_before_roster_swap", swap.lineno),
+            ("loader_after_swap_before_published", published.lineno),
+            ("loader_after_publication_before_return", returned.lineno),
+        )
+        registration_type = descriptor_custody.close.__globals__["DescriptorRegistration"]
+        for label, line in cases:
+            prior = registration_type(39)
+            prior.published = True
+            custody = descriptor_custody(label)
+            custody.descriptors = [prior]
+            with self.subTest(boundary=label), mock.patch.object(
+                os,
+                "open",
+                return_value=40,
+            ), mock.patch.object(os, "close") as close, self.assertRaisesRegex(
+                KeyboardInterrupt,
+                label,
+            ):
+                with interrupt_once_on_line(
+                    descriptor_custody.open.__code__,
+                    line,
+                    label,
+                ) as fired:
+                    custody.open("ignored", os.O_RDONLY)
+            self.assertTrue(fired[0])
+            close.assert_called_once_with(40)
+            self.assertEqual(custody.descriptors, [prior])
+
+    def test_loader_restore_and_close_boundary_matrices_persist_first_error(self) -> None:
+        descriptor_custody = self._descriptor_custody_type()
+        loader = WRAPPER.read_text(encoding="utf-8").split(
+            "read -r -d '' pinned_loader <<'PY' || true\n",
+            1,
+        )[1].split("\nPY\n", 1)[0]
+        restore_ast = class_method_ast(loader, "DescriptorCustody", "_restore_roster")
+        restore_assignment = next(
+            node
+            for node in ast.walk(restore_ast)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Attribute) and target.attr == "descriptors"
+                for target in node.targets
+            )
+        )
+        restore_return = next(
+            node
+            for node in ast.walk(restore_ast)
+            if isinstance(node, ast.Return) and node.lineno > restore_assignment.lineno
+        )
+        after_restore = min(
+            (
+                node
+                for node in ast.walk(restore_ast)
+                if isinstance(node, ast.If)
+                and any(
+                    isinstance(value, ast.Name) and value.id == "first_error"
+                    for value in ast.walk(node.test)
+                )
+                and restore_assignment.lineno < node.lineno < restore_return.lineno
+            ),
+            key=lambda node: node.lineno,
+        )
+        registration_type = descriptor_custody.close.__globals__["DescriptorRegistration"]
+        for label, line in (
+            ("loader_before_restore_swap", restore_assignment.lineno),
+            ("loader_after_restore_swap", after_restore.lineno),
+            ("loader_before_restore_return", restore_return.lineno),
+        ):
+            prior = registration_type(39)
+            prior.published = True
+            custody = descriptor_custody(label)
+            custody.descriptors = [prior]
+            custody.state = "closed"
+            with self.subTest(boundary=label), mock.patch.object(
                 os,
                 "open",
                 return_value=40,
             ), mock.patch.object(os, "close") as close, self.assertRaisesRegex(
                 SystemExit,
-                "registration token is absent or duplicated",
-            ):
+                "registration is unavailable",
+            ) as raised, interrupt_once_on_line(
+                    descriptor_custody._restore_roster.__code__,
+                    line,
+                    label,
+                ) as fired:
+                    custody.open("ignored", os.O_RDONLY)
+            self.assertTrue(fired[0])
+            close.assert_called_once_with(40)
+            self.assertEqual(custody.descriptors, [prior])
+            self.assertIn(label, "\n".join(raised.exception.__notes__))
+
+        close_ast = class_method_ast(loader, "DescriptorCustody", "_close_once")
+        invoke_line = next(
+            node.lineno
+            for node in ast.walk(close_ast)
+            if isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and node.value.func.attr == "close"
+        )
+        finished_line = next(
+            node.lineno
+            for node in ast.walk(close_ast)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Attribute) and target.attr == "close_finished"
+                for target in node.targets
+            )
+            and node.lineno > invoke_line
+        )
+        for label, line in (
+            ("loader_pre_close_before_syscall", invoke_line),
+            ("loader_after_close_before_finished", finished_line),
+        ):
+            custody = descriptor_custody(label)
+            with mock.patch.object(os, "open", return_value=40):
                 custody.open("ignored", os.O_RDONLY)
+            with self.subTest(boundary=label), mock.patch.object(
+                os,
+                "close",
+            ) as close, self.assertRaisesRegex(KeyboardInterrupt, label) as first:
+                with interrupt_once_on_line(
+                    descriptor_custody._close_once.__code__,
+                    line,
+                    label,
+                ) as fired:
+                    custody.close()
+            self.assertTrue(fired[0])
             close.assert_called_once_with(40)
             self.assertEqual(custody.descriptors, [])
+            self.assertEqual(custody.state, "closed")
+            with self.assertRaises(KeyboardInterrupt) as retried:
+                custody.close()
+            self.assertIs(retried.exception, first.exception)
 
-    def test_loader_pop_line_interrupt_preserves_primary_and_closes_once(self) -> None:
+    def test_loader_hostile_three_descriptor_cleanup_attempts_all(self) -> None:
         descriptor_custody = self._descriptor_custody_type()
-        loader = WRAPPER.read_text(encoding="utf-8").split(
-            "read -r -d '' pinned_loader <<'PY' || true\n",
-            1,
-        )[1].split("\nPY\n", 1)[0]
-        tree = ast.parse(loader)
-        custody_class = next(
-            node
-            for node in tree.body
-            if isinstance(node, ast.ClassDef) and node.name == "DescriptorCustody"
-        )
-        rollback = next(
-            node
-            for node in custody_class.body
-            if isinstance(node, ast.FunctionDef) and node.name == "_rollback"
-        )
-        pop_call = next(
-            node
-            for node in ast.walk(rollback)
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "pop"
-        )
-        boundary_line = min(
-            node.lineno
-            for node in ast.walk(rollback)
-            if isinstance(node, ast.Return) and node.lineno > pop_call.lineno
-        )
 
-        class AppendThenRaise(list[object]):
-            def append(self, value: object) -> None:
-                super().append(value)
-                raise KeyboardInterrupt("loader append remains primary")
+        class HostileCleanupError(OSError):
+            def __str__(self) -> str:
+                raise MemoryError("hostile loader cleanup rendering")
 
-        custody = descriptor_custody("loader pop boundary")
-        custody.descriptors = AppendThenRaise()
-        interrupted = False
-
-        def trace(frame: object, event: str, _arg: object):  # type: ignore[no-untyped-def]
-            nonlocal interrupted
-            if (
-                event == "line"
-                and getattr(frame, "f_code") is descriptor_custody._rollback.__code__
-                and getattr(frame, "f_lineno") == boundary_line
-                and not interrupted
-            ):
-                interrupted = True
-                sys.settrace(None)
-                raise KeyboardInterrupt("loader interrupted immediately after pop")
-            return trace
-
-        with mock.patch.object(os, "open", return_value=40), mock.patch.object(
+        first = OSError("first loader cleanup failure")
+        hostile = HostileCleanupError()
+        custody = descriptor_custody("loader three-descriptor cleanup")
+        with mock.patch.object(os, "open", side_effect=(40, 41, 42)):
+            custody.open("first", os.O_RDONLY)
+            custody.open("second", os.O_RDONLY)
+            custody.open("third", os.O_RDONLY)
+        with mock.patch.object(
             os,
             "close",
-        ) as close, self.assertRaisesRegex(
-            KeyboardInterrupt,
-            "loader append remains primary",
-        ) as raised:
-            sys.settrace(trace)
-            try:
-                custody.open("ignored", os.O_RDONLY)
-            finally:
-                sys.settrace(None)
-        self.assertTrue(interrupted)
-        self.assertIn("immediately after pop", "\n".join(raised.exception.__notes__))
-        close.assert_called_once_with(40)
+            side_effect=(first, hostile, None),
+        ) as close, self.assertRaises(OSError) as raised:
+            custody.close()
+        self.assertEqual(close.call_args_list, [mock.call(42), mock.call(41), mock.call(40)])
+        self.assertIs(raised.exception, first)
+        self.assertIn(
+            "<unprintable HostileCleanupError>",
+            "\n".join(first.__notes__),
+        )
         self.assertEqual(custody.descriptors, [])
+        self.assertEqual(custody.state, "closed")
 
-    def test_loader_close_line_interrupt_retries_without_double_close(self) -> None:
+    def test_loader_close_entry_retries_before_start_but_return_stops_after_start(self) -> None:
         descriptor_custody = self._descriptor_custody_type()
         loader = WRAPPER.read_text(encoding="utf-8").split(
             "read -r -d '' pinned_loader <<'PY' || true\n",
             1,
         )[1].split("\nPY\n", 1)[0]
-        tree = ast.parse(loader)
-        custody_class = next(
-            node
-            for node in tree.body
-            if isinstance(node, ast.ClassDef) and node.name == "DescriptorCustody"
-        )
-        close_method = next(
-            node
-            for node in custody_class.body
-            if isinstance(node, ast.FunctionDef) and node.name == "close"
-        )
-        completed_line = next(
+        close_once_ast = class_method_ast(loader, "DescriptorCustody", "_close_once")
+        entry_line = min(
             node.lineno
+            for node in close_once_ast.body
+            if isinstance(node, ast.stmt)
+        )
+        return_line = max(
+            node.lineno
+            for node in ast.walk(close_once_ast)
+            if isinstance(node, ast.Return)
+        )
+        for label, line, expected_calls in (
+            ("loader_close_entry_before_start", entry_line, 2),
+            ("loader_close_return_after_start", return_line, 1),
+        ):
+            custody = descriptor_custody(label)
+            with mock.patch.object(os, "open", return_value=40):
+                custody.open("ignored", os.O_RDONLY)
+            close_once = custody._close_once
+            with self.subTest(boundary=label), mock.patch.object(
+                custody,
+                "_close_once",
+                wraps=close_once,
+            ) as close_calls, mock.patch.object(
+                os,
+                "close",
+            ) as close, self.assertRaisesRegex(
+                KeyboardInterrupt,
+                label,
+            ) as raised:
+                with interrupt_once_on_line(
+                    descriptor_custody._close_once.__code__,
+                    line,
+                    label,
+                ) as fired:
+                    custody.close()
+            self.assertTrue(fired[0])
+            self.assertEqual(close_calls.call_count, expected_calls)
+            close.assert_called_once_with(40)
+            self.assertIn(label, str(raised.exception))
+            self.assertEqual(custody.descriptors, [])
+            self.assertEqual(custody.state, "closed")
+
+    def test_loader_error_return_interruption_preserves_close_failure(self) -> None:
+        descriptor_custody = self._descriptor_custody_type()
+        loader = WRAPPER.read_text(encoding="utf-8").split(
+            "read -r -d '' pinned_loader <<'PY' || true\n",
+            1,
+        )[1].split("\nPY\n", 1)[0]
+        close_once_ast = class_method_ast(loader, "DescriptorCustody", "_close_once")
+        close_line = next(
+            node.lineno
+            for node in ast.walk(close_once_ast)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "os"
+            and node.func.attr == "close"
+        )
+        error_return = min(
+            (
+                node
+                for node in ast.walk(close_once_ast)
+                if isinstance(node, ast.Return)
+                and isinstance(node.value, ast.Attribute)
+                and node.value.attr == "close_error"
+                and node.lineno > close_line
+            ),
+            key=lambda node: node.lineno,
+        )
+        error_persistence = min(
+            (
+                node
+                for node in ast.walk(close_once_ast)
+                if isinstance(node, ast.Assign)
+                and any(
+                    isinstance(target, ast.Attribute)
+                    and target.attr == "close_error"
+                    for target in node.targets
+                )
+                and node.lineno > close_line
+            ),
+            key=lambda node: node.lineno,
+        )
+        for label, line in (
+            ("loader_before_cleanup_error_persistence", error_persistence.lineno),
+            ("loader_cleanup_error_return_interrupted", error_return.lineno),
+        ):
+            first = OSError("loader descriptor close failed first")
+            custody = descriptor_custody(label)
+            with mock.patch.object(os, "open", return_value=40):
+                custody.open("ignored", os.O_RDONLY)
+            with self.subTest(boundary=label), mock.patch.object(
+                os,
+                "close",
+                side_effect=first,
+            ) as close, self.assertRaises(BaseException) as raised:
+                with interrupt_once_on_line(
+                    descriptor_custody._close_once.__code__,
+                    line,
+                    label,
+                ) as fired:
+                    custody.close()
+            self.assertTrue(fired[0])
+            close.assert_called_once_with(40)
+            self.assertIs(raised.exception, first)
+            self.assertIn(label, "\n".join(first.__notes__))
+            self.assertEqual(custody.descriptors, [])
+            self.assertEqual(custody.state, "closed")
+
+    def test_loader_cleanup_activation_bookkeeping_cannot_veto_close(self) -> None:
+        descriptor_custody = self._descriptor_custody_type()
+        loader = WRAPPER.read_text(encoding="utf-8").split(
+            "read -r -d '' pinned_loader <<'PY' || true\n",
+            1,
+        )[1].split("\nPY\n", 1)[0]
+
+        class FailingActivationRoster(set[int]):
+            def add(self, _value: int) -> None:
+                raise MemoryError("loader activation roster allocation failed")
+
+        custody = descriptor_custody("loader cleanup activation")
+        custody.active_cleanup_tokens = FailingActivationRoster()
+        with mock.patch.object(os, "open", return_value=40):
+            custody.open("ignored", os.O_RDONLY)
+        with mock.patch.object(os, "close") as close:
+            custody.close()
+        close.assert_called_once_with(40)
+        self.assertEqual(custody.descriptors, [])
+        self.assertEqual(custody.state, "closed")
+        close_once_ast = class_method_ast(loader, "DescriptorCustody", "_close_once")
+        self.assertNotIn("active_cleanup_tokens", loader)
+        self.assertFalse(
+            any(
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in {"add", "discard"}
+                for node in ast.walk(close_once_ast)
+            )
+        )
+        self.assertNotIn("active_cleanup", loader)
+        self.assertTrue(hasattr(descriptor_custody, "_cleanup_is_active"))
+
+        registration_type = descriptor_custody.close.__globals__["DescriptorRegistration"]
+        custody = descriptor_custody("loader abandoned cleanup generation")
+        with mock.patch.object(os, "open", return_value=41):
+            custody.open("ignored", os.O_RDONLY)
+        registration = custody.descriptors[0]
+        self.assertIsInstance(registration, registration_type)
+        registration.close_started = True
+        registration.close_finished = False
+        registration.close_error = None
+        self.assertFalse(custody._cleanup_is_active(registration))
+        with mock.patch.object(os, "close") as close, self.assertRaisesRegex(
+            SystemExit,
+            "invocation is ambiguous",
+        ):
+            custody.close()
+        close.assert_not_called()
+        self.assertEqual(custody.descriptors, [])
+        self.assertEqual(custody.state, "closed")
+
+    def test_loader_open_to_closing_and_final_settlement_are_resumable(self) -> None:
+        descriptor_custody = self._descriptor_custody_type()
+        loader = WRAPPER.read_text(encoding="utf-8").split(
+            "read -r -d '' pinned_loader <<'PY' || true\n",
+            1,
+        )[1].split("\nPY\n", 1)[0]
+        close_method = class_method_ast(loader, "DescriptorCustody", "close")
+        transition = next(
+            node
+            for node in ast.walk(close_method)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Attribute) and target.attr == "state"
+                for target in node.targets
+            )
+            and isinstance(node.value, ast.Constant)
+            and node.value.value == "closing"
+        )
+        after_transition = min(
+            node.lineno
+            for node in ast.walk(close_method)
+            if isinstance(node, ast.stmt) and node.lineno > transition.lineno
+        )
+        completed = next(
+            node
             for node in ast.walk(close_method)
             if isinstance(node, ast.Assign)
             and any(
@@ -5841,36 +6692,34 @@ class WrapperBoundaryTest(unittest.TestCase):
             and isinstance(node.value, ast.Constant)
             and node.value.value is True
         )
-        custody = descriptor_custody("loader close boundary")
-        with mock.patch.object(os, "open", return_value=40):
-            custody.open("ignored", os.O_RDONLY)
-        interrupted = False
-
-        def trace(frame: object, event: str, _arg: object):  # type: ignore[no-untyped-def]
-            nonlocal interrupted
-            if (
-                event == "line"
-                and getattr(frame, "f_code") is descriptor_custody.close.__code__
-                and getattr(frame, "f_lineno") == completed_line
-                and not interrupted
-            ):
-                interrupted = True
-                sys.settrace(None)
-                raise KeyboardInterrupt("loader close traversal interrupted")
-            return trace
-
-        primary = RuntimeError("loader body remains primary")
-        with mock.patch.object(os, "close") as close:
-            sys.settrace(trace)
-            try:
-                custody.__exit__(RuntimeError, primary, None)
-            finally:
-                sys.settrace(None)
-        self.assertTrue(interrupted)
-        close.assert_called_once_with(40)
-        self.assertEqual(custody.state, "closed")
-        self.assertEqual(str(primary), "loader body remains primary")
-        self.assertIn("close traversal interrupted", "\n".join(primary.__notes__))
+        final_settlement = min(
+            node.lineno
+            for node in ast.walk(close_method)
+            if isinstance(node, ast.stmt) and node.lineno > completed.lineno
+        )
+        for label, line in (
+            ("loader_after_open_to_closing", after_transition),
+            ("loader_after_completed_before_settlement", final_settlement),
+        ):
+            custody = descriptor_custody(label)
+            with mock.patch.object(os, "open", return_value=40):
+                custody.open("ignored", os.O_RDONLY)
+            with self.subTest(boundary=label), mock.patch.object(
+                os,
+                "close",
+            ) as close:
+                with self.assertRaisesRegex(KeyboardInterrupt, label):
+                    with interrupt_once_on_line(
+                        descriptor_custody.close.__code__,
+                        line,
+                        label,
+                    ) as fired:
+                        custody.close()
+                self.assertTrue(fired[0])
+                custody.close()
+                close.assert_called_once_with(40)
+            self.assertEqual(custody.descriptors, [])
+            self.assertEqual(custody.state, "closed")
 
     def test_loader_distinct_tokens_aliasing_one_fd_close_at_most_once(self) -> None:
         descriptor_custody = self._descriptor_custody_type()

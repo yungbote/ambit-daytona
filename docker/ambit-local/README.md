@@ -198,8 +198,11 @@ already-connected request is in flight; stop-time API quiescence remains an
 explicit live acceptance observation under the single-user local-host model.
 
 Pre-v5 `/run` daemon state has no root control or supervisor snapshot and is
-therefore never guessed or auto-adopted by this source. This packet is the
-first authorized live candidate; if an operator has independently run an older
+therefore never guessed or auto-adopted by this source. This packet is a source
+candidate for a later read-only live gate, not live authorization by itself.
+The composed v5 supervisor must first pass its separate failure-total descriptor
+cleanup review, and this legacy candidate must pass exact-source review, before
+any live `verify-only` is allowed. If an operator has independently run an older
 v4 prototype, they must stop it with that exact frozen source (or perform an
 explicit root-admin purge) before using the v5 launcher. Persistent v2 storage
 has the separate authenticated `--legacy-v2` remove-only path described above.
@@ -276,7 +279,9 @@ drain /home/bote/m/.local/ambit-daytona-c16b/state VERIFICATION_SHA256
 resume /home/bote/m/.local/ambit-daytona-c16b/state
 ```
 
-`verify-only` writes nothing and authorizes no mutation. It performs two
+`verify-only` performs no application mutation and authorizes none. Ordinary
+filesystem atime effects from reads remain possible and carry no transition
+authority. The verifier performs two
 stable root-level passes over the exact receipt/config/runtime identities,
 pidfd-stabilized daemon/wrapper/shim/task graph and every visible
 `/proc/<tgid>/task/<tid>` Linux task (including non-leader threads with
@@ -327,20 +332,26 @@ verifier's own exactly single-threaded FD table, are re-proved at each borrowed
 consumer boundary, and close on every success or failure path. Transient open
 FD counts are preflight telemetry, not durable authority, so holding the global
 lease cannot change an otherwise identical verification digest.
-Every acquired descriptor or closeable enters its lifetime-matching lexical
-custody in the same helper that performs the acquisition. Descriptor-producing
+Every application descriptor or closeable returned by this source's explicit
+opening primitives enters its lifetime-matching lexical custody in the same
+helper that performs the acquisition. Descriptor-producing
 helpers receive that custody before opening anything and return only borrowed
 views that are already registered; there is no raw-return/adoption interval,
-unowned release state, or custody-to-custody transfer mechanism. Each
-registration has one identity token and one cleanup-attempt state. Missing or
-duplicated append publication, an interrupted rollback, repeated token aliases,
-and distinct aliases of one numeric descriptor all converge to at most one
-close attempt. Cleanup enters `OPEN -> CLOSING -> CLOSED`, rejects and settles
-new acquisitions while closing, treats reentrant close as the outer traversal's
-responsibility, attempts the complete distinct roster, and never retries an
-ambiguous failed numeric close that the kernel may already have consumed. The
+unowned release state, or custody-to-custody transfer mechanism. Each syscall
+result is a fresh generation even when Linux reuses an older numeric FD. The
+owner snapshots its roster before acquisition and publishes the generation by
+copy-and-swap; failed publication restores that exact baseline and settles the
+fresh generation, so no append/pop rollback ledger or stale numeric alias
+exists. Each generation separately records whether its closer was entered and
+whether it returned. Cleanup enters `OPEN -> CLOSING -> CLOSED`, rejects and
+settles new acquisitions while closing, lets an interrupted or reentrant
+`CLOSING` traversal resume through the same one-shot generations, persists the
+first cleanup error across retries, attempts the complete distinct roster, and
+never retries an ambiguous failed numeric close that the kernel may already
+have consumed. The
 custody context receives the exact immediate body exception, and supplemental
-notes are best-effort through the base exception implementation, so neither a
+notes are rendered and attached inside one best-effort base-exception boundary,
+so neither a
 caller's already-handled exception nor hostile note behavior can hide a normal
 cleanup failure or replace the primary error. Any close ambiguity fails the
 transition closed before further mutation.
@@ -460,7 +471,9 @@ caller-owned state tree. The immutable control retains the exact original
 receipt bytes.
 The state root and all three recorded persistent-root descriptors remain held
 through the terminal handoff. Registry inventory traverses the held registry
-descriptor, and every literal persistent child name/inode is re-proved before
+descriptor with a bounded no-follow, descriptor-relative tree walker rather
+than implicit pathname glob iterators, and every literal persistent child
+name/inode is re-proved before
 and after projection, tombstone, and archive work, including exceptional exits.
 Before the control capsule is published—and again whenever an existing capsule
 is opened—the reducer and pinned resume loader construct the complete future

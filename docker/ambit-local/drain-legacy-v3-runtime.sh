@@ -39,7 +39,7 @@ caller_gid=$(/usr/bin/id -g)
 script_source=$(/usr/bin/realpath -e -- "${BASH_SOURCE[0]}")
 script_dir=${script_source%/*}
 tool=${script_dir}/legacy_v3_drain.py
-tool_sha256=e81963e81ab819aa920fd2252cb6f4523c1e7e7aa1e2cd0d5bf899c4776b383f
+tool_sha256=89a0f72d6299bc2704138324fc46832c10b345d7bf3573bf27961aa9d1804845
 control_root=/run/ambit-c16b-legacy-v3-drain-1577287b8182
 
 read -r -d '' pinned_loader <<'PY' || true
@@ -95,8 +95,16 @@ def terminal_projection_value_for(control, *, observed_at, boot_id):
         "forceKillPerformed": False,
     }
 
-def add_error_note(active_error, note):
+def add_error_note(active_error, prefix, detail=None):
     try:
+        if detail is None:
+            note = prefix
+        else:
+            try:
+                rendered = str(detail)
+            except BaseException:
+                rendered = "<unprintable " + type(detail).__name__ + ">"
+            note = prefix + rendered
         BaseException.add_note(active_error, note)
     except BaseException:
         pass
@@ -104,117 +112,226 @@ def add_error_note(active_error, note):
 class DescriptorRegistration:
     def __init__(self, descriptor):
         self.descriptor = descriptor
-        self.cleanup_attempted = False
+        self.published = False
+        self.close_started = False
+        self.close_finished = False
+        self.close_error = None
 
 class DescriptorCustody:
     def __init__(self, label):
         self.label = label
         self.descriptors = []
         self.state = "open"
+        self.cleanup_error = None
 
     def open(self, *args, **kwargs):
-        descriptor = os.open(*args, **kwargs)
-        registration = DescriptorRegistration(descriptor)
-        append_started = False
+        baseline = list.copy(self.descriptors)
+        descriptor = None
+        registration = None
+        acquired = False
         try:
+            # Keep the acquired result and guard on one line-trace boundary.
+            descriptor = os.open(*args, **kwargs); acquired = True
+            registration = DescriptorRegistration(descriptor)
             if type(descriptor) is not int or descriptor < 0:
                 raise SystemExit(self.label + " acquired descriptor is invalid")
-            if self.state != "open":
-                raise SystemExit(self.label + " registration is unavailable while " + self.state)
-            if any(owned.descriptor == descriptor for owned in self.descriptors):
-                raise SystemExit(self.label + " descriptor registration is duplicated")
-            append_started = True
-            self.descriptors.append(registration)
-            registration_count = sum(
-                owned is registration for owned in self.descriptors
-            )
-            if registration_count != 1:
-                raise SystemExit(self.label + " registration token is absent or duplicated")
+            if self.state != "open" or self.cleanup_error is not None:
+                raise SystemExit(
+                    self.label + " registration is unavailable while "
+                    + self.state + " or cleanup is ambiguous"
+                )
+            candidate = list.copy(baseline)
+            candidate.append(registration)
+            self.descriptors = candidate
+            registration.published = True
+            return descriptor
         except BaseException as error:
-            if append_started:
+            if not acquired:
+                raise
+            if registration is None:
                 try:
-                    self._rollback(registration, error)
-                except BaseException as rollback_error:
+                    registration = DescriptorRegistration(descriptor)
+                except BaseException as registration_error:
                     add_error_note(
                         error,
-                        self.label + " registration rollback escaped: "
-                        + str(rollback_error),
+                        self.label + " registration construction also failed: ",
+                        registration_error,
                     )
-            try:
-                self._close_once(registration, error)
-            except BaseException as cleanup_error:
+                    registration = object.__new__(DescriptorRegistration)
+                    registration.descriptor = descriptor
+                    registration.published = False
+                    registration.close_started = False
+                    registration.close_finished = False
+                    registration.close_error = None
+            for _attempt in range(2):
+                try:
+                    self._restore_roster(baseline, registration, error)
+                    break
+                except BaseException as escaped_restore:
+                    add_error_note(
+                        error,
+                        self.label + " roster restoration escaped: ",
+                        escaped_restore,
+                    )
+            cleanup_error = None
+            for _attempt in range(2):
+                try:
+                    cleanup_error = self._settle_once(registration)
+                    break
+                except BaseException as escaped_cleanup:
+                    cleanup_error = escaped_cleanup
+                    add_error_note(
+                        error,
+                        self.label + " registration cleanup escaped: ",
+                        escaped_cleanup,
+                    )
+                    if registration.close_started:
+                        break
+            if cleanup_error is not None:
                 add_error_note(
                     error,
-                    self.label + " registration cleanup escaped: "
-                    + str(cleanup_error),
+                    self.label + " registration cleanup also failed: ",
+                    cleanup_error,
                 )
             raise
-        return descriptor
 
-    def _rollback(self, registration, active_error):
-        try:
-            found_indices = []
-            for index in range(len(self.descriptors)):
-                if self.descriptors[index] is registration:
-                    found_indices.append(index)
-            if len(found_indices) > 1:
-                add_error_note(
-                    active_error,
-                    self.label + " registration rollback retired "
-                    + str(len(found_indices)) + " aliases of one identity token"
-                )
-            for index in reversed(found_indices):
-                self.descriptors.pop(index)
-            return
-        except BaseException as rollback_error:
-            add_error_note(
-                active_error,
-                self.label + " registration rollback also failed: "
-                + str(rollback_error),
-            )
-        try:
-            replacement = []
-            removed = 0
-            for owned in self.descriptors:
-                if owned is registration:
-                    removed += 1
+    def _restore_roster(self, baseline, registration, active_error):
+        first_error = None
+        for _attempt in range(2):
+            try:
+                # Restore roster and publication state at one trace boundary.
+                self.descriptors = list.copy(baseline); registration.published = False
+                if first_error is not None:
+                    add_error_note(
+                        active_error,
+                        self.label + " roster restoration first failed: ",
+                        first_error,
+                    )
+                return
+            except BaseException as restore_error:
+                if first_error is None:
+                    first_error = restore_error
                 else:
-                    replacement.append(owned)
-            self.descriptors = replacement
-            if removed > 1:
-                add_error_note(
-                    active_error,
-                    self.label + " registration rollback fallback retired "
-                    + str(removed) + " aliases of one identity token"
-                )
-            return
-        except BaseException as fallback_error:
+                    add_error_note(
+                        active_error,
+                        self.label + " roster restoration also failed: ",
+                        restore_error,
+                    )
+        if first_error is not None:
             add_error_note(
                 active_error,
-                self.label + " registration rollback fallback also failed: "
-                + str(fallback_error),
+                self.label + " roster restoration remained incomplete: ",
+                first_error,
             )
 
-    def _close_once(self, registration, active_error=None):
-        if registration.cleanup_attempted:
-            return
-        registration.cleanup_attempted = True
+    def _close_once(self, registration):
+        if registration.close_started:
+            return None
+        preinvoke_error = None
+        while not registration.close_started:
+            try:
+                # Publish syscall entry and invoke it at one trace boundary.
+                registration.close_started = True; os.close(registration.descriptor)
+                registration.close_finished = True
+            except BaseException as cleanup_error:
+                if not registration.close_started:
+                    if preinvoke_error is None:
+                        preinvoke_error = cleanup_error
+                    else:
+                        add_error_note(
+                            preinvoke_error,
+                            self.label + " repeated pre-close interruption: ",
+                            cleanup_error,
+                        )
+                    continue
+                registration.close_error = cleanup_error; registration.close_finished = True
+                if preinvoke_error is not None:
+                    add_error_note(
+                        preinvoke_error,
+                        self.label + " cleanup also failed: ",
+                        cleanup_error,
+                    )
+                    registration.close_error = preinvoke_error
+                    return preinvoke_error
+                return registration.close_error
+        if preinvoke_error is not None:
+            registration.close_error = preinvoke_error
+        return registration.close_error
+
+    def _settle_once(self, registration):
+        first_error = None
+        for _attempt in range(2):
+            try:
+                observed_error = self._close_once(registration)
+            except BaseException as escaped_error:
+                observed_error = escaped_error
+            if (
+                registration.close_started
+                and registration.close_error is None
+                and observed_error is not None
+                and isinstance(observed_error.__context__, BaseException)
+            ):
+                registration.close_error = observed_error.__context__
+                registration.close_finished = True
+                add_error_note(
+                    registration.close_error,
+                    self.label + " cleanup persistence also failed: ",
+                    observed_error,
+                )
+            if registration.close_started and registration.close_error is not None:
+                if observed_error is not None and observed_error is not registration.close_error:
+                    add_error_note(
+                        registration.close_error,
+                        self.label + " cleanup settlement also failed: ",
+                        observed_error,
+                    )
+                observed_error = registration.close_error
+            if first_error is None and observed_error is not None:
+                first_error = observed_error
+            elif observed_error is not None and observed_error is not first_error:
+                add_error_note(
+                    first_error,
+                    self.label + " cleanup retry also failed: ",
+                    observed_error,
+                )
+            if registration.close_started:
+                return first_error
+        return first_error
+
+    def _cleanup_is_active(self, registration):
+        frame = sys._getframe(1)
         try:
-            os.close(registration.descriptor)
-        except BaseException as cleanup_error:
-            if active_error is None:
-                raise
-            add_error_note(active_error, self.label + " cleanup also failed: " + str(cleanup_error))
+            while frame is not None:
+                if (
+                    frame.f_code is DescriptorCustody._close_once.__code__
+                    and frame.f_locals.get("self") is self
+                    and frame.f_locals.get("registration") is registration
+                ):
+                    return True
+                frame = frame.f_back
+            return False
+        finally:
+            del frame
+
+    def _record_cleanup_error(self, error):
+        if self.cleanup_error is None:
+            self.cleanup_error = error
+            return
+        if self.cleanup_error is not error:
+            add_error_note(
+                self.cleanup_error,
+                self.label + " additional cleanup also failed: ",
+                error,
+            )
 
     def close(self):
         if self.state == "closed":
+            if self.cleanup_error is not None:
+                raise self.cleanup_error
             return
-        if self.state == "closing":
-            return
-        self.state = "closing"
-        first_error = None
         completed = False
         try:
+            self.state = "closing"
             roster = list.copy(self.descriptors)
             unique = []
             seen_tokens = set()
@@ -224,63 +341,88 @@ class DescriptorCustody:
                 if token in seen_tokens:
                     continue
                 seen_tokens.add(token)
+                if registration.close_started:
+                    if self._cleanup_is_active(registration):
+                        continue
+                    resumed_error = registration.close_error
+                    if resumed_error is None and not registration.close_finished:
+                        resumed_error = SystemExit(
+                            self.label + " cleanup invocation is ambiguous"
+                        )
+                    if resumed_error is not None:
+                        self._record_cleanup_error(resumed_error)
+                    continue
                 descriptor = registration.descriptor
                 if type(descriptor) is not int or descriptor < 0:
-                    registration.cleanup_attempted = True
-                    if first_error is None:
-                        first_error = SystemExit(self.label + " cleanup descriptor is invalid")
+                    registration.close_started = True
+                    registration.close_finished = True
+                    self._record_cleanup_error(
+                        SystemExit(self.label + " cleanup descriptor is invalid")
+                    )
                     continue
                 if descriptor in seen_descriptors:
-                    registration.cleanup_attempted = True
-                    if first_error is None:
-                        first_error = SystemExit(
+                    registration.close_started = True
+                    registration.close_finished = True
+                    self._record_cleanup_error(
+                        SystemExit(
                             self.label + " cleanup roster aliases one descriptor"
                         )
+                    )
                     continue
                 seen_descriptors.add(descriptor)
                 unique.append(registration)
             for registration in unique:
-                try:
-                    self._close_once(registration)
-                except BaseException as error:
-                    if first_error is None:
-                        first_error = error
-                    else:
-                        add_error_note(
-                            first_error,
-                            self.label + " additional cleanup also failed: "
-                            + str(error),
-                        )
+                cleanup_error = self._settle_once(registration)
+                if cleanup_error is not None:
+                    self._record_cleanup_error(cleanup_error)
             completed = True
         finally:
             if completed:
-                self.descriptors = []
-                self.state = "closed"
+                # An interrupted line leaves CLOSING resumable with the old roster.
+                self.descriptors = []; self.state = "closed"
             else:
                 self.state = "open"
-        if first_error is not None:
-            raise first_error
+        if self.cleanup_error is not None:
+            raise self.cleanup_error
 
     def __enter__(self):
-        if self.state != "open":
-            raise SystemExit(self.label + " custody is not open")
+        if self.state != "open" or self.cleanup_error is not None:
+            raise SystemExit(self.label + " custody is not safely open")
         return self
 
     def __exit__(self, _exception_type, active_error, _traceback):
-        try:
-            self.close()
-        except BaseException as cleanup_error:
+        cleanup_error = None
+        for _attempt in range(2):
             try:
                 self.close()
-            except BaseException as retry_error:
+                break
+            except BaseException as observed_error:
+                if cleanup_error is None:
+                    cleanup_error = observed_error
+                else:
+                    add_error_note(
+                        cleanup_error,
+                        self.label + " cleanup retry also failed: ",
+                        observed_error,
+                    )
+        if self.cleanup_error is not None:
+            persisted = SystemExit(self.label + " cleanup failed")
+            persisted.__cause__ = self.cleanup_error
+            if cleanup_error is not None:
                 add_error_note(
+                    persisted,
+                    self.label + " settlement also failed: ",
                     cleanup_error,
-                    self.label + " cleanup retry also failed: "
-                    + str(retry_error),
                 )
+            cleanup_error = persisted
+        if cleanup_error is not None:
             if active_error is None:
-                raise
-            add_error_note(active_error, self.label + " cleanup also failed: " + str(cleanup_error))
+                raise cleanup_error
+            add_error_note(
+                active_error,
+                self.label + " cleanup also failed: ",
+                cleanup_error,
+            )
 
 def read_bound_at(directory_fd, name, maximum, *, expected_device=None):
     with DescriptorCustody("legacy-v3 bound read " + name) as custody:
