@@ -1,0 +1,49 @@
+{
+  "schema": "ambit.runtime-pack-debian-input-lock/v1",
+  "platform": "linux/amd64",
+  "archives": [
+    {
+      "name": "debian",
+      "snapshot": "https://snapshot.debian.org/archive/debian/20260802T202614Z/",
+      "suite": "trixie",
+      "component": "main",
+      "inRelease": {
+        "url": "https://snapshot.debian.org/archive/debian/20260802T202614Z/dists/trixie/InRelease",
+        "sha256": "sha256:98b25b5cd185c59d34aa6e4c3e9b5b8f01bbe9d104fe2dcfbcd30dc0a14a59ed"
+      }
+    },
+    {
+      "name": "debian-security",
+      "snapshot": "https://snapshot.debian.org/archive/debian-security/20260802T121235Z/",
+      "suite": "trixie-security",
+      "component": "main",
+      "inRelease": {
+        "url": "https://snapshot.debian.org/archive/debian-security/20260802T121235Z/dists/trixie-security/InRelease",
+        "sha256": "sha256:c5b38b54765337d3f141385c5cd7b5ef2dd64557c44b519bd079c5ac8f40b369"
+      }
+    }
+  ],
+  "signaturePolicy": {
+    "trustedKeyring": "/usr/share/keyrings/debian-archive-keyring.gpg",
+    "verifyInRelease": true,
+    "checkValidUntil": false,
+    "checkValidUntilException": "exact-snapshot-and-inrelease-bytes-independently-locked"
+  },
+  "requestedPackages": [
+    "fonts-noto-cjk=1:20240730+repack1-1",
+    "fonts-noto-core=20201225-2",
+    "libreoffice-writer-nogui=4:25.2.3-2+deb13u6"
+  ],
+  "resolution": {
+    "installRecommends": false,
+    "state": "unavailable",
+    "requiredClosureLock": "debian-closure.lock.json",
+    "missing": [
+      "exact-signed-packages-index-digests",
+      "exact-binary-deb-sha256-roster",
+      "exact-source-artifact-sha256-roster",
+      "exact-installed-dpkg-closure",
+      "exact-copyright-file-digest-roster"
+    ]
+  }
+}

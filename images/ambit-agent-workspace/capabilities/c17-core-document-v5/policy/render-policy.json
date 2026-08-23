@@ -1,0 +1,40 @@
+{
+  "schema": "ambit.runtime-pack-document-render-policy/v1",
+  "policyRef": "ambit.render-policy/core-document-paginated@1",
+  "input": {
+    "localImmutableBytesOnly": true,
+    "remoteUrls": "forbidden",
+    "maximumBytes": 67108864,
+    "macros": "disabled",
+    "externalLinks": "disabled",
+    "passwordProtected": "unsupported"
+  },
+  "libreOffice": {
+    "processModel": "one-process-per-render",
+    "privateUserProfile": "required",
+    "profileReuse": "forbidden",
+    "headless": true,
+    "nologo": true,
+    "nodefault": true,
+    "norestore": true,
+    "maximumWallMilliseconds": 120000
+  },
+  "pages": {
+    "maximumCount": 512,
+    "maximumWidthPixels": 20000,
+    "maximumHeightPixels": 20000,
+    "maximumPixelsPerPage": 100000000,
+    "orderedZeroBasedRosterRequired": true,
+    "exactPngSha256Required": true
+  },
+  "pdfjs": {
+    "bytesInputOnly": true,
+    "localStaticResourcesOnly": true,
+    "workerVersionMustEqualApiVersion": true,
+    "standardFonts": "unsupported-until-license-corrected-and-frozen",
+    "popplerFallback": "forbidden",
+    "executionState": "unavailable"
+  },
+  "canonicalArtifactBoundary": "external-commit-only",
+  "renderOutputGrantsCanonicalAuthority": false
+}

@@ -1,0 +1,38 @@
+{
+  "schema": "ambit.runtime-pack-external-capture-helper-input-lock/v1",
+  "state": "unavailable",
+  "roleRef": "ambit.runtime-component/working-copy-capture@1",
+  "interfaceRef": "ambit.runtime-interface/working-copy-capture@1",
+  "license": {
+    "packageLicenseField": "UNLICENSED",
+    "spdxExpression": "LicenseRef-Ambit-Proprietary",
+    "distribution": "proprietary-internal-only"
+  },
+  "requiredExternalAuthority": {
+    "archivePath": "caller-owned-absolute-no-follow-regular-read-only-file",
+    "expectedRawSha256": "independently-supplied-lowercase-sha256",
+    "detachedSignature": "required-ed25519-signature-over-domain-separated-archive-statement",
+    "expectedSignatureSha256": "independently-supplied-lowercase-sha256",
+    "publisherPublicKey": "independently-supplied-ed25519-public-key",
+    "expectedPublisherKeySha256": "independently-pinned-lowercase-sha256",
+    "downgrade": "forbidden"
+  },
+  "archiveAdmission": {
+    "hashRawBytesBeforeParsing": true,
+    "exactByteCountRequired": true,
+    "canonicalMemberRosterRequired": true,
+    "regularFilesAndDirectoriesOnly": true,
+    "linksDevicesFifosSocketsSparseAndUnknownPax": "forbidden",
+    "absoluteParentDuplicateExtraAndMissingPaths": "forbidden",
+    "exactModeOwnerTimestampSizeAndContentDigest": true,
+    "selfDescribedDigestsGrantAuthority": false
+  },
+  "missing": [
+    "backend-producer-archive",
+    "independent-expected-raw-sha256",
+    "publisher-detached-signature",
+    "independently-pinned-publisher-key",
+    "exact-archive-member-roster",
+    "exact-binary-and-protocol-pins"
+  ]
+}

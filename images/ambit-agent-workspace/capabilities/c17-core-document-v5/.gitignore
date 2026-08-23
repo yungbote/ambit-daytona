@@ -1,0 +1,11 @@
+/inputs/
+/out/
+/evidence/
+*.tar
+*.tar.gz
+*.tgz
+*.deb
+*.sig
+*.pem
+__pycache__/
+*.pyc

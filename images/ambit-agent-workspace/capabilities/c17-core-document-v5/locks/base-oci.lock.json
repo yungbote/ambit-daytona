@@ -1,0 +1,24 @@
+{
+  "schema": "ambit.runtime-pack-base-oci-lock/v1",
+  "sourceTag": "docker.io/library/debian:trixie-20260803-slim",
+  "index": {
+    "mediaType": "application/vnd.oci.image.index.v1+json",
+    "reference": "docker.io/library/debian@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258",
+    "digest": "sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258"
+  },
+  "platform": {
+    "os": "linux",
+    "architecture": "amd64",
+    "manifestDigest": "sha256:38a76d01668772e381ad2826d876627c89e7133e2f8a0f5d567306798b0f2a16",
+    "configDigest": "sha256:cb1aeeeb4fff439fcbc763f5b313a1f00b39d03f45d2d4be0c52cf14928b297e",
+    "layers": [
+      {
+        "digest": "sha256:26c307b5e35a59ce911f5fde5b9458120ec8734e831ea2da5649a9ad14abfd3d",
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "size": 29780765
+      }
+    ]
+  },
+  "configCreatedAt": "2026-08-03T00:00:00Z",
+  "debuerreotypeVersion": "0.17"
+}
