@@ -135,45 +135,63 @@ EXPECTED_REGISTRY_MANIFESTS = {
     },
 }
 
-FULL_ROOT_CAPABILITIES = {
-    "inheritable": "0000000000000000",
-    "permitted": "000001ffffffffff",
-    "effective": "000001ffffffffff",
-    "bounding": "000001ffffffffff",
-    "ambient": "0000000000000000",
-}
-SUDO_WRAPPER_CREDENTIALS = {
-    "uids": {"real": 1000, "effective": 0, "saved": 0, "filesystem": 0},
-    "gids": {"real": 0, "effective": 0, "saved": 0, "filesystem": 0},
-    "supplementaryGroups": [0],
-    "capabilities": {**FULL_ROOT_CAPABILITIES},
-    "noNewPrivileges": 0,
-    "seccompMode": 0,
-    "seccompFilterCount": 0,
-}
-ROOT_RUNTIME_CREDENTIALS = {
-    "uids": {"real": 0, "effective": 0, "saved": 0, "filesystem": 0},
-    "gids": {"real": 0, "effective": 0, "saved": 0, "filesystem": 0},
-    "supplementaryGroups": [0],
-    "capabilities": {**FULL_ROOT_CAPABILITIES},
-    "noNewPrivileges": 0,
-    "seccompMode": 0,
-    "seccompFilterCount": 0,
-}
-REGISTRY_TASK_CREDENTIALS = {
-    "uids": {"real": 0, "effective": 0, "saved": 0, "filesystem": 0},
-    "gids": {"real": 0, "effective": 0, "saved": 0, "filesystem": 0},
-    "supplementaryGroups": [0, 0, 1, 2, 3, 4, 6, 10, 11, 20, 26, 27],
-    "capabilities": {
-        "inheritable": "0000000000000000",
-        "permitted": "00000000a80425fb",
-        "effective": "00000000a80425fb",
-        "bounding": "00000000a80425fb",
-        "ambient": "0000000000000000",
+MEASURED_TASK_SECURITY_PROFILES: dict[str, dict[str, object]] = {
+    "sudo-wrapper-caller-real-root-effective": {
+        "uids": {"real": 1000, "effective": 0, "saved": 0, "filesystem": 0},
+        "gids": {"real": 0, "effective": 0, "saved": 0, "filesystem": 0},
+        "supplementaryGroups": [0],
+        "capabilities": {
+            "inheritable": "0000000000000000",
+            "permitted": "000001ffffffffff",
+            "effective": "000001ffffffffff",
+            "bounding": "000001ffffffffff",
+            "ambient": "0000000000000000",
+        },
+        "noNewPrivileges": 0,
+        "seccompMode": 0,
+        "seccompFilterCount": 0,
     },
-    "noNewPrivileges": 0,
-    "seccompMode": 2,
-    "seccompFilterCount": 1,
+    "root-runtime-full-capability": {
+        "uids": {"real": 0, "effective": 0, "saved": 0, "filesystem": 0},
+        "gids": {"real": 0, "effective": 0, "saved": 0, "filesystem": 0},
+        "supplementaryGroups": [0],
+        "capabilities": {
+            "inheritable": "0000000000000000",
+            "permitted": "000001ffffffffff",
+            "effective": "000001ffffffffff",
+            "bounding": "000001ffffffffff",
+            "ambient": "0000000000000000",
+        },
+        "noNewPrivileges": 0,
+        "seccompMode": 0,
+        "seccompFilterCount": 0,
+    },
+    "registry-task-container-security": {
+        "uids": {"real": 0, "effective": 0, "saved": 0, "filesystem": 0},
+        "gids": {"real": 0, "effective": 0, "saved": 0, "filesystem": 0},
+        "supplementaryGroups": [0, 0, 1, 2, 3, 4, 6, 10, 11, 20, 26, 27],
+        "capabilities": {
+            "inheritable": "0000000000000000",
+            "permitted": "00000000a80425fb",
+            "effective": "00000000a80425fb",
+            "bounding": "00000000a80425fb",
+            "ambient": "0000000000000000",
+        },
+        "noNewPrivileges": 0,
+        "seccompMode": 2,
+        "seccompFilterCount": 1,
+    },
+}
+MEASURED_TASK_SECURITY_PROFILE_SHA256 = {
+    "sudo-wrapper-caller-real-root-effective": (
+        "2a053786c11465d7fd63dc4b2d8b3fd67bce270a552849e6d939050651e2ae1f"
+    ),
+    "root-runtime-full-capability": (
+        "b9a469657e79a5d52bd87f82e40a0f2e53e57973fb4ad4294cec9fd76ac39c78"
+    ),
+    "registry-task-container-security": (
+        "8715cc21a29e8c770c0145606ac2d978bb13e821bed87d64ccf0c50f19bdbdc5"
+    ),
 }
 
 EXPECTED_PROCESS_CANDIDATES: dict[str, dict[str, object]] = {
@@ -184,7 +202,6 @@ EXPECTED_PROCESS_CANDIDATES: dict[str, dict[str, object]] = {
         "argumentsSha256": "77a7164e53355538b75586d1318d4eefef81e4b64137337435a9af9cd86e7f08",
         "executableName": "sudo",
         "credentialProfile": "sudo-wrapper-caller-real-root-effective",
-        "credentials": SUDO_WRAPPER_CREDENTIALS,
     },
     "containerdWrapperInner": {
         "pid": 960165,
@@ -193,7 +210,6 @@ EXPECTED_PROCESS_CANDIDATES: dict[str, dict[str, object]] = {
         "argumentsSha256": "77a7164e53355538b75586d1318d4eefef81e4b64137337435a9af9cd86e7f08",
         "executableName": "sudo",
         "credentialProfile": "sudo-wrapper-caller-real-root-effective",
-        "credentials": SUDO_WRAPPER_CREDENTIALS,
     },
     "containerd": {
         "pid": 960166,
@@ -202,7 +218,6 @@ EXPECTED_PROCESS_CANDIDATES: dict[str, dict[str, object]] = {
         "argumentsSha256": "7d4abe5345d3526b66e897aad0bd6d3b84f817d103a76529aec0e3edfd3c417f",
         "executable": "/usr/bin/containerd",
         "credentialProfile": "root-runtime-full-capability",
-        "credentials": ROOT_RUNTIME_CREDENTIALS,
     },
     "dockerdWrapperOuter": {
         "pid": 960213,
@@ -211,7 +226,6 @@ EXPECTED_PROCESS_CANDIDATES: dict[str, dict[str, object]] = {
         "argumentsSha256": "1f282ab869478c3a7b8d1ad0d892bec6baa27e7f85a0a6a97aff5f464ee4e3dd",
         "executableName": "sudo",
         "credentialProfile": "sudo-wrapper-caller-real-root-effective",
-        "credentials": SUDO_WRAPPER_CREDENTIALS,
     },
     "dockerdWrapperInner": {
         "pid": 960215,
@@ -220,7 +234,6 @@ EXPECTED_PROCESS_CANDIDATES: dict[str, dict[str, object]] = {
         "argumentsSha256": "1f282ab869478c3a7b8d1ad0d892bec6baa27e7f85a0a6a97aff5f464ee4e3dd",
         "executableName": "sudo",
         "credentialProfile": "sudo-wrapper-caller-real-root-effective",
-        "credentials": SUDO_WRAPPER_CREDENTIALS,
     },
     "dockerd": {
         "pid": 960217,
@@ -229,7 +242,6 @@ EXPECTED_PROCESS_CANDIDATES: dict[str, dict[str, object]] = {
         "argumentsSha256": "a87b194399f06a9490236a24fb13dbf96131962bf08dada03f58267415335b58",
         "executable": "/usr/bin/dockerd",
         "credentialProfile": "root-runtime-full-capability",
-        "credentials": ROOT_RUNTIME_CREDENTIALS,
     },
     "registryShim": {
         "pid": 964659,
@@ -238,7 +250,6 @@ EXPECTED_PROCESS_CANDIDATES: dict[str, dict[str, object]] = {
         "argumentsSha256": "a834f2563fa09c5aebc409149a9c88a9c82e39e54d47786cbb223cd981d74414",
         "executable": "/usr/bin/containerd-shim-runc-v2",
         "credentialProfile": "root-runtime-full-capability",
-        "credentials": ROOT_RUNTIME_CREDENTIALS,
     },
     "registryTask": {
         "pid": 964683,
@@ -247,7 +258,6 @@ EXPECTED_PROCESS_CANDIDATES: dict[str, dict[str, object]] = {
         "argumentsSha256": "082d432bf472c0fa581000acecffc36a2bd3bc4e02774eb4745eca5c5a86de7f",
         "executableName": "registry",
         "credentialProfile": "registry-task-container-security",
-        "credentials": REGISTRY_TASK_CREDENTIALS,
     },
 }
 
@@ -724,6 +734,178 @@ def process_task_coordinates_once() -> tuple[tuple[int, int], ...]:
     return tuple(sorted(result))
 
 
+@dataclass(frozen=True)
+class ParsedTaskStatus:
+    thread_group_id: int
+    task_id: int
+    security_state: dict[str, object]
+
+
+def _task_status_decimal(raw: str, label: str, *, positive: bool = False) -> int:
+    require(
+        re.fullmatch(r"(?:0|[1-9][0-9]*)", raw) is not None,
+        f"process task {label} is invalid",
+    )
+    value = int(raw)
+    require(not positive or value > 0, f"process task {label} is invalid")
+    return value
+
+
+def parse_task_status(status: str) -> ParsedTaskStatus:
+    """Parse one task status without allowing duplicate-field substitution."""
+    required = (
+        "Tgid",
+        "Pid",
+        "Uid",
+        "Gid",
+        "Groups",
+        "CapInh",
+        "CapPrm",
+        "CapEff",
+        "CapBnd",
+        "CapAmb",
+        "NoNewPrivs",
+        "Seccomp",
+        "Seccomp_filters",
+    )
+    values: dict[str, list[str]] = {name: [] for name in required}
+    for line in status.splitlines():
+        if ":" not in line:
+            continue
+        name, raw = line.split(":", 1)
+        if name in values:
+            values[name].append(raw.strip())
+    require(
+        all(len(values[name]) == 1 for name in required),
+        "process task status field roster differs",
+    )
+    uid_values = values["Uid"][0].split()
+    gid_values = values["Gid"][0].split()
+    require(
+        len(uid_values) == 4 and len(gid_values) == 4,
+        "process task UID or GID tuple differs",
+    )
+    uids = [_task_status_decimal(value, "UID") for value in uid_values]
+    gids = [_task_status_decimal(value, "GID") for value in gid_values]
+    groups = [
+        _task_status_decimal(value, "supplementary group")
+        for value in values["Groups"][0].split()
+    ]
+    capability_fields = {
+        "inheritable": "CapInh",
+        "permitted": "CapPrm",
+        "effective": "CapEff",
+        "bounding": "CapBnd",
+        "ambient": "CapAmb",
+    }
+    capabilities: dict[str, str] = {}
+    for name, field in capability_fields.items():
+        raw = values[field][0]
+        require(
+            re.fullmatch(r"[0-9a-f]{16}", raw) is not None,
+            f"process task capability field differs: {field}",
+        )
+        capabilities[name] = raw
+    return ParsedTaskStatus(
+        thread_group_id=_task_status_decimal(
+            values["Tgid"][0], "thread group ID", positive=True
+        ),
+        task_id=_task_status_decimal(values["Pid"][0], "task ID", positive=True),
+        security_state={
+            "uids": dict(zip(("real", "effective", "saved", "filesystem"), uids)),
+            "gids": dict(zip(("real", "effective", "saved", "filesystem"), gids)),
+            "supplementaryGroups": groups,
+            "capabilities": capabilities,
+            "noNewPrivileges": _task_status_decimal(
+                values["NoNewPrivs"][0], "NoNewPrivs"
+            ),
+            "seccompMode": _task_status_decimal(values["Seccomp"][0], "Seccomp"),
+            "seccompFilterCount": _task_status_decimal(
+                values["Seccomp_filters"][0], "Seccomp_filters"
+            ),
+        },
+    )
+
+
+def measured_task_security_profile(
+    profile: object,
+) -> tuple[str, dict[str, object]]:
+    require(
+        isinstance(profile, str)
+        and set(MEASURED_TASK_SECURITY_PROFILES)
+        == set(MEASURED_TASK_SECURITY_PROFILE_SHA256)
+        == {
+            "sudo-wrapper-caller-real-root-effective",
+            "root-runtime-full-capability",
+            "registry-task-container-security",
+        }
+        and profile in MEASURED_TASK_SECURITY_PROFILES,
+        "candidate process security profile is absent",
+    )
+    expected = MEASURED_TASK_SECURITY_PROFILES[profile]
+    expected_sha256 = MEASURED_TASK_SECURITY_PROFILE_SHA256[profile]
+    require(
+        sha256_bytes(canonical_json(expected)) == expected_sha256,
+        f"measured task security profile seal differs: {profile}",
+    )
+    return expected_sha256, expected
+
+
+def require_expected_task_security(
+    candidate: Mapping[str, object],
+    observed: Mapping[str, object],
+) -> tuple[str, str, dict[str, object]]:
+    profile = candidate.get("credentialProfile")
+    profile_sha256, expected = measured_task_security_profile(profile)
+    recorded_sha256 = candidate.get("credentialProfileSha256")
+    recorded_state = candidate.get("credentials")
+    require(
+        (recorded_sha256 is None or recorded_sha256 == profile_sha256)
+        and (recorded_state is None or recorded_state == expected)
+        and dict(observed) == expected,
+        "candidate process credentials or security state differ",
+    )
+    assert isinstance(profile, str)
+    return profile, profile_sha256, dict(observed)
+
+
+def recorded_role_security_contract(
+    role: str,
+    recorded: Mapping[str, object],
+) -> tuple[str, str, dict[str, object]]:
+    candidate = EXPECTED_PROCESS_CANDIDATES.get(role)
+    require(candidate is not None, f"recorded legacy role is unknown: {role}")
+    expected_profile = candidate.get("credentialProfile")
+    profile = recorded.get("credentialProfile")
+    profile_sha256, expected = measured_task_security_profile(profile)
+    require(
+        profile == expected_profile
+        and recorded.get("credentialProfileSha256") == profile_sha256
+        and recorded.get("credentials") == expected,
+        f"recorded legacy role security contract differs: {role}",
+    )
+    assert isinstance(profile, str)
+    return profile, profile_sha256, expected
+
+
+def require_recorded_role_task_security(
+    role: str,
+    recorded: Mapping[str, object],
+    observed: Mapping[str, object],
+    *,
+    thread_group_id: int,
+    task_id: int,
+) -> None:
+    _profile, _profile_sha256, expected = recorded_role_security_contract(
+        role, recorded
+    )
+    manual(
+        dict(observed) == expected,
+        "recorded legacy task security state differs: "
+        f"{role}/{thread_group_id}/{task_id}",
+    )
+
+
 @dataclass
 class CapturedTask:
     thread_group_id: int
@@ -732,10 +914,46 @@ class CapturedTask:
     process_fd: int
     parent_pid: int
     start_ticks: int
+    security_state: dict[str, object]
 
     def close(self) -> None:
         os.close(self.process_fd)
         os.close(self.pidfd)
+
+
+def reprove_captured_task(
+    task: CapturedTask,
+    *,
+    expected_security_state: Mapping[str, object] | None = None,
+) -> None:
+    try:
+        status = parse_task_status(
+            read_at(task.process_fd, "status").decode("ascii", "strict")
+        )
+        parent_pid, start_ticks = stat_identity(read_at(task.process_fd, "stat"))
+    except (FileNotFoundError, ProcessLookupError) as error:
+        raise ManualRecoveryRequired(
+            "live process task disappeared during held reproof: "
+            f"{task.thread_group_id}/{task.task_id}"
+        ) from error
+    except PermissionError as error:
+        raise ManualRecoveryRequired(
+            "live process task is unreadable during held reproof: "
+            f"{task.thread_group_id}/{task.task_id}"
+        ) from error
+    manual(
+        status.thread_group_id == task.thread_group_id
+        and status.task_id == task.task_id
+        and (parent_pid, start_ticks) == (task.parent_pid, task.start_ticks)
+        and status.security_state == task.security_state
+        and (
+            expected_security_state is None
+            or status.security_state == dict(expected_security_state)
+        )
+        and not pidfd_exited(task.pidfd),
+        "held process task identity or security state changed: "
+        f"{task.thread_group_id}/{task.task_id}",
+    )
 
 
 def capture_task(thread_group_id: int, task_id: int) -> CapturedTask | None:
@@ -763,12 +981,9 @@ def capture_task(thread_group_id: int, task_id: int) -> CapturedTask | None:
             )
             observed = os.fstat(process_fd)
             literal = os.stat(task_path, follow_symlinks=False)
-            status = read_at(process_fd, "status").decode("ascii", "strict")
-            fields = {
-                line.split(":", 1)[0]: line.split(":", 1)[1].strip()
-                for line in status.splitlines()
-                if ":" in line
-            }
+            status = parse_task_status(
+                read_at(process_fd, "status").decode("ascii", "strict")
+            )
             parent_pid, start_ticks = stat_identity(read_at(process_fd, "stat"))
         except (FileNotFoundError, ProcessLookupError):
             if pidfd_exited(pidfd):
@@ -781,22 +996,25 @@ def capture_task(thread_group_id: int, task_id: int) -> CapturedTask | None:
                 f"live process task is unreadable: {thread_group_id}/{task_id}"
             ) from error
         require(
-            fields.get("Tgid") == str(thread_group_id)
-            and fields.get("Pid") == str(task_id)
+            status.thread_group_id == thread_group_id
+            and status.task_id == task_id
             and (literal.st_dev, literal.st_ino)
             == (observed.st_dev, observed.st_ino)
             and not pidfd_exited(pidfd),
             f"process task identity changed: {thread_group_id}/{task_id}",
         )
-        keep = True
-        return CapturedTask(
+        captured = CapturedTask(
             thread_group_id,
             task_id,
             pidfd,
             process_fd,
             parent_pid,
             start_ticks,
+            status.security_state,
         )
+        reprove_captured_task(captured)
+        keep = True
+        return captured
     finally:
         if process_fd is not None and not keep:
             os.close(process_fd)
@@ -808,100 +1026,6 @@ def capture_task(thread_group_id: int, task_id: int) -> CapturedTask | None:
 class CapturedProcess:
     authority: dict[str, object]
     observed_proc_inode: int
-
-
-def normalize_process_credentials(status: str) -> dict[str, object]:
-    required = (
-        "Uid",
-        "Gid",
-        "Groups",
-        "CapInh",
-        "CapPrm",
-        "CapEff",
-        "CapBnd",
-        "CapAmb",
-        "NoNewPrivs",
-        "Seccomp",
-        "Seccomp_filters",
-    )
-    values: dict[str, list[str]] = {name: [] for name in required}
-    for line in status.splitlines():
-        if ":" not in line:
-            continue
-        name, raw = line.split(":", 1)
-        if name in values:
-            values[name].append(raw.strip())
-    require(
-        all(len(values[name]) == 1 for name in required),
-        "candidate process credential status shape differs",
-    )
-
-    def decimal(raw: str, label: str) -> int:
-        require(
-            re.fullmatch(r"(?:0|[1-9][0-9]*)", raw) is not None,
-            f"candidate process {label} is invalid",
-        )
-        return int(raw)
-
-    uid_values = values["Uid"][0].split()
-    gid_values = values["Gid"][0].split()
-    require(
-        len(uid_values) == 4 and len(gid_values) == 4,
-        "candidate process UID or GID tuple differs",
-    )
-    uids = [decimal(value, "UID") for value in uid_values]
-    gids = [decimal(value, "GID") for value in gid_values]
-    groups = [
-        decimal(value, "supplementary group")
-        for value in values["Groups"][0].split()
-    ]
-    capability_fields = {
-        "inheritable": "CapInh",
-        "permitted": "CapPrm",
-        "effective": "CapEff",
-        "bounding": "CapBnd",
-        "ambient": "CapAmb",
-    }
-    capabilities: dict[str, str] = {}
-    for name, field in capability_fields.items():
-        raw = values[field][0]
-        require(
-            re.fullmatch(r"[0-9a-f]{16}", raw) is not None,
-            f"candidate process capability field differs: {field}",
-        )
-        capabilities[name] = raw
-    return {
-        "uids": dict(zip(("real", "effective", "saved", "filesystem"), uids)),
-        "gids": dict(zip(("real", "effective", "saved", "filesystem"), gids)),
-        "supplementaryGroups": groups,
-        "capabilities": capabilities,
-        "noNewPrivileges": decimal(values["NoNewPrivs"][0], "NoNewPrivs"),
-        "seccompMode": decimal(values["Seccomp"][0], "Seccomp"),
-        "seccompFilterCount": decimal(
-            values["Seccomp_filters"][0],
-            "Seccomp_filters",
-        ),
-    }
-
-
-def require_expected_process_credentials(
-    candidate: Mapping[str, object],
-    status: str,
-) -> tuple[str, dict[str, object]]:
-    profile = candidate.get("credentialProfile")
-    expected = candidate.get("credentials")
-    require(
-        isinstance(profile, str)
-        and 0 < len(profile) <= 128
-        and isinstance(expected, dict),
-        "candidate process credential contract is absent",
-    )
-    observed = normalize_process_credentials(status)
-    require(
-        observed == expected,
-        "candidate process credentials or security state differ",
-    )
-    return profile, observed
 
 
 def capture_process(candidate: Mapping[str, object]) -> CapturedProcess:
@@ -947,10 +1071,20 @@ def capture_process(candidate: Mapping[str, object]) -> CapturedProcess:
         raw_arguments = read_at(process_fd, "cmdline")
         require(raw_arguments.endswith(b"\0"), f"candidate argv is invalid: {pid}")
         arguments_sha = sha256_bytes(raw_arguments)
-        status = read_at(process_fd, "status").decode("ascii", "strict")
-        credential_profile, credentials = require_expected_process_credentials(
+        task_status = parse_task_status(
+            read_at(process_fd, "status").decode("ascii", "strict")
+        )
+        require(
+            (task_status.thread_group_id, task_status.task_id) == (pid, pid),
+            f"candidate process leader status differs: {pid}",
+        )
+        (
+            credential_profile,
+            credential_profile_sha256,
+            credentials,
+        ) = require_expected_task_security(
             candidate,
-            status,
+            task_status.security_state,
         )
         cgroup_lines = read_at(process_fd, "cgroup").decode("ascii", "strict").splitlines()
         require(
@@ -964,6 +1098,10 @@ def capture_process(candidate: Mapping[str, object]) -> CapturedProcess:
             and namespace_identity(process_fd, "net") == network_namespace
             and namespace_identity(process_fd, "pid") == pid_namespace
             and namespace_identity(process_fd, "user") == user_namespace
+            and parse_task_status(
+                read_at(process_fd, "status").decode("ascii", "strict")
+            )
+            == task_status
             and not pidfd_exited(pidfd),
             f"candidate process changed during proof: {pid}",
         )
@@ -1011,6 +1149,7 @@ def capture_process(candidate: Mapping[str, object]) -> CapturedProcess:
                 "userNamespace": user_namespace,
                 "cgroup": cgroup_lines[0][3:],
                 "credentialProfile": credential_profile,
+                "credentialProfileSha256": credential_profile_sha256,
                 "credentials": credentials,
             },
             observed_proc_inode=process_dir.st_ino,
@@ -2063,20 +2202,13 @@ def process_reference_scan(
             }
             if EXPECTED_CONTAINER_ID in cgroup_components:
                 relations.add("containerCgroup")
-            second_parent, second_start = stat_identity(
-                read_at(task.process_fd, "stat")
-            )
-            require(
-                (first_parent, first_start) == (second_parent, second_start)
-                and not pidfd_exited(task.pidfd),
-                "process task reference scan changed: "
-                f"{thread_group_id}/{actual_task_id}",
-            )
+            reprove_captured_task(task)
             row = {
                 "pid": thread_group_id,
                 "taskId": actual_task_id,
                 "parentPid": first_parent,
                 "startTimeTicks": first_start,
+                "securityState": task.security_state,
                 "namespaces": namespaces,
                 "relations": sorted(relations),
             }
@@ -2164,6 +2296,17 @@ def _related_process_universe_once(
                 == (recorded["parentPid"], recorded["startTimeTicks"]),
                 f"recorded legacy process PID was reused: {role}",
             )
+        for (thread_group_id, task_id), row in rows.items():
+            role = known_by_tgid.get(thread_group_id)
+            if role is None:
+                continue
+            require_recorded_role_task_security(
+                role,
+                processes[role],
+                row["securityState"],
+                thread_group_id=thread_group_id,
+                task_id=task_id,
+            )
         related = {
             coordinate
             for coordinate, row in rows.items()
@@ -2215,18 +2358,18 @@ def _related_process_universe_once(
                 f"recorded legacy process leader is not visible: {role}",
             )
         for observation in observations:
-            parent_pid, start_ticks = stat_identity(
-                read_at(observation.process_fd, "stat")
+            held_task = CapturedTask(
+                int(observation.row["pid"]),
+                int(observation.row["taskId"]),
+                observation.pidfd,
+                observation.process_fd,
+                int(observation.row["parentPid"]),
+                int(observation.row["startTimeTicks"]),
+                dict(observation.row["securityState"]),
             )
-            require(
-                (parent_pid, start_ticks)
-                == (
-                    observation.row["parentPid"],
-                    observation.row["startTimeTicks"],
-                )
-                and not pidfd_exited(observation.pidfd),
-                "process task changed before census commit: "
-                f"{observation.row['pid']}/{observation.row['taskId']}",
+            reprove_captured_task(
+                held_task,
+                expected_security_state=observation.row["securityState"],
             )
         for thread_group_id, task_id in sorted(related):
             repeated = process_reference_scan(
@@ -3443,11 +3586,17 @@ def hold_related_process_cutoff(
         control,
         allowed_roles=allowed_roles,
     )
-    held: list[CapturedTask] = []
+    held: list[tuple[CapturedTask, Mapping[str, object]]] = []
     try:
         for row in proof["related"]:
             thread_group_id = int(row["pid"])
             task_id = int(row["taskId"])
+            security_state = row.get("securityState")
+            require(
+                isinstance(security_state, dict),
+                "recorded task security proof is invalid: "
+                f"{thread_group_id}/{task_id}",
+            )
             task = capture_task(thread_group_id, task_id)
             manual(
                 task is not None,
@@ -3455,13 +3604,18 @@ def hold_related_process_cutoff(
                 f"{thread_group_id}/{task_id}",
             )
             assert task is not None
-            held.append(task)
+            held.append((task, row))
             manual(
                 (task.parent_pid, task.start_ticks)
                 == (row["parentPid"], row["startTimeTicks"])
+                and task.security_state == security_state
                 and not pidfd_exited(task.pidfd),
-                "recorded legacy task changed at the action cutoff: "
+                "recorded legacy task identity or security changed at the action cutoff: "
                 f"{thread_group_id}/{task_id}",
+            )
+            reprove_captured_task(
+                task,
+                expected_security_state=security_state,
             )
         for role in sorted(allowed_roles):
             manual(
@@ -3476,8 +3630,18 @@ def hold_related_process_cutoff(
             committed == proof,
             "related task universe changed while entering the action cutoff",
         )
+        for task, row in held:
+            reprove_captured_task(
+                task,
+                expected_security_state=row["securityState"],
+            )
         yield proof
         if revalidate_after:
+            for task, row in held:
+                reprove_captured_task(
+                    task,
+                    expected_security_state=row["securityState"],
+                )
             final = require_related_process_cutoff(
                 control,
                 allowed_roles=allowed_roles,
@@ -3492,8 +3656,13 @@ def hold_related_process_cutoff(
                     == "exact",
                     f"recorded legacy role changed across the action cutoff: {role}",
                 )
+            for task, row in held:
+                reprove_captured_task(
+                    task,
+                    expected_security_state=row["securityState"],
+                )
     finally:
-        for task in held:
+        for task, _row in held:
             task.close()
 
 

@@ -118,8 +118,15 @@ def captured_process(
             "userNamespace": {"device": 4, "inode": 22},
             "cgroup": "/user.slice/task.scope",
             "credentialProfile": "root-runtime-full-capability",
+            "credentialProfileSha256": MODULE.MEASURED_TASK_SECURITY_PROFILE_SHA256[
+                "root-runtime-full-capability"
+            ],
             "credentials": json.loads(
-                json.dumps(MODULE.ROOT_RUNTIME_CREDENTIALS)
+                json.dumps(
+                    MODULE.MEASURED_TASK_SECURITY_PROFILES[
+                        "root-runtime-full-capability"
+                    ]
+                )
             ),
         },
         observed_proc_inode=proc_inode,
@@ -316,6 +323,8 @@ class ProcessCredentialAuthorityTest(unittest.TestCase):
         cls,
         value: object,
         *,
+        thread_group_id: int = 100,
+        task_id: int = 100,
         omit: str | None = None,
         duplicate: str | None = None,
         raw_override: dict[str, str] | None = None,
@@ -327,6 +336,8 @@ class ProcessCredentialAuthorityTest(unittest.TestCase):
         assert isinstance(uids, dict) and isinstance(gids, dict)
         assert isinstance(capabilities, dict)
         fields = {
+            "Tgid": str(thread_group_id),
+            "Pid": str(task_id),
             "Uid": "\t".join(
                 str(uids[name])
                 for name in ("real", "effective", "saved", "filesystem")
@@ -377,18 +388,57 @@ class ProcessCredentialAuthorityTest(unittest.TestCase):
         )
         for role, candidate in MODULE.EXPECTED_PROCESS_CANDIDATES.items():
             with self.subTest(role=role):
-                profile, observed = MODULE.require_expected_process_credentials(
+                expected = MODULE.MEASURED_TASK_SECURITY_PROFILES[
+                    expected_profiles[role]
+                ]
+                parsed = MODULE.parse_task_status(self.status(expected))
+                profile, profile_sha256, observed = MODULE.require_expected_task_security(
                     candidate,
-                    self.status(candidate["credentials"]),
+                    parsed.security_state,
                 )
                 self.assertEqual(profile, expected_profiles[role])
-                self.assertEqual(observed, candidate["credentials"])
+                self.assertEqual(
+                    profile_sha256,
+                    MODULE.MEASURED_TASK_SECURITY_PROFILE_SHA256[profile],
+                )
+                self.assertEqual(observed, expected)
+
+    def test_exactly_three_measured_profiles_have_fixed_canonical_seals(self) -> None:
+        self.assertEqual(
+            set(MODULE.MEASURED_TASK_SECURITY_PROFILES),
+            {
+                "sudo-wrapper-caller-real-root-effective",
+                "root-runtime-full-capability",
+                "registry-task-container-security",
+            },
+        )
+        self.assertEqual(
+            set(MODULE.MEASURED_TASK_SECURITY_PROFILE_SHA256),
+            set(MODULE.MEASURED_TASK_SECURITY_PROFILES),
+        )
+        for profile, expected in MODULE.MEASURED_TASK_SECURITY_PROFILES.items():
+            with self.subTest(profile=profile):
+                observed_sha256, observed = MODULE.measured_task_security_profile(
+                    profile
+                )
+                self.assertEqual(observed, expected)
+                self.assertEqual(
+                    observed_sha256,
+                    hashlib.sha256(MODULE.canonical_json(expected)).hexdigest(),
+                )
 
     def test_sudo_wrapper_real_uid_is_caller_but_gid_tuple_is_independent(self) -> None:
         candidate = MODULE.EXPECTED_PROCESS_CANDIDATES["containerdWrapperOuter"]
-        profile, observed = MODULE.require_expected_process_credentials(
+        sudo_security = MODULE.MEASURED_TASK_SECURITY_PROFILES[
+            "sudo-wrapper-caller-real-root-effective"
+        ]
+        root_security = MODULE.MEASURED_TASK_SECURITY_PROFILES[
+            "root-runtime-full-capability"
+        ]
+        parsed = MODULE.parse_task_status(self.status(sudo_security))
+        profile, _profile_sha256, observed = MODULE.require_expected_task_security(
             candidate,
-            self.status(MODULE.SUDO_WRAPPER_CREDENTIALS),
+            parsed.security_state,
         )
         self.assertEqual(profile, "sudo-wrapper-caller-real-root-effective")
         self.assertEqual(observed["uids"], {
@@ -399,9 +449,9 @@ class ProcessCredentialAuthorityTest(unittest.TestCase):
         })
         self.assertEqual(set(observed["gids"].values()), {0})
         with self.assertRaisesRegex(MODULE.DrainError, "security state differ"):
-            MODULE.require_expected_process_credentials(
+            MODULE.require_expected_task_security(
                 candidate,
-                self.status(MODULE.ROOT_RUNTIME_CREDENTIALS),
+                MODULE.parse_task_status(self.status(root_security)).security_state,
             )
 
     def test_uid_gid_group_capability_and_security_substitutions_reject(self) -> None:
@@ -424,22 +474,29 @@ class ProcessCredentialAuthorityTest(unittest.TestCase):
             ("seccomp_filters", lambda value: value.__setitem__("seccompFilterCount", 1)),
         ]
         for label, mutate in mutations:
-            value = self.contract(MODULE.SUDO_WRAPPER_CREDENTIALS)
+            value = self.contract(
+                MODULE.MEASURED_TASK_SECURITY_PROFILES[
+                    "sudo-wrapper-caller-real-root-effective"
+                ]
+            )
             mutate(value)
             with self.subTest(label=label), self.assertRaisesRegex(
                 MODULE.DrainError,
                 "security state differ",
             ):
-                MODULE.require_expected_process_credentials(
+                MODULE.require_expected_task_security(
                     candidate,
-                    self.status(value),
+                    MODULE.parse_task_status(self.status(value)).security_state,
                 )
 
     def test_registry_task_duplicate_group_and_reduced_security_contract_is_exact(self) -> None:
         candidate = MODULE.EXPECTED_PROCESS_CANDIDATES["registryTask"]
-        _, observed = MODULE.require_expected_process_credentials(
+        registry_security = MODULE.MEASURED_TASK_SECURITY_PROFILES[
+            "registry-task-container-security"
+        ]
+        _profile, _profile_sha256, observed = MODULE.require_expected_task_security(
             candidate,
-            self.status(MODULE.REGISTRY_TASK_CREDENTIALS),
+            MODULE.parse_task_status(self.status(registry_security)).security_state,
         )
         self.assertEqual(
             observed["supplementaryGroups"],
@@ -448,28 +505,46 @@ class ProcessCredentialAuthorityTest(unittest.TestCase):
         self.assertEqual(observed["seccompMode"], 2)
         self.assertEqual(observed["seccompFilterCount"], 1)
         with self.assertRaisesRegex(MODULE.DrainError, "security state differ"):
-            MODULE.require_expected_process_credentials(
+            MODULE.require_expected_task_security(
                 candidate,
-                self.status(MODULE.ROOT_RUNTIME_CREDENTIALS),
+                MODULE.parse_task_status(
+                    self.status(
+                        MODULE.MEASURED_TASK_SECURITY_PROFILES[
+                            "root-runtime-full-capability"
+                        ]
+                    )
+                ).security_state,
             )
 
     def test_missing_duplicate_and_malformed_status_fields_reject(self) -> None:
         candidate = MODULE.EXPECTED_PROCESS_CANDIDATES["dockerd"]
+        root_security = MODULE.MEASURED_TASK_SECURITY_PROFILES[
+            "root-runtime-full-capability"
+        ]
         for label, kwargs in (
+            ("missing_tgid", {"omit": "Tgid"}),
+            ("duplicate_pid", {"duplicate": "Pid"}),
             ("missing", {"omit": "Uid"}),
             ("duplicate", {"duplicate": "Gid"}),
+            ("task_id", {"raw_override": {"Pid": "0"}}),
             ("uid", {"raw_override": {"Uid": "00\t0\t0\t0"}}),
             ("capability", {"raw_override": {"CapEff": "ABC"}}),
             ("security", {"raw_override": {"Seccomp": "-1"}}),
         ):
             with self.subTest(label=label), self.assertRaises(MODULE.DrainError):
-                MODULE.require_expected_process_credentials(
+                parsed = MODULE.parse_task_status(
+                    self.status(root_security, **kwargs)
+                )
+                MODULE.require_expected_task_security(
                     candidate,
-                    self.status(MODULE.ROOT_RUNTIME_CREDENTIALS, **kwargs),
+                    parsed.security_state,
                 )
 
     def test_credentials_are_persisted_and_reproved_inside_pidfd_cutoffs(self) -> None:
         source = MODULE_PATH.read_text(encoding="utf-8")
+        task_capture = source[
+            source.index("def capture_task") : source.index("class CapturedProcess")
+        ]
         capture = source[
             source.index("def capture_process")
             : source.index("def validate_receipt_process")
@@ -479,11 +554,34 @@ class ProcessCredentialAuthorityTest(unittest.TestCase):
             : source.index("def exact_process_status")
         ]
         self.assertIn('"credentialProfile": credential_profile', capture)
+        self.assertIn('"credentialProfileSha256": credential_profile_sha256', capture)
         self.assertIn('"credentials": credentials', capture)
+        self.assertIn('"securityState": task.security_state', source)
+        self.assertIn("require_recorded_role_task_security", source)
+        self.assertIn("parse_task_status", task_capture)
+        self.assertIn("parse_task_status", capture)
+        self.assertNotIn("normalize_process_credentials", source)
+        self.assertTrue(
+            all(
+                "credentials" not in candidate
+                for candidate in MODULE.EXPECTED_PROCESS_CANDIDATES.values()
+            )
+        )
+        self.assertGreaterEqual(cutoff.count("reprove_captured_task"), 4)
         self.assertGreaterEqual(cutoff.count("exact_process_status"), 2)
 
 
 class ProcessUniverseTest(unittest.TestCase):
+    @staticmethod
+    def _root_security() -> dict[str, object]:
+        return json.loads(
+            json.dumps(
+                MODULE.MEASURED_TASK_SECURITY_PROFILES[
+                    "root-runtime-full-capability"
+                ]
+            )
+        )
+
     def test_structured_arguments_do_not_use_substring_authority(self) -> None:
         exact = (
             b"/usr/bin/containerd-shim-runc-v2\0-address\0"
@@ -542,13 +640,43 @@ class ProcessUniverseTest(unittest.TestCase):
                 allowed_roles=set(),
             )
 
+        first_security = self._root_security()
+        second_security = self._root_security()
+        second_security["seccompMode"] = 2
+        security_first = {
+            **stable,
+            "related": [
+                {"pid": 10, "taskId": 11, "securityState": first_security}
+            ],
+            "proofSha256": "e" * 64,
+        }
+        security_second = {
+            **stable,
+            "related": [
+                {"pid": 10, "taskId": 11, "securityState": second_security}
+            ],
+            "proofSha256": "f" * 64,
+        }
+        with mock.patch.object(
+            MODULE,
+            "_related_process_universe_once",
+            side_effect=(security_first, security_second),
+        ), self.assertRaisesRegex(MODULE.DrainError, "across proof passes"):
+            MODULE.related_process_universe(
+                processes,
+                runtime,
+                sockets,
+                allowed_roles=set(),
+            )
+
     def test_allowed_pidfds_remain_held_through_action(self) -> None:
         closed: list[str] = []
         roles = {"dockerd", "containerd"}
+        security_state = self._root_security()
         rows = [
-            {"pid": 1, "taskId": 1, "parentPid": 0, "startTimeTicks": 10},
-            {"pid": 1, "taskId": 3, "parentPid": 0, "startTimeTicks": 11},
-            {"pid": 2, "taskId": 2, "parentPid": 0, "startTimeTicks": 20},
+            {"pid": 1, "taskId": 1, "parentPid": 0, "startTimeTicks": 10, "securityState": security_state},
+            {"pid": 1, "taskId": 3, "parentPid": 0, "startTimeTicks": 11, "securityState": security_state},
+            {"pid": 2, "taskId": 2, "parentPid": 0, "startTimeTicks": 20, "securityState": security_state},
         ]
         tasks = []
         for row in rows:
@@ -556,6 +684,7 @@ class ProcessUniverseTest(unittest.TestCase):
                 parent_pid=row["parentPid"],
                 start_ticks=row["startTimeTicks"],
                 pidfd=30 + row["taskId"],
+                security_state=row["securityState"],
             )
             task.close.side_effect = (
                 lambda value=f"{row['pid']}/{row['taskId']}": closed.append(value)
@@ -572,6 +701,8 @@ class ProcessUniverseTest(unittest.TestCase):
         ), mock.patch.object(
             MODULE, "pidfd_exited", return_value=False
         ), mock.patch.object(
+            MODULE, "reprove_captured_task"
+        ), mock.patch.object(
             MODULE, "process_authority", return_value={}
         ), mock.patch.object(
             MODULE, "exact_process_status", return_value="exact"
@@ -583,18 +714,24 @@ class ProcessUniverseTest(unittest.TestCase):
         self.assertEqual(sorted(closed), ["1/1", "1/3", "2/2"])
 
     def test_action_cutoff_rejects_a_new_unheld_thread(self) -> None:
+        security_state = self._root_security()
         original = {
             "related": [
-                {"pid": 1, "taskId": 1, "parentPid": 0, "startTimeTicks": 10}
+                {"pid": 1, "taskId": 1, "parentPid": 0, "startTimeTicks": 10, "securityState": security_state}
             ]
         }
         changed = {
             "related": [
                 *original["related"],
-                {"pid": 1, "taskId": 2, "parentPid": 0, "startTimeTicks": 11},
+                {"pid": 1, "taskId": 2, "parentPid": 0, "startTimeTicks": 11, "securityState": security_state},
             ]
         }
-        task = mock.Mock(parent_pid=0, start_ticks=10, pidfd=31)
+        task = mock.Mock(
+            parent_pid=0,
+            start_ticks=10,
+            pidfd=31,
+            security_state=security_state,
+        )
         with mock.patch.object(
             MODULE,
             "require_related_process_cutoff",
@@ -603,6 +740,8 @@ class ProcessUniverseTest(unittest.TestCase):
             MODULE, "capture_task", return_value=task
         ), mock.patch.object(
             MODULE, "pidfd_exited", return_value=False
+        ), mock.patch.object(
+            MODULE, "reprove_captured_task"
         ), mock.patch.object(
             MODULE, "process_authority", return_value={}
         ), mock.patch.object(
@@ -615,13 +754,19 @@ class ProcessUniverseTest(unittest.TestCase):
                 self.fail("a changed task roster reached the action")
         task.close.assert_called_once_with()
 
-    def test_action_cutoff_rejects_credential_drift(self) -> None:
+    def test_action_cutoff_rejects_held_nonleader_security_drift(self) -> None:
+        security_state = self._root_security()
         proof = {
             "related": [
-                {"pid": 1, "taskId": 1, "parentPid": 0, "startTimeTicks": 10}
+                {"pid": 1, "taskId": 2, "parentPid": 0, "startTimeTicks": 10, "securityState": security_state}
             ]
         }
-        task = mock.Mock(parent_pid=0, start_ticks=10, pidfd=31)
+        task = mock.Mock(
+            parent_pid=0,
+            start_ticks=10,
+            pidfd=31,
+            security_state=security_state,
+        )
         with mock.patch.object(
             MODULE, "require_related_process_cutoff", return_value=proof
         ), mock.patch.object(
@@ -629,12 +774,20 @@ class ProcessUniverseTest(unittest.TestCase):
         ), mock.patch.object(
             MODULE, "pidfd_exited", return_value=False
         ), mock.patch.object(
+            MODULE,
+            "reprove_captured_task",
+            side_effect=(
+                None,
+                None,
+                MODULE.ManualRecoveryRequired("held process task identity or security state changed"),
+            ),
+        ), mock.patch.object(
             MODULE, "process_authority", return_value={}
         ), mock.patch.object(
-            MODULE, "exact_process_status", side_effect=("exact", "foreign")
+            MODULE, "exact_process_status", return_value="exact"
         ), self.assertRaisesRegex(
             MODULE.ManualRecoveryRequired,
-            "changed across the action cutoff",
+            "security state changed",
         ):
             with MODULE.hold_related_process_cutoff(
                 {"authority": {}},
@@ -662,7 +815,11 @@ class ProcessUniverseTest(unittest.TestCase):
         def read(_directory_fd: int, name: str, maximum: int = 0) -> bytes:
             del maximum
             if name == "status":
-                return b"Name:\tworker\nTgid:\t100\nPid:\t101\n"
+                return ProcessCredentialAuthorityTest.status(
+                    self._root_security(),
+                    thread_group_id=100,
+                    task_id=101,
+                ).encode()
             self.assertEqual(name, "stat")
             return raw_stat
 
@@ -683,10 +840,47 @@ class ProcessUniverseTest(unittest.TestCase):
             self.assertIsNotNone(task)
             assert task is not None
             self.assertEqual((task.parent_pid, task.start_ticks), (1, 77))
+            self.assertEqual(task.security_state, self._root_security())
             task.close()
         pidfd_open.assert_called_once_with(101, MODULE.PIDFD_THREAD)
 
+    def test_held_thread_pidfd_reproof_reads_current_nonleader_security(self) -> None:
+        expected = self._root_security()
+        changed = self._root_security()
+        changed["noNewPrivileges"] = 1
+        fields = [b"S", b"1", *([b"0"] * 17), b"77"]
+        raw_stat = b"101 (worker) " + b" ".join(fields)
+        task = MODULE.CapturedTask(100, 101, 30, 31, 1, 77, expected)
+
+        def read(_directory_fd: int, name: str, maximum: int = 0) -> bytes:
+            del maximum
+            if name == "status":
+                return ProcessCredentialAuthorityTest.status(
+                    changed,
+                    thread_group_id=100,
+                    task_id=101,
+                ).encode()
+            self.assertEqual(name, "stat")
+            return raw_stat
+
+        with mock.patch.object(
+            MODULE, "read_at", side_effect=read
+        ), mock.patch.object(
+            MODULE, "pidfd_exited", return_value=False
+        ), mock.patch.object(
+            MODULE.os, "pidfd_open"
+        ) as reopened, self.assertRaisesRegex(
+            MODULE.ManualRecoveryRequired,
+            "identity or security state changed",
+        ):
+            MODULE.reprove_captured_task(
+                task,
+                expected_security_state=expected,
+            )
+        reopened.assert_not_called()
+
     def test_nonleader_edge_is_in_the_related_task_proof(self) -> None:
+        root_security = self._root_security()
         namespaces = {
             "mountNamespace": {"inode": 1},
             "networkNamespace": {"inode": 2},
@@ -698,6 +892,11 @@ class ProcessUniverseTest(unittest.TestCase):
                 "pid": 100,
                 "parentPid": 1,
                 "startTimeTicks": 10,
+                "credentialProfile": "root-runtime-full-capability",
+                "credentialProfileSha256": MODULE.MEASURED_TASK_SECURITY_PROFILE_SHA256[
+                    "root-runtime-full-capability"
+                ],
+                "credentials": root_security,
                 **namespaces,
             }
         }
@@ -706,6 +905,7 @@ class ProcessUniverseTest(unittest.TestCase):
             "taskId": 100,
             "parentPid": 1,
             "startTimeTicks": 10,
+            "securityState": root_security,
             "namespaces": {},
             "relations": [],
         }
@@ -714,6 +914,7 @@ class ProcessUniverseTest(unittest.TestCase):
             "taskId": 101,
             "parentPid": 1,
             "startTimeTicks": 11,
+            "securityState": root_security,
             "namespaces": {},
             "relations": ["runtimeFdInode"],
         }
@@ -734,11 +935,7 @@ class ProcessUniverseTest(unittest.TestCase):
         ), mock.patch.object(
             MODULE.os, "stat", return_value=mock.Mock(st_ino=1)
         ), mock.patch.object(
-            MODULE, "read_at", return_value=b"stat"
-        ), mock.patch.object(
-            MODULE, "stat_identity", side_effect=((1, 10), (1, 11))
-        ), mock.patch.object(
-            MODULE, "pidfd_exited", return_value=False
+            MODULE, "reprove_captured_task"
         ), mock.patch.object(MODULE.os, "close"):
             proof = MODULE._related_process_universe_once(
                 processes,
@@ -750,6 +947,90 @@ class ProcessUniverseTest(unittest.TestCase):
             [(row["pid"], row["taskId"]) for row in proof["related"]],
             [(100, 100), (100, 101)],
         )
+
+    def test_recorded_role_rejects_every_nonleader_security_divergence(self) -> None:
+        expected = self._root_security()
+        recorded = {
+            "credentialProfile": "root-runtime-full-capability",
+            "credentialProfileSha256": MODULE.MEASURED_TASK_SECURITY_PROFILE_SHA256[
+                "root-runtime-full-capability"
+            ],
+            "credentials": expected,
+        }
+        mutations: list[tuple[str, Callable[[dict[str, object]], None]]] = [
+            ("uid", lambda value: value["uids"].__setitem__("effective", 1000)),
+            ("gid", lambda value: value["gids"].__setitem__("saved", 1000)),
+            ("groups", lambda value: value["supplementaryGroups"].append(1000)),
+            (
+                "capabilities",
+                lambda value: value["capabilities"].__setitem__(
+                    "bounding", "0000000000000000"
+                ),
+            ),
+            ("nnp", lambda value: value.__setitem__("noNewPrivileges", 1)),
+            ("seccomp", lambda value: value.__setitem__("seccompMode", 2)),
+            (
+                "seccomp_filters",
+                lambda value: value.__setitem__("seccompFilterCount", 1),
+            ),
+        ]
+        MODULE.require_recorded_role_task_security(
+            "dockerd",
+            recorded,
+            expected,
+            thread_group_id=100,
+            task_id=101,
+        )
+        for label, mutate in mutations:
+            observed = self._root_security()
+            mutate(observed)
+            with self.subTest(label=label), self.assertRaisesRegex(
+                MODULE.ManualRecoveryRequired,
+                "task security state differs",
+            ):
+                MODULE.require_recorded_role_task_security(
+                    "dockerd",
+                    recorded,
+                    observed,
+                    thread_group_id=100,
+                    task_id=101,
+                )
+
+    def test_recorded_role_rejects_wrong_profile_or_profile_seal(self) -> None:
+        expected = self._root_security()
+        for label, recorded in (
+            (
+                "profile",
+                {
+                    "credentialProfile": "registry-task-container-security",
+                    "credentialProfileSha256": MODULE.MEASURED_TASK_SECURITY_PROFILE_SHA256[
+                        "registry-task-container-security"
+                    ],
+                    "credentials": MODULE.MEASURED_TASK_SECURITY_PROFILES[
+                        "registry-task-container-security"
+                    ],
+                },
+            ),
+            (
+                "seal",
+                {
+                    "credentialProfile": "root-runtime-full-capability",
+                    "credentialProfileSha256": "0" * 64,
+                    "credentials": expected,
+                },
+            ),
+        ):
+            with self.subTest(label=label), self.assertRaisesRegex(
+                MODULE.DrainError,
+                "role security contract differs",
+            ):
+                MODULE.require_recorded_role_task_security(
+                    "dockerd",
+                    recorded,
+                    expected,
+                    thread_group_id=100,
+                    task_id=101,
+                )
 
     def test_task_roster_drives_process_socket_and_mount_censuses(self) -> None:
         source = MODULE_PATH.read_text(encoding="utf-8")

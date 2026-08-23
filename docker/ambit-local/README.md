@@ -296,9 +296,14 @@ seccomp mode/filter count. The four setuid `sudo` wrapper processes retain the
 authenticated caller as real UID 1000 while their other UID slots and all GID
 slots are root; containerd, dockerd, and the shim use the measured full-root
 profile; the registry task uses its measured container groups, reduced
-capability mask, and seccomp filter. Those normalized fields are persisted in
-process authority and re-proved while the full thread-group pidfd cutoff is
-held before and after each non-signal action.
+capability mask, and seccomp filter. These are exactly three source-sealed
+profiles with fixed canonical SHA-256 digests, not repeated per-role copies.
+One duplicate-rejecting task-status parser owns both leader and non-leader
+security capture. Every related task proof row persists the normalized full
+security state, every task in a recorded role's TGID must equal that role's
+sealed profile in both complete universe passes, and the same state is read
+again through each held `PIDFD_THREAD` task descriptor before and after every
+non-signal action cutoff.
 Any unreadable namespace, foreign client/process/source target, substituted
 path, unknown runtime entry, changed registry blob, residual v5 cgroup, or
 coexisting v5 authority is a manual blocker. The legacy tool observes but
