@@ -1,0 +1,68 @@
+{
+  "schema": "ambit.runtime-pack-node-input-lock/v1",
+  "state": "unavailable",
+  "version": "24.19.0",
+  "source": {
+    "repository": "https://github.com/nodejs/node",
+    "tag": "v24.19.0",
+    "tagObject": "1dbab0e88e7ccc6b44c801418911767447796ed0",
+    "commit": "cdc1b38d40cb567b7ad0b39c86addf830a0af0ae",
+    "archiveUrl": "https://nodejs.org/dist/v24.19.0/node-v24.19.0.tar.xz",
+    "archiveBytes": 55505276,
+    "archiveSha256": "sha256:f6d95e10a0431ee1067fc6aabe9f762908b4716dd35324e1ddb4b1466b76659f"
+  },
+  "binary": {
+    "platform": "linux/x64",
+    "archiveUrl": "https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-x64.tar.xz",
+    "archiveBytes": 31633904,
+    "archiveSha256": "sha256:14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647",
+    "nodePath": "bin/node",
+    "nodeBytes": 125989464,
+    "nodeSha256": "sha256:bc17c508ffeed0ec622934f9b7fa72f8e78da65350e63c3eceb56fa688aa5e12",
+    "licensePath": "LICENSE",
+    "licenseSha256": "sha256:148eacf7863ef4329224a29398623077200a27194aa075569faf4a0a85566ca5"
+  },
+  "releaseAuthority": {
+    "shasumsUrl": "https://nodejs.org/dist/v24.19.0/SHASUMS256.txt",
+    "shasumsBytes": 2967,
+    "shasumsSha256": "sha256:be0629ee2bcd8e40bb856abdd3407f0762101b76bd60a36b8867f637733631c0",
+    "signatureUrl": "https://nodejs.org/dist/v24.19.0/SHASUMS256.txt.sig",
+    "signatureBytes": 119,
+    "signatureSha256": "sha256:801534e2d4c769c087e2e3eec89e879032872357e64e82336f86f03e72ece630",
+    "signerFingerprint": "5BE8A3F6C8A5C01D106C0AD820B1A390B168D356",
+    "verificationState": "unavailable"
+  },
+  "runtimeAbi": {
+    "modules": "137",
+    "napi": "10",
+    "v8": "13.6.233.17-node.51",
+    "openssl": "3.5.7",
+    "uv": "1.52.1",
+    "dynamicLibraries": [
+      "ld-linux-x86-64.so.2",
+      "libc.so.6",
+      "libdl.so.2",
+      "libgcc_s.so.1",
+      "libm.so.6",
+      "libpthread.so.0",
+      "libstdc++.so.6"
+    ]
+  },
+  "retainedRuntimePaths": [
+    "bin/node",
+    "LICENSE"
+  ],
+  "removedRuntimePaths": [
+    "bin/corepack",
+    "bin/npm",
+    "bin/npx",
+    "lib/node_modules/corepack",
+    "lib/node_modules/npm"
+  ],
+  "missing": [
+    "independent-node-release-keyring-verification",
+    "exact-debian-dynamic-library-closure-reproof",
+    "node-binary-and-source-vulnerability-policy-pass",
+    "retained-node-license-and-third-party-notice-roster"
+  ]
+}

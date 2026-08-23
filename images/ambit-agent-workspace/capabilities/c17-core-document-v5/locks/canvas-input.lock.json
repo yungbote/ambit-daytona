@@ -1,0 +1,73 @@
+{
+  "schema": "ambit.runtime-pack-pdfjs-canvas-input-lock/v1",
+  "state": "unavailable",
+  "implementation": {
+    "package": "@napi-rs/canvas",
+    "version": "1.0.7",
+    "sourceRepository": "https://github.com/Brooooooklyn/canvas",
+    "sourceCommit": "062130c03715f275fd46a59a4bb224e907c91686",
+    "sourceArchiveUrl": "https://github.com/Brooooooklyn/canvas/archive/062130c03715f275fd46a59a4bb224e907c91686.tar.gz",
+    "sourceArchiveBytes": 2273773,
+    "sourceArchiveSha256": "sha256:a742c5453323327c4d6de7bfdcc69d0678144c3bf0db8f7dc246668dc5273c22",
+    "licenseExpression": "MIT",
+    "licensePath": "LICENSE"
+  },
+  "javascriptArchive": {
+    "url": "https://registry.npmjs.org/@napi-rs/canvas/-/canvas-1.0.7.tgz",
+    "bytes": 32351,
+    "sha256": "sha256:8f969d4166974b4508007838d1bb53f27d030b2554ffbbbbf50f8dba0a7fbabe",
+    "npmIntegrity": "sha512-26wVFEgs6gbe7wmzCrud1pK8q6oOgcUu7OOF24BuazB8ZUCskU9ZSLrCjoWIFVxx09rjAxsXxPleaWowHvdPCA==",
+    "npmAttestationUrl": "https://registry.npmjs.org/-/npm/v1/attestations/@napi-rs%2fcanvas@1.0.7"
+  },
+  "platformArchive": {
+    "package": "@napi-rs/canvas-linux-x64-gnu",
+    "version": "1.0.7",
+    "url": "https://registry.npmjs.org/@napi-rs/canvas-linux-x64-gnu/-/canvas-linux-x64-gnu-1.0.7.tgz",
+    "bytes": 14085888,
+    "sha256": "sha256:8bbe6cbfcf5add8a43232b90d86636d90ed8f28a9acb0a91c0e9a49dc2124699",
+    "npmIntegrity": "sha512-0tT9KzEcTfb6MWdUWIDfy6uq6UNF691r/9NfXxxl8s9+G5QrD7VP1UC+PAwzsCzJTClIKyidNau/grYTL+QmHw==",
+    "npmAttestationUrl": "https://registry.npmjs.org/-/npm/v1/attestations/@napi-rs%2fcanvas-linux-x64-gnu@1.0.7",
+    "nativePath": "skia.linux-x64-gnu.node",
+    "nativeBytes": 33978880,
+    "nativeSha256": "sha256:b180b8e12464e337f5bc0c4195a7bed73c65f588542ca7d0de20c596419eff03"
+  },
+  "requiredInterface": {
+    "createCanvas": true,
+    "DOMMatrix": true,
+    "Path2D": true,
+    "ImageData": true,
+    "pngEncoding": true
+  },
+  "nativeLineage": {
+    "skiaCommit": "7219df0fb0ff64f26adad448f94e8c001b964e6a",
+    "skiaSourceArchiveSha256": "sha256:83edae36346f1cd9122a1674b82277693bb101d17a106822835c0863f002b5bd",
+    "skiaBuildConfiguration": "unavailable",
+    "cargoDependencyLock": "unavailable",
+    "completeThirdPartySourceRoster": "unavailable",
+    "completeThirdPartyLicenseRoster": "unavailable"
+  },
+  "dynamicLibraries": [
+    "ld-linux-x86-64.so.2",
+    "libc.so.6",
+    "libdl.so.2",
+    "libgcc_s.so.1",
+    "libm.so.6",
+    "libpthread.so.0",
+    "librt.so.1"
+  ],
+  "forbiddenAlternatives": [
+    "ambient-browser-canvas",
+    "ambient-native-addon",
+    "path2d-polyfill",
+    "poppler-rasterization",
+    "prebuilt-binary-without-source-license-closure"
+  ],
+  "missing": [
+    "verified-npm-slsa-attestations",
+    "exact-skia-build-configuration",
+    "exact-cargo-and-native-source-closure",
+    "complete-skia-and-third-party-license-inventory",
+    "native-binary-vulnerability-policy-pass",
+    "real-pdfjs-page-pixel-conformance"
+  ]
+}
