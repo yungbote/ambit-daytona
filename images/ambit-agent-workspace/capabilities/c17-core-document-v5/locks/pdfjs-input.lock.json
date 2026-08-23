@@ -1,0 +1,56 @@
+{
+  "schema": "ambit.runtime-pack-pdfjs-input-lock/v1",
+  "package": "pdfjs-dist",
+  "version": "6.2.108",
+  "source": {
+    "repository": "https://github.com/mozilla/pdf.js",
+    "tag": "v6.2.108",
+    "commit": "0365cbde028bd92e58f2dab1bb70cd30ac7acfd7"
+  },
+  "archive": {
+    "url": "https://registry.npmjs.org/pdfjs-dist/-/pdfjs-dist-6.2.108.tgz",
+    "bytes": 8419573,
+    "sha256": "sha256:b3e68d5cda70551a90b3f771419d379e20fc788ce056fa32de73608e01df47f4",
+    "sha512": "sha512:63115bf9241ca1d376ae75fd4e7ddd1d896a7dbecd8e5cf37ce34fa4977e00aa0ab548c475ebd37db0b4edde5371ccf338aeb6eb56ae4643ff33c3811ecf6f15",
+    "npmIntegrity": "sha512-YxFb+SQcodN2rnX9Tn3dHYlqfb7NjlzzfONPpJd+AKoKtUjEdevTfbC07d5TcczzOK6261auRkP/M8OBHs9vFQ==",
+    "npmAttestationUrl": "https://registry.npmjs.org/-/npm/v1/attestations/pdfjs-dist@6.2.108"
+  },
+  "retainedStaticRoots": [
+    "build/pdf.mjs",
+    "build/pdf.worker.mjs",
+    "cmaps",
+    "iccs",
+    "wasm"
+  ],
+  "requiredLicenseFiles": [
+    "LICENSE",
+    "cmaps/LICENSE",
+    "iccs/LICENSE",
+    "wasm/LICENSE_JBIG2",
+    "wasm/LICENSE_OPENJPEG",
+    "wasm/LICENSE_PDFJS_JBIG2",
+    "wasm/LICENSE_PDFJS_OPENJPEG",
+    "wasm/LICENSE_PDFJS_QCMS",
+    "wasm/LICENSE_QCMS"
+  ],
+  "excludedRoots": [
+    "legacy",
+    "standard_fonts",
+    "types",
+    "web"
+  ],
+  "execution": {
+    "state": "unavailable",
+    "reason": "no-exact-licensed-pdfjs-canvas-execution-component",
+    "forbiddenSubstitutions": [
+      "browser-cdn",
+      "poppler",
+      "ambient-node",
+      "unlicensed-native-canvas"
+    ]
+  },
+  "extractedRoster": {
+    "state": "unavailable",
+    "requiredLock": "pdfjs-static-files.sha256"
+  }
+}
