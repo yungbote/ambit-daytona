@@ -1379,7 +1379,12 @@ class ProcessUniverseTest(unittest.TestCase):
 
     def test_borrowed_namespace_census_reproves_held_descriptor_identity(self) -> None:
         identity = MODULE.NamespaceIdentity("mnt", 4, 100)
-        preimage = {"taskCount": 1}
+        preimage = MODULE.task_namespace_census_preimage(
+            {identity},
+            set(),
+            (),
+            1,
+        )
         digest = hashlib.sha256(MODULE.canonical_json(preimage)).hexdigest()
         summary = {
             "currentNamespaceCount": 1,
@@ -1446,7 +1451,12 @@ class ProcessUniverseTest(unittest.TestCase):
         self.assertEqual(close.call_args_list, [mock.call(40), mock.call(41)])
 
     def test_borrowed_census_rejects_mutated_digest_preimage(self) -> None:
-        preimage = {"taskCount": 0}
+        preimage = MODULE.task_namespace_census_preimage(
+            set(),
+            set(),
+            (),
+            0,
+        )
         digest = hashlib.sha256(MODULE.canonical_json(preimage)).hexdigest()
         summary = {
             "currentNamespaceCount": 0,
@@ -2212,6 +2222,47 @@ class MountAuthorityTest(unittest.TestCase):
             census.proof_sha256,
         )
         self.assertNotIn("mountNamespaces", census.proof)
+
+    def test_borrowed_census_rejects_same_count_mount_and_fd_replacements(self) -> None:
+        identity, full, _restricted = self.canonical_and_restricted_views()
+        net = MODULE.NamespaceIdentity("net", 4, 4026531833)
+
+        def fresh() -> MODULE.TaskNamespaceCensus:
+            return MODULE._task_namespace_census_from_observations(
+                {identity, net},
+                {net},
+                {identity: [full]},
+                2,
+                (),
+            )
+
+        changed_fd = fresh()
+        changed_fd.namespace_fds = frozenset(
+            (MODULE.NamespaceIdentity("net", 4, 4026531834),)
+        )
+        with self.assertRaisesRegex(MODULE.DrainError, "digest or summary differs"):
+            changed_fd.require_open()
+
+        changed_mount = fresh()
+        original = changed_mount.mounts[0]
+        replacement_record = MODULE.MountRecord(
+            99,
+            1,
+            "0:99",
+            "/",
+            "/replacement",
+            "tmpfs",
+        )
+        changed_mount.mounts = (
+            MODULE.MountNamespaceAuthority(
+                original.identity,
+                original.root_identity,
+                (replacement_record,),
+                original.views,
+            ),
+        )
+        with self.assertRaisesRegex(MODULE.DrainError, "digest or summary differs"):
+            changed_mount.require_open()
 
     def test_mount_records_preserve_ids_and_stacked_multiplicity(self) -> None:
         raw = (

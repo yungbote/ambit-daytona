@@ -1409,8 +1409,20 @@ class TaskNamespaceCensus:
 
     def require_open(self) -> None:
         require(not self._closed, "task namespace census is already closed")
+        task_count = self.proof.get("taskCount")
         require(
-            sha256_bytes(canonical_json(self.preimage)) == self.proof_sha256
+            isinstance(task_count, int) and not isinstance(task_count, bool),
+            "task namespace census task count differs",
+        )
+        reconstructed = task_namespace_census_preimage(
+            set(self.current),
+            set(self.namespace_fds),
+            self.mounts,
+            task_count,
+        )
+        require(
+            canonical_json(reconstructed) == canonical_json(self.preimage)
+            and sha256_bytes(canonical_json(self.preimage)) == self.proof_sha256
             and self.proof.get("proofSha256") == self.proof_sha256
             and self.proof.get("currentNamespaceCount") == len(self.current)
             and self.proof.get("namespaceFdCount") == len(self.namespace_fds)
@@ -1786,6 +1798,36 @@ def require_mounted_namespace_representatives(
     return mounted_namespace_pins
 
 
+def task_namespace_census_preimage(
+    current: set[NamespaceIdentity],
+    namespace_fds: set[NamespaceIdentity],
+    mounts: Sequence[MountNamespaceAuthority],
+    task_count: int,
+) -> dict[str, object]:
+    mounted_namespace_pins = require_mounted_namespace_representatives(
+        mounts,
+        current,
+    )
+    return {
+        "currentNamespaces": [
+            _namespace_identity_document(value) for value in sorted(current)
+        ],
+        "namespaceFds": [
+            _namespace_identity_document(value) for value in sorted(namespace_fds)
+        ],
+        "mountNamespaces": [
+            _mount_authority_document(value) for value in mounts
+        ],
+        "mountedNamespacePins": [
+            _namespace_identity_document(value)
+            for value in sorted(mounted_namespace_pins)
+        ],
+        "processlessMountNamespaces": "not_observable_and_not_admitted",
+        "queuedScmRightsNamespaceFds": "not_observable_and_not_admitted",
+        "taskCount": task_count,
+    }
+
+
 def require_task_namespace_census_fd_budget(
     task_count: int,
     *,
@@ -1988,27 +2030,12 @@ def _task_namespace_census_from_observations(
         build_mount_namespace_authority(identity, mount_views[identity])
         for identity in sorted(mount_views)
     )
-    mounted_namespace_pins = require_mounted_namespace_representatives(
-        mounts, current
+    proof = task_namespace_census_preimage(
+        current,
+        namespace_fds,
+        mounts,
+        task_count,
     )
-    proof = {
-        "currentNamespaces": [
-            _namespace_identity_document(value) for value in sorted(current)
-        ],
-        "namespaceFds": [
-            _namespace_identity_document(value) for value in sorted(namespace_fds)
-        ],
-        "mountNamespaces": [
-            _mount_authority_document(value) for value in mounts
-        ],
-        "mountedNamespacePins": [
-            _namespace_identity_document(value)
-            for value in sorted(mounted_namespace_pins)
-        ],
-        "processlessMountNamespaces": "not_observable_and_not_admitted",
-        "queuedScmRightsNamespaceFds": "not_observable_and_not_admitted",
-        "taskCount": task_count,
-    }
     digest = sha256_bytes(canonical_json(proof))
     return TaskNamespaceCensus(
         frozenset(current),
