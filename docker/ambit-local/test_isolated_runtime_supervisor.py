@@ -2274,6 +2274,34 @@ class DescriptorCustodyTest(unittest.TestCase):
         self.assertEqual(calls, [121])
         self.assertEqual(owner.attempted, (121,))
 
+    def test_cleanup_outcome_primary_store_is_opcode_interruption_safe(self) -> None:
+        target = next(
+            instruction.offset
+            for instruction in dis.get_instructions(MODULE.CleanupOutcome.record)
+            if instruction.opname == "STORE_ATTR" and instruction.argval == "primary"
+        )
+        outcome = MODULE.CleanupOutcome(None)
+        first = OSError("first cleanup failure")
+        fired = False
+
+        def trace(frame: object, event: str, _argument: object) -> object:
+            nonlocal fired
+            if getattr(frame, "f_code", None) is MODULE.CleanupOutcome.record.__code__:
+                frame.f_trace_opcodes = True
+                if event == "opcode" and frame.f_lasti == target:
+                    fired = True
+                    raise KeyboardInterrupt("outcome publication was traceable")
+            return trace
+
+        sys.settrace(trace)
+        try:
+            outcome.record(first)
+        finally:
+            sys.settrace(None)
+
+        self.assertFalse(fired)
+        self.assertIs(outcome.primary, first)
+
     def test_every_custody_transition_line_is_closed_or_exactly_retryable(self) -> None:
         close_codes = (
             MODULE.DescriptorCustody._close_next.__code__,
@@ -2449,6 +2477,146 @@ class DescriptorCustodyTest(unittest.TestCase):
             )
         )
 
+    def test_close_failure_is_recorded_before_restoration_failure(self) -> None:
+        owner = MODULE.DescriptorCustody((130, 131))
+        first = OSError("first close failed")
+        restoration = KeyboardInterrupt("pending signal on restore")
+        calls: list[int] = []
+        restores = 0
+        real_restore = MODULE.restore_python_interruptions
+
+        def close(descriptor: int) -> None:
+            calls.append(descriptor)
+            if descriptor == 131:
+                raise first
+
+        def restore(mask: MODULE.InterruptionMask) -> None:
+            nonlocal restores
+            restores += 1
+            real_restore(mask)
+            if restores == 1:
+                raise restoration
+
+        with (
+            mock.patch.object(MODULE.os, "close", side_effect=close),
+            mock.patch.object(
+                MODULE,
+                "restore_python_interruptions",
+                side_effect=restore,
+            ),
+        ):
+            with self.assertRaises(OSError) as raised:
+                owner.close()
+
+        self.assertIs(raised.exception, first)
+        self.assertEqual(calls, [131, 130])
+        self.assertEqual(owner.failures, ((131, first),))
+        self.assertTrue(
+            any(
+                "KeyboardInterrupt" in note
+                for note in getattr(first, "__notes__", ())
+            )
+        )
+
+    def test_restoration_attempts_profile_signal_and_trace_after_failures(self) -> None:
+        profile_error = RuntimeError("profile restore failed")
+        signal_error = OSError("signal mask restore failed")
+        trace_error = KeyboardInterrupt("trace restore failed")
+        events: list[str] = []
+        mask = MODULE.InterruptionMask(mock.Mock(), mock.Mock(), set())
+
+        def profile(_value: object) -> None:
+            events.append("profile")
+            raise profile_error
+
+        def signal_mask(_operation: object, _value: object) -> None:
+            events.append("signal")
+            raise signal_error
+
+        def trace(_value: object) -> None:
+            events.append("trace")
+            raise trace_error
+
+        with (
+            mock.patch.object(MODULE.sys, "setprofile", side_effect=profile),
+            mock.patch.object(MODULE.signal, "pthread_sigmask", side_effect=signal_mask),
+            mock.patch.object(MODULE.sys, "settrace", side_effect=trace),
+        ):
+            with self.assertRaises(OSError) as raised:
+                MODULE.restore_python_interruptions(mask)
+
+        self.assertIs(raised.exception, signal_error)
+        self.assertEqual(events, ["signal", "trace", "profile"])
+        notes = getattr(signal_error, "__notes__", ())
+        self.assertTrue(any("RuntimeError" in note for note in notes))
+        self.assertTrue(any("KeyboardInterrupt" in note for note in notes))
+
+    def test_hostile_restored_profile_cannot_preempt_signal_mask_restoration(self) -> None:
+        signal_calls: list[tuple[object, object]] = []
+        profile_events: list[str] = []
+
+        def hostile_profile(_frame: object, event: str, _argument: object) -> None:
+            profile_events.append(event)
+            raise RuntimeError("hostile restored profile")
+
+        mask = MODULE.InterruptionMask(None, hostile_profile, set())
+        try:
+            with mock.patch.object(
+                MODULE.signal,
+                "pthread_sigmask",
+                side_effect=lambda operation, value: signal_calls.append(
+                    (operation, value)
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "hostile restored profile"):
+                    MODULE.restore_python_interruptions(mask)
+        finally:
+            sys.setprofile(None)
+            sys.settrace(None)
+
+        self.assertEqual(len(signal_calls), 1)
+        self.assertTrue(profile_events)
+
+    def test_suspend_failure_rolls_back_both_hooks_and_preserves_first_error(self) -> None:
+        block_error = OSError("signal block failed")
+        profile_error = RuntimeError("profile rollback failed")
+        saved_trace = mock.Mock()
+        saved_profile = mock.Mock()
+        trace_values: list[object] = []
+        profile_values: list[object] = []
+
+        def settrace(value: object) -> None:
+            trace_values.append(value)
+
+        def setprofile(value: object) -> None:
+            profile_values.append(value)
+            if value is saved_profile:
+                raise profile_error
+
+        with (
+            mock.patch.object(MODULE.sys, "gettrace", return_value=saved_trace),
+            mock.patch.object(MODULE.sys, "getprofile", return_value=saved_profile),
+            mock.patch.object(MODULE.sys, "settrace", side_effect=settrace),
+            mock.patch.object(MODULE.sys, "setprofile", side_effect=setprofile),
+            mock.patch.object(
+                MODULE.signal,
+                "pthread_sigmask",
+                side_effect=block_error,
+            ),
+        ):
+            with self.assertRaises(OSError) as raised:
+                MODULE.suspend_python_interruptions()
+
+        self.assertIs(raised.exception, block_error)
+        self.assertEqual(trace_values, [None, saved_trace])
+        self.assertEqual(profile_values, [None, saved_profile, saved_profile])
+        self.assertTrue(
+            any(
+                "RuntimeError" in note
+                for note in getattr(block_error, "__notes__", ())
+            )
+        )
+
     def test_authority_retirement_interrupt_still_closes_all_four_descriptors(self) -> None:
         state = MODULE.StateAuthority(STATE_ROOT, 1000, 1000, 108, 109)
         lease = MODULE.RuntimeLease(Path("/run/example.lock"), 110, 111, 1, 2)
@@ -2479,12 +2647,159 @@ class DescriptorCustodyTest(unittest.TestCase):
             sys.settrace(trace)
             try:
                 with self.assertRaisesRegex(KeyboardInterrupt, "retirement interrupted"):
-                    MODULE.close_runtime_authorities(state=state, lease=lease)
+                    MODULE.settle_runtime_authorities(state=state, lease=lease)
             finally:
                 sys.settrace(None)
 
         self.assertTrue(interrupted)
         self.assertEqual(calls, [109, 108, 111, 110])
+        self.assertEqual(state._descriptors.owned, ())
+        self.assertEqual(lease._descriptors.owned, ())
+
+    def test_outer_gate_retries_an_interrupted_inner_exit(self) -> None:
+        gate = MODULE.DescriptorCustodyGate()
+        owner = gate.custody
+        calls: list[int] = []
+        interrupted = False
+
+        def trace(frame: object, event: str, _argument: object) -> object:
+            nonlocal interrupted
+            if (
+                not interrupted
+                and event == "line"
+                and getattr(frame, "f_code", None)
+                is MODULE.DescriptorCustody.__exit__.__code__
+            ):
+                interrupted = True
+                raise KeyboardInterrupt("inner exit entry interrupted")
+            return trace
+
+        caught: BaseException | None = None
+        with mock.patch.object(
+            MODULE.os,
+            "close",
+            side_effect=lambda descriptor: calls.append(descriptor),
+        ):
+            try:
+                with gate, owner:
+                    owner.acquire(lambda: 124)
+                    owner.acquire(lambda: 125)
+                    sys.settrace(trace)
+            except BaseException as error:
+                caught = error
+            finally:
+                sys.settrace(None)
+
+        self.assertTrue(interrupted)
+        self.assertIsInstance(caught, KeyboardInterrupt)
+        self.assertEqual(calls, [125, 124])
+        self.assertEqual(owner.owned, ())
+
+    def test_outer_gate_reconciles_every_reachable_inner_exit_transition(self) -> None:
+        executed: set[int] = set()
+
+        def record(frame: object, event: str, _argument: object) -> object:
+            if (
+                event == "line"
+                and getattr(frame, "f_code", None)
+                is MODULE.DescriptorCustody.__exit__.__code__
+            ):
+                executed.add(frame.f_lineno)
+            return record
+
+        baseline_gate = MODULE.DescriptorCustodyGate()
+        baseline = baseline_gate.custody
+        with mock.patch.object(
+            MODULE.os,
+            "close",
+            side_effect=OSError("baseline close failed"),
+        ):
+            sys.settrace(record)
+            try:
+                with self.assertRaises(OSError):
+                    with baseline_gate, baseline:
+                        baseline.acquire(lambda: 132)
+            finally:
+                sys.settrace(None)
+
+        for target in sorted(executed):
+            with self.subTest(line=target):
+                gate = MODULE.DescriptorCustodyGate()
+                owner = gate.custody
+                first = OSError(f"close failed at target {target}")
+                calls: list[int] = []
+                interrupted = False
+                close_happened_before_interrupt = False
+
+                def close(descriptor: int) -> None:
+                    calls.append(descriptor)
+                    raise first
+
+                def trace(frame: object, event: str, _argument: object) -> object:
+                    nonlocal interrupted, close_happened_before_interrupt
+                    if (
+                        not interrupted
+                        and event == "line"
+                        and getattr(frame, "f_code", None)
+                        is MODULE.DescriptorCustody.__exit__.__code__
+                        and frame.f_lineno == target
+                    ):
+                        close_happened_before_interrupt = bool(calls)
+                        interrupted = True
+                        raise KeyboardInterrupt(f"inner exit line {target}")
+                    return trace
+
+                caught: BaseException | None = None
+                with mock.patch.object(MODULE.os, "close", side_effect=close):
+                    try:
+                        with gate, owner:
+                            owner.acquire(lambda: 133)
+                            sys.settrace(trace)
+                    except BaseException as error:
+                        caught = error
+                    finally:
+                        sys.settrace(None)
+
+                self.assertTrue(interrupted)
+                self.assertEqual(calls, [133])
+                self.assertEqual(owner.owned, ())
+                if close_happened_before_interrupt:
+                    self.assertIs(caught, first)
+                else:
+                    self.assertIsInstance(caught, KeyboardInterrupt)
+
+    def test_authority_outer_gate_retries_interrupted_inner_entry(self) -> None:
+        state = MODULE.StateAuthority(STATE_ROOT, 1000, 1000, 126, 127)
+        lease = MODULE.RuntimeLease(Path("/run/example.lock"), 128, 129, 1, 2)
+        calls: list[int] = []
+        interrupted = False
+
+        def trace(frame: object, event: str, _argument: object) -> object:
+            nonlocal interrupted
+            if (
+                not interrupted
+                and event == "line"
+                and getattr(frame, "f_code", None)
+                is MODULE._close_runtime_authorities_once.__code__
+            ):
+                interrupted = True
+                raise KeyboardInterrupt("authority entry interrupted")
+            return trace
+
+        with mock.patch.object(
+            MODULE.os,
+            "close",
+            side_effect=lambda descriptor: calls.append(descriptor),
+        ):
+            sys.settrace(trace)
+            try:
+                with self.assertRaisesRegex(KeyboardInterrupt, "authority entry interrupted"):
+                    MODULE.settle_runtime_authorities(state=state, lease=lease)
+            finally:
+                sys.settrace(None)
+
+        self.assertTrue(interrupted)
+        self.assertEqual(calls, [127, 126, 129, 128])
         self.assertEqual(state._descriptors.owned, ())
         self.assertEqual(lease._descriptors.owned, ())
 
@@ -2588,15 +2903,24 @@ class DescriptorCustodyTest(unittest.TestCase):
                 side_effect=lambda descriptor: calls.append(descriptor),
             ),
         ):
-            with self.assertRaisesRegex(KeyboardInterrupt, "state publication interrupted"):
-                with state:
+            caught: BaseException | None = None
+            try:
+                try:
                     sys.settrace(trace)
-                    try:
-                        state.acquire()
-                    finally:
-                        sys.settrace(None)
+                    state.acquire()
+                finally:
+                    sys.settrace(None)
+            except BaseException as error:
+                caught = error
+            finally:
+                MODULE.settle_runtime_authorities(
+                    state=state,
+                    lease=None,
+                    primary=caught,
+                )
 
         self.assertTrue(interrupted)
+        self.assertIsInstance(caught, KeyboardInterrupt)
         self.assertEqual(calls, [114, 113])
         self.assertEqual((state.root_fd, state.evidence_fd), (-1, -1))
         self.assertEqual(state._descriptors.owned, ())
@@ -2699,9 +3023,9 @@ class DescriptorCustodyTest(unittest.TestCase):
         primary = RuntimeError("active body failure")
         with mock.patch.object(MODULE.os, "close") as close:
             with self.assertRaisesRegex(MODULE.SupervisorError, "duplicate"):
-                MODULE.close_runtime_authorities(state=state, lease=lease)
+                MODULE.settle_runtime_authorities(state=state, lease=lease)
             close.assert_not_called()
-            MODULE.close_runtime_authorities(
+            MODULE.settle_runtime_authorities(
                 state=state,
                 lease=lease,
                 primary=primary,
@@ -2747,6 +3071,76 @@ class DescriptorCustodyTest(unittest.TestCase):
 
         self.assertEqual(calls, [61, 60])
 
+    def test_busy_lease_cleanup_ambiguity_is_not_retryable(self) -> None:
+        lease = MODULE.RuntimeLease.pending(STATE_ROOT)
+        parent = mock.Mock(
+            st_mode=stat.S_IFDIR | 0o755,
+            st_uid=0,
+            st_gid=0,
+        )
+        file_identity = mock.Mock(
+            st_mode=stat.S_IFREG | 0o600,
+            st_uid=0,
+            st_gid=0,
+            st_nlink=1,
+            st_dev=1,
+            st_ino=2,
+        )
+        calls: list[int] = []
+
+        def close(descriptor: int) -> None:
+            calls.append(descriptor)
+            if descriptor == 141:
+                raise OSError("ambiguous lease close")
+
+        with (
+            mock.patch.object(MODULE.os, "open", side_effect=(140, 141)),
+            mock.patch.object(
+                MODULE.os,
+                "fstat",
+                side_effect=lambda descriptor: parent if descriptor == 140 else file_identity,
+            ),
+            mock.patch.object(MODULE.os, "stat", return_value=file_identity),
+            mock.patch.object(
+                MODULE.fcntl,
+                "flock",
+                side_effect=BlockingIOError("busy"),
+            ),
+            mock.patch.object(MODULE.os, "close", side_effect=close),
+        ):
+            with self.assertRaisesRegex(
+                MODULE.SupervisorError,
+                "cleanup is ambiguous; retry is forbidden",
+            ):
+                lease.acquire()
+
+        self.assertEqual(calls, [141, 140])
+        self.assertEqual(lease._descriptors.disposition, "ambiguous")
+        self.assertEqual(len(lease._descriptors.failures), 1)
+
+        first = mock.Mock()
+        first.acquire.side_effect = MODULE.SupervisorError(
+            "runtime lease cleanup is ambiguous; retry is forbidden"
+        )
+        second = mock.Mock()
+        published: list[object] = []
+        with mock.patch.object(
+            MODULE.RuntimeLease,
+            "pending",
+            side_effect=(first, second),
+        ) as pending, self.assertRaisesRegex(
+            MODULE.SupervisorError,
+            "cleanup is ambiguous; retry is forbidden",
+        ):
+            MODULE.acquire_runtime_lease_until(
+                STATE_ROOT,
+                timeout=1.0,
+                recipient=lambda candidate: published.append(candidate),
+            )
+        pending.assert_called_once_with(STATE_ROOT)
+        self.assertEqual(published, [first])
+        second.acquire.assert_not_called()
+
     def test_composed_state_and_lease_are_retired_before_all_attempt_cleanup(
         self,
     ) -> None:
@@ -2767,9 +3161,9 @@ class DescriptorCustodyTest(unittest.TestCase):
 
         with mock.patch.object(MODULE.os, "close", side_effect=close):
             with self.assertRaises(OSError) as raised:
-                MODULE.close_runtime_authorities(state=state, lease=lease)
+                MODULE.settle_runtime_authorities(state=state, lease=lease)
             self.assertIs(raised.exception, first)
-            MODULE.close_runtime_authorities(state=state, lease=lease)
+            MODULE.settle_runtime_authorities(state=state, lease=lease)
 
         self.assertEqual(calls, [71, 70, 73, 72])
         self.assertTrue(any("fd 73" in note for note in getattr(first, "__notes__", ())))
@@ -2787,7 +3181,7 @@ class DescriptorCustodyTest(unittest.TestCase):
             side_effect=lambda descriptor: calls.append(descriptor),
         ):
             self.assertTrue(
-                MODULE.close_runtime_authorities(
+                MODULE.settle_runtime_authorities(
                     state=state,
                     lease=lease,
                     primary=primary,
@@ -2923,7 +3317,7 @@ class DescriptorCustodyTest(unittest.TestCase):
         lease = MODULE.RuntimeLease(Path("/run/example.lock"), 94, 95, 1, 2)
         supervisor = mock.Mock()
         calls: list[int] = []
-        real_close = MODULE.close_runtime_authorities
+        real_close = MODULE.settle_runtime_authorities
 
         def close_authorities(
             *,
@@ -2953,7 +3347,7 @@ class DescriptorCustodyTest(unittest.TestCase):
             mock.patch.object(MODULE, "set_child_subreaper"),
             mock.patch.object(
                 MODULE,
-                "close_runtime_authorities",
+                "settle_runtime_authorities",
                 side_effect=close_authorities,
             ) as composed_close,
             mock.patch.object(
@@ -3010,9 +3404,23 @@ class DescriptorCustodyTest(unittest.TestCase):
                 for call in ast.walk(functions[name])
                 if isinstance(call, ast.Call)
                 and isinstance(call.func, ast.Name)
-                and call.func.id == "DescriptorCustody"
+                and call.func.id == "DescriptorCustodyGate"
             ]
             self.assertTrue(custody_calls, name)
+
+        for name in (
+            "_close_custody_roster_failure_total",
+            "_retire_and_close_authorities_failure_total",
+        ):
+            self.assertFalse(
+                any(
+                    isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Name)
+                    and call.func.id == name
+                    for call in ast.walk(functions[name])
+                ),
+                name,
+            )
 
         for name in ("StateAuthority.acquire", "RuntimeLease.acquire"):
             internal_acquires = [
@@ -3075,12 +3483,13 @@ class DescriptorCustodyTest(unittest.TestCase):
                 for call in ast.walk(functions[name])
                 if isinstance(call, ast.Call)
                 and isinstance(call.func, ast.Name)
-                and call.func.id == "close_runtime_authorities"
+                and call.func.id == "settle_runtime_authorities"
             ]
             self.assertTrue(calls, name)
         source = SCRIPT.read_text(encoding="utf-8")
         self.assertNotIn("sys.exception(", source)
         self.assertNotIn("def transfer", source)
+        self.assertNotIn("with DescriptorCustody()", source)
         for forbidden in (
             "state.close(",
             "lease.close(",
