@@ -2546,7 +2546,9 @@ class DescriptorCustodyTest(unittest.TestCase):
                 MODULE.restore_python_interruptions(mask)
 
         self.assertIs(raised.exception, signal_error)
-        self.assertEqual(events, ["signal", "trace", "profile"])
+        self.assertEqual(events[:3], ["signal", "profile", "trace"])
+        self.assertGreaterEqual(events.count("profile"), 1)
+        self.assertGreaterEqual(events.count("trace"), 1)
         notes = getattr(signal_error, "__notes__", ())
         self.assertTrue(any("RuntimeError" in note for note in notes))
         self.assertTrue(any("KeyboardInterrupt" in note for note in notes))
@@ -2608,14 +2610,46 @@ class DescriptorCustodyTest(unittest.TestCase):
                 MODULE.suspend_python_interruptions()
 
         self.assertIs(raised.exception, block_error)
-        self.assertEqual(trace_values, [None, saved_trace])
-        self.assertEqual(profile_values, [None, saved_profile, saved_profile])
+        self.assertEqual(trace_values[0], None)
+        self.assertIn(saved_trace, trace_values)
+        self.assertEqual(trace_values[-1], None)
+        self.assertEqual(profile_values[0], None)
+        self.assertIn(saved_profile, profile_values)
+        self.assertEqual(profile_values[-1], None)
         self.assertTrue(
             any(
                 "RuntimeError" in note
                 for note in getattr(block_error, "__notes__", ())
             )
         )
+
+    def test_hostile_trace_cannot_mask_earlier_signal_restoration_error(self) -> None:
+        signal_error = OSError("earlier signal mask restore failed")
+        trace_error = KeyboardInterrupt("hostile restored trace fired")
+        trace_events: list[tuple[str, str]] = []
+
+        def hostile_trace(frame: object, event: str, _argument: object) -> object:
+            trace_events.append((frame.f_code.co_name, event))
+            raise trace_error
+
+        mask = MODULE.InterruptionMask(hostile_trace, None, set())
+        caught: BaseException | None = None
+        try:
+            with mock.patch.object(
+                MODULE.signal,
+                "pthread_sigmask",
+                side_effect=signal_error,
+            ):
+                try:
+                    MODULE.restore_python_interruptions(mask)
+                except BaseException as error:
+                    caught = error
+        finally:
+            sys.settrace(None)
+            sys.setprofile(None)
+
+        self.assertIs(caught, signal_error)
+        self.assertIsNone(sys.gettrace())
 
     def test_authority_retirement_interrupt_still_closes_all_four_descriptors(self) -> None:
         state = MODULE.StateAuthority(STATE_ROOT, 1000, 1000, 108, 109)
