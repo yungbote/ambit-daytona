@@ -3028,6 +3028,8 @@ class ProcessUniverseTest(unittest.TestCase):
         close.assert_not_called()
         self.assertIsInstance(raised.exception.__cause__, MODULE.DrainError)
         self.assertIn("invocation is ambiguous", str(raised.exception.__cause__))
+        self.assertIs(registration.close_error, raised.exception.__cause__)
+        self.assertTrue(registration.close_finished)
         self.assertEqual(custody._resources, [])
         self.assertEqual(custody._state, "closed")
 
@@ -3208,6 +3210,284 @@ class ProcessUniverseTest(unittest.TestCase):
                 except OSError:
                     pass
 
+    def test_alias_terminal_error_publication_is_resumable_at_every_boundary(self) -> None:
+        close_ast = class_method_ast(
+            MODULE_PATH.read_text(encoding="utf-8"),
+            "ResourceCustody",
+            "close",
+        )
+        alias_error = next(
+            node
+            for node in ast.walk(close_ast)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "alias_error"
+                for target in node.targets
+            )
+        )
+        publish_ast = class_method_ast(
+            MODULE_PATH.read_text(encoding="utf-8"),
+            "ResourceCustody",
+            "_publish_terminal_error",
+        )
+        terminal_publish = next(
+            node
+            for node in ast.walk(publish_ast)
+            if isinstance(node, ast.Assign)
+            and isinstance(node.targets[0], ast.Tuple)
+        )
+        self.assertEqual(
+            [target.attr for target in terminal_publish.targets[0].elts],
+            ["close_error", "close_finished"],
+        )
+        self.assertEqual(terminal_publish.lineno, terminal_publish.end_lineno)
+        self.assertIsInstance(terminal_publish.value, ast.Tuple)
+        self.assertEqual(
+            [
+                value.id if isinstance(value, ast.Name) else value.value
+                for value in terminal_publish.value.elts
+            ],
+            ["error", True],
+        )
+        publish_call = min(
+            (
+                node
+                for node in ast.walk(close_ast)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "_publish_terminal_error"
+                and len(node.args) == 2
+                and isinstance(node.args[1], ast.Name)
+                and node.args[1].id == "alias_error"
+                and node.lineno > alias_error.lineno
+            ),
+            key=lambda node: node.lineno,
+        )
+        record_call = min(
+            (
+                node
+                for node in ast.walk(close_ast)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "_preserve_cleanup_error"
+                and node.lineno > publish_call.lineno
+            ),
+            key=lambda node: node.lineno,
+        )
+        preserve_ast = class_method_ast(
+            MODULE_PATH.read_text(encoding="utf-8"),
+            "ResourceCustody",
+            "_preserve_cleanup_error",
+        )
+        record_inner = next(
+            node
+            for node in ast.walk(preserve_ast)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "_record_cleanup_error"
+        )
+        for label, code, line in (
+            (
+                "before_alias_error",
+                MODULE.ResourceCustody.close.__code__,
+                alias_error.lineno,
+            ),
+            (
+                "before_alias_terminal_publish",
+                MODULE.ResourceCustody.close.__code__,
+                publish_call.lineno,
+            ),
+            (
+                "after_alias_publish_before_record",
+                MODULE.ResourceCustody.close.__code__,
+                record_call.lineno,
+            ),
+            (
+                "during_alias_error_recording",
+                MODULE.ResourceCustody._preserve_cleanup_error.__code__,
+                record_inner.lineno,
+            ),
+        ):
+            first = MODULE.ResourceRegistration("descriptor", 41)
+            second = MODULE.ResourceRegistration("descriptor", 41)
+            first.published = second.published = True
+            custody = MODULE.ResourceCustody(label=label)
+            custody._resources = [first, second]
+            with self.subTest(boundary=label), mock.patch.object(
+                MODULE.os,
+                "close",
+            ) as close:
+                if label == "during_alias_error_recording":
+                    with self.assertRaisesRegex(
+                        MODULE.DrainError,
+                        "cleanup failed",
+                    ) as raised:
+                        with interrupt_once_on_line(
+                            code,
+                            line,
+                            label,
+                        ) as fired:
+                            custody.close()
+                else:
+                    with self.assertRaisesRegex(KeyboardInterrupt, label):
+                        with interrupt_once_on_line(
+                            code,
+                            line,
+                            label,
+                        ) as fired:
+                            custody.close()
+                    if label == "after_alias_publish_before_record":
+                        self.assertIsInstance(first.close_error, MODULE.DrainError)
+                        self.assertFalse(first.close_started)
+                        self.assertTrue(first.close_finished)
+                    else:
+                        self.assertIsNone(first.close_error)
+                        self.assertFalse(first.close_started)
+                        self.assertFalse(first.close_finished)
+                    self.assertIsNone(custody._cleanup_error)
+                    close.assert_not_called()
+                    self.assertEqual(custody._state, "closing")
+                    self.assertEqual(len(custody._resources), 2)
+                    with self.assertRaisesRegex(
+                        MODULE.DrainError,
+                        "cleanup failed",
+                    ) as raised:
+                        custody.close()
+                self.assertTrue(fired[0])
+            close.assert_called_once_with(41)
+            self.assertIsNotNone(custody._cleanup_error)
+            self.assertIs(first.close_error, custody._cleanup_error)
+            self.assertFalse(first.close_started)
+            self.assertTrue(first.close_finished)
+            self.assertTrue(second.close_started)
+            self.assertTrue(second.close_finished)
+            self.assertIs(raised.exception.__cause__, custody._cleanup_error)
+            self.assertIn("roster aliases", str(custody._cleanup_error))
+            self.assertEqual(custody._resources, [])
+            self.assertEqual(custody._state, "closed")
+
+    def test_terminal_error_publication_prefixes_are_resumable(self) -> None:
+        publish_ast = class_method_ast(
+            MODULE_PATH.read_text(encoding="utf-8"),
+            "ResourceCustody",
+            "_publish_terminal_error",
+        )
+        terminal_publications = [
+            node
+            for node in ast.walk(publish_ast)
+            if isinstance(node, ast.Assign)
+            and isinstance(node.targets[0], ast.Tuple)
+        ]
+        self.assertEqual(len(terminal_publications), 1)
+        terminal_publish = terminal_publications[0]
+        self.assertEqual(
+            [target.attr for target in terminal_publish.targets[0].elts],
+            ["close_error", "close_finished"],
+        )
+        self.assertEqual(terminal_publish.lineno, terminal_publish.end_lineno)
+        self.assertIsInstance(terminal_publish.value, ast.Tuple)
+        self.assertEqual(
+            [
+                value.id if isinstance(value, ast.Name) else value.value
+                for value in terminal_publish.value.elts
+            ],
+            ["error", True],
+        )
+
+        for scenario in (
+            "alias_seeded_first",
+            "alias_seeded_last",
+            "invalid_descriptor_text",
+            "invalid_closeable",
+        ):
+            for seeded_error, close_started, close_finished in (
+                (False, False, False),
+                (True, False, False),
+                (False, False, True),
+                (False, True, False),
+                (False, True, True),
+                (True, True, False),
+                (True, True, True),
+            ):
+                if scenario.startswith("alias"):
+                    registration = MODULE.ResourceRegistration("descriptor", 41)
+                    unique = MODULE.ResourceRegistration("descriptor", 41)
+                    registration.published = unique.published = True
+                    resources = (
+                        [registration, unique]
+                        if scenario == "alias_seeded_first"
+                        else [unique, registration]
+                    )
+                    error_pattern = "roster aliases"
+                elif scenario.startswith("invalid_descriptor"):
+                    registration = MODULE.ResourceRegistration(
+                        "descriptor",
+                        "invalid",
+                    )
+                    registration.published = True
+                    resources = [registration]
+                    error_pattern = "descriptor is invalid"
+                else:
+                    registration = MODULE.ResourceRegistration("closeable", 7)
+                    registration.published = True
+                    resources = [registration]
+                    error_pattern = "closeable is invalid"
+                if seeded_error:
+                    registration.close_error = MODULE.DrainError(
+                        f"seeded {error_pattern}"
+                    )
+                registration.close_started = close_started
+                registration.close_finished = close_finished
+                custody = MODULE.ResourceCustody(
+                    label=f"{scenario} prefix {seeded_error} "
+                    f"{close_started} {close_finished}"
+                )
+                custody._resources = resources
+                with self.subTest(
+                    scenario=scenario,
+                    seeded_error=seeded_error,
+                    close_started=close_started,
+                    close_finished=close_finished,
+                ), mock.patch.object(MODULE.os, "close") as close:
+                    with self.assertRaisesRegex(
+                        MODULE.DrainError,
+                        "cleanup failed",
+                    ) as raised:
+                        custody.close()
+                if scenario.startswith("alias"):
+                    authority_is_seeded = (
+                        close_started or scenario == "alias_seeded_last"
+                    )
+                    seeded_is_terminal = (
+                        seeded_error or close_started or close_finished
+                    )
+                    expected_calls = (
+                        []
+                        if authority_is_seeded and seeded_is_terminal
+                        else [mock.call(41)]
+                    )
+                else:
+                    expected_calls = []
+                self.assertEqual(close.call_args_list, expected_calls)
+                self.assertIs(raised.exception.__cause__, custody._cleanup_error)
+                self.assertIn(error_pattern, str(custody._cleanup_error))
+                registration_was_invoked = (
+                    scenario == "alias_seeded_last" and not seeded_is_terminal
+                    if scenario.startswith("alias")
+                    else False
+                )
+                self.assertEqual(
+                    registration.close_started,
+                    close_started or registration_was_invoked,
+                )
+                self.assertTrue(
+                    all(owned.close_finished for owned in resources)
+                )
+                if not scenario.startswith("alias"):
+                    self.assertIs(registration.close_error, custody._cleanup_error)
+                self.assertEqual(custody._resources, [])
+                self.assertEqual(custody._state, "closed")
+
     def test_cleanup_retires_identity_and_resource_aliases_at_most_once(self) -> None:
         same_token = MODULE.ResourceRegistration("descriptor", 40)
         same_token.published = True
@@ -3228,6 +3508,26 @@ class ProcessUniverseTest(unittest.TestCase):
         ):
             custody.close()
         close.assert_called_once_with(41)
+        self.assertEqual(custody._resources, [])
+
+        first = MODULE.ResourceRegistration("descriptor", 42)
+        started = MODULE.ResourceRegistration("descriptor", 42)
+        third = MODULE.ResourceRegistration("descriptor", 42)
+        first.published = started.published = third.published = True
+        started.close_started = True
+        started.close_finished = True
+        custody = MODULE.ResourceCustody(label="started descriptor alias group")
+        custody._resources = [first, started, third]
+        with mock.patch.object(MODULE.os, "close") as close, self.assertRaisesRegex(
+            MODULE.DrainError,
+            "cleanup failed",
+        ):
+            custody.close()
+        close.assert_not_called()
+        self.assertTrue(all(item.close_finished for item in (first, started, third)))
+        self.assertFalse(first.close_started)
+        self.assertTrue(started.close_started)
+        self.assertFalse(third.close_started)
         self.assertEqual(custody._resources, [])
 
     def test_closeable_reentrancy_cannot_register_or_recurse_cleanup(self) -> None:
@@ -6772,6 +7072,7 @@ class WrapperBoundaryTest(unittest.TestCase):
         close.assert_called_once_with(40)
         self.assertEqual(custody.descriptors, [])
         self.assertEqual(custody.state, "closed")
+
         close_once_ast = class_method_ast(loader, "DescriptorCustody", "_close_once")
         self.assertNotIn("active_cleanup_tokens", loader)
         self.assertFalse(
@@ -6798,9 +7099,11 @@ class WrapperBoundaryTest(unittest.TestCase):
         with mock.patch.object(os, "close") as close, self.assertRaisesRegex(
             SystemExit,
             "invocation is ambiguous",
-        ):
+        ) as raised:
             custody.close()
         close.assert_not_called()
+        self.assertIs(registration.close_error, raised.exception)
+        self.assertTrue(registration.close_finished)
         self.assertEqual(custody.descriptors, [])
         self.assertEqual(custody.state, "closed")
 
@@ -6915,6 +7218,224 @@ class WrapperBoundaryTest(unittest.TestCase):
         self.assertEqual(close.call_args_list, [mock.call(41), mock.call(40)])
         self.assertEqual(custody.state, "closed")
 
+    def test_loader_terminal_roster_errors_are_resumable_at_every_boundary(
+        self,
+    ) -> None:
+        descriptor_custody = self._descriptor_custody_type()
+        loader = WRAPPER.read_text(encoding="utf-8").split(
+            "read -r -d '' pinned_loader <<'PY' || true\n",
+            1,
+        )[1].split("\nPY\n", 1)[0]
+        close_ast = class_method_ast(loader, "DescriptorCustody", "close")
+        publish_ast = class_method_ast(
+            loader,
+            "DescriptorCustody",
+            "_publish_terminal_error",
+        )
+        terminal_publications = [
+            node
+            for node in ast.walk(publish_ast)
+            if isinstance(node, ast.Assign)
+            and isinstance(node.targets[0], ast.Tuple)
+        ]
+        self.assertEqual(len(terminal_publications), 1)
+        terminal_publish = terminal_publications[0]
+        self.assertEqual(
+            [target.attr for target in terminal_publish.targets[0].elts],
+            ["close_error", "close_finished"],
+        )
+        self.assertEqual(terminal_publish.lineno, terminal_publish.end_lineno)
+        self.assertIsInstance(terminal_publish.value, ast.Tuple)
+        self.assertEqual(
+            [
+                value.id if isinstance(value, ast.Name) else value.value
+                for value in terminal_publish.value.elts
+            ],
+            ["error", True],
+        )
+        registration_type = descriptor_custody.close.__globals__["DescriptorRegistration"]
+        for error_name, descriptors, expected_calls, error_pattern in (
+            ("invalid_error", (-1,), [], "descriptor is invalid"),
+            ("alias_error", (41, 41), [mock.call(41)], "roster aliases"),
+        ):
+            error_publish = next(
+                node
+                for node in ast.walk(close_ast)
+                if isinstance(node, ast.Assign)
+                and any(
+                    isinstance(target, ast.Name) and target.id == error_name
+                    for target in node.targets
+                )
+            )
+            publish_call = (
+                error_publish.value
+                if error_name == "invalid_error"
+                else min(
+                    (
+                        node
+                        for node in ast.walk(close_ast)
+                        if isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)
+                        and node.func.attr == "_publish_terminal_error"
+                        and len(node.args) == 2
+                        and isinstance(node.args[1], ast.Name)
+                        and node.args[1].id == "alias_error"
+                        and node.lineno > error_publish.lineno
+                    ),
+                    key=lambda node: node.lineno,
+                )
+            )
+            self.assertIsInstance(publish_call, ast.Call)
+            record_arg = (
+                "invalid_error"
+                if error_name == "invalid_error"
+                else "observed_error"
+            )
+            record_call = min(
+                (
+                    node
+                    for node in ast.walk(close_ast)
+                    if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "_record_cleanup_error"
+                    and len(node.args) == 1
+                    and isinstance(node.args[0], ast.Name)
+                    and node.args[0].id == record_arg
+                    and node.lineno > publish_call.lineno
+                ),
+                key=lambda node: node.lineno,
+            )
+            for boundary, line in (
+                ("before_error", error_publish.lineno),
+                ("before_terminal_publish", publish_call.lineno),
+                ("after_terminal_publish", record_call.lineno),
+            ):
+                label = f"loader_{error_name}_{boundary}"
+                custody = descriptor_custody(label)
+                custody.descriptors = [
+                    registration_type(descriptor) for descriptor in descriptors
+                ]
+                registration = custody.descriptors[0]
+                with self.subTest(
+                    error=error_name,
+                    boundary=boundary,
+                ), mock.patch.object(os, "close") as close:
+                    with self.assertRaisesRegex(KeyboardInterrupt, label):
+                        with interrupt_once_on_line(
+                            descriptor_custody.close.__code__,
+                            line,
+                            label,
+                        ) as fired:
+                            custody.close()
+                    self.assertTrue(fired[0])
+                    self.assertEqual(custody.state, "closing")
+                    if boundary == "after_terminal_publish":
+                        self.assertIsInstance(registration.close_error, SystemExit)
+                        self.assertFalse(registration.close_started)
+                        self.assertTrue(registration.close_finished)
+                    else:
+                        self.assertIsNone(registration.close_error)
+                        self.assertFalse(registration.close_started)
+                        self.assertFalse(registration.close_finished)
+                    self.assertIsNone(custody.cleanup_error)
+                    close.assert_not_called()
+                    with self.assertRaisesRegex(
+                        SystemExit,
+                        error_pattern,
+                    ) as raised:
+                        custody.close()
+                self.assertEqual(close.call_args_list, expected_calls)
+                self.assertIsNotNone(custody.cleanup_error)
+                self.assertIs(registration.close_error, custody.cleanup_error)
+                self.assertFalse(registration.close_started)
+                self.assertTrue(registration.close_finished)
+                self.assertIs(raised.exception, custody.cleanup_error)
+                self.assertEqual(custody.descriptors, [])
+                self.assertEqual(custody.state, "closed")
+
+    def test_loader_terminal_error_publication_prefixes_are_resumable(
+        self,
+    ) -> None:
+        descriptor_custody = self._descriptor_custody_type()
+        registration_type = descriptor_custody.close.__globals__["DescriptorRegistration"]
+        for scenario, descriptor, error_pattern in (
+            ("alias_seeded_first", 41, "roster aliases"),
+            ("alias_seeded_last", 41, "roster aliases"),
+            ("invalid_negative", -1, "descriptor is invalid"),
+            ("invalid_boolean", True, "descriptor is invalid"),
+            ("invalid_text", "invalid", "descriptor is invalid"),
+        ):
+            for seeded_error, close_started, close_finished in (
+                (False, False, False),
+                (True, False, False),
+                (False, False, True),
+                (False, True, False),
+                (False, True, True),
+                (True, True, False),
+                (True, True, True),
+            ):
+                if scenario.startswith("alias"):
+                    registration = registration_type(41)
+                    unique = registration_type(41)
+                    descriptors = (
+                        [registration, unique]
+                        if scenario == "alias_seeded_first"
+                        else [unique, registration]
+                    )
+                else:
+                    registration = registration_type(descriptor)
+                    descriptors = [registration]
+                if seeded_error:
+                    registration.close_error = SystemExit(f"seeded {error_pattern}")
+                registration.close_started = close_started
+                registration.close_finished = close_finished
+                custody = descriptor_custody(
+                    f"loader {scenario} prefix {seeded_error} "
+                    f"{close_started} {close_finished}"
+                )
+                custody.descriptors = descriptors
+                with self.subTest(
+                    scenario=scenario,
+                    seeded_error=seeded_error,
+                    close_started=close_started,
+                    close_finished=close_finished,
+                ), mock.patch.object(os, "close") as close:
+                    with self.assertRaisesRegex(SystemExit, error_pattern) as raised:
+                        custody.close()
+                if scenario.startswith("alias"):
+                    authority_is_seeded = (
+                        close_started or scenario == "alias_seeded_last"
+                    )
+                    seeded_is_terminal = (
+                        seeded_error or close_started or close_finished
+                    )
+                    expected_calls = (
+                        []
+                        if authority_is_seeded and seeded_is_terminal
+                        else [mock.call(41)]
+                    )
+                else:
+                    expected_calls = []
+                self.assertEqual(close.call_args_list, expected_calls)
+                self.assertIs(raised.exception, custody.cleanup_error)
+                self.assertIn(error_pattern, str(custody.cleanup_error))
+                registration_was_invoked = (
+                    scenario == "alias_seeded_last" and not seeded_is_terminal
+                    if scenario.startswith("alias")
+                    else False
+                )
+                self.assertEqual(
+                    registration.close_started,
+                    close_started or registration_was_invoked,
+                )
+                self.assertTrue(
+                    all(owned.close_finished for owned in descriptors)
+                )
+                if not scenario.startswith("alias"):
+                    self.assertIs(registration.close_error, custody.cleanup_error)
+                self.assertEqual(custody.descriptors, [])
+                self.assertEqual(custody.state, "closed")
+
     def test_loader_distinct_tokens_aliasing_one_fd_close_at_most_once(self) -> None:
         descriptor_custody = self._descriptor_custody_type()
         registration_type = descriptor_custody.close.__globals__["DescriptorRegistration"]
@@ -6926,6 +7447,26 @@ class WrapperBoundaryTest(unittest.TestCase):
         ):
             custody.close()
         close.assert_called_once_with(40)
+        self.assertEqual(custody.descriptors, [])
+        self.assertEqual(custody.state, "closed")
+
+        first = registration_type(41)
+        started = registration_type(41)
+        third = registration_type(41)
+        started.close_started = True
+        started.close_finished = True
+        custody = descriptor_custody("loader started descriptor alias group")
+        custody.descriptors = [first, started, third]
+        with mock.patch.object(os, "close") as close, self.assertRaisesRegex(
+            SystemExit,
+            "roster aliases",
+        ):
+            custody.close()
+        close.assert_not_called()
+        self.assertTrue(all(item.close_finished for item in (first, started, third)))
+        self.assertFalse(first.close_started)
+        self.assertTrue(started.close_started)
+        self.assertFalse(third.close_started)
         self.assertEqual(custody.descriptors, [])
         self.assertEqual(custody.state, "closed")
 

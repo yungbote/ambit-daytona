@@ -39,7 +39,7 @@ caller_gid=$(/usr/bin/id -g)
 script_source=$(/usr/bin/realpath -e -- "${BASH_SOURCE[0]}")
 script_dir=${script_source%/*}
 tool=${script_dir}/legacy_v3_drain.py
-tool_sha256=64fdd7ef4f0c1c3c3437681b3531adda83928506322dc33b10ae2662a992b541
+tool_sha256=694c9698e460e95479c07af07b1bf35fb29fb6896b43ef79cea15ed5e594d88c
 control_root=/run/ambit-c16b-legacy-v3-drain-1577287b8182
 
 read -r -d '' pinned_loader <<'PY' || true
@@ -225,6 +225,8 @@ class DescriptorCustody:
             )
 
     def _close_once(self, registration):
+        if registration.close_error is not None or registration.close_finished:
+            return registration.close_error
         if registration.close_started:
             return None
         preinvoke_error = None
@@ -294,7 +296,7 @@ class DescriptorCustody:
                     self.label + " cleanup retry also failed: ",
                     observed_error,
                 )
-            if registration.close_started:
+            if registration.close_started or registration.close_finished:
                 return first_error
         return first_error
 
@@ -312,6 +314,20 @@ class DescriptorCustody:
             return False
         finally:
             del frame
+
+    def _publish_terminal_error(self, registration, error):
+        if registration.close_error is None:
+            # A synthetic rejection never claims that os.close was invoked.
+            registration.close_error, registration.close_finished = error, True
+            return error
+        registration.close_finished = True
+        if registration.close_error is not error:
+            add_error_note(
+                registration.close_error,
+                self.label + " additional terminal error: ",
+                error,
+            )
+        return registration.close_error
 
     def _record_cleanup_error(self, error):
         if self.cleanup_error is None:
@@ -333,44 +349,91 @@ class DescriptorCustody:
         try:
             self.state = "closing"
             roster = list.copy(self.descriptors)
-            unique = []
+            registrations = []
             seen_tokens = set()
-            seen_descriptors = set()
             for registration in reversed(roster):
                 token = id(registration)
                 if token in seen_tokens:
                     continue
                 seen_tokens.add(token)
-                if registration.close_started:
-                    if self._cleanup_is_active(registration):
-                        continue
-                    resumed_error = registration.close_error
-                    if resumed_error is None and not registration.close_finished:
-                        resumed_error = SystemExit(
-                            self.label + " cleanup invocation is ambiguous"
-                        )
-                    if resumed_error is not None:
-                        self._record_cleanup_error(resumed_error)
-                    continue
+                registrations.append(registration)
+
+            invalid = []
+            groups = {}
+            for registration in registrations:
                 descriptor = registration.descriptor
                 if type(descriptor) is not int or descriptor < 0:
-                    registration.close_started = True
-                    registration.close_finished = True
-                    self._record_cleanup_error(
-                        SystemExit(self.label + " cleanup descriptor is invalid")
-                    )
+                    invalid.append(registration)
                     continue
-                if descriptor in seen_descriptors:
-                    registration.close_started = True
-                    registration.close_finished = True
-                    self._record_cleanup_error(
-                        SystemExit(
-                            self.label + " cleanup roster aliases one descriptor"
+                groups.setdefault(descriptor, []).append(registration)
+
+            for registration in invalid:
+                invalid_error = self._publish_terminal_error(
+                    registration,
+                    SystemExit(self.label + " cleanup descriptor is invalid"),
+                )
+                self._record_cleanup_error(invalid_error)
+
+            unique = []
+            for group in groups.values():
+                authority = next(
+                    (
+                        registration
+                        for registration in group
+                        if registration.close_started
+                        and self._cleanup_is_active(registration)
+                    ),
+                    next(
+                        (
+                            registration
+                            for registration in group
+                            if registration.close_started
+                        ),
+                        group[0],
+                    ),
+                )
+                if len(group) > 1:
+                    alias_error = SystemExit(
+                        self.label + " cleanup roster aliases one descriptor"
+                    )
+                    for registration in group:
+                        if registration is authority:
+                            continue
+                        observed_error = self._publish_terminal_error(
+                            registration,
+                            alias_error,
                         )
+                        self._record_cleanup_error(observed_error)
+
+                if authority.close_error is not None:
+                    observed_error = self._publish_terminal_error(
+                        authority,
+                        authority.close_error,
                     )
+                    self._record_cleanup_error(observed_error)
                     continue
-                seen_descriptors.add(descriptor)
-                unique.append(registration)
+                if authority.close_started:
+                    if self._cleanup_is_active(authority):
+                        continue
+                    if not authority.close_finished:
+                        observed_error = self._publish_terminal_error(
+                            authority,
+                            SystemExit(
+                                self.label + " cleanup invocation is ambiguous"
+                            ),
+                        )
+                        self._record_cleanup_error(observed_error)
+                    continue
+                if authority.close_finished:
+                    observed_error = self._publish_terminal_error(
+                        authority,
+                        SystemExit(
+                            self.label + " cleanup completion is ambiguous"
+                        ),
+                    )
+                    self._record_cleanup_error(observed_error)
+                    continue
+                unique.append(authority)
             for registration in unique:
                 cleanup_error = self._settle_once(registration)
                 if cleanup_error is not None:

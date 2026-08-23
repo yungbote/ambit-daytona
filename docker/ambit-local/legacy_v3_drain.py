@@ -1150,23 +1150,21 @@ class ResourceCustody:
         self,
         registration: ResourceRegistration,
     ) -> BaseException | None:
+        if registration.close_error is not None or registration.close_finished:
+            return registration.close_error
         if registration.close_started:
             return None
         if registration.kind == "descriptor":
             if not isinstance(registration.value, int):
-                registration.close_started = True
-                registration.close_finished = True
-                registration.close_error = DrainError(
+                invalid_error = DrainError(
                     f"{self.label} cleanup descriptor is invalid"
                 )
-                return registration.close_error
+                return self._publish_terminal_error(registration, invalid_error)
         elif isinstance(registration.value, int):
-            registration.close_started = True
-            registration.close_finished = True
-            registration.close_error = DrainError(
+            invalid_error = DrainError(
                 f"{self.label} cleanup closeable is invalid"
             )
-            return registration.close_error
+            return self._publish_terminal_error(registration, invalid_error)
         preinvoke_error: BaseException | None = None
         while not registration.close_started:
             try:
@@ -1241,7 +1239,7 @@ class ResourceCustody:
                     f"{self.label} cleanup retry also failed: ",
                     observed_error,
                 )
-            if registration.close_started:
+            if registration.close_started or registration.close_finished:
                 return first_error
         return first_error
 
@@ -1261,6 +1259,24 @@ class ResourceCustody:
         finally:
             del frame
 
+    def _publish_terminal_error(
+        self,
+        registration: ResourceRegistration,
+        error: BaseException,
+    ) -> BaseException:
+        if registration.close_error is None:
+            # A synthetic rejection never claims that a closer was invoked.
+            registration.close_error, registration.close_finished = error, True
+            return error
+        registration.close_finished = True
+        if registration.close_error is not error:
+            add_error_note(
+                registration.close_error,
+                f"{self.label} additional terminal error: ",
+                error,
+            )
+        return registration.close_error
+
     def _record_cleanup_error(self, error: BaseException) -> None:
         if self._cleanup_error is None:
             self._cleanup_error = error
@@ -1271,6 +1287,18 @@ class ResourceCustody:
                 f"{self.label} additional cleanup also failed: ",
                 error,
             )
+
+    def _preserve_cleanup_error(
+        self,
+        error: BaseException,
+        note_prefix: str,
+    ) -> None:
+        try:
+            self._record_cleanup_error(error)
+        except BaseException as record_error:
+            if self._cleanup_error is None:
+                self._cleanup_error = error
+            add_error_note(error, note_prefix, record_error)
 
     def _raise_cleanup_error(self, message: str) -> None:
         if self._cleanup_error is not None:
@@ -1296,16 +1324,10 @@ class ResourceCustody:
             for registration in registrations:
                 cleanup_error = self._settle_registration_once(registration)
                 if cleanup_error is not None:
-                    try:
-                        self._record_cleanup_error(cleanup_error)
-                    except BaseException as record_error:
-                        if self._cleanup_error is None:
-                            self._cleanup_error = cleanup_error
-                        add_error_note(
-                            cleanup_error,
-                            f"{self.label} cleanup error recording also failed: ",
-                            record_error,
-                        )
+                    self._preserve_cleanup_error(
+                        cleanup_error,
+                        f"{self.label} cleanup error recording also failed: ",
+                    )
             completed = True
         finally:
             if completed:
@@ -1350,72 +1372,143 @@ class ResourceCustody:
         try:
             self._state = "closing"
             roster = list.copy(self._resources)
-            unique: list[ResourceRegistration] = []
+            registrations: list[ResourceRegistration] = []
             seen_tokens: set[int] = set()
-            seen_resources: set[tuple[str, int]] = set()
             for registration in reversed(roster):
                 token_identity = id(registration)
                 if token_identity in seen_tokens:
                     continue
                 seen_tokens.add(token_identity)
-                if registration.close_started:
-                    if self._cleanup_is_active(registration):
-                        continue
-                    resumed_error = registration.close_error
-                    if resumed_error is None and not registration.close_finished:
-                        resumed_error = DrainError(
-                            f"{self.label} cleanup invocation is ambiguous"
-                        )
-                    if resumed_error is not None:
-                        try:
-                            self._record_cleanup_error(resumed_error)
-                        except BaseException as record_error:
-                            if self._cleanup_error is None:
-                                self._cleanup_error = resumed_error
-                            add_error_note(
-                                resumed_error,
-                                f"{self.label} resumed error recording failed: ",
-                                record_error,
+                registrations.append(registration)
+
+            invalid: list[tuple[ResourceRegistration, DrainError]] = []
+            groups: dict[tuple[str, int], list[ResourceRegistration]] = {}
+            for registration in registrations:
+                if registration.kind == "descriptor":
+                    if not exact_descriptor(registration.value):
+                        invalid.append(
+                            (
+                                registration,
+                                DrainError(
+                                    f"{self.label} cleanup descriptor is invalid"
+                                ),
                             )
+                        )
+                        continue
+                    resource_identity = ("descriptor", int(registration.value))
+                elif registration.kind == "closeable":
+                    if isinstance(registration.value, int):
+                        invalid.append(
+                            (
+                                registration,
+                                DrainError(
+                                    f"{self.label} cleanup closeable is invalid"
+                                ),
+                            )
+                        )
+                        continue
+                    resource_identity = ("closeable", id(registration.value))
+                else:
+                    invalid.append(
+                        (
+                            registration,
+                            DrainError(
+                                f"{self.label} cleanup registration kind is invalid"
+                            ),
+                        )
+                    )
                     continue
-                resource_identity = (
-                    registration.kind,
-                    int(registration.value)
-                    if registration.kind == "descriptor"
-                    else id(registration.value),
+                groups.setdefault(resource_identity, []).append(registration)
+
+            for registration, invalid_error in invalid:
+                observed_error = self._publish_terminal_error(
+                    registration,
+                    invalid_error,
                 )
-                if resource_identity in seen_resources:
-                    registration.close_started = True
-                    registration.close_finished = True
+                self._preserve_cleanup_error(
+                    observed_error,
+                    f"{self.label} invalid error recording also failed: ",
+                )
+
+            unique: list[ResourceRegistration] = []
+            for group in groups.values():
+                authority = next(
+                    (
+                        registration
+                        for registration in group
+                        if registration.close_started
+                        and self._cleanup_is_active(registration)
+                    ),
+                    next(
+                        (
+                            registration
+                            for registration in group
+                            if registration.close_started
+                        ),
+                        group[0],
+                    ),
+                )
+                if len(group) > 1:
                     alias_error = DrainError(
                         f"{self.label} cleanup roster aliases one resource"
                     )
-                    try:
-                        self._record_cleanup_error(alias_error)
-                    except BaseException as record_error:
-                        if self._cleanup_error is None:
-                            self._cleanup_error = alias_error
-                        add_error_note(
+                    for registration in group:
+                        if registration is authority:
+                            continue
+                        observed_error = self._publish_terminal_error(
+                            registration,
                             alias_error,
+                        )
+                        self._preserve_cleanup_error(
+                            observed_error,
                             f"{self.label} alias error recording also failed: ",
-                            record_error,
+                        )
+
+                if authority.close_error is not None:
+                    observed_error = self._publish_terminal_error(
+                        authority,
+                        authority.close_error,
+                    )
+                    self._preserve_cleanup_error(
+                        observed_error,
+                        f"{self.label} resumed error recording failed: ",
+                    )
+                    continue
+                if authority.close_started:
+                    if self._cleanup_is_active(authority):
+                        continue
+                    if not authority.close_finished:
+                        observed_error = self._publish_terminal_error(
+                            authority,
+                            DrainError(
+                                f"{self.label} cleanup invocation is ambiguous"
+                            ),
+                        )
+                        self._preserve_cleanup_error(
+                            observed_error,
+                            f"{self.label} resumed error recording failed: ",
                         )
                     continue
-                seen_resources.add(resource_identity)
-                unique.append(registration)
+                if authority.close_finished:
+                    observed_error = self._publish_terminal_error(
+                        authority,
+                        DrainError(
+                            f"{self.label} cleanup completion is ambiguous"
+                        ),
+                    )
+                    self._preserve_cleanup_error(
+                        observed_error,
+                        f"{self.label} terminal error recording failed: ",
+                    )
+                    continue
+                unique.append(authority)
             for registration in unique:
                 cleanup_error = self._settle_registration_once(registration)
                 if cleanup_error is not None:
-                    try:
-                        self._record_cleanup_error(cleanup_error)
-                    except BaseException as record_error:
-                        if self._cleanup_error is None:
-                            self._cleanup_error = cleanup_error
-                        add_error_note(
-                            cleanup_error,
-                            f"{self.label} cleanup error recording also failed: ",
-                            record_error,
-                        )
+                    self._preserve_cleanup_error(
+                        cleanup_error,
+                        f"{self.label} cleanup error recording also failed: ",
+                    )
             completed = True
         finally:
             if completed:
