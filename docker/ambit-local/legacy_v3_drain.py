@@ -963,12 +963,18 @@ class Closeable(Protocol):
     def close(self) -> None: ...
 
 
+@dataclass(eq=False)
+class ResourceRegistration:
+    kind: str
+    value: int | Closeable
+
+
 class ResourceCustody:
     """LIFO ownership whose __exit__ receives the exact body exception."""
 
     def __init__(self, *, label: str) -> None:
         self.label = label
-        self._resources: list[tuple[str, int | Closeable]] = []
+        self._resources: list[ResourceRegistration] = []
 
     def open(self, *args: object, **kwargs: object) -> int:
         descriptor = os.open(*args, **kwargs)  # type: ignore[arg-type]
@@ -1015,6 +1021,21 @@ class ResourceCustody:
             f"{self.label} descriptor adoption requires an exact tuple",
         )
         result = descriptors
+        invalid = False
+        for index, descriptor in enumerate(result):
+            if type(descriptor) is not int or descriptor < 0:
+                invalid = True
+                continue
+            for prior_index in range(index):
+                if result[prior_index] == descriptor:
+                    invalid = True
+                    break
+        if invalid:
+            error = DrainError(
+                f"{self.label} descriptor adoption roster is not unique and exact"
+            )
+            self._close_unowned_unique_descriptors(result, 0, error)
+            raise error
         for index, descriptor in enumerate(result):
             try:
                 require(
@@ -1022,21 +1043,54 @@ class ResourceCustody:
                     f"{self.label} resource registration is duplicated",
                 )
             except BaseException as error:
-                remaining_index = index + 1
-                while remaining_index < len(result):
-                    try:
-                        close_all_descriptors(
-                            result[remaining_index],
-                            label=f"{self.label} unregistered resource",
-                        )
-                    except BaseException as cleanup_error:
-                        error.add_note(
-                            f"{self.label} remaining registration cleanup also failed: "
-                            f"{cleanup_error}"
-                        )
-                    remaining_index += 1
+                self._close_unowned_unique_descriptors(
+                    result,
+                    index + 1,
+                    error,
+                )
                 raise
         return result
+
+    def _close_unowned_unique_descriptors(
+        self,
+        descriptors: tuple[int, ...],
+        start: int,
+        active_error: BaseException,
+    ) -> None:
+        for index in range(start, len(descriptors)):
+            descriptor = descriptors[index]
+            if type(descriptor) is not int or descriptor < 0:
+                continue
+            duplicate = False
+            for prior_index in range(index):
+                if descriptors[prior_index] == descriptor:
+                    duplicate = True
+                    break
+            if duplicate:
+                continue
+            try:
+                if self._descriptor_is_owned(descriptor):
+                    continue
+                close_all_descriptors(
+                    descriptor,
+                    label=f"{self.label} unregistered resource",
+                )
+            except BaseException as cleanup_error:
+                active_error.add_note(
+                    f"{self.label} remaining registration cleanup also failed: "
+                    f"{cleanup_error}"
+                )
+
+    def _descriptor_is_owned(self, descriptor: int) -> bool:
+        matches = 0
+        for owned in self._resources:
+            if owned.kind == "descriptor" and owned.value == descriptor:
+                matches += 1
+        require(
+            matches <= 1,
+            f"{self.label} descriptor ownership is ambiguous",
+        )
+        return matches == 1
 
     def own_closeable(self, resource_value: Closeable) -> Closeable:
         require(
@@ -1046,33 +1100,87 @@ class ResourceCustody:
         return resource_value
 
     def _register(self, kind: str, resource_value: int | Closeable) -> bool:
+        registration: ResourceRegistration | None = None
+        append_started = False
         try:
+            registration = ResourceRegistration(kind, resource_value)
             duplicate = any(
-                owned_kind == kind
+                owned.kind == kind
                 and (
-                    owned_value == resource_value
+                    owned.value == resource_value
                     if kind == "descriptor"
-                    else owned_value is resource_value
+                    else owned.value is resource_value
                 )
-                for owned_kind, owned_value in self._resources
+                for owned in self._resources
             )
             if duplicate:
                 return False
-            self._resources.append((kind, resource_value))
+            append_started = True
+            self._resources.append(registration)
         except BaseException as error:
-            try:
-                if kind == "descriptor":
-                    assert isinstance(resource_value, int)
-                    close_all_descriptors(resource_value, label=self.label)
-                else:
-                    assert not isinstance(resource_value, int)
-                    resource_value.close()
-            except BaseException as cleanup_error:
-                error.add_note(
-                    f"{self.label} registration cleanup also failed: {cleanup_error}"
+            rollback_complete = True
+            if append_started and registration is not None:
+                rollback_complete = self._rollback_registration(
+                    registration,
+                    error,
                 )
+            if rollback_complete:
+                try:
+                    if kind == "descriptor":
+                        assert isinstance(resource_value, int)
+                        close_all_descriptors(resource_value, label=self.label)
+                    else:
+                        assert not isinstance(resource_value, int)
+                        resource_value.close()
+                except BaseException as cleanup_error:
+                    error.add_note(
+                        f"{self.label} registration cleanup also failed: "
+                        f"{cleanup_error}"
+                    )
             raise
         return True
+
+    def _rollback_registration(
+        self,
+        registration: ResourceRegistration,
+        active_error: BaseException,
+    ) -> bool:
+        try:
+            found_index = -1
+            for index in range(len(self._resources)):
+                if self._resources[index] is registration:
+                    require(
+                        found_index == -1,
+                        f"{self.label} registration token is duplicated",
+                    )
+                    found_index = index
+            if found_index != -1:
+                self._resources.pop(found_index)
+            return True
+        except BaseException as rollback_error:
+            active_error.add_note(
+                f"{self.label} registration rollback also failed: {rollback_error}"
+            )
+        try:
+            replacement: list[ResourceRegistration] = []
+            removed = 0
+            for owned in self._resources:
+                if owned is registration:
+                    removed += 1
+                else:
+                    replacement.append(owned)
+            require(
+                removed <= 1,
+                f"{self.label} registration token is duplicated",
+            )
+            self._resources = replacement
+            return True
+        except BaseException as fallback_error:
+            active_error.add_note(
+                f"{self.label} registration rollback fallback also failed: "
+                f"{fallback_error}"
+            )
+            return False
 
     def release_descriptor(self, descriptor: int) -> int:
         self._release("descriptor", descriptor)
@@ -1092,8 +1200,8 @@ class ResourceCustody:
         for descriptor in result:
             matches = [
                 index
-                for index, (kind, value) in enumerate(self._resources)
-                if kind == "descriptor" and value == descriptor
+                for index, owned in enumerate(self._resources)
+                if owned.kind == "descriptor" and owned.value == descriptor
             ]
             require(
                 len(matches) == 1 and matches[0] not in indices,
@@ -1115,12 +1223,12 @@ class ResourceCustody:
     def _release(self, kind: str, resource_value: int | Closeable) -> None:
         matches = [
             index
-            for index, (owned_kind, owned_value) in enumerate(self._resources)
-            if owned_kind == kind
+            for index, owned in enumerate(self._resources)
+            if owned.kind == kind
             and (
-                owned_value == resource_value
+                owned.value == resource_value
                 if kind == "descriptor"
-                else owned_value is resource_value
+                else owned.value is resource_value
             )
         ]
         require(
@@ -1132,7 +1240,8 @@ class ResourceCustody:
     def close(self) -> None:
         first_error: BaseException | None = None
         while self._resources:
-            kind, resource_value = self._resources.pop()
+            owned = self._resources.pop()
+            kind, resource_value = owned.kind, owned.value
             try:
                 if kind == "descriptor":
                     assert isinstance(resource_value, int)

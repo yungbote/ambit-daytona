@@ -2202,6 +2202,52 @@ class ProcessUniverseTest(unittest.TestCase):
             custody.own_closeable(resource_value)
         resource_value.close.assert_called_once_with()
 
+    def test_post_commit_append_failure_rolls_back_before_cleanup(self) -> None:
+        class AppendThenRaise(list[object]):
+            def append(self, value: object) -> None:
+                super().append(value)
+                raise KeyboardInterrupt("append committed then interrupted")
+
+        custody = MODULE.ResourceCustody(label="registration")
+        custody._resources = AppendThenRaise()  # type: ignore[assignment]
+        with mock.patch.object(MODULE.os, "close") as close, self.assertRaisesRegex(
+            KeyboardInterrupt,
+            "append committed then interrupted",
+        ):
+            custody.own_descriptor(40)
+        close.assert_called_once_with(40)
+        self.assertEqual(custody._resources, [])
+        custody.close()
+        close.assert_called_once_with(40)
+
+        resource_value = mock.Mock()
+        custody = MODULE.ResourceCustody(label="registration")
+        custody._resources = AppendThenRaise()  # type: ignore[assignment]
+        with self.assertRaisesRegex(KeyboardInterrupt, "append committed then interrupted"):
+            custody.own_closeable(resource_value)
+        resource_value.close.assert_called_once_with()
+        self.assertEqual(custody._resources, [])
+
+    def test_registration_rollback_pop_failure_uses_identity_fallback(self) -> None:
+        class AppendThenRaiseAndFailPop(list[object]):
+            def append(self, value: object) -> None:
+                super().append(value)
+                raise KeyboardInterrupt("append committed then interrupted")
+
+            def pop(self, index: int = -1) -> object:
+                raise MemoryError(f"rollback pop failed at {index}")
+
+        custody = MODULE.ResourceCustody(label="registration")
+        custody._resources = AppendThenRaiseAndFailPop()  # type: ignore[assignment]
+        with mock.patch.object(MODULE.os, "close") as close, self.assertRaisesRegex(
+            KeyboardInterrupt,
+            "append committed then interrupted",
+        ) as raised:
+            custody.own_descriptor(40)
+        self.assertIn("rollback pop failed", "\n".join(raised.exception.__notes__))
+        close.assert_called_once_with(40)
+        self.assertEqual(custody._resources, [])
+
     def test_true_duplicate_registration_preserves_existing_owner(self) -> None:
         custody = MODULE.ResourceCustody(label="registration")
         custody.own_descriptor(40)
@@ -2215,6 +2261,36 @@ class ProcessUniverseTest(unittest.TestCase):
             custody.close()
         close.assert_called_once_with(40)
 
+    def test_duplicate_batch_closes_each_unique_unowned_descriptor_once(self) -> None:
+        for descriptors, expected in (
+            ((40, 41, 40), [mock.call(40), mock.call(41)]),
+            ((40, 41, 41), [mock.call(40), mock.call(41)]),
+        ):
+            custody = MODULE.ResourceCustody(label="adoption")
+            with self.subTest(descriptors=descriptors), mock.patch.object(
+                MODULE.os,
+                "close",
+            ) as close, self.assertRaisesRegex(
+                MODULE.DrainError,
+                "not unique and exact",
+            ):
+                custody.own_descriptors(descriptors)
+            self.assertEqual(close.call_args_list, expected)
+            self.assertEqual(custody._resources, [])
+
+    def test_preowned_batch_member_is_preserved_while_others_converge(self) -> None:
+        custody = MODULE.ResourceCustody(label="adoption")
+        custody.own_descriptor(40)
+        with mock.patch.object(MODULE.os, "close") as close, self.assertRaisesRegex(
+            MODULE.DrainError,
+            "registration is duplicated",
+        ):
+            custody.own_descriptors((41, 40, 42))
+        close.assert_called_once_with(42)
+        with mock.patch.object(MODULE.os, "close") as close:
+            custody.close()
+        self.assertEqual(close.call_args_list, [mock.call(41), mock.call(40)])
+
     def test_batch_release_validates_before_releasing_any_descriptor(self) -> None:
         custody = MODULE.ResourceCustody(label="transfer")
         custody.own_descriptors((40, 41))
@@ -2227,13 +2303,13 @@ class ProcessUniverseTest(unittest.TestCase):
     def test_singular_release_rejects_ambiguous_internal_ownership(self) -> None:
         custody = MODULE.ResourceCustody(label="transfer")
         custody._resources = [  # type: ignore[assignment]
-            ("descriptor", 40),
-            ("descriptor", 40),
+            MODULE.ResourceRegistration("descriptor", 40),
+            MODULE.ResourceRegistration("descriptor", 40),
         ]
         with self.assertRaisesRegex(MODULE.DrainError, "unowned or ambiguous"):
             custody.release_descriptor(40)
         self.assertEqual(
-            custody._resources,
+            [(owned.kind, owned.value) for owned in custody._resources],
             [("descriptor", 40), ("descriptor", 40)],
         )
 
@@ -4872,11 +4948,67 @@ class WrapperBoundaryTest(unittest.TestCase):
         namespace = {"os": os}
         exec(compile(extracted, "<loader-custody>", "exec"), namespace, namespace)
         custody = namespace["DescriptorCustody"]("loader fault injection")
-        custody.descriptors.append(40)
+        custody.descriptors.append((object(), 40))
         primary = RuntimeError("loader body failed")
         with mock.patch.object(os, "close", side_effect=OSError("close failed")):
             custody.__exit__(RuntimeError, primary, None)
         self.assertIn("cleanup also failed", "\n".join(primary.__notes__))
+
+    def test_loader_custody_rolls_back_post_commit_append_failure(self) -> None:
+        source = WRAPPER.read_text(encoding="utf-8")
+        loader = source.split(
+            "read -r -d '' pinned_loader <<'PY' || true\n",
+            1,
+        )[1].split("\nPY\n", 1)[0]
+        tree = ast.parse(loader)
+        descriptor_custody = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "DescriptorCustody"
+        )
+        extracted = ast.fix_missing_locations(
+            ast.Module(body=[descriptor_custody], type_ignores=[])
+        )
+        namespace = {"os": os}
+        exec(compile(extracted, "<loader-custody>", "exec"), namespace, namespace)
+
+        class AppendThenRaise(list[object]):
+            def append(self, value: object) -> None:
+                super().append(value)
+                raise KeyboardInterrupt("loader append committed then interrupted")
+
+        custody = namespace["DescriptorCustody"]("loader registration")
+        custody.descriptors = AppendThenRaise()
+        with mock.patch.object(os, "open", return_value=40), mock.patch.object(
+            os,
+            "close",
+        ) as close, self.assertRaisesRegex(
+            KeyboardInterrupt,
+            "loader append committed then interrupted",
+        ):
+            custody.open("ignored", os.O_RDONLY)
+        close.assert_called_once_with(40)
+        self.assertEqual(custody.descriptors, [])
+        custody.close()
+        close.assert_called_once_with(40)
+
+        class AppendThenRaiseAndFailPop(AppendThenRaise):
+            def pop(self, index: int = -1) -> object:
+                raise MemoryError(f"loader rollback pop failed at {index}")
+
+        custody = namespace["DescriptorCustody"]("loader registration")
+        custody.descriptors = AppendThenRaiseAndFailPop()
+        with mock.patch.object(os, "open", return_value=41), mock.patch.object(
+            os,
+            "close",
+        ) as close, self.assertRaisesRegex(
+            KeyboardInterrupt,
+            "loader append committed then interrupted",
+        ) as raised:
+            custody.open("ignored", os.O_RDONLY)
+        self.assertIn("rollback pop failed", "\n".join(raised.exception.__notes__))
+        close.assert_called_once_with(41)
+        self.assertEqual(custody.descriptors, [])
 
     def test_verify_only_has_no_output_file_argument(self) -> None:
         source = WRAPPER.read_text(encoding="utf-8")

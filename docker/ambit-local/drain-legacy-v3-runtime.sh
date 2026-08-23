@@ -39,7 +39,7 @@ caller_gid=$(/usr/bin/id -g)
 script_source=$(/usr/bin/realpath -e -- "${BASH_SOURCE[0]}")
 script_dir=${script_source%/*}
 tool=${script_dir}/legacy_v3_drain.py
-tool_sha256=8ebf60906abe8b91d1c310e69eb9645ce60258ca8201ee6dc5e9428493ad6460
+tool_sha256=aca5581a04ed68c3fccc6ba59f6ec95ed79d987653812ed7a1c6d72e5e036588
 control_root=/run/ambit-c16b-legacy-v3-drain-1577287b8182
 
 read -r -d '' pinned_loader <<'PY' || true
@@ -102,18 +102,60 @@ class DescriptorCustody:
 
     def open(self, *args, **kwargs):
         descriptor = os.open(*args, **kwargs)
+        token = None
+        append_started = False
         try:
-            self.descriptors.append(descriptor)
+            token = object()
+            registration = (token, descriptor)
+            append_started = True
+            self.descriptors.append(registration)
         except BaseException as error:
-            try:
-                os.close(descriptor)
-            except BaseException as cleanup_error:
-                error.add_note(self.label + " registration cleanup also failed: " + str(cleanup_error))
+            rollback_complete = True
+            if append_started and token is not None:
+                rollback_complete = self._rollback(token, error)
+            if rollback_complete:
+                try:
+                    os.close(descriptor)
+                except BaseException as cleanup_error:
+                    error.add_note(self.label + " registration cleanup also failed: " + str(cleanup_error))
             raise
         return descriptor
 
+    def _rollback(self, token, active_error):
+        try:
+            found_index = -1
+            for index in range(len(self.descriptors)):
+                if self.descriptors[index][0] is token:
+                    if found_index != -1:
+                        raise SystemExit(self.label + " registration token is duplicated")
+                    found_index = index
+            if found_index != -1:
+                self.descriptors.pop(found_index)
+            return True
+        except BaseException as rollback_error:
+            active_error.add_note(self.label + " registration rollback also failed: " + str(rollback_error))
+        try:
+            replacement = []
+            removed = 0
+            for registration in self.descriptors:
+                if registration[0] is token:
+                    removed += 1
+                else:
+                    replacement.append(registration)
+            if removed > 1:
+                raise SystemExit(self.label + " registration token is duplicated")
+            self.descriptors = replacement
+            return True
+        except BaseException as fallback_error:
+            active_error.add_note(self.label + " registration rollback fallback also failed: " + str(fallback_error))
+            return False
+
     def release(self, descriptor):
-        matches = [index for index, value in enumerate(self.descriptors) if value == descriptor]
+        matches = [
+            index
+            for index, registration in enumerate(self.descriptors)
+            if registration[1] == descriptor
+        ]
         if len(matches) != 1:
             raise SystemExit(self.label + " transfer is unowned or ambiguous")
         self.descriptors.pop(matches[0])
@@ -126,7 +168,7 @@ class DescriptorCustody:
     def close(self):
         first_error = None
         while self.descriptors:
-            descriptor = self.descriptors.pop()
+            _token, descriptor = self.descriptors.pop()
             try:
                 os.close(descriptor)
             except BaseException as error:
