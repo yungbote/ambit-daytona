@@ -939,6 +939,40 @@ class ProcessUniverseTest(unittest.TestCase):
             )
         reopened.assert_not_called()
 
+    def test_captured_task_close_attempts_procfd_and_pidfd_after_one_failure(self) -> None:
+        task = MODULE.CapturedTask(
+            100,
+            101,
+            30,
+            31,
+            1,
+            77,
+            self._root_security(),
+        )
+        with mock.patch.object(
+            MODULE.os,
+            "close",
+            side_effect=(OSError("proc close failed"), None),
+        ) as close, self.assertRaisesRegex(
+            MODULE.DrainError,
+            "captured task descriptor close failed",
+        ):
+            task.close()
+        self.assertEqual(close.call_args_list, [mock.call(31), mock.call(30)])
+
+    def test_process_observation_close_attempts_procfd_and_pidfd_after_failure(self) -> None:
+        observation = MODULE.ProcessReferenceObservation({}, 30, 31)
+        with mock.patch.object(
+            MODULE.os,
+            "close",
+            side_effect=(OSError("proc close failed"), None),
+        ) as close, self.assertRaisesRegex(
+            MODULE.DrainError,
+            "process reference observation descriptor close failed",
+        ):
+            observation.close()
+        self.assertEqual(close.call_args_list, [mock.call(31), mock.call(30)])
+
     def test_nonleader_edge_is_in_the_related_task_proof(self) -> None:
         root_security = self._root_security()
         namespaces = {
@@ -1355,6 +1389,19 @@ class ProcessUniverseTest(unittest.TestCase):
         first.close.assert_called_once_with()
         second.close.assert_not_called()
 
+    def test_first_census_close_failure_closes_second_before_rejecting(self) -> None:
+        first = mock.Mock(proof_sha256="a" * 64, namespace_descriptors=(40,))
+        second = mock.Mock(proof_sha256="a" * 64, namespace_descriptors=(50,))
+        first.close.side_effect = MODULE.DrainError("first close failed")
+        with mock.patch.object(
+            MODULE,
+            "task_namespace_census_once",
+            side_effect=(first, second),
+        ), self.assertRaisesRegex(MODULE.DrainError, "first close failed"):
+            MODULE.stable_task_namespace_census()
+        first.close.assert_called_once_with()
+        second.close.assert_called_once_with()
+
     def test_closed_borrowed_namespace_census_rejects_before_consumer_scan(self) -> None:
         census = MODULE.TaskNamespaceCensus(
             frozenset(),
@@ -1597,6 +1644,25 @@ class ProcessUniverseTest(unittest.TestCase):
             MODULE.admit_held_namespace_descriptor(held, identity, 41)
         close.assert_called_once_with(41)
         self.assertEqual(held, {identity: 40})
+
+    def test_namespace_observation_cleanup_attempts_all_namespaces_and_tasks(self) -> None:
+        first = mock.Mock()
+        second = mock.Mock()
+        first.close.side_effect = MODULE.DrainError("task close failed")
+        tasks = [first, second]
+        with mock.patch.object(
+            MODULE.os,
+            "close",
+            side_effect=(OSError("namespace close failed"), None),
+        ) as close, self.assertRaisesRegex(
+            MODULE.DrainError,
+            "namespace observation cleanup failed",
+        ):
+            MODULE.close_namespace_observation_resources((40, 41), tasks)
+        self.assertEqual(close.call_args_list, [mock.call(40), mock.call(41)])
+        second.close.assert_called_once_with()
+        first.close.assert_called_once_with()
+        self.assertEqual(tasks, [])
 
     def test_exact_process_status_uses_the_real_exact_vocabulary(self) -> None:
         recorded = captured_process().authority
@@ -2331,6 +2397,7 @@ class MountAuthorityTest(unittest.TestCase):
         ]
         self.assertIn('observed["occurrences"] == recorded_occurrences', body)
         self.assertIn("fd_umount(target_fd)", body)
+        self.assertIn("close_descriptor_and_object_resources", body)
         self.assertNotIn("subprocess.run", body)
         self.assertNotIn("/usr/bin/umount", body)
 

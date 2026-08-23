@@ -914,6 +914,43 @@ def require_recorded_role_task_security(
     )
 
 
+def close_all_descriptors(
+    descriptors: Sequence[int],
+    *,
+    label: str,
+) -> None:
+    first_error: OSError | None = None
+    for descriptor in descriptors:
+        try:
+            os.close(descriptor)
+        except OSError as error:
+            if first_error is None:
+                first_error = error
+    if first_error is not None:
+        raise DrainError(f"{label} descriptor close failed") from first_error
+
+
+class Closeable(Protocol):
+    def close(self) -> None: ...
+
+
+def close_all_closeables(
+    resources: list[Closeable],
+    *,
+    label: str,
+) -> None:
+    first_error: BaseException | None = None
+    while resources:
+        resource_value = resources.pop()
+        try:
+            resource_value.close()
+        except BaseException as error:
+            if first_error is None:
+                first_error = error
+    if first_error is not None:
+        raise DrainError(f"{label} close failed") from first_error
+
+
 @dataclass
 class CapturedTask:
     thread_group_id: int
@@ -925,8 +962,10 @@ class CapturedTask:
     security_state: dict[str, object]
 
     def close(self) -> None:
-        os.close(self.process_fd)
-        os.close(self.pidfd)
+        close_all_descriptors(
+            (self.process_fd, self.pidfd),
+            label="captured task",
+        )
 
 
 def reprove_captured_task(
@@ -1396,16 +1435,13 @@ class TaskNamespaceCensus:
     def close(self) -> None:
         if self._closed:
             return
-        first_error: OSError | None = None
-        for descriptor in self.namespace_descriptors:
-            try:
-                os.close(descriptor)
-            except OSError as error:
-                if first_error is None:
-                    first_error = error
-        self._closed = True
-        if first_error is not None:
-            raise DrainError("task namespace census descriptor close failed") from first_error
+        try:
+            close_all_descriptors(
+                self.namespace_descriptors,
+                label="task namespace census",
+            )
+        finally:
+            self._closed = True
 
     def require_open(self) -> None:
         require(not self._closed, "task namespace census is already closed")
@@ -1893,6 +1929,44 @@ def admit_held_namespace_descriptor(
         os.close(descriptor)
 
 
+def close_captured_tasks(tasks: list[CapturedTask]) -> None:
+    close_all_closeables(tasks, label="captured task roster")
+
+
+def close_namespace_observation_resources(
+    namespace_descriptors: Sequence[int],
+    tasks: list[CapturedTask],
+) -> None:
+    close_descriptor_and_object_resources(
+        namespace_descriptors,
+        tasks,
+        label="namespace observation",
+    )
+
+
+def close_descriptor_and_object_resources(
+    descriptors: Sequence[int],
+    resources: list[Closeable],
+    *,
+    label: str,
+) -> None:
+    first_error: BaseException | None = None
+    try:
+        close_all_descriptors(
+            descriptors,
+            label=label,
+        )
+    except BaseException as error:
+        first_error = error
+    try:
+        close_all_closeables(resources, label=label)
+    except BaseException as error:
+        if first_error is None:
+            first_error = error
+    if first_error is not None:
+        raise DrainError(f"{label} cleanup failed") from first_error
+
+
 def _held_task_namespace_observations(
     *,
     external_self_excluded_fds: frozenset[int] = frozenset(),
@@ -1994,6 +2068,7 @@ def _held_task_namespace_observations(
         descriptors = tuple(
             held_namespaces[identity] for identity in sorted(held_namespaces)
         )
+        close_captured_tasks(held)
         transfer_namespace_descriptors = True
         return (
             current,
@@ -2003,11 +2078,20 @@ def _held_task_namespace_observations(
             descriptors,
         )
     finally:
-        if not transfer_namespace_descriptors:
-            for descriptor in held_namespaces.values():
-                os.close(descriptor)
-        for task in held:
-            task.close()
+        active_error = sys.exception()
+        try:
+            close_namespace_observation_resources(
+                (
+                    ()
+                    if transfer_namespace_descriptors
+                    else tuple(held_namespaces.values())
+                ),
+                held,
+            )
+        except BaseException as cleanup_error:
+            if active_error is None:
+                raise
+            active_error.add_note(f"cleanup also failed: {cleanup_error}")
 
 
 def _task_namespace_census_from_observations(
@@ -2065,32 +2149,51 @@ def task_namespace_census_once(
     )
     try:
         return _task_namespace_census_from_observations(*observations)
-    except BaseException:
-        for descriptor in observations[4]:
-            os.close(descriptor)
+    except BaseException as error:
+        try:
+            close_all_descriptors(
+                observations[4],
+                label="untransferred task namespace census",
+            )
+        except BaseException as cleanup_error:
+            error.add_note(f"cleanup also failed: {cleanup_error}")
         raise
 
 
 def stable_task_namespace_census() -> TaskNamespaceCensus:
     first = task_namespace_census_once()
+    second: TaskNamespaceCensus | None = None
     try:
         first.require_open()
         second = task_namespace_census_once(
             external_self_excluded_fds=frozenset(first.namespace_descriptors),
         )
-        try:
-            first.require_open()
-            second.require_open()
-            require(
-                first.proof_sha256 == second.proof_sha256,
-                "task namespace census changed across proof passes",
-            )
-            return second
-        except BaseException:
-            second.close()
-            raise
-    finally:
+        first.require_open()
+        second.require_open()
+        require(
+            first.proof_sha256 == second.proof_sha256,
+            "task namespace census changed across proof passes",
+        )
+    except BaseException as error:
+        for census in (second, first):
+            if census is None:
+                continue
+            try:
+                census.close()
+            except BaseException as cleanup_error:
+                error.add_note(f"census cleanup also failed: {cleanup_error}")
+        raise
+    try:
         first.close()
+    except BaseException as error:
+        assert second is not None
+        try:
+            second.close()
+        except BaseException as cleanup_error:
+            error.add_note(f"second census cleanup also failed: {cleanup_error}")
+        raise
+    assert second is not None
+    return second
 
 
 def classify_namespace_fd(
@@ -2896,8 +2999,19 @@ class ProcessReferenceObservation:
     process_fd: int
 
     def close(self) -> None:
-        os.close(self.process_fd)
-        os.close(self.pidfd)
+        close_all_descriptors(
+            (self.process_fd, self.pidfd),
+            label="process reference observation",
+        )
+
+
+def close_process_reference_observations(
+    observations: list[ProcessReferenceObservation],
+) -> None:
+    close_all_closeables(
+        observations,
+        label="process reference observation roster",
+    )
 
 
 def _structured_argument_relations(raw: bytes) -> set[str]:
@@ -3409,8 +3523,13 @@ def _related_process_universe_once(
             "namespaceFds": namespace_fd_proof,
         }
     finally:
-        for observation in observations:
-            observation.close()
+        active_error = sys.exception()
+        try:
+            close_process_reference_observations(observations)
+        except BaseException as cleanup_error:
+            if active_error is None:
+                raise
+            active_error.add_note(f"cleanup also failed: {cleanup_error}")
 
 
 def related_process_universe(
@@ -4770,8 +4889,13 @@ def hold_related_process_cutoff(
                     expected_security_state=row["securityState"],
                 )
     finally:
-        for task, _row in held:
-            task.close()
+        active_error = sys.exception()
+        try:
+            close_captured_tasks([task for task, _row in held])
+        except BaseException as cleanup_error:
+            if active_error is None:
+                raise
+            active_error.add_note(f"cleanup also failed: {cleanup_error}")
 
 
 def exact_process_status(recorded: Mapping[str, object]) -> str:
@@ -5490,12 +5614,31 @@ def settle_task_netns(control: Mapping[str, object]) -> dict[str, object]:
             os.close(marker_fd)
         os.fsync(netns_fd)
     finally:
-        for descriptor in (target_fd, netns_fd, exec_fd, root_fd, root_parent_fd):
-            if descriptor is not None:
-                os.close(descriptor)
-        for proof in (netns_proof, exec_proof):
-            if proof is not None:
-                proof.close()
+        active_error = sys.exception()
+        try:
+            close_descriptor_and_object_resources(
+                tuple(
+                    descriptor
+                    for descriptor in (
+                        target_fd,
+                        netns_fd,
+                        exec_fd,
+                        root_fd,
+                        root_parent_fd,
+                    )
+                    if descriptor is not None
+                ),
+                [
+                    proof
+                    for proof in (netns_proof, exec_proof)
+                    if proof is not None
+                ],
+                label="legacy task netns transition",
+            )
+        except BaseException as cleanup_error:
+            if active_error is None:
+                raise
+            active_error.add_note(f"cleanup also failed: {cleanup_error}")
     final = stable_global_mount_roster(
         TASK_NETNS_TARGET,
         anchor,
