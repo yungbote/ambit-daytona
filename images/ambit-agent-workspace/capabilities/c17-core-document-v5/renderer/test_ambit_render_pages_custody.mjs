@@ -5,6 +5,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   rename,
   rm,
   symlink,
@@ -112,6 +113,8 @@ test('writes exclusive fsynced files and rejects directory replacement', async (
         writeDurableOutput(output, 'render-manifest.json', body),
         /identity changed/,
       )
+      assert.deepEqual(await readdir(outputPath), [])
+      assert.deepEqual(await readdir(moved), ['page-0001.png'])
     } finally {
       await output.handle.close()
     }
