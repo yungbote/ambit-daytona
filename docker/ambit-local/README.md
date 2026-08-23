@@ -312,7 +312,10 @@ its exact device/inode is also a current namespace of a captured live task.
 The privileged verifier must remain single-threaded so proof-owned FD numbers
 cannot alias an unshared sibling FD table. Before capture it freezes one task
 coordinate roster and fails closed unless `RLIMIT_NOFILE` has a source-bounded
-six-descriptor-per-task budget plus explicit baseline and prior-pass reserves.
+ten-descriptor-per-task budget (one thread pidfd, one bound task procfd, and
+all eight current Linux namespace kinds: cgroup, IPC, mount, network, PID,
+time, user, and UTS), plus explicit baseline, prior-pass, and two-descriptor
+root/fdinfo-or-mountinfo transient reserves.
 It retains every task pidfd/proc descriptor through the pass commit and one
 typed nsfs descriptor per unique current namespace through all shared FD and
 mount consumers. Those proof-created namespace FDs are excluded only from the
@@ -320,6 +323,12 @@ verifier's own exactly single-threaded FD table, are re-proved at each borrowed
 consumer boundary, and close on every success or failure path. Transient open
 FD counts are preflight telemetry, not durable authority, so holding the global
 lease cannot change an otherwise identical verification digest.
+Every acquired descriptor or closeable enters one LIFO custody authority at
+acquisition. Owner construction precedes atomic transfer, registration failure
+closes the current and all not-yet-registered batch resources, and cleanup
+attempts the complete roster. The custody context receives the exact immediate
+body exception, so a caller's already-handled exception cannot suppress a
+normal cleanup failure or let a cleanup failure replace the primary error.
 For each mount namespace, one representative whose `/proc/<tid>/root` link is
 exactly `/`, whose held root descriptor `mnt_id` equals the mountinfo `/`
 record, and whose descriptor device/type binds that record's `/` source root
@@ -417,6 +426,13 @@ the original state, evidence, config, persistent-root, process, mount, pidfile,
 and registry bindings; this lets reboot recovery reject a substituted
 caller-owned state tree. The immutable control retains the exact original
 receipt bytes.
+Before the control capsule is published—and again whenever an existing capsule
+is opened—the reducer and pinned resume loader construct the complete future
+projection and prove its canonical bytes fit the common 2 MiB document bound.
+Nonterminal states reserve the exact fixed-width generated UTC timestamp;
+terminal replay measures the stored terminal timestamp. A control that fits
+while its embedded projection does not therefore blocks before any runtime
+mutation, rather than failing after destruction.
 The reducer constructs the archive in a second root-owned unnamed file, links
 and fsyncs it first at the fixed hidden `*.prepared` recovery coordinate,
 descriptor-rewrites the old live inode to a deterministic non-legacy
@@ -437,7 +453,12 @@ projection and prepared links, including boot replay. If a reboot clears the
 pinned repository bytes,
 revalidates the root-owned projection plus prepared original bytes and the
 absent legacy runtime/PIDs, completes the caller-owned tombstone if necessary,
-and performs the same final no-replace link. With a live capsule, `resume` uses
+and performs the same final no-replace link. Boot-independent tombstone replay
+reuses the ordinary live-receipt disposition contract, binds the held and
+literal live file to the control's exact recorded device/inode before and after
+mutation, and then reopens a second exact type/link/size/owner/mode/tombstone
+observation before archive publication; copied bytes on a substituted inode
+never authorize root mutation. With a live capsule, `resume` uses
 the loader-held control-root FD and executes the already-read snapshot bytes
 in-process, never an admitted pathname. A timeout or foreign state stops for an
 explicit manual route; the default tool has no force path.

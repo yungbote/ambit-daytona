@@ -39,7 +39,7 @@ caller_gid=$(/usr/bin/id -g)
 script_source=$(/usr/bin/realpath -e -- "${BASH_SOURCE[0]}")
 script_dir=${script_source%/*}
 tool=${script_dir}/legacy_v3_drain.py
-tool_sha256=3685f8b7096aa7970c3135923c2651ecb70f4ebcf2925e5d18832394c3e4a9b1
+tool_sha256=ec6e71b739a56ab6958ce3e9d3699a5e39033ec0b7fe50684534a4415610e334
 control_root=/run/ambit-c16b-legacy-v3-drain-1577287b8182
 
 read -r -d '' pinned_loader <<'PY' || true
@@ -71,9 +71,84 @@ def duplicate_rejector(pairs):
 def canonical(value):
     return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
+TERMINAL_TIMESTAMP_SENTINEL = "2000-01-01T00:00:00.000000+00:00"
+
+def terminal_projection_value_for(control, *, observed_at, boot_id):
+    return {
+        "schema": "ambit.local-daytona-legacy-v3-drain-terminal/v1",
+        "outcome": "drained",
+        "observedAt": observed_at,
+        "bootId": boot_id,
+        "stateRoot": "/home/bote/m/.local/ambit-daytona-c16b/state",
+        "legacyReceiptSha256": "c7b6f7f5f77ae5569a918cd33a811aa855b781f3c007df6f9f19bf1d3f458c21",
+        "legacyReceiptArchive": "/home/bote/m/.local/ambit-daytona-c16b/state/evidence/outer-docker-receipt.legacy-v3-c7b6f7f5f77ae556.json",
+        "controlSha256": hashlib.sha256(canonical(control)).hexdigest(),
+        "sourceSha256": control["sourceSha256"],
+        "control": control,
+        "persistentDataPreserved": [
+            "/home/bote/m/.local/ambit-daytona-c16b/state/outer-docker",
+            "/home/bote/m/.local/ambit-daytona-c16b/state/outer-containerd",
+            "/home/bote/m/.local/ambit-daytona-c16b/state/registry",
+        ],
+        "legacyRuntimeRemoved": True,
+        "cgroupMutationPerformed": False,
+        "forceKillPerformed": False,
+    }
+
+class DescriptorCustody:
+    def __init__(self, label):
+        self.label = label
+        self.descriptors = []
+
+    def open(self, *args, **kwargs):
+        descriptor = os.open(*args, **kwargs)
+        try:
+            self.descriptors.append(descriptor)
+        except BaseException as error:
+            try:
+                os.close(descriptor)
+            except BaseException as cleanup_error:
+                error.add_note(self.label + " registration cleanup also failed: " + str(cleanup_error))
+            raise
+        return descriptor
+
+    def release(self, descriptor):
+        matches = [index for index, value in enumerate(self.descriptors) if value == descriptor]
+        if len(matches) != 1:
+            raise SystemExit(self.label + " transfer is unowned or ambiguous")
+        self.descriptors.pop(matches[0])
+        return descriptor
+
+    def close_descriptor(self, descriptor):
+        self.release(descriptor)
+        os.close(descriptor)
+
+    def close(self):
+        first_error = None
+        while self.descriptors:
+            descriptor = self.descriptors.pop()
+            try:
+                os.close(descriptor)
+            except BaseException as error:
+                if first_error is None:
+                    first_error = error
+        if first_error is not None:
+            raise first_error
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exception_type, active_error, _traceback):
+        try:
+            self.close()
+        except BaseException as cleanup_error:
+            if active_error is None:
+                raise
+            active_error.add_note(self.label + " cleanup also failed: " + str(cleanup_error))
+
 def read_bound_at(directory_fd, name, maximum, *, expected_device=None):
-    descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
-    try:
+    with DescriptorCustody("legacy-v3 bound read " + name) as custody:
+        descriptor = custody.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
         before = os.fstat(descriptor)
         if not (
             stat.S_ISREG(before.st_mode)
@@ -103,13 +178,30 @@ def read_bound_at(directory_fd, name, maximum, *, expected_device=None):
         ):
             raise SystemExit("legacy-v3 capsule file changed during read: " + name)
         return bytes(source)
-    finally:
-        os.close(descriptor)
 
-control_root_fd = None
+def execute_source(source, display_name, control_root_fd=None):
+    if not hmac.compare_digest(hashlib.sha256(source).hexdigest(), expected_sha256):
+        raise SystemExit("legacy-v3 pinned Python source digest differs")
+    os.chdir("/")
+    os.environ.clear()
+    os.environ.update({
+        "HOME": "/root", "LC_ALL": "C.UTF-8", "PATH": "/usr/bin:/bin",
+        "SUDO_UID": caller_uid, "SUDO_GID": caller_gid,
+    })
+    sys.argv = [display_name, operation, state_root, caller_uid, caller_gid, *tail]
+    namespace = {
+        "__name__": "__main__",
+        "__file__": display_name,
+        "__package__": None,
+        "__legacy_pinned_source_bytes__": source,
+    }
+    if control_root_fd is not None:
+        namespace["__legacy_control_root_fd__"] = control_root_fd
+    exec(compile(source, display_name, "exec"), namespace, namespace)
+
 if mode == "repo":
-    descriptor = os.open(authority_path, os.O_RDONLY | os.O_NOFOLLOW)
-    try:
+    with DescriptorCustody("legacy-v3 repository source") as custody:
+        descriptor = custody.open(authority_path, os.O_RDONLY | os.O_NOFOLLOW)
         before = os.fstat(descriptor)
         if not (
             stat.S_ISREG(before.st_mode)
@@ -138,43 +230,39 @@ if mode == "repo":
         ):
             raise SystemExit("legacy-v3 repository source changed during admission")
         source = bytes(source)
-    finally:
-        os.close(descriptor)
     display_name = authority_path
-else:
+def execute_resume_owned(custody):
     if authority_path != "/run/ambit-c16b-legacy-v3-drain-1577287b8182":
         raise SystemExit("legacy-v3 control-root path differs")
-    run_fd = os.open("/run", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        run_identity = os.fstat(run_fd)
-        if not (
-            stat.S_ISDIR(run_identity.st_mode)
-            and run_identity.st_uid == 0
-            and run_identity.st_gid == 0
-            and stat.S_IMODE(run_identity.st_mode) & 0o022 == 0
-        ):
-            raise SystemExit("legacy-v3 control parent differs")
-        control_root_fd = os.open(
-            "ambit-c16b-legacy-v3-drain-1577287b8182",
-            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-            dir_fd=run_fd,
-        )
-        root = os.fstat(control_root_fd)
-        literal = os.stat(
-            "ambit-c16b-legacy-v3-drain-1577287b8182",
-            dir_fd=run_fd,
-            follow_symlinks=False,
-        )
-        if not (
-            stat.S_ISDIR(root.st_mode)
-            and root.st_uid == 0
-            and root.st_gid == 0
-            and stat.S_IMODE(root.st_mode) == 0o700
-            and (literal.st_dev, literal.st_ino) == (root.st_dev, root.st_ino)
-        ):
-            raise SystemExit("legacy-v3 root control identity differs")
-    finally:
-        os.close(run_fd)
+    run_fd = custody.open("/run", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    run_identity = os.fstat(run_fd)
+    if not (
+        stat.S_ISDIR(run_identity.st_mode)
+        and run_identity.st_uid == 0
+        and run_identity.st_gid == 0
+        and stat.S_IMODE(run_identity.st_mode) & 0o022 == 0
+    ):
+        raise SystemExit("legacy-v3 control parent differs")
+    control_root_fd = custody.open(
+        "ambit-c16b-legacy-v3-drain-1577287b8182",
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        dir_fd=run_fd,
+    )
+    root = os.fstat(control_root_fd)
+    literal = os.stat(
+        "ambit-c16b-legacy-v3-drain-1577287b8182",
+        dir_fd=run_fd,
+        follow_symlinks=False,
+    )
+    if not (
+        stat.S_ISDIR(root.st_mode)
+        and root.st_uid == 0
+        and root.st_gid == 0
+        and stat.S_IMODE(root.st_mode) == 0o700
+        and (literal.st_dev, literal.st_ino) == (root.st_dev, root.st_ino)
+    ):
+        raise SystemExit("legacy-v3 root control identity differs")
+    custody.close_descriptor(run_fd)
     allowed = {
         "legacy_v3_drain.py", "control.json", "state.json",
         ".legacy_v3_drain.py.pending", ".control.json.pending", ".state.json.pending",
@@ -226,26 +314,26 @@ else:
         raise SystemExit("legacy-v3 root control binding differs")
     if not hmac.compare_digest(hashlib.sha256(source).hexdigest(), control["sourceSha256"]):
         raise SystemExit("legacy-v3 root source snapshot differs")
+    terminal_observed_at = (
+        state["observedAt"]
+        if state["phase"] == "archive_intent_final"
+        else TERMINAL_TIMESTAMP_SENTINEL
+    )
+    terminal_projection = terminal_projection_value_for(
+        control,
+        observed_at=terminal_observed_at,
+        boot_id=state["bootId"],
+    )
+    if not (0 < len(canonical(terminal_projection)) <= 2 * 1024 * 1024):
+        raise SystemExit("legacy-v3 terminal projection is too large")
     display_name = authority_path + "/legacy_v3_drain.py"
+    execute_source(source, display_name, control_root_fd)
 
-if not hmac.compare_digest(hashlib.sha256(source).hexdigest(), expected_sha256):
-    raise SystemExit("legacy-v3 pinned Python source digest differs")
-os.chdir("/")
-os.environ.clear()
-os.environ.update({
-    "HOME": "/root", "LC_ALL": "C.UTF-8", "PATH": "/usr/bin:/bin",
-    "SUDO_UID": caller_uid, "SUDO_GID": caller_gid,
-})
-sys.argv = [display_name, operation, state_root, caller_uid, caller_gid, *tail]
-namespace = {
-    "__name__": "__main__",
-    "__file__": display_name,
-    "__package__": None,
-    "__legacy_pinned_source_bytes__": source,
-}
-if control_root_fd is not None:
-    namespace["__legacy_control_root_fd__"] = control_root_fd
-exec(compile(source, display_name, "exec"), namespace, namespace)
+if mode == "repo":
+    execute_source(source, display_name)
+else:
+    with DescriptorCustody("legacy-v3 resume authority") as resume_custody:
+        execute_resume_owned(resume_custody)
 PY
 
 invoke_tool() {

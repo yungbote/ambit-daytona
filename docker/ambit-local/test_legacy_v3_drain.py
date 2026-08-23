@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import errno
 import hashlib
 import importlib.util
 import json
@@ -1215,10 +1216,17 @@ class ProcessUniverseTest(unittest.TestCase):
         self.assertIn("_namespace_fd_records(", held_commit)
         self.assertIn("== namespace_fd_rows", held_commit)
         self.assertLess(
-            held_commit.index("transfer_namespace_descriptors = True"),
-            held_commit.index("return ("),
+            held_commit.index("result = ("),
+            held_commit.index("for task in tuple(held)"),
         )
-        self.assertLess(held_commit.index("return ("), held_commit.index("finally:"))
+        self.assertLess(
+            held_commit.index("for task in tuple(held)"),
+            held_commit.index("custody.release_descriptors(descriptors)"),
+        )
+        self.assertLess(
+            held_commit.index("custody.release_descriptors(descriptors)"),
+            held_commit.index("return result"),
+        )
         mount_projection = source[
             source.index("def global_mount_roster_once")
             : source.index("def stable_global_mount_roster")
@@ -1381,6 +1389,40 @@ class ProcessUniverseTest(unittest.TestCase):
                     changed,
                     label="test",
                 )
+
+    def test_every_current_linux_namespace_kind_is_typed_and_censused(self) -> None:
+        self.assertEqual(
+            MODULE.NAMESPACE_KINDS,
+            ("cgroup", "ipc", "mnt", "net", "pid", "time", "user", "uts"),
+        )
+        observed = mock.Mock(
+            st_mode=stat.S_IFREG | 0o444,
+            st_dev=4,
+            st_ino=100,
+        )
+        for kind in MODULE.NAMESPACE_KINDS:
+            with self.subTest(kind=kind):
+                self.assertEqual(
+                    MODULE.namespace_fd_identity(
+                        f"{kind}:[100]",
+                        observed,
+                        label="test",
+                    ),
+                    MODULE.NamespaceIdentity(kind, 4, 100),
+                )
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        census = source[
+            source.index("def _held_task_namespace_observations")
+            : source.index("def _task_namespace_census_from_observations")
+        ]
+        process_scan = source[
+            source.index("def process_reference_scan")
+            : source.index("def _related_process_universe_once")
+        ]
+        self.assertIn("for kind in NAMESPACE_KINDS", census)
+        self.assertIn("for name in NAMESPACE_KINDS", process_scan)
+        self.assertNotIn("pid_for_children", MODULE.NAMESPACE_KINDS)
+        self.assertNotIn("time_for_children", MODULE.NAMESPACE_KINDS)
 
     def test_census_owned_namespace_pins_are_excluded_from_self_fd_roster(self) -> None:
         task = mock.Mock(process_fd=10, pidfd=11, thread_group_id=100, task_id=100)
@@ -1579,6 +1621,33 @@ class ProcessUniverseTest(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.DrainError, "digest or summary differs"):
             census.require_open()
 
+    def test_census_enter_failure_closes_before_python_can_call_exit(self) -> None:
+        preimage = MODULE.task_namespace_census_preimage(set(), set(), (), 0)
+        digest = hashlib.sha256(MODULE.canonical_json(preimage)).hexdigest()
+        census = MODULE.TaskNamespaceCensus(
+            frozenset(),
+            frozenset(),
+            (),
+            digest,
+            {
+                "currentNamespaceCount": 0,
+                "namespaceFdCount": 0,
+                "mountNamespaceCount": 0,
+                "proofSha256": digest,
+                "processlessMountNamespaces": "not_observable_and_not_admitted",
+                "queuedScmRightsNamespaceFds": "not_observable_and_not_admitted",
+                "taskCount": 0,
+            },
+            (40,),
+            preimage,
+        )
+        with mock.patch.object(MODULE.os, "close") as close, self.assertRaisesRegex(
+            MODULE.DrainError,
+            "descriptor roster differs",
+        ):
+            census.__enter__()
+        close.assert_called_once_with(40)
+
     def test_current_namespace_change_inside_one_task_capture_rejects(self) -> None:
         task = mock.Mock(thread_group_id=100, task_id=101, process_fd=31)
         expected = MODULE.NamespaceIdentity("mnt", 4, 100)
@@ -1600,7 +1669,7 @@ class ProcessUniverseTest(unittest.TestCase):
         with mock.patch.object(
             MODULE.resource,
             "getrlimit",
-            return_value=(188, 256),
+            return_value=(230, 256),
         ), mock.patch.object(
             MODULE.os,
             "listdir",
@@ -1611,16 +1680,18 @@ class ProcessUniverseTest(unittest.TestCase):
                 {
                     "taskCount": 10,
                     "baselineDescriptorReserve": 128,
+                    "perTaskDescriptorReserve": 10,
+                    "transientDescriptorReserve": 2,
                     "externallyHeldDescriptorCount": 0,
-                    "requiredDescriptorLimit": 188,
-                    "softDescriptorLimit": 188,
+                    "requiredDescriptorLimit": 230,
+                    "softDescriptorLimit": 230,
                     "hardDescriptorLimit": 256,
                 },
             )
         with mock.patch.object(
             MODULE.resource,
             "getrlimit",
-            return_value=(187, 256),
+            return_value=(229, 256),
         ), mock.patch.object(
             MODULE.os,
             "listdir",
@@ -1634,7 +1705,7 @@ class ProcessUniverseTest(unittest.TestCase):
         with mock.patch.object(
             MODULE.resource,
             "getrlimit",
-            return_value=(188, 256),
+            return_value=(230, 256),
         ), mock.patch.object(
             MODULE.os,
             "listdir",
@@ -1650,7 +1721,7 @@ class ProcessUniverseTest(unittest.TestCase):
         with mock.patch.object(
             MODULE.resource,
             "getrlimit",
-            return_value=(190, 256),
+            return_value=(232, 256),
         ), mock.patch.object(
             MODULE.os,
             "listdir",
@@ -1661,7 +1732,7 @@ class ProcessUniverseTest(unittest.TestCase):
                     10,
                     externally_held=2,
                 )["requiredDescriptorLimit"],
-                190,
+                232,
             )
 
     def test_self_fd_exclusion_requires_a_single_threaded_drain(self) -> None:
@@ -1696,11 +1767,14 @@ class ProcessUniverseTest(unittest.TestCase):
         close.assert_called_once_with(41)
         self.assertEqual(held, {identity: 40})
 
-    def test_namespace_observation_cleanup_attempts_all_namespaces_and_tasks(self) -> None:
+    def test_resource_custody_cleanup_attempts_every_owned_resource(self) -> None:
         first = mock.Mock()
         second = mock.Mock()
         first.close.side_effect = MODULE.DrainError("task close failed")
-        tasks = [first, second]
+        custody = MODULE.ResourceCustody(label="namespace observation")
+        custody.own_descriptors((40, 41))
+        custody.own_closeable(first)
+        custody.own_closeable(second)
         with mock.patch.object(
             MODULE.os,
             "close",
@@ -1709,11 +1783,64 @@ class ProcessUniverseTest(unittest.TestCase):
             MODULE.DrainError,
             "namespace observation cleanup failed",
         ):
-            MODULE.close_namespace_observation_resources((40, 41), tasks)
-        self.assertEqual(close.call_args_list, [mock.call(40), mock.call(41)])
+            custody.close()
+        self.assertEqual(close.call_args_list, [mock.call(41), mock.call(40)])
         second.close.assert_called_once_with()
         first.close.assert_called_once_with()
-        self.assertEqual(tasks, [])
+
+    def test_resource_custody_preserves_primary_and_surfaces_normal_cleanup(self) -> None:
+        primary = RuntimeError("body failed")
+        custody = MODULE.ResourceCustody(label="fault injection")
+        custody.own_descriptor(40)
+        with mock.patch.object(
+            MODULE.os,
+            "close",
+            side_effect=OSError("close failed"),
+        ):
+            custody.__exit__(RuntimeError, primary, None)
+        self.assertIn("cleanup also failed", "\n".join(primary.__notes__))
+
+        custody = MODULE.ResourceCustody(label="fault injection")
+        custody.own_descriptor(41)
+        with mock.patch.object(
+            MODULE.os,
+            "close",
+            side_effect=OSError("close failed"),
+        ), self.assertRaisesRegex(MODULE.DrainError, "cleanup failed"):
+            custody.__exit__(None, None, None)
+
+    def test_resource_registration_failure_closes_current_and_remaining(self) -> None:
+        class FailSecondAppend(list[object]):
+            def __init__(self) -> None:
+                super().__init__()
+                self.calls = 0
+
+            def append(self, value: object) -> None:
+                self.calls += 1
+                if self.calls == 2:
+                    raise MemoryError("registration failed")
+                super().append(value)
+
+        custody = MODULE.ResourceCustody(label="registration")
+        custody._resources = FailSecondAppend()  # type: ignore[assignment]
+        with mock.patch.object(MODULE.os, "close") as close:
+            with self.assertRaisesRegex(MemoryError, "registration failed"):
+                custody.own_descriptors((40, 41, 42))
+            self.assertEqual(close.call_args_list, [mock.call(41), mock.call(42)])
+            custody.close()
+            self.assertEqual(
+                close.call_args_list,
+                [mock.call(41), mock.call(42), mock.call(40)],
+            )
+
+    def test_batch_release_validates_before_releasing_any_descriptor(self) -> None:
+        custody = MODULE.ResourceCustody(label="transfer")
+        custody.own_descriptors((40, 41))
+        with self.assertRaisesRegex(MODULE.DrainError, "unowned or ambiguous"):
+            custody.release_descriptors((40, 99))
+        with mock.patch.object(MODULE.os, "close") as close:
+            custody.close()
+        self.assertEqual(close.call_args_list, [mock.call(41), mock.call(40)])
 
     def test_exact_process_status_uses_the_real_exact_vocabulary(self) -> None:
         recorded = captured_process().authority
@@ -2448,7 +2575,7 @@ class MountAuthorityTest(unittest.TestCase):
         ]
         self.assertIn('observed["occurrences"] == recorded_occurrences', body)
         self.assertIn("fd_umount(target_fd)", body)
-        self.assertIn("close_descriptor_and_object_resources", body)
+        self.assertIn('ResourceCustody(label="legacy task netns transition")', body)
         self.assertNotIn("subprocess.run", body)
         self.assertNotIn("/usr/bin/umount", body)
 
@@ -2986,7 +3113,8 @@ class DestructiveBoundaryTest(unittest.TestCase):
             )
         self.assertEqual(close.call_args_list, [mock.call(31), mock.call(30)])
 
-    def test_multi_resource_finalizers_use_close_all_authority(self) -> None:
+    def test_source_has_one_explicit_descriptor_ownership_authority(self) -> None:
+        source = MODULE_PATH.read_text(encoding="utf-8")
         tree = ast.parse(MODULE_PATH.read_text(encoding="utf-8"))
         offenders: list[tuple[int, list[int]]] = []
         for node in ast.walk(tree):
@@ -3004,6 +3132,147 @@ class DestructiveBoundaryTest(unittest.TestCase):
             if len(close_lines) > 1:
                 offenders.append((node.lineno, close_lines))
         self.assertEqual(offenders, [])
+        raw_acquisitions: list[tuple[int, str]] = []
+        parents: dict[ast.AST, ast.AST] = {}
+        for node in ast.walk(tree):
+            for child in ast.iter_child_nodes(node):
+                parents[child] = node
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if not isinstance(node.func.value, ast.Name):
+                continue
+            call = (node.func.value.id, node.func.attr)
+            if call not in {
+                ("os", "open"),
+                ("os", "pidfd_open"),
+                ("os", "dup"),
+                ("socket", "socket"),
+            }:
+                continue
+            parent: ast.AST | None = node
+            function: ast.FunctionDef | None = None
+            class_name: str | None = None
+            while parent is not None:
+                if function is None and isinstance(parent, ast.FunctionDef):
+                    function = parent
+                if isinstance(parent, ast.ClassDef):
+                    class_name = parent.name
+                    break
+                parent = parents.get(parent)
+            if class_name != "ResourceCustody":
+                raw_acquisitions.append(
+                    (node.lineno, function.name if function is not None else "<module>")
+                )
+        self.assertEqual(raw_acquisitions, [])
+        self.assertNotIn("sys.exception()", source)
+        self.assertNotIn("close_all_descriptors_preserving_active", source)
+        self.assertNotIn("close_closeable_preserving_active", source)
+
+    def test_control_publication_closes_initial_existing_validation_failure(self) -> None:
+        with mock.patch.object(
+            MODULE,
+            "open_run_parent",
+            return_value=10,
+        ), mock.patch.object(
+            MODULE.os,
+            "open",
+            return_value=11,
+        ), mock.patch.object(
+            MODULE,
+            "_validate_control_root_descriptor",
+            side_effect=RuntimeError("existing validation failed"),
+        ), mock.patch.object(
+            MODULE.os,
+            "close",
+            side_effect=(OSError("existing close failed"), None),
+        ) as close, self.assertRaisesRegex(
+            RuntimeError,
+            "existing validation failed",
+        ) as raised:
+            MODULE.publish_control_capsule({}, {})
+        self.assertEqual(close.call_args_list, [mock.call(11), mock.call(10)])
+        self.assertIn("cleanup also failed", "\n".join(raised.exception.__notes__))
+
+    def test_control_publication_closes_raced_existing_validation_failure(self) -> None:
+        control = {"sourceSha256": "d" * 64}
+        allowed = {MODULE.SNAPSHOT_NAME, MODULE.CONTROL_NAME, MODULE.STATE_NAME}
+        with mock.patch.object(
+            MODULE,
+            "open_run_parent",
+            return_value=10,
+        ), mock.patch.object(
+            MODULE.os,
+            "open",
+            side_effect=(FileNotFoundError(), 12, 13),
+        ), mock.patch.object(
+            MODULE,
+            "_reduce_pending_control_capsule",
+        ), mock.patch.object(
+            MODULE.os,
+            "mkdir",
+        ), mock.patch.object(
+            MODULE.os,
+            "fsync",
+        ), mock.patch.object(
+            MODULE,
+            "_validate_control_root_descriptor",
+            side_effect=(None, RuntimeError("race validation failed")),
+        ), mock.patch.object(
+            MODULE,
+            "snapshot_source",
+            return_value="d" * 64,
+        ), mock.patch.object(
+            MODULE,
+            "atomic_write_at",
+        ), mock.patch.object(
+            MODULE.os,
+            "listdir",
+            return_value=allowed,
+        ), mock.patch.object(
+            MODULE,
+            "rename_noreplace_at",
+            side_effect=FileExistsError(errno.EEXIST, "exists"),
+        ), mock.patch.object(
+            MODULE.os,
+            "close",
+            side_effect=(None, OSError("race close failed"), None),
+        ) as close, self.assertRaisesRegex(
+            RuntimeError,
+            "race validation failed",
+        ) as raised:
+            MODULE.publish_control_capsule(control, {})
+        self.assertEqual(
+            close.call_args_list,
+            [mock.call(12), mock.call(13), mock.call(10)],
+        )
+        self.assertIn("cleanup also failed", "\n".join(raised.exception.__notes__))
+
+    def test_recovery_second_descriptor_acquisition_failure_closes_state(self) -> None:
+        with mock.patch.object(
+            MODULE,
+            "exists_nofollow",
+            return_value=False,
+        ), mock.patch.object(
+            MODULE,
+            "require_v5_absent",
+            return_value={"legacyRuntime": None},
+        ), mock.patch.object(
+            MODULE,
+            "require_registry_listener_absent",
+        ), mock.patch.object(
+            MODULE.os,
+            "open",
+            side_effect=(30, OSError("evidence open failed")),
+        ), mock.patch.object(
+            MODULE.os,
+            "close",
+        ) as close, self.assertRaisesRegex(
+            OSError,
+            "evidence open failed",
+        ):
+            MODULE.recover_terminal_archive_without_control()
+        close.assert_called_once_with(30)
 
     def test_no_replace_rename_preserves_foreign_destination(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -3147,6 +3416,159 @@ class DestructiveBoundaryTest(unittest.TestCase):
                 "tombstone",
             )
 
+    def test_recovery_tombstone_rejects_byte_identical_substituted_inode(self) -> None:
+        raw = b"receipt\n"
+        digest = hashlib.sha256(raw).hexdigest()
+        control = {
+            "authority": {
+                "legacyReceipt": {
+                    "device": 7,
+                    "inode": 9,
+                    "uid": 1000,
+                    "gid": 1000,
+                    "mode": 0o600,
+                    "size": len(raw),
+                },
+                "legacyReceiptBytes": raw.decode(),
+            }
+        }
+        projection = {
+            "controlSha256": MODULE.sha256_bytes(MODULE.canonical_json(control)),
+            "control": control,
+        }
+        substituted = mock.Mock(
+            st_mode=stat.S_IFREG | 0o600,
+            st_uid=1000,
+            st_gid=1000,
+            st_nlink=1,
+            st_dev=7,
+            st_ino=10,
+            st_size=len(raw),
+        )
+        with mock.patch.object(
+            MODULE,
+            "EXPECTED_RECEIPT_SHA256",
+            digest,
+        ), mock.patch.object(
+            MODULE,
+            "_read_regular_at",
+            return_value=(31, substituted, raw),
+        ), mock.patch.object(
+            MODULE.os,
+            "close",
+        ) as close, mock.patch.object(
+            MODULE.os,
+            "ftruncate",
+        ) as truncate, mock.patch.object(
+            MODULE,
+            "_write_all",
+        ) as write, mock.patch.object(
+            MODULE.os,
+            "fchown",
+        ) as chown, mock.patch.object(
+            MODULE.os,
+            "fchmod",
+        ) as chmod, self.assertRaisesRegex(
+            MODULE.ManualRecoveryRequired,
+            "live receipt is foreign",
+        ):
+            MODULE.complete_terminal_tombstone_without_control(20, projection)
+        close.assert_called_once_with(31)
+        truncate.assert_not_called()
+        write.assert_not_called()
+        chown.assert_not_called()
+        chmod.assert_not_called()
+
+    def test_recovery_tombstone_rejects_post_mutation_name_substitution(self) -> None:
+        raw = b"receipt\n"
+        digest = hashlib.sha256(raw).hexdigest()
+        control = {
+            "authority": {
+                "legacyReceipt": {
+                    "device": 7,
+                    "inode": 9,
+                    "uid": 1000,
+                    "gid": 1000,
+                    "mode": 0o600,
+                    "size": len(raw),
+                },
+                "legacyReceiptBytes": raw.decode(),
+            }
+        }
+        projection = {
+            "controlSha256": MODULE.sha256_bytes(MODULE.canonical_json(control)),
+            "control": control,
+        }
+        initial = mock.Mock(
+            st_mode=stat.S_IFREG | 0o600,
+            st_uid=1000,
+            st_gid=1000,
+            st_nlink=1,
+            st_dev=7,
+            st_ino=9,
+            st_size=len(raw),
+        )
+        with mock.patch.object(MODULE, "EXPECTED_RECEIPT_SHA256", digest):
+            tombstone = MODULE.receipt_tombstone_bytes_for_control_digest(
+                str(projection["controlSha256"])
+            )
+            final = mock.Mock(
+                st_mode=stat.S_IFREG | 0o600,
+                st_uid=1000,
+                st_gid=1000,
+                st_nlink=1,
+                st_dev=7,
+                st_ino=9,
+                st_size=len(tombstone),
+            )
+            substituted = mock.Mock(st_dev=7, st_ino=10)
+            with mock.patch.object(
+                MODULE,
+                "_read_regular_at",
+                return_value=(31, initial, raw),
+            ), mock.patch.object(
+                MODULE.os,
+                "read",
+                side_effect=(tombstone, b""),
+            ), mock.patch.object(
+                MODULE.os,
+                "ftruncate",
+            ), mock.patch.object(
+                MODULE.os,
+                "lseek",
+            ), mock.patch.object(
+                MODULE,
+                "_write_all",
+            ), mock.patch.object(
+                MODULE.os,
+                "fsync",
+            ), mock.patch.object(
+                MODULE.os,
+                "fchown",
+            ), mock.patch.object(
+                MODULE.os,
+                "fchmod",
+            ), mock.patch.object(
+                MODULE.os,
+                "fstat",
+                return_value=final,
+            ), mock.patch.object(
+                MODULE.os,
+                "stat",
+                return_value=substituted,
+            ), mock.patch.object(
+                MODULE.os,
+                "close",
+            ), mock.patch.object(
+                MODULE,
+                "require_exact_live_receipt_tombstone",
+            ) as reproof, self.assertRaisesRegex(
+                MODULE.DrainError,
+                "tombstone binding differs",
+            ):
+                MODULE.complete_terminal_tombstone_without_control(20, projection)
+            reproof.assert_not_called()
+
     def test_archived_response_loss_is_namespace_read_only_and_byte_stable(self) -> None:
         control = ReducerStateMachineTest.FakeControl("archive_intent_final")
         expected = {"schema": MODULE.PROJECTION_SCHEMA, "outcome": "drained"}
@@ -3289,6 +3711,242 @@ class DestructiveBoundaryTest(unittest.TestCase):
             archive.rindex("link_tmpfile_noreplace_at"),
         )
 
+    def test_terminal_projection_capacity_has_exact_maximum_boundary(self) -> None:
+        self.assertEqual(len(MODULE.utc_now()), len(MODULE.TERMINAL_TIMESTAMP_SENTINEL))
+
+        def control_with_padding(padding: str) -> dict[str, object]:
+            authority = {"padding": padding}
+            return {
+                "schema": MODULE.CONTROL_SCHEMA,
+                "observedAt": MODULE.TERMINAL_TIMESTAMP_SENTINEL,
+                "bootId": "b" * 36,
+                "stateRoot": str(MODULE.EXPECTED_STATE_ROOT),
+                "caller": {"uid": 1000, "gid": 1000},
+                "verificationSha256": MODULE.sha256_bytes(
+                    MODULE.canonical_json(authority)
+                ),
+                "sourceSha256": "d" * 64,
+                "authority": authority,
+            }
+
+        state = {
+            "phase": "stopping_intent_final",
+            "observedAt": "ignored-for-nonterminal-capacity",
+            "bootId": "b" * 36,
+        }
+        base = control_with_padding("")
+        base_size = len(
+            MODULE.canonical_json(
+                MODULE.terminal_projection_value_for(
+                    base,
+                    observed_at=MODULE.TERMINAL_TIMESTAMP_SENTINEL,
+                    boot_id="b" * 36,
+                )
+            )
+        )
+        exact = control_with_padding("x" * (MODULE.MAX_JSON_BYTES - base_size))
+        self.assertEqual(
+            MODULE.require_terminal_projection_capacity(exact, state),
+            MODULE.MAX_JSON_BYTES,
+        )
+        over = control_with_padding(
+            "x" * (MODULE.MAX_JSON_BYTES - base_size + 1)
+        )
+        with self.assertRaisesRegex(MODULE.DrainError, "projection is too large"):
+            MODULE.require_terminal_projection_capacity(over, state)
+
+        terminal_state = {
+            "phase": "archive_intent_final",
+            "observedAt": "terminal-observation-with-a-different-width",
+            "bootId": "b" * 36,
+        }
+        self.assertEqual(
+            MODULE.require_terminal_projection_capacity(base, terminal_state),
+            len(
+                MODULE.canonical_json(
+                    MODULE.terminal_projection_value_for(
+                        base,
+                        observed_at=str(terminal_state["observedAt"]),
+                        boot_id="b" * 36,
+                    )
+                )
+            ),
+        )
+
+    def test_oversized_projection_blocks_before_control_publication(self) -> None:
+        boot_id = "b" * 36
+        source = b"pinned source"
+
+        def authority_with_padding(padding: str) -> dict[str, object]:
+            return {"padding": padding}
+
+        def candidate(authority: dict[str, object]) -> dict[str, object]:
+            return {
+                "schema": MODULE.CONTROL_SCHEMA,
+                "observedAt": MODULE.TERMINAL_TIMESTAMP_SENTINEL,
+                "bootId": boot_id,
+                "stateRoot": str(MODULE.EXPECTED_STATE_ROOT),
+                "caller": {"uid": 1000, "gid": 1000},
+                "verificationSha256": MODULE.sha256_bytes(
+                    MODULE.canonical_json(authority)
+                ),
+                "sourceSha256": MODULE.sha256_bytes(source),
+                "authority": authority,
+            }
+
+        base_authority = authority_with_padding("")
+        base = candidate(base_authority)
+        base_size = len(
+            MODULE.canonical_json(
+                MODULE.terminal_projection_value_for(
+                    base,
+                    observed_at=MODULE.TERMINAL_TIMESTAMP_SENTINEL,
+                    boot_id=boot_id,
+                )
+            )
+        )
+        authority = authority_with_padding(
+            "x" * (MODULE.MAX_JSON_BYTES - base_size + 1)
+        )
+        digest = MODULE.sha256_bytes(MODULE.canonical_json(authority))
+        verification = {
+            "verificationSha256": digest,
+            "authority": authority,
+        }
+        with mock.patch.dict(
+            MODULE.__dict__,
+            {"__legacy_pinned_source_bytes__": source},
+        ), mock.patch.object(
+            MODULE,
+            "open_control_root",
+            side_effect=FileNotFoundError,
+        ), mock.patch.object(
+            MODULE,
+            "current_boot_id",
+            return_value=boot_id,
+        ), mock.patch.object(
+            MODULE,
+            "utc_now",
+            return_value=MODULE.TERMINAL_TIMESTAMP_SENTINEL,
+        ), mock.patch.object(
+            MODULE,
+            "publish_control_capsule",
+        ) as publish, self.assertRaisesRegex(
+            MODULE.DrainError,
+            "projection is too large",
+        ):
+            MODULE.ControlAuthority.create(
+                verification,
+                expected_verification_sha256=digest,
+            )
+        publish.assert_not_called()
+
+    def test_existing_oversized_projection_closes_authority_before_return(self) -> None:
+        boot_id = "b" * 36
+        source = b"pinned source"
+
+        def control_with_padding(padding: str) -> dict[str, object]:
+            authority = {"padding": padding}
+            return {
+                "schema": MODULE.CONTROL_SCHEMA,
+                "observedAt": MODULE.TERMINAL_TIMESTAMP_SENTINEL,
+                "bootId": boot_id,
+                "stateRoot": str(MODULE.EXPECTED_STATE_ROOT),
+                "caller": {"uid": 1000, "gid": 1000},
+                "verificationSha256": MODULE.sha256_bytes(
+                    MODULE.canonical_json(authority)
+                ),
+                "sourceSha256": MODULE.sha256_bytes(source),
+                "authority": authority,
+            }
+
+        base = control_with_padding("")
+        base_size = len(
+            MODULE.canonical_json(
+                MODULE.terminal_projection_value_for(
+                    base,
+                    observed_at=MODULE.TERMINAL_TIMESTAMP_SENTINEL,
+                    boot_id=boot_id,
+                )
+            )
+        )
+        control = control_with_padding(
+            "x" * (MODULE.MAX_JSON_BYTES - base_size + 1)
+        )
+        state = {
+            "schema": MODULE.STATE_SCHEMA,
+            "observedAt": MODULE.TERMINAL_TIMESTAMP_SENTINEL,
+            "bootId": boot_id,
+            "stateRoot": str(MODULE.EXPECTED_STATE_ROOT),
+            "controlSha256": MODULE.sha256_bytes(MODULE.canonical_json(control)),
+            "phase": "stopping_intent_final",
+            "netnsMarkerIdentity": None,
+        }
+        verification = {
+            "verificationSha256": control["verificationSha256"],
+            "authority": control["authority"],
+        }
+        with mock.patch.dict(
+            MODULE.__dict__,
+            {"__legacy_pinned_source_bytes__": source},
+        ), mock.patch.object(
+            MODULE,
+            "open_control_root",
+            return_value=31,
+        ), mock.patch.object(
+            MODULE,
+            "read_at",
+            return_value=source,
+        ), mock.patch.object(
+            MODULE,
+            "read_json_at",
+            side_effect=(control, state),
+        ), mock.patch.object(
+            MODULE,
+            "current_boot_id",
+            return_value=boot_id,
+        ), mock.patch.object(
+            MODULE.os,
+            "close",
+        ) as close, self.assertRaisesRegex(
+            MODULE.DrainError,
+            "projection is too large",
+        ):
+            MODULE.ControlAuthority.create(
+                verification,
+                expected_verification_sha256=str(control["verificationSha256"]),
+            )
+        close.assert_called_once_with(31)
+
+        with mock.patch.dict(
+            MODULE.__dict__,
+            {"__legacy_control_root_fd__": 30},
+        ), mock.patch.object(
+            MODULE.os,
+            "dup",
+            return_value=31,
+        ), mock.patch.object(
+            MODULE,
+            "read_at",
+            return_value=source,
+        ), mock.patch.object(
+            MODULE,
+            "read_json_at",
+            side_effect=(control, state),
+        ), mock.patch.object(
+            MODULE,
+            "current_boot_id",
+            return_value=boot_id,
+        ), mock.patch.object(
+            MODULE.os,
+            "close",
+        ) as close, self.assertRaisesRegex(
+            MODULE.DrainError,
+            "projection is too large",
+        ):
+            MODULE.ControlAuthority.open()
+        close.assert_called_once_with(31)
+
     def test_runtime_and_pidfile_have_complete_preflight_before_unlink(self) -> None:
         source = MODULE_PATH.read_text(encoding="utf-8")
         reducer_start = source.index("def run_reducer")
@@ -3339,7 +3997,7 @@ class DestructiveBoundaryTest(unittest.TestCase):
             : source.index("def write_projection")
         ]
         self.assertLess(
-            recovery.index("state_fd = os.open("),
+            recovery.index("state_fd = custody.open("),
             recovery.index("read_terminal_projection_without_control(evidence_fd)"),
         )
         self.assertIn('stored_control = projection["control"]', recovery)
@@ -3381,13 +4039,21 @@ class WrapperBoundaryTest(unittest.TestCase):
 
     def test_resume_boot_gate_precedes_source_execution(self) -> None:
         source = WRAPPER.read_text(encoding="utf-8")
+        resume = source[
+            source.index("def execute_resume_owned")
+            : source.index('if mode == "repo":\n    execute_source')
+        ]
         self.assertLess(
-            source.index('control["bootId"] == state["bootId"] == boot_id'),
-            source.index("exec(compile(source, display_name"),
+            resume.index('control["bootId"] == state["bootId"] == boot_id'),
+            resume.index("execute_source(source, display_name, control_root_fd)"),
         )
         self.assertLess(
-            source.index("control_root_fd = os.open("),
-            source.index('read_bound_at(control_root_fd, "legacy_v3_drain.py"'),
+            resume.index("control_root_fd = custody.open("),
+            resume.index('read_bound_at(control_root_fd, "legacy_v3_drain.py"'),
+        )
+        self.assertLess(
+            resume.index("terminal_projection = terminal_projection_value_for("),
+            resume.index("execute_source(source, display_name, control_root_fd)"),
         )
 
     def test_loader_and_reducer_share_exact_canonical_bytes(self) -> None:
@@ -3405,6 +4071,106 @@ class WrapperBoundaryTest(unittest.TestCase):
         value = {"nested": {"b": 2}, "a": [1, True, None]}
         self.assertEqual(namespace["canonical"](value), MODULE.canonical_json(value))
 
+    def test_loader_and_reducer_share_terminal_projection_capacity_bytes(self) -> None:
+        source = WRAPPER.read_text(encoding="utf-8")
+        loader = source.split(
+            "read -r -d '' pinned_loader <<'PY' || true\n",
+            1,
+        )[1].split("\nPY\n", 1)[0]
+        tree = ast.parse(loader)
+        selected: list[ast.stmt] = []
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name in {
+                "canonical",
+                "terminal_projection_value_for",
+            }:
+                selected.append(node)
+            elif isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name)
+                and target.id == "TERMINAL_TIMESTAMP_SENTINEL"
+                for target in node.targets
+            ):
+                selected.append(node)
+        extracted = ast.fix_missing_locations(
+            ast.Module(body=selected, type_ignores=[])
+        )
+        namespace = {"json": json, "hashlib": hashlib}
+        exec(compile(extracted, "<loader-projection>", "exec"), namespace, namespace)
+        authority = {"padding": "x" * 100}
+        control = {
+            "schema": MODULE.CONTROL_SCHEMA,
+            "observedAt": MODULE.TERMINAL_TIMESTAMP_SENTINEL,
+            "bootId": "b" * 36,
+            "stateRoot": str(MODULE.EXPECTED_STATE_ROOT),
+            "caller": {"uid": 1000, "gid": 1000},
+            "verificationSha256": MODULE.sha256_bytes(
+                MODULE.canonical_json(authority)
+            ),
+            "sourceSha256": "d" * 64,
+            "authority": authority,
+        }
+        loader_value = namespace["terminal_projection_value_for"](
+            control,
+            observed_at=namespace["TERMINAL_TIMESTAMP_SENTINEL"],
+            boot_id="b" * 36,
+        )
+        module_value = MODULE.terminal_projection_value_for(
+            control,
+            observed_at=MODULE.TERMINAL_TIMESTAMP_SENTINEL,
+            boot_id="b" * 36,
+        )
+        self.assertEqual(namespace["canonical"](loader_value), MODULE.canonical_json(module_value))
+        self.assertEqual(
+            namespace["TERMINAL_TIMESTAMP_SENTINEL"],
+            MODULE.TERMINAL_TIMESTAMP_SENTINEL,
+        )
+        base_size = len(namespace["canonical"](loader_value)) - 100
+        exact_padding = "x" * (MODULE.MAX_JSON_BYTES - base_size)
+        exact_authority = {"padding": exact_padding}
+        exact_control = {
+            **control,
+            "authority": exact_authority,
+            "verificationSha256": MODULE.sha256_bytes(
+                MODULE.canonical_json(exact_authority)
+            ),
+        }
+        exact_loader = namespace["terminal_projection_value_for"](
+            exact_control,
+            observed_at=namespace["TERMINAL_TIMESTAMP_SENTINEL"],
+            boot_id="b" * 36,
+        )
+        exact_module = MODULE.terminal_projection_value_for(
+            exact_control,
+            observed_at=MODULE.TERMINAL_TIMESTAMP_SENTINEL,
+            boot_id="b" * 36,
+        )
+        self.assertEqual(len(namespace["canonical"](exact_loader)), MODULE.MAX_JSON_BYTES)
+        self.assertEqual(len(MODULE.canonical_json(exact_module)), MODULE.MAX_JSON_BYTES)
+        over_authority = {"padding": exact_padding + "x"}
+        over_control = {
+            **control,
+            "authority": over_authority,
+            "verificationSha256": MODULE.sha256_bytes(
+                MODULE.canonical_json(over_authority)
+            ),
+        }
+        over_loader = namespace["terminal_projection_value_for"](
+            over_control,
+            observed_at=namespace["TERMINAL_TIMESTAMP_SENTINEL"],
+            boot_id="b" * 36,
+        )
+        over_module = MODULE.terminal_projection_value_for(
+            over_control,
+            observed_at=MODULE.TERMINAL_TIMESTAMP_SENTINEL,
+            boot_id="b" * 36,
+        )
+        self.assertEqual(
+            len(namespace["canonical"](over_loader)), MODULE.MAX_JSON_BYTES + 1
+        )
+        self.assertEqual(
+            len(MODULE.canonical_json(over_module)), MODULE.MAX_JSON_BYTES + 1
+        )
+
     def test_loader_phase_roster_matches_reducer_exactly(self) -> None:
         source = WRAPPER.read_text(encoding="utf-8")
         loader = source.split("read -r -d '' pinned_loader <<'PY' || true\n", 1)[1].split("\nPY\n", 1)[0]
@@ -3420,6 +4186,63 @@ class WrapperBoundaryTest(unittest.TestCase):
         )
         self.assertEqual(ast.literal_eval(phase_assignment.value), set(MODULE.PHASES))
         self.assertIn('"netnsMarkerIdentity"', loader)
+
+    def test_loader_raw_descriptor_operations_are_custody_only(self) -> None:
+        source = WRAPPER.read_text(encoding="utf-8")
+        loader = source.split(
+            "read -r -d '' pinned_loader <<'PY' || true\n",
+            1,
+        )[1].split("\nPY\n", 1)[0]
+        tree = ast.parse(loader)
+        parents: dict[ast.AST, ast.AST] = {}
+        for node in ast.walk(tree):
+            for child in ast.iter_child_nodes(node):
+                parents[child] = node
+        offenders: list[tuple[int, str]] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if not isinstance(node.func.value, ast.Name):
+                continue
+            if (node.func.value.id, node.func.attr) not in {
+                ("os", "open"),
+                ("os", "close"),
+            }:
+                continue
+            parent: ast.AST | None = node
+            class_name: str | None = None
+            while parent in parents:
+                parent = parents[parent]
+                if isinstance(parent, ast.ClassDef):
+                    class_name = parent.name
+                    break
+            if class_name != "DescriptorCustody":
+                offenders.append((node.lineno, node.func.attr))
+        self.assertEqual(offenders, [])
+
+    def test_loader_custody_preserves_body_error_on_close_failure(self) -> None:
+        source = WRAPPER.read_text(encoding="utf-8")
+        loader = source.split(
+            "read -r -d '' pinned_loader <<'PY' || true\n",
+            1,
+        )[1].split("\nPY\n", 1)[0]
+        tree = ast.parse(loader)
+        descriptor_custody = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "DescriptorCustody"
+        )
+        extracted = ast.fix_missing_locations(
+            ast.Module(body=[descriptor_custody], type_ignores=[])
+        )
+        namespace = {"os": os}
+        exec(compile(extracted, "<loader-custody>", "exec"), namespace, namespace)
+        custody = namespace["DescriptorCustody"]("loader fault injection")
+        custody.descriptors.append(40)
+        primary = RuntimeError("loader body failed")
+        with mock.patch.object(os, "close", side_effect=OSError("close failed")):
+            custody.__exit__(RuntimeError, primary, None)
+        self.assertIn("cleanup also failed", "\n".join(primary.__notes__))
 
     def test_verify_only_has_no_output_file_argument(self) -> None:
         source = WRAPPER.read_text(encoding="utf-8")
