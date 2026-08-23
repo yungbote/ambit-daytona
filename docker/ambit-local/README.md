@@ -309,8 +309,23 @@ Task namespace and mount discovery use one shared stable census rather than
 separate recorded-process, drain-process, and per-root allowlists. A typed
 namespace FD is ambient observation authority—not a legacy relation—only when
 its exact device/inode is also a current namespace of a captured live task.
-For each mount namespace, one representative whose held root descriptor binds
-the `/` filesystem root supplies the canonical complete mount roster. Other
+The privileged verifier must remain single-threaded so proof-owned FD numbers
+cannot alias an unshared sibling FD table. Before capture it freezes one task
+coordinate roster and fails closed unless `RLIMIT_NOFILE` has a source-bounded
+six-descriptor-per-task budget plus explicit baseline and prior-pass reserves.
+It retains every task pidfd/proc descriptor through the pass commit and one
+typed nsfs descriptor per unique current namespace through all shared FD and
+mount consumers. Those proof-created namespace FDs are excluded only from the
+verifier's own exactly single-threaded FD table, are re-proved at each borrowed
+consumer boundary, and close on every success or failure path. Transient open
+FD counts are preflight telemetry, not durable authority, so holding the global
+lease cannot change an otherwise identical verification digest.
+For each mount namespace, one representative whose `/proc/<tid>/root` link is
+exactly `/`, whose held root descriptor `mnt_id` equals the mountinfo `/`
+record, and whose descriptor device/type binds that record's `/` source root
+supplies the canonical complete mount roster. A chroot at the root of a nested
+filesystem is therefore still restricted authority even when its visible
+mountinfo source root happens to be `/`. Other
 representatives may be chroot-restricted views, but every record in each view
 must map by mount ID, source root, and its held root path to a canonical record.
 Canonical presence survives a restricted view that cannot see it; a restricted
@@ -321,7 +336,10 @@ return identical mount targets.
 A detached namespace FD, an nsfs-mounted namespace without a live
 representative, a mount namespace with no proven full-root view, an
 unexplainable projection, or any unreadable/churning census remains a manual
-blocker. Namespace FDs queued only in `SCM_RIGHTS` messages and other
+blocker. A `/proc/<tgid>` entry whose task roster becomes unavailable while
+the group is still visible also blocks; surviving non-leaders after leader
+exit are never silently treated as absence. Namespace FDs queued only in
+`SCM_RIGHTS` messages and other
 processless namespace references are not observable through `/proc` task FD
 tables and are explicitly not admitted. The tool does not turn their absence
 from a stable sample into proof that none exist.

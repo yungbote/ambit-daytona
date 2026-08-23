@@ -21,6 +21,7 @@ import hashlib
 import json
 import os
 import re
+import resource
 import select
 import signal
 import socket
@@ -29,7 +30,7 @@ import struct
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, Protocol, Sequence
 
@@ -723,7 +724,14 @@ def process_task_coordinates_once() -> tuple[tuple[int, int], ...]:
         try:
             task_ids = tuple(os.listdir(task_root))
         except (FileNotFoundError, ProcessLookupError):
-            continue
+            try:
+                os.stat(Path("/proc") / entry, follow_symlinks=False)
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+            raise ManualRecoveryRequired(
+                "live process thread-group task roster is unavailable: "
+                f"{thread_group_id}"
+            )
         except PermissionError as error:
             raise ManualRecoveryRequired(
                 f"process task roster is unreadable: {thread_group_id}"
@@ -1295,6 +1303,61 @@ def namespace_fd_identity(
     return NamespaceIdentity(match.group(1), observed.st_dev, observed.st_ino)
 
 
+def current_task_namespace_identity(
+    task: CapturedTask,
+    kind: str,
+) -> NamespaceIdentity:
+    require(kind in {"mnt", "net", "pid", "user"}, "namespace kind is invalid")
+    observed = os.stat(f"ns/{kind}", dir_fd=task.process_fd)
+    identity = NamespaceIdentity(kind, observed.st_dev, observed.st_ino)
+    require(
+        os.readlink(f"ns/{kind}", dir_fd=task.process_fd)
+        == f"{kind}:[{identity.inode}]",
+        "process task current namespace identity differs: "
+        f"{task.thread_group_id}/{task.task_id}/{kind}",
+    )
+    return identity
+
+
+def open_current_task_namespace(
+    task: CapturedTask,
+    kind: str,
+) -> tuple[NamespaceIdentity, int]:
+    require(kind in {"mnt", "net", "pid", "user"}, "namespace kind is invalid")
+    first_link = os.readlink(f"ns/{kind}", dir_fd=task.process_fd)
+    descriptor = os.open(
+        f"ns/{kind}",
+        os.O_RDONLY | os.O_CLOEXEC,
+        dir_fd=task.process_fd,
+    )
+    try:
+        observed = os.fstat(descriptor)
+        second_link = os.readlink(f"ns/{kind}", dir_fd=task.process_fd)
+        identity = NamespaceIdentity(kind, observed.st_dev, observed.st_ino)
+        require(
+            stat.S_ISREG(observed.st_mode)
+            and first_link == second_link == f"{kind}:[{identity.inode}]"
+            and current_task_namespace_identity(task, kind) == identity,
+            "process task namespace descriptor binding differs: "
+            f"{task.thread_group_id}/{task.task_id}/{kind}",
+        )
+        return identity, descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def require_current_task_namespace_identity(
+    task: CapturedTask,
+    expected: NamespaceIdentity,
+) -> None:
+    require(
+        current_task_namespace_identity(task, expected.kind) == expected,
+        "process task current namespace changed during census: "
+        f"{task.thread_group_id}/{task.task_id}/{expected.kind}",
+    )
+
+
 @dataclass(frozen=True)
 class MountNamespaceView:
     root_link: str
@@ -1311,13 +1374,85 @@ class MountNamespaceAuthority:
     views: tuple[MountNamespaceView, ...]
 
 
-@dataclass(frozen=True)
+@dataclass
 class TaskNamespaceCensus:
     current: frozenset[NamespaceIdentity]
     namespace_fds: frozenset[NamespaceIdentity]
     mounts: tuple[MountNamespaceAuthority, ...]
     proof_sha256: str
     proof: dict[str, object]
+    namespace_descriptors: tuple[int, ...] = field(
+        default=(),
+        repr=False,
+        compare=False,
+    )
+    preimage: dict[str, object] = field(
+        default_factory=dict,
+        repr=False,
+        compare=False,
+    )
+    _closed: bool = field(default=False, init=False, repr=False, compare=False)
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        first_error: OSError | None = None
+        for descriptor in self.namespace_descriptors:
+            try:
+                os.close(descriptor)
+            except OSError as error:
+                if first_error is None:
+                    first_error = error
+        self._closed = True
+        if first_error is not None:
+            raise DrainError("task namespace census descriptor close failed") from first_error
+
+    def require_open(self) -> None:
+        require(not self._closed, "task namespace census is already closed")
+        require(
+            sha256_bytes(canonical_json(self.preimage)) == self.proof_sha256
+            and self.proof.get("proofSha256") == self.proof_sha256
+            and self.proof.get("currentNamespaceCount") == len(self.current)
+            and self.proof.get("namespaceFdCount") == len(self.namespace_fds)
+            and self.proof.get("mountNamespaceCount") == len(self.mounts)
+            and self.proof.get("taskCount") == self.preimage.get("taskCount")
+            and self.proof.get("processlessMountNamespaces")
+            == "not_observable_and_not_admitted"
+            and self.proof.get("queuedScmRightsNamespaceFds")
+            == "not_observable_and_not_admitted",
+            "task namespace census digest or summary differs",
+        )
+        identities = tuple(sorted(self.current))
+        require(
+            len(identities) == len(self.namespace_descriptors),
+            "task namespace census descriptor roster differs",
+        )
+        for identity, descriptor in zip(identities, self.namespace_descriptors):
+            try:
+                observed = os.fstat(descriptor)
+                target = os.readlink(f"/proc/self/fd/{descriptor}")
+            except OSError as error:
+                raise DrainError(
+                    "task namespace census descriptor is no longer held: "
+                    f"{identity.kind}:{identity.device}:{identity.inode}"
+                ) from error
+            require(
+                namespace_fd_identity(
+                    target,
+                    observed,
+                    label="task namespace census",
+                )
+                == identity,
+                "task namespace census descriptor identity changed: "
+                f"{identity.kind}:{identity.device}:{identity.inode}",
+            )
+
+    def __enter__(self) -> "TaskNamespaceCensus":
+        self.require_open()
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
 
 
 def _namespace_identity_document(value: NamespaceIdentity) -> dict[str, object]:
@@ -1340,7 +1475,11 @@ def _root_identity_document(
     return dict(zip(("device", "inode", "type", "uid", "gid"), value))
 
 
-def _namespace_fd_records(task: CapturedTask) -> tuple[dict[str, object], ...]:
+def _namespace_fd_records(
+    task: CapturedTask,
+    *,
+    excluded_fds: frozenset[int] = frozenset(),
+) -> tuple[dict[str, object], ...]:
     descriptor = os.open(
         "fd",
         os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
@@ -1349,6 +1488,8 @@ def _namespace_fd_records(task: CapturedTask) -> tuple[dict[str, object], ...]:
     rows: list[dict[str, object]] = []
     try:
         for name in tuple(sorted(os.listdir(descriptor), key=int)):
+            if int(name) in excluded_fds:
+                continue
             try:
                 target = os.readlink(name, dir_fd=descriptor)
             except (FileNotFoundError, ProcessLookupError):
@@ -1399,6 +1540,26 @@ def _namespace_fd_records(task: CapturedTask) -> tuple[dict[str, object], ...]:
     return tuple(sorted(rows, key=lambda row: int(row["fd"])))
 
 
+def require_root_mount_binding(
+    observed: os.stat_result,
+    mount_id: int,
+    record: MountRecord,
+    *,
+    label: str,
+) -> None:
+    require(
+        record.device
+        == f"{os.major(observed.st_dev)}:{os.minor(observed.st_dev)}"
+        and record.mount_id == mount_id
+        and stat.S_ISDIR(observed.st_mode),
+        f"{label} root mount identity differs",
+    )
+
+
+def is_proven_full_root_view(root_link: str, root_record: MountRecord) -> bool:
+    return root_link == "/" and root_record.root == "/"
+
+
 def _task_mount_view(task: CapturedTask) -> MountNamespaceView:
     try:
         first_link = os.readlink("root", dir_fd=task.process_fd)
@@ -1415,6 +1576,7 @@ def _task_mount_view(task: CapturedTask) -> MountNamespaceView:
         ) from error
     try:
         bound = os.fstat(root_fd)
+        root_mount_id = fd_mount_id(root_fd)
         raw = read_at(task.process_fd, "mountinfo", maximum=16 * 1024 * 1024)
         records = mount_records(raw.decode("utf-8", "strict"))
         second_link = os.readlink("root", dir_fd=task.process_fd)
@@ -1438,17 +1600,16 @@ def _task_mount_view(task: CapturedTask) -> MountNamespaceView:
         f"{task.thread_group_id}/{task.task_id}",
     )
     root_record = root_records[0]
-    require(
-        root_record.device
-        == f"{os.major(first_stat.st_dev)}:{os.minor(first_stat.st_dev)}"
-        and stat.S_ISDIR(first_stat.st_mode),
-        "process task root mount identity differs: "
-        f"{task.thread_group_id}/{task.task_id}",
+    require_root_mount_binding(
+        first_stat,
+        root_mount_id,
+        root_record,
+        label=f"process task {task.thread_group_id}/{task.task_id}",
     )
     return MountNamespaceView(
         os.path.normpath(first_link),
         _root_identity(first_stat),
-        root_record.root == "/",
+        is_proven_full_root_view(os.path.normpath(first_link), root_record),
         records,
     )
 
@@ -1466,10 +1627,14 @@ def _record_source_target(
     canonical: MountRecord,
     projected: MountRecord,
 ) -> str:
+    if not Path(canonical.root).is_absolute() or not Path(projected.root).is_absolute():
+        require(
+            canonical.root == projected.root,
+            "restricted opaque mount projection source root differs",
+        )
+        return os.path.normpath(canonical.target)
     require(
-        Path(canonical.root).is_absolute()
-        and Path(projected.root).is_absolute()
-        and path_at_or_below(projected.root, canonical.root),
+        path_at_or_below(projected.root, canonical.root),
         "restricted mount projection source root differs",
     )
     relative = Path(projected.root).relative_to(canonical.root)
@@ -1484,6 +1649,10 @@ def require_mount_view_projection(
     require(
         len(by_id) == len(canonical),
         "canonical mount roster reuses a mount ID",
+    )
+    require(
+        len({record.mount_id for record in view.records}) == len(view.records),
+        "restricted mount projection reuses a mount ID",
     )
     for projected in view.records:
         admitted = by_id.get(projected.mount_id)
@@ -1536,6 +1705,11 @@ def build_mount_namespace_authority(
         f"{identity.device}:{identity.inode}",
     )
     canonical = full[0]
+    require(
+        len({record.mount_id for record in canonical.records})
+        == len(canonical.records),
+        "canonical mount roster reuses a mount ID",
+    )
     for view in full[1:]:
         manual(
             view.records == canonical.records
@@ -1581,8 +1755,8 @@ def _mount_authority_document(
 def require_mounted_namespace_representatives(
     mounts: Sequence[MountNamespaceAuthority],
     current: set[NamespaceIdentity],
-) -> set[tuple[str, int]]:
-    mounted_namespace_pins: set[tuple[str, int]] = set()
+) -> set[NamespaceIdentity]:
+    mounted_namespace_pins: set[NamespaceIdentity] = set()
     for authority in mounts:
         for record in authority.records:
             if record.filesystem != "nsfs":
@@ -1592,43 +1766,149 @@ def require_mounted_namespace_representatives(
             )
             require(match is not None, "mounted nsfs source identity is invalid")
             assert match is not None
-            mounted_namespace_pins.add((match.group(1), int(match.group(2))))
-    current_tokens = {(value.kind, value.inode) for value in current}
-    processless_pins = mounted_namespace_pins - current_tokens
+            major, minor = (int(value) for value in record.device.split(":", 1))
+            mounted_namespace_pins.add(
+                NamespaceIdentity(
+                    match.group(1),
+                    os.makedev(major, minor),
+                    int(match.group(2)),
+                )
+            )
+    processless_pins = mounted_namespace_pins - current
     manual(
         not processless_pins,
         "a mounted namespace has no live representative: "
         + ",".join(
-            f"{kind}:[{inode}]" for kind, inode in sorted(processless_pins)
+            f"{value.kind}:{value.device}:[{value.inode}]"
+            for value in sorted(processless_pins)
         ),
     )
     return mounted_namespace_pins
 
 
-def task_namespace_census_once() -> TaskNamespaceCensus:
+def require_task_namespace_census_fd_budget(
+    task_count: int,
+    *,
+    externally_held: int = 0,
+) -> dict[str, int]:
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    open_count = len(os.listdir("/proc/self/fd"))
+    baseline_reserve = 128
+    required = task_count * 6 + externally_held + baseline_reserve
+    manual(
+        open_count >= externally_held
+        and open_count - externally_held <= baseline_reserve
+        and (soft == resource.RLIM_INFINITY or soft >= required),
+        "task namespace census file-descriptor limit is insufficient: "
+        f"required={required},open={open_count},soft={soft},hard={hard}",
+    )
+    return {
+        "taskCount": task_count,
+        "baselineDescriptorReserve": baseline_reserve,
+        "externallyHeldDescriptorCount": externally_held,
+        "requiredDescriptorLimit": required,
+        "softDescriptorLimit": soft,
+        "hardDescriptorLimit": hard,
+    }
+
+
+def require_single_threaded_drain_coordinates(
+    coordinates: Sequence[tuple[int, int]],
+) -> None:
+    self_tasks = tuple(
+        task_id
+        for thread_group_id, task_id in coordinates
+        if thread_group_id == os.getpid()
+    )
+    require(
+        self_tasks == (os.getpid(),),
+        "drain task roster is not single-threaded for FD exclusion",
+    )
+
+
+def admit_held_namespace_descriptor(
+    held: dict[NamespaceIdentity, int],
+    identity: NamespaceIdentity,
+    descriptor: int,
+) -> None:
+    existing = held.get(identity)
+    if existing is None:
+        held[identity] = descriptor
+        return
+    try:
+        stable = os.fstat(existing)
+        observed = os.fstat(descriptor)
+        require(
+            (stable.st_dev, stable.st_ino, stat.S_IFMT(stable.st_mode))
+            == (
+                observed.st_dev,
+                observed.st_ino,
+                stat.S_IFMT(observed.st_mode),
+            ),
+            "current namespace descriptor identity diverges",
+        )
+    finally:
+        os.close(descriptor)
+
+
+def _held_task_namespace_observations(
+    *,
+    external_self_excluded_fds: frozenset[int] = frozenset(),
+) -> tuple[
+    set[NamespaceIdentity],
+    set[NamespaceIdentity],
+    dict[NamespaceIdentity, list[MountNamespaceView]],
+    int,
+    tuple[int, ...],
+]:
     current: set[NamespaceIdentity] = set()
     namespace_fds: set[NamespaceIdentity] = set()
     mount_views: dict[NamespaceIdentity, list[MountNamespaceView]] = {}
-    for thread_group_id, task_id in process_task_coordinates_once():
-        task = capture_task(thread_group_id, task_id)
-        if task is None:
-            continue
-        try:
+    held: list[CapturedTask] = []
+    held_namespaces: dict[NamespaceIdentity, int] = {}
+    proofs: list[
+        tuple[
+            CapturedTask,
+            dict[str, NamespaceIdentity],
+            MountNamespaceView,
+            tuple[dict[str, object], ...],
+        ]
+    ] = []
+    transfer_namespace_descriptors = False
+    try:
+        coordinates = process_task_coordinates_once()
+        require_single_threaded_drain_coordinates(coordinates)
+        fd_budget = require_task_namespace_census_fd_budget(
+            len(coordinates),
+            externally_held=len(external_self_excluded_fds),
+        )
+        for thread_group_id, task_id in coordinates:
+            task = capture_task(thread_group_id, task_id)
+            if task is None:
+                continue
+            held.append(task)
             namespaces: dict[str, NamespaceIdentity] = {}
             for kind in ("mnt", "net", "pid", "user"):
-                observed = os.stat(f"ns/{kind}", dir_fd=task.process_fd)
-                identity = NamespaceIdentity(kind, observed.st_dev, observed.st_ino)
-                require(
-                    os.readlink(f"ns/{kind}", dir_fd=task.process_fd)
-                    == f"{kind}:[{observed.st_ino}]",
-                    "process task current namespace identity differs: "
-                    f"{thread_group_id}/{task_id}/{kind}",
+                identity, namespace_fd = open_current_task_namespace(task, kind)
+                admit_held_namespace_descriptor(
+                    held_namespaces,
+                    identity,
+                    namespace_fd,
                 )
                 namespaces[kind] = identity
                 current.add(identity)
             view = _task_mount_view(task)
             mount_views.setdefault(namespaces["mnt"], []).append(view)
-            for row in _namespace_fd_records(task):
+            excluded = (
+                frozenset(held_namespaces.values()) | external_self_excluded_fds
+                if thread_group_id == os.getpid()
+                else frozenset()
+            )
+            namespace_fd_rows = _namespace_fd_records(
+                task,
+                excluded_fds=excluded,
+            )
+            for row in namespace_fd_rows:
                 namespace_fds.add(
                     NamespaceIdentity(
                         str(row["kind"]),
@@ -1636,9 +1916,65 @@ def task_namespace_census_once() -> TaskNamespaceCensus:
                         int(row["inode"]),
                     )
                 )
+            proofs.append((task, namespaces, view, namespace_fd_rows))
+        for task, namespaces, view, namespace_fd_rows in proofs:
+            for identity in namespaces.values():
+                require_current_task_namespace_identity(task, identity)
+            manual(
+                _task_mount_view(task) == view,
+                "process task root or mount view changed before census commit: "
+                f"{task.thread_group_id}/{task.task_id}",
+            )
+            manual(
+                _namespace_fd_records(
+                    task,
+                    excluded_fds=(
+                        frozenset(held_namespaces.values())
+                        | external_self_excluded_fds
+                        if task.thread_group_id == os.getpid()
+                        else frozenset()
+                    ),
+                )
+                == namespace_fd_rows,
+                "process task namespace FD roster changed before census commit: "
+                f"{task.thread_group_id}/{task.task_id}",
+            )
             reprove_captured_task(task)
-        finally:
+        for identity, descriptor in held_namespaces.items():
+            observed = os.fstat(descriptor)
+            require(
+                stat.S_ISREG(observed.st_mode)
+                and (observed.st_dev, observed.st_ino)
+                == (identity.device, identity.inode),
+                "held namespace descriptor identity changed before census commit: "
+                f"{identity.kind}:{identity.device}:{identity.inode}",
+            )
+        descriptors = tuple(
+            held_namespaces[identity] for identity in sorted(held_namespaces)
+        )
+        transfer_namespace_descriptors = True
+        return (
+            current,
+            namespace_fds,
+            mount_views,
+            int(fd_budget["taskCount"]),
+            descriptors,
+        )
+    finally:
+        if not transfer_namespace_descriptors:
+            for descriptor in held_namespaces.values():
+                os.close(descriptor)
+        for task in held:
             task.close()
+
+
+def _task_namespace_census_from_observations(
+    current: set[NamespaceIdentity],
+    namespace_fds: set[NamespaceIdentity],
+    mount_views: dict[NamespaceIdentity, list[MountNamespaceView]],
+    task_count: int,
+    namespace_descriptors: tuple[int, ...],
+) -> TaskNamespaceCensus:
     manual(current, "no current process namespace was observable")
     detached = namespace_fds - current
     manual(
@@ -1666,11 +2002,12 @@ def task_namespace_census_once() -> TaskNamespaceCensus:
             _mount_authority_document(value) for value in mounts
         ],
         "mountedNamespacePins": [
-            {"kind": kind, "inode": inode}
-            for kind, inode in sorted(mounted_namespace_pins)
+            _namespace_identity_document(value)
+            for value in sorted(mounted_namespace_pins)
         ],
         "processlessMountNamespaces": "not_observable_and_not_admitted",
         "queuedScmRightsNamespaceFds": "not_observable_and_not_admitted",
+        "taskCount": task_count,
     }
     digest = sha256_bytes(canonical_json(proof))
     return TaskNamespaceCensus(
@@ -1685,18 +2022,48 @@ def task_namespace_census_once() -> TaskNamespaceCensus:
             "proofSha256": digest,
             "processlessMountNamespaces": "not_observable_and_not_admitted",
             "queuedScmRightsNamespaceFds": "not_observable_and_not_admitted",
+            "taskCount": task_count,
         },
+        namespace_descriptors,
+        proof,
     )
+
+
+def task_namespace_census_once(
+    *,
+    external_self_excluded_fds: frozenset[int] = frozenset(),
+) -> TaskNamespaceCensus:
+    observations = _held_task_namespace_observations(
+        external_self_excluded_fds=external_self_excluded_fds,
+    )
+    try:
+        return _task_namespace_census_from_observations(*observations)
+    except BaseException:
+        for descriptor in observations[4]:
+            os.close(descriptor)
+        raise
 
 
 def stable_task_namespace_census() -> TaskNamespaceCensus:
     first = task_namespace_census_once()
-    second = task_namespace_census_once()
-    require(
-        first.proof_sha256 == second.proof_sha256,
-        "task namespace census changed across proof passes",
-    )
-    return second
+    try:
+        first.require_open()
+        second = task_namespace_census_once(
+            external_self_excluded_fds=frozenset(first.namespace_descriptors),
+        )
+        try:
+            first.require_open()
+            second.require_open()
+            require(
+                first.proof_sha256 == second.proof_sha256,
+                "task namespace census changed across proof passes",
+            )
+            return second
+        except BaseException:
+            second.close()
+            raise
+    finally:
+        first.close()
 
 
 def classify_namespace_fd(
@@ -1705,15 +2072,9 @@ def classify_namespace_fd(
     current: frozenset[NamespaceIdentity],
     owned: frozenset[NamespaceIdentity],
 ) -> str:
-    if identity in owned:
-        return "owned"
-    if identity in current:
-        return "ambient_current"
-    return "detached"
-
-
-def source_anchors(raw: str, root: Path) -> tuple[tuple[str, str], ...]:
-    return source_anchors_from_records(mount_records(raw), root)
+    if identity not in current:
+        return "detached"
+    return "owned" if identity in owned else "ambient_current"
 
 
 def source_anchors_from_records(
@@ -1736,20 +2097,6 @@ def source_anchors_from_records(
     return tuple(sorted(anchors))
 
 
-def mount_reference_records(
-    raw: str,
-    root: Path,
-    anchors: tuple[tuple[str, str], ...],
-    extra_targets: tuple[str, ...] = (),
-) -> tuple[MountRecord, ...]:
-    return mount_reference_records_from_records(
-        mount_records(raw),
-        root,
-        anchors,
-        extra_targets,
-    )
-
-
 def mount_reference_records_from_records(
     records: Sequence[MountRecord],
     root: Path,
@@ -1768,23 +2115,7 @@ def mount_reference_records_from_records(
     return tuple(sorted(result))
 
 
-def mount_references(
-    raw: str,
-    root: Path,
-    anchors: tuple[tuple[str, str], ...],
-    extra_targets: tuple[str, ...] = (),
-) -> tuple[str, ...]:
-    return tuple(
-        sorted(
-            record.target
-            for record in mount_reference_records(
-                raw, root, anchors, extra_targets
-            )
-        )
-    )
-
-
-def global_mount_roster_once(
+def _global_mount_roster_from_census(
     root: Path,
     anchors: tuple[tuple[str, str], ...] | None = None,
     extra_targets: tuple[str, ...] = (),
@@ -1793,11 +2124,10 @@ def global_mount_roster_once(
     tuple[tuple[str, str], ...],
     tuple[tuple[str, tuple[MountRecord, ...]], ...],
 ]:
-    census = (
-        stable_task_namespace_census()
-        if namespace_census is None
-        else namespace_census
-    )
+    require(namespace_census is not None, "task namespace census is absent")
+    assert namespace_census is not None
+    census = namespace_census
+    census.require_open()
     observed_self = os.stat("/proc/self/ns/mnt")
     own_identity = NamespaceIdentity("mnt", observed_self.st_dev, observed_self.st_ino)
     own = next(
@@ -1827,7 +2157,33 @@ def global_mount_roster_once(
         )
     )
     require(namespaces, "no process task mount namespace was visible")
+    census.require_open()
     return actual_anchors, namespaces
+
+
+def global_mount_roster_once(
+    root: Path,
+    anchors: tuple[tuple[str, str], ...] | None = None,
+    extra_targets: tuple[str, ...] = (),
+    namespace_census: TaskNamespaceCensus | None = None,
+) -> tuple[
+    tuple[tuple[str, str], ...],
+    tuple[tuple[str, tuple[MountRecord, ...]], ...],
+]:
+    if namespace_census is not None:
+        return _global_mount_roster_from_census(
+            root,
+            anchors,
+            extra_targets,
+            namespace_census,
+        )
+    with stable_task_namespace_census() as census:
+        return _global_mount_roster_from_census(
+            root,
+            anchors,
+            extra_targets,
+            census,
+        )
 
 
 def stable_global_mount_roster(
@@ -1836,44 +2192,44 @@ def stable_global_mount_roster(
     extra_targets: tuple[str, ...] = (),
     namespace_census: TaskNamespaceCensus | None = None,
 ) -> dict[str, object]:
+    owns_census = namespace_census is None
     census = (
         stable_task_namespace_census()
         if namespace_census is None
         else namespace_census
     )
-    actual_anchors, namespaces = global_mount_roster_once(
-        root,
-        anchors,
-        extra_targets,
-        census,
-    )
-    occurrences = tuple(
-        sorted(
-            (namespace, record)
-            for namespace, records in namespaces
-            for record in records
+    try:
+        actual_anchors, namespaces = _global_mount_roster_from_census(
+            root,
+            anchors,
+            extra_targets,
+            census,
         )
-    )
-    return {
-        "root": str(root),
-        "namespaceCensusSha256": census.proof_sha256,
-        "sourceAnchors": [
-            {"device": device, "root": source_root}
-            for device, source_root in actual_anchors
-        ],
-        "occurrences": [
-            {
-                "mountNamespace": namespace,
-                "mountId": record.mount_id,
-                "parentId": record.parent_id,
-                "device": record.device,
-                "root": record.root,
-                "target": record.target,
-                "filesystem": record.filesystem,
-            }
-            for namespace, record in occurrences
-        ],
-    }
+        occurrences = tuple(
+            sorted(
+                (namespace, record)
+                for namespace, records in namespaces
+                for record in records
+            )
+        )
+        return {
+            "root": str(root),
+            "namespaceCensusSha256": census.proof_sha256,
+            "sourceAnchors": [
+                {"device": device, "root": source_root}
+                for device, source_root in actual_anchors
+            ],
+            "occurrences": [
+                {
+                    "mountNamespace": namespace,
+                    **mount_record_document(record),
+                }
+                for namespace, record in occurrences
+            ],
+        }
+    finally:
+        if owns_census:
+            census.close()
 
 
 def socket_identity(path: Path, *, expected_uid: int, expected_gid: int | None = None) -> dict[str, object]:
@@ -2556,9 +2912,10 @@ def process_reference_scan(
     *,
     runtime_inodes: set[tuple[int, int]],
     socket_inodes: set[int],
-    private_namespace_tokens: set[str],
+    private_namespace_identities: frozenset[NamespaceIdentity],
     observable_namespace_identities: frozenset[NamespaceIdentity],
-    owned_namespace_identities: frozenset[NamespaceIdentity],
+    owned_relation_namespace_identities: frozenset[NamespaceIdentity],
+    proof_owned_namespace_fds: frozenset[int],
 ) -> ProcessReferenceObservation | None:
     actual_task_id = thread_group_id if task_id is None else task_id
     task = capture_task(thread_group_id, actual_task_id)
@@ -2573,15 +2930,18 @@ def process_reference_scan(
             cgroup = read_at(task.process_fd, "cgroup").decode("ascii", "strict")
             relations = _structured_argument_relations(raw_arguments)
             namespace_fds: list[dict[str, object]] = []
-            namespaces = {
-                name: namespace_identity(task.process_fd, name)
+            captured_namespace_identities = {
+                name: current_task_namespace_identity(task, name)
                 for name in ("mnt", "net", "pid", "user")
             }
-            namespace_tokens = {
-                f"{name}:[{identity['inode']}]"
-                for name, identity in namespaces.items()
+            namespaces = {
+                name: {"device": identity.device, "inode": identity.inode}
+                for name, identity in captured_namespace_identities.items()
             }
-            if namespace_tokens & private_namespace_tokens:
+            current_namespace_identities = {
+                identity for identity in captured_namespace_identities.values()
+            }
+            if current_namespace_identities & private_namespace_identities:
                 relations.add("privateRuntimeNamespace")
             for label, name in (("cwd", "cwd"), ("root", "root"), ("exe", "exe")):
                 try:
@@ -2639,6 +2999,32 @@ def process_reference_scan(
                                 "live process task FD edge is unreadable: "
                                 f"{thread_group_id}/{actual_task_id}"
                             ) from error
+                        if (
+                            thread_group_id == os.getpid()
+                            and int(fd_name) in proof_owned_namespace_fds
+                        ):
+                            try:
+                                stable = os.stat(fd_name, dir_fd=fd_directory)
+                            except (FileNotFoundError, ProcessLookupError) as error:
+                                raise ManualRecoveryRequired(
+                                    "proof-owned namespace FD changed during scan: "
+                                    f"{fd_name}"
+                                ) from error
+                            require(
+                                (
+                                    stable.st_dev,
+                                    stable.st_ino,
+                                    stat.S_IFMT(stable.st_mode),
+                                )
+                                == (
+                                    observed.st_dev,
+                                    observed.st_ino,
+                                    stat.S_IFMT(observed.st_mode),
+                                ),
+                                "proof-owned namespace FD identity changed during scan: "
+                                f"{fd_name}",
+                            )
+                            continue
                         if (observed.st_dev, observed.st_ino) in runtime_inodes:
                             relations.add("runtimeFdInode")
                         normalized = target.removesuffix(" (deleted)")
@@ -2666,7 +3052,7 @@ def process_reference_scan(
                             classification = classify_namespace_fd(
                                 namespace_identity_value,
                                 current=observable_namespace_identities,
-                                owned=owned_namespace_identities,
+                                owned=owned_relation_namespace_identities,
                             )
                             namespace_fds.append(
                                 {
@@ -2713,6 +3099,8 @@ def process_reference_scan(
             }
             if EXPECTED_CONTAINER_ID in cgroup_components:
                 relations.add("containerCgroup")
+            for identity in captured_namespace_identities.values():
+                require_current_task_namespace_identity(task, identity)
             reprove_captured_task(task)
             row = {
                 "pid": thread_group_id,
@@ -2763,21 +3151,6 @@ def _related_process_universe_once(
     socket_inodes = {
         int(item["inode"]) for item in sockets["unixRecords"]
     } | {int(inode) for inode in sockets.get("relatedUnixInodes", [])}
-    recorded_namespace_tokens = {
-        f"{name}:[{int(value[field]['inode'])}]"
-        for value in processes.values()
-        for name, field in (
-            ("mnt", "mountNamespace"),
-            ("net", "networkNamespace"),
-            ("pid", "pidNamespace"),
-            ("user", "userNamespace"),
-        )
-    }
-    own_namespace_tokens = {
-        f"{name}:[{os.stat(f'/proc/self/ns/{name}').st_ino}]"
-        for name in ("mnt", "net", "pid", "user")
-    }
-    private_namespace_tokens = recorded_namespace_tokens - own_namespace_tokens
     owned_namespace_identities = frozenset(
         NamespaceIdentity(
             name,
@@ -2792,17 +3165,39 @@ def _related_process_universe_once(
             ("user", "userNamespace"),
         )
     )
+    own_namespace_identities: set[NamespaceIdentity] = set()
+    for name in ("mnt", "net", "pid", "user"):
+        observed = os.stat(f"/proc/self/ns/{name}")
+        require(
+            os.readlink(f"/proc/self/ns/{name}")
+            == f"{name}:[{observed.st_ino}]",
+            f"drain current namespace identity differs: {name}",
+        )
+        own_namespace_identities.add(
+            NamespaceIdentity(name, observed.st_dev, observed.st_ino)
+        )
+    private_namespace_identities = (
+        owned_namespace_identities - frozenset(own_namespace_identities)
+    )
     observations: list[ProcessReferenceObservation] = []
     try:
-        for thread_group_id, task_id in process_task_coordinates_once():
+        coordinates = process_task_coordinates_once()
+        require_single_threaded_drain_coordinates(coordinates)
+        proof_owned_namespace_fds = frozenset(
+            namespace_census.namespace_descriptors
+        )
+        for thread_group_id, task_id in coordinates:
             observation = process_reference_scan(
                 thread_group_id,
                 task_id,
                 runtime_inodes=runtime_inodes,
                 socket_inodes=socket_inodes,
-                private_namespace_tokens=private_namespace_tokens,
+                private_namespace_identities=private_namespace_identities,
                 observable_namespace_identities=namespace_census.current,
-                owned_namespace_identities=owned_namespace_identities,
+                owned_relation_namespace_identities=frozenset(
+                    private_namespace_identities
+                ),
+                proof_owned_namespace_fds=proof_owned_namespace_fds,
             )
             if observation is not None:
                 observations.append(observation)
@@ -2859,6 +3254,19 @@ def _related_process_universe_once(
                 f"{thread_group_id}/{task_id}"
                 for thread_group_id, task_id in detached_namespaces
             ),
+        )
+        observed_current_namespaces = frozenset(
+            NamespaceIdentity(
+                str(kind),
+                int(identity["device"]),
+                int(identity["inode"]),
+            )
+            for row in rows.values()
+            for kind, identity in row["namespaces"].items()
+        )
+        require(
+            observed_current_namespaces == namespace_census.current,
+            "current namespace roster changed after the stable namespace census",
         )
         observed_namespace_fds = frozenset(
             NamespaceIdentity(
@@ -2925,9 +3333,12 @@ def _related_process_universe_once(
                 task_id,
                 runtime_inodes=runtime_inodes,
                 socket_inodes=socket_inodes,
-                private_namespace_tokens=private_namespace_tokens,
+                private_namespace_identities=private_namespace_identities,
                 observable_namespace_identities=namespace_census.current,
-                owned_namespace_identities=owned_namespace_identities,
+                owned_relation_namespace_identities=frozenset(
+                    private_namespace_identities
+                ),
+                proof_owned_namespace_fds=proof_owned_namespace_fds,
             )
             manual(
                 repeated is not None,
@@ -2948,11 +3359,16 @@ def _related_process_universe_once(
             _namespace_identity_document(value)
             for value in sorted(observed_namespace_fds)
         ]
+        current_namespace_proof = [
+            _namespace_identity_document(value)
+            for value in sorted(observed_current_namespaces)
+        ]
         proof_digest = sha256_bytes(
             canonical_json(
                 {
                     "related": proof,
                     "namespaceCensusSha256": namespace_census.proof_sha256,
+                    "currentNamespaces": current_namespace_proof,
                     "namespaceFds": namespace_fd_proof,
                 }
             )
@@ -2962,6 +3378,7 @@ def _related_process_universe_once(
             "related": proof,
             "proofSha256": proof_digest,
             "namespaceCensusSha256": namespace_census.proof_sha256,
+            "currentNamespaces": current_namespace_proof,
             "namespaceFds": namespace_fd_proof,
         }
     finally:
@@ -2977,27 +3394,34 @@ def related_process_universe(
     allowed_roles: set[str],
     namespace_census: TaskNamespaceCensus | None = None,
 ) -> dict[str, object]:
+    owns_census = namespace_census is None
     census = (
         stable_task_namespace_census()
         if namespace_census is None
         else namespace_census
     )
-    first = _related_process_universe_once(
-        processes,
-        runtime,
-        sockets,
-        census,
-        allowed_roles=allowed_roles,
-    )
-    second = _related_process_universe_once(
-        processes,
-        runtime,
-        sockets,
-        census,
-        allowed_roles=allowed_roles,
-    )
-    require(first == second, "related process universe changed across proof passes")
-    return second
+    try:
+        census.require_open()
+        first = _related_process_universe_once(
+            processes,
+            runtime,
+            sockets,
+            census,
+            allowed_roles=allowed_roles,
+        )
+        second = _related_process_universe_once(
+            processes,
+            runtime,
+            sockets,
+            census,
+            allowed_roles=allowed_roles,
+        )
+        require(first == second, "related process universe changed across proof passes")
+        census.require_open()
+        return second
+    finally:
+        if owns_census:
+            census.close()
 
 
 def runtime_tree_snapshot() -> dict[str, object]:
@@ -3233,12 +3657,22 @@ def pidfile_identity(
     return identity
 
 
-def netns_baseline(
-    namespace_census: TaskNamespaceCensus | None = None,
+def _netns_baseline_from_census(
+    census: TaskNamespaceCensus,
 ) -> dict[str, object]:
+    census.require_open()
     target = str(TASK_NETNS_TARGET)
-    records = mount_records(Path("/proc/self/mountinfo").read_text(encoding="utf-8"))
-    matches = [record for record in records if record.target == target]
+    observed_self = os.stat("/proc/self/ns/mnt")
+    self_identity = NamespaceIdentity(
+        "mnt", observed_self.st_dev, observed_self.st_ino
+    )
+    own = next(
+        (value for value in census.mounts if value.identity == self_identity),
+        None,
+    )
+    require(own is not None, "drain mount namespace is absent from its census")
+    assert own is not None
+    matches = [record for record in own.records if record.target == target]
     require(len(matches) == 1 and matches[0].filesystem == "nsfs", "legacy task netns mount differs")
     source = {"device": matches[0].device, "root": matches[0].root}
     require(
@@ -3251,7 +3685,7 @@ def netns_baseline(
         TASK_NETNS_TARGET,
         source_anchor,
         (target, ambient_target),
-        namespace_census,
+        census,
     )
     occurrences = list(source_roster["occurrences"])
     require(
@@ -3273,12 +3707,23 @@ def netns_baseline(
         and len({str(item["mountNamespace"]) for item in occurrences}) == 1,
         "legacy task netns source has a foreign target",
     )
-    return {
+    result = {
         "sourceAnchor": source,
         "ownedTarget": target,
         "ambientTargets": [ambient_target],
         "occurrences": occurrences,
     }
+    census.require_open()
+    return result
+
+
+def netns_baseline(
+    namespace_census: TaskNamespaceCensus | None = None,
+) -> dict[str, object]:
+    if namespace_census is not None:
+        return _netns_baseline_from_census(namespace_census)
+    with stable_task_namespace_census() as census:
+        return _netns_baseline_from_census(census)
 
 
 def require_mount_targets_within(
@@ -3298,6 +3743,129 @@ def require_mount_targets_within(
         )
     )
     manual(not foreign, f"{label} source has a foreign target: " + ",".join(foreign))
+
+
+def _finish_authority_with_namespace_census(
+    *,
+    caller_uid: int,
+    caller_gid: int,
+    allow_global_lease: bool,
+    state_identity: dict[str, object],
+    evidence_identity: dict[str, object],
+    config_identity: dict[str, object],
+    receipt_identity: dict[str, object],
+    receipt_raw: bytes,
+    docker_config: dict[str, object],
+    containerd_config: dict[str, object],
+    docker_pidfile: dict[str, object],
+    containerd_pidfile: dict[str, object],
+    runtime_tree: dict[str, object],
+    process_graph: dict[str, object],
+    process_observations: dict[str, object],
+    sockets: dict[str, object],
+    namespace_census: TaskNamespaceCensus,
+) -> tuple[dict[str, object], dict[str, object]]:
+    namespace_census.require_open()
+    processes = process_graph["processes"]
+    assert isinstance(processes, dict)
+    process_graph["relatedUniverse"] = related_process_universe(
+        processes,
+        runtime_tree,
+        sockets,
+        allowed_roles=set(processes),
+        namespace_census=namespace_census,
+    )
+    runtime_mounts = stable_global_mount_roster(
+        EXPECTED_RUNTIME_ROOT,
+        namespace_census=namespace_census,
+    )
+    data_mounts = stable_global_mount_roster(
+        EXPECTED_STATE_ROOT / "outer-docker",
+        namespace_census=namespace_census,
+    )
+    registry_mounts = stable_global_mount_roster(
+        EXPECTED_STATE_ROOT / "registry",
+        namespace_census=namespace_census,
+    )
+    netns = netns_baseline(namespace_census)
+    require_mount_targets_within(
+        runtime_mounts,
+        allowed_roots=(EXPECTED_RUNTIME_ROOT,),
+        label="legacy runtime",
+    )
+    require_mount_targets_within(
+        data_mounts,
+        allowed_roots=(EXPECTED_STATE_ROOT / "outer-docker",),
+        label="legacy outer Docker",
+    )
+    require_mount_targets_within(
+        registry_mounts,
+        allowed_roots=(EXPECTED_STATE_ROOT / "registry", EXPECTED_OVERLAY_TARGET),
+        label="legacy registry",
+    )
+    manual(
+        any(
+            item["target"] == str(EXPECTED_OVERLAY_TARGET)
+            for item in data_mounts["occurrences"]
+        ),
+        "legacy registry overlay mount is absent",
+    )
+    manual(bool(registry_mounts["occurrences"]), "legacy registry bind mount is absent")
+    persistent = {
+        str(path): directory_identity(
+            path,
+            expected_uid=0 if path.name == "outer-docker" else caller_uid,
+            expected_gid=0 if path.name == "outer-docker" else caller_gid,
+            expected_modes={0o710} if path.name == "outer-docker" else {0o700},
+        )
+        for path in PERSISTENT_ROOTS
+    }
+    v5 = require_v5_absent(allow_global_lease=allow_global_lease)
+    registry = registry_inventory()
+    namespace_census.require_open()
+    authority = {
+        "bootId": current_boot_id(),
+        "stateRootIdentity": state_identity,
+        "evidenceRootIdentity": evidence_identity,
+        "configRootIdentity": config_identity,
+        "legacySource": EXPECTED_LEGACY_SOURCE,
+        "legacyReceipt": receipt_identity,
+        "legacyReceiptBytes": receipt_raw.decode("utf-8", "strict"),
+        "runtime": runtime_tree,
+        "configs": {
+            "docker": docker_config,
+            "containerd": containerd_config,
+            "dockerPidfile": docker_pidfile,
+            "containerdPidfile": containerd_pidfile,
+        },
+        "processGraph": process_graph,
+        "namespaceCensus": namespace_census.proof,
+        "sockets": sockets,
+        "mounts": {
+            "runtime": runtime_mounts,
+            "outerDocker": data_mounts,
+            "registry": registry_mounts,
+            "networkNamespace": netns,
+        },
+        "persistentRoots": persistent,
+        "registryInventory": registry,
+        "currentV5": v5,
+        "mutationPolicy": {
+            "cgroup": "forbidden_shared_66_process_observation",
+            "forceKill": "forbidden",
+            "persistentDataDeletion": "forbidden",
+            "automaticShimOrTaskSignal": "forbidden",
+            "nonNsfsUnmount": "forbidden",
+        },
+    }
+    observations = {
+        "legacyProcInodes": process_observations,
+        "namespaceCensusPreimage": namespace_census.preimage,
+        "processlessMountNamespaces": "not_observable_and_not_admitted",
+        "queuedScmRightsNamespaceFds": "not_observable_and_not_admitted",
+    }
+    namespace_census.require_open()
+    return authority, observations
 
 
 def collect_authority(
@@ -3360,101 +3928,26 @@ def collect_authority(
     )
     process_graph, process_observations = capture_process_graph(parsed)
     sockets = runtime_socket_snapshot(960217, 964683)
-    namespace_census = stable_task_namespace_census()
-    processes = process_graph["processes"]
-    assert isinstance(processes, dict)
-    process_graph["relatedUniverse"] = related_process_universe(
-        processes,
-        runtime_tree,
-        sockets,
-        allowed_roles=set(processes),
-        namespace_census=namespace_census,
-    )
-    runtime_mounts = stable_global_mount_roster(
-        EXPECTED_RUNTIME_ROOT,
-        namespace_census=namespace_census,
-    )
-    data_mounts = stable_global_mount_roster(
-        EXPECTED_STATE_ROOT / "outer-docker",
-        namespace_census=namespace_census,
-    )
-    registry_mounts = stable_global_mount_roster(
-        EXPECTED_STATE_ROOT / "registry",
-        namespace_census=namespace_census,
-    )
-    netns = netns_baseline(namespace_census)
-    require_mount_targets_within(
-        runtime_mounts,
-        allowed_roots=(EXPECTED_RUNTIME_ROOT,),
-        label="legacy runtime",
-    )
-    require_mount_targets_within(
-        data_mounts,
-        allowed_roots=(EXPECTED_STATE_ROOT / "outer-docker",),
-        label="legacy outer Docker",
-    )
-    require_mount_targets_within(
-        registry_mounts,
-        allowed_roots=(EXPECTED_STATE_ROOT / "registry", EXPECTED_OVERLAY_TARGET),
-        label="legacy registry",
-    )
-    manual(
-        any(item["target"] == str(EXPECTED_OVERLAY_TARGET) for item in data_mounts["occurrences"]),
-        "legacy registry overlay mount is absent",
-    )
-    manual(bool(registry_mounts["occurrences"]), "legacy registry bind mount is absent")
-    persistent = {
-        str(path): directory_identity(
-            path,
-            expected_uid=0 if path.name == "outer-docker" else caller_uid,
-            expected_gid=0 if path.name == "outer-docker" else caller_gid,
-            expected_modes={0o710} if path.name == "outer-docker" else {0o700},
+    with stable_task_namespace_census() as namespace_census:
+        return _finish_authority_with_namespace_census(
+            caller_uid=caller_uid,
+            caller_gid=caller_gid,
+            allow_global_lease=allow_global_lease,
+            state_identity=state_identity,
+            evidence_identity=evidence_identity,
+            config_identity=config_identity,
+            receipt_identity=receipt_identity,
+            receipt_raw=receipt_raw,
+            docker_config=docker_config,
+            containerd_config=containerd_config,
+            docker_pidfile=docker_pidfile,
+            containerd_pidfile=containerd_pidfile,
+            runtime_tree=runtime_tree,
+            process_graph=process_graph,
+            process_observations=process_observations,
+            sockets=sockets,
+            namespace_census=namespace_census,
         )
-        for path in PERSISTENT_ROOTS
-    }
-    v5 = require_v5_absent(allow_global_lease=allow_global_lease)
-    registry = registry_inventory()
-    authority = {
-        "bootId": current_boot_id(),
-        "stateRootIdentity": state_identity,
-        "evidenceRootIdentity": evidence_identity,
-        "configRootIdentity": config_identity,
-        "legacySource": EXPECTED_LEGACY_SOURCE,
-        "legacyReceipt": receipt_identity,
-        "legacyReceiptBytes": receipt_raw.decode("utf-8", "strict"),
-        "runtime": runtime_tree,
-        "configs": {
-            "docker": docker_config,
-            "containerd": containerd_config,
-            "dockerPidfile": docker_pidfile,
-            "containerdPidfile": containerd_pidfile,
-        },
-        "processGraph": process_graph,
-        "namespaceCensus": namespace_census.proof,
-        "sockets": sockets,
-        "mounts": {
-            "runtime": runtime_mounts,
-            "outerDocker": data_mounts,
-            "registry": registry_mounts,
-            "networkNamespace": netns,
-        },
-        "persistentRoots": persistent,
-        "registryInventory": registry,
-        "currentV5": v5,
-        "mutationPolicy": {
-            "cgroup": "forbidden_shared_66_process_observation",
-            "forceKill": "forbidden",
-            "persistentDataDeletion": "forbidden",
-            "automaticShimOrTaskSignal": "forbidden",
-            "nonNsfsUnmount": "forbidden",
-        },
-    }
-    observations = {
-        "legacyProcInodes": process_observations,
-        "processlessMountNamespaces": "not_observable_and_not_admitted",
-        "queuedScmRightsNamespaceFds": "not_observable_and_not_admitted",
-    }
-    return authority, observations
 
 
 def collect_verification(

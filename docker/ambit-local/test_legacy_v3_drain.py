@@ -140,7 +140,7 @@ def namespace_census(
     mounts: tuple[MODULE.MountNamespaceAuthority, ...] = (),
     digest: str = "9" * 64,
 ) -> MODULE.TaskNamespaceCensus:
-    return MODULE.TaskNamespaceCensus(
+    result = MODULE.TaskNamespaceCensus(
         frozenset(current),
         frozenset(namespace_fds),
         mounts,
@@ -152,6 +152,8 @@ def namespace_census(
             "proofSha256": digest,
         },
     )
+    result.require_open = mock.Mock()  # type: ignore[method-assign]
+    return result
 
 
 class ReceiptContractTest(unittest.TestCase):
@@ -839,6 +841,32 @@ class ProcessUniverseTest(unittest.TestCase):
                 ((10, 10), (10, 11), (20, 20), (20, 21), (20, 22)),
             )
 
+    def test_live_group_with_unenumerable_task_roster_rejects(self) -> None:
+        with mock.patch.object(
+            MODULE.os,
+            "listdir",
+            side_effect=(("10",), FileNotFoundError()),
+        ), mock.patch.object(
+            MODULE.os,
+            "stat",
+            return_value=mock.Mock(),
+        ), self.assertRaisesRegex(
+            MODULE.ManualRecoveryRequired,
+            "thread-group task roster is unavailable",
+        ):
+            MODULE.process_task_coordinates_once()
+
+        with mock.patch.object(
+            MODULE.os,
+            "listdir",
+            side_effect=(("10",), FileNotFoundError()),
+        ), mock.patch.object(
+            MODULE.os,
+            "stat",
+            side_effect=FileNotFoundError(),
+        ):
+            self.assertEqual(MODULE.process_task_coordinates_once(), ())
+
     def test_nonleader_task_identity_is_bound_to_a_thread_pidfd(self) -> None:
         identity = mock.Mock(st_dev=1, st_ino=2)
         fields = [b"S", b"1", *([b"0"] * 17), b"77"]
@@ -952,6 +980,16 @@ class ProcessUniverseTest(unittest.TestCase):
             "namespaceFds": [],
             "relations": ["runtimeFdInode"],
         }
+        verifier = {
+            "pid": 999,
+            "taskId": 999,
+            "parentPid": 1,
+            "startTimeTicks": 12,
+            "securityState": root_security,
+            "namespaces": {},
+            "namespaceFds": [],
+            "relations": [],
+        }
 
         def observation(row: dict[str, object], offset: int) -> object:
             return MODULE.ProcessReferenceObservation(row, 30 + offset, 40 + offset)
@@ -959,15 +997,24 @@ class ProcessUniverseTest(unittest.TestCase):
         scans = (
             observation(leader, 0),
             observation(worker, 1),
-            observation(dict(leader), 2),
-            observation(dict(worker), 3),
+            observation(verifier, 2),
+            observation(dict(leader), 3),
+            observation(dict(worker), 4),
         )
         with mock.patch.object(
-            MODULE, "process_task_coordinates_once", return_value=((100, 100), (100, 101))
+            MODULE,
+            "process_task_coordinates_once",
+            return_value=((100, 100), (100, 101), (999, 999)),
         ), mock.patch.object(
             MODULE, "process_reference_scan", side_effect=scans
         ), mock.patch.object(
-            MODULE.os, "stat", return_value=mock.Mock(st_ino=1)
+            MODULE.os, "getpid", return_value=999
+        ), mock.patch.object(
+            MODULE.os, "stat", return_value=mock.Mock(st_dev=4, st_ino=1)
+        ), mock.patch.object(
+            MODULE.os,
+            "readlink",
+            side_effect=lambda path: f"{Path(path).name}:[1]",
         ), mock.patch.object(
             MODULE, "reprove_captured_task"
         ), mock.patch.object(MODULE.os, "close"):
@@ -1070,11 +1117,23 @@ class ProcessUniverseTest(unittest.TestCase):
     def test_task_roster_drives_process_socket_and_mount_censuses(self) -> None:
         source = MODULE_PATH.read_text(encoding="utf-8")
         namespace_census_source = source[
-            source.index("def task_namespace_census_once")
+            source.index("def _held_task_namespace_observations")
             : source.index("def stable_task_namespace_census")
         ]
         self.assertIn("process_task_coordinates_once()", namespace_census_source)
         self.assertIn("capture_task", namespace_census_source)
+        held_commit = source[
+            source.index("def _held_task_namespace_observations")
+            : source.index("def task_namespace_census_once")
+        ]
+        self.assertIn("_task_mount_view(task) == view", held_commit)
+        self.assertIn("_namespace_fd_records(", held_commit)
+        self.assertIn("== namespace_fd_rows", held_commit)
+        self.assertLess(
+            held_commit.index("transfer_namespace_descriptors = True"),
+            held_commit.index("return ("),
+        )
+        self.assertLess(held_commit.index("return ("), held_commit.index("finally:"))
         mount_projection = source[
             source.index("def global_mount_roster_once")
             : source.index("def stable_global_mount_roster")
@@ -1105,7 +1164,18 @@ class ProcessUniverseTest(unittest.TestCase):
             : source.index("def collect_verification")
         ]
         self.assertEqual(collection.count("stable_task_namespace_census()"), 1)
-        self.assertGreaterEqual(collection.count("namespace_census="), 4)
+        self.assertIn("with stable_task_namespace_census() as namespace_census", collection)
+        finish = source[
+            source.index("def _finish_authority_with_namespace_census")
+            : source.index("def collect_authority")
+        ]
+        self.assertGreaterEqual(finish.count("namespace_census="), 4)
+        netns = source[
+            source.index("def _netns_baseline_from_census")
+            : source.index("def require_mount_targets_within")
+        ]
+        self.assertNotIn('/proc/self/mountinfo', netns)
+        self.assertIn("census.mounts", netns)
 
     def test_source_covers_empty_argv_maps_namespace_fds_and_pid_reuse(self) -> None:
         source = MODULE_PATH.read_text(encoding="utf-8")
@@ -1115,10 +1185,25 @@ class ProcessUniverseTest(unittest.TestCase):
         self.assertIn("recorded legacy process PID was reused", source)
         self.assertNotIn("if not raw_arguments:\n                second_parent", source)
         self.assertNotIn("admitted_namespace_tokens", source)
+        self.assertNotIn("recorded_namespace_tokens", source)
+        self.assertNotIn("private_namespace_tokens", source)
+        self.assertIn("owned_relation_namespace_identities", source)
+        self.assertIn("proof_owned_namespace_fds", source)
+        process_scan = source[
+            source.index("def process_reference_scan")
+            : source.index("def _related_process_universe_once")
+        ]
+        self.assertLess(
+            process_scan.index("proof-owned namespace FD identity changed"),
+            process_scan.index('relations.add("runtimeFdInode")'),
+        )
         self.assertNotIn("unclassifiedNamespaceFd", source)
         self.assertNotIn("mount namespace visibility differs across representatives", source)
         self.assertIn('"ambient_current"', source)
         self.assertIn('"queuedScmRightsNamespaceFds"', source)
+        self.assertNotIn("def source_anchors(", source)
+        self.assertNotIn("def mount_reference_records(", source)
+        self.assertNotIn("def mount_references(", source)
 
     def test_namespace_fd_current_owned_and_detached_classification_is_exact(self) -> None:
         ambient = MODULE.NamespaceIdentity("mnt", 4, 100)
@@ -1145,6 +1230,33 @@ class ProcessUniverseTest(unittest.TestCase):
             MODULE.classify_namespace_fd(
                 detached,
                 current=current,
+                owned=frozenset((owned,)),
+            ),
+            "detached",
+        )
+        recorded = frozenset((ambient, owned))
+        drain_self = frozenset((ambient,))
+        owned_relation = recorded - drain_self
+        self.assertEqual(
+            MODULE.classify_namespace_fd(
+                ambient,
+                current=current,
+                owned=owned_relation,
+            ),
+            "ambient_current",
+        )
+        self.assertEqual(
+            MODULE.classify_namespace_fd(
+                owned,
+                current=current,
+                owned=owned_relation,
+            ),
+            "owned",
+        )
+        self.assertEqual(
+            MODULE.classify_namespace_fd(
+                owned,
+                current=frozenset((ambient,)),
                 owned=frozenset((owned,)),
             ),
             "detached",
@@ -1185,6 +1297,37 @@ class ProcessUniverseTest(unittest.TestCase):
                     label="test",
                 )
 
+    def test_census_owned_namespace_pins_are_excluded_from_self_fd_roster(self) -> None:
+        task = mock.Mock(process_fd=10, pidfd=11, thread_group_id=100, task_id=100)
+        observed = mock.Mock(
+            st_mode=stat.S_IFREG | 0o444,
+            st_dev=4,
+            st_ino=101,
+        )
+        with mock.patch.object(
+            MODULE.os,
+            "open",
+            return_value=12,
+        ), mock.patch.object(
+            MODULE.os,
+            "listdir",
+            return_value=("40", "41"),
+        ), mock.patch.object(
+            MODULE.os,
+            "readlink",
+            return_value="mnt:[101]",
+        ) as readlink, mock.patch.object(
+            MODULE.os,
+            "stat",
+            return_value=observed,
+        ), mock.patch.object(MODULE.os, "close"):
+            rows = MODULE._namespace_fd_records(
+                task,
+                excluded_fds=frozenset((40,)),
+            )
+        self.assertEqual([row["fd"] for row in rows], [41])
+        readlink.assert_called_once_with("41", dir_fd=12)
+
     def test_namespace_census_churn_between_passes_rejects(self) -> None:
         stable = namespace_census(digest="1" * 64)
         changed = namespace_census(digest="2" * 64)
@@ -1194,6 +1337,256 @@ class ProcessUniverseTest(unittest.TestCase):
             side_effect=(stable, changed),
         ), self.assertRaisesRegex(MODULE.DrainError, "changed across proof passes"):
             MODULE.stable_task_namespace_census()
+
+    def test_second_namespace_pass_excludes_first_pass_proof_descriptors(self) -> None:
+        first = mock.Mock(proof_sha256="a" * 64, namespace_descriptors=(40, 41))
+        second = mock.Mock(proof_sha256="a" * 64, namespace_descriptors=(50,))
+        with mock.patch.object(
+            MODULE,
+            "task_namespace_census_once",
+            side_effect=(first, second),
+        ) as once:
+            self.assertIs(MODULE.stable_task_namespace_census(), second)
+        self.assertEqual(once.call_args_list[0], mock.call())
+        self.assertEqual(
+            once.call_args_list[1],
+            mock.call(external_self_excluded_fds=frozenset((40, 41))),
+        )
+        first.close.assert_called_once_with()
+        second.close.assert_not_called()
+
+    def test_closed_borrowed_namespace_census_rejects_before_consumer_scan(self) -> None:
+        census = MODULE.TaskNamespaceCensus(
+            frozenset(),
+            frozenset(),
+            (),
+            "a" * 64,
+            {},
+        )
+        census.close()
+        with mock.patch.object(
+            MODULE,
+            "_related_process_universe_once",
+        ) as scan, self.assertRaisesRegex(MODULE.DrainError, "already closed"):
+            MODULE.related_process_universe(
+                {},
+                {"tree": [], "rootIdentity": {"device": 1, "inode": 2}},
+                {"unixRecords": []},
+                allowed_roles=set(),
+                namespace_census=census,
+            )
+        scan.assert_not_called()
+
+    def test_borrowed_namespace_census_reproves_held_descriptor_identity(self) -> None:
+        identity = MODULE.NamespaceIdentity("mnt", 4, 100)
+        preimage = {"taskCount": 1}
+        digest = hashlib.sha256(MODULE.canonical_json(preimage)).hexdigest()
+        summary = {
+            "currentNamespaceCount": 1,
+            "namespaceFdCount": 0,
+            "mountNamespaceCount": 0,
+            "proofSha256": digest,
+            "processlessMountNamespaces": "not_observable_and_not_admitted",
+            "queuedScmRightsNamespaceFds": "not_observable_and_not_admitted",
+            "taskCount": 1,
+        }
+        census = MODULE.TaskNamespaceCensus(
+            frozenset((identity,)),
+            frozenset(),
+            (),
+            digest,
+            summary,
+            (40,),
+            preimage,
+        )
+        observed = mock.Mock(
+            st_mode=stat.S_IFREG | 0o444,
+            st_dev=4,
+            st_ino=100,
+        )
+        with mock.patch.object(
+            MODULE.os,
+            "fstat",
+            return_value=observed,
+        ), mock.patch.object(
+            MODULE.os,
+            "readlink",
+            return_value="mnt:[100]",
+        ):
+            census.require_open()
+        with mock.patch.object(
+            MODULE.os,
+            "fstat",
+            return_value=observed,
+        ), mock.patch.object(
+            MODULE.os,
+            "readlink",
+            return_value="mnt:[101]",
+        ), self.assertRaisesRegex(MODULE.DrainError, "identity differs"):
+            census.require_open()
+        with mock.patch.object(MODULE.os, "close"):
+            census.close()
+
+    def test_namespace_census_context_closes_owned_descriptors_once(self) -> None:
+        census = MODULE.TaskNamespaceCensus(
+            frozenset(),
+            frozenset(),
+            (),
+            "a" * 64,
+            {},
+            (40, 41),
+        )
+        with mock.patch.object(census, "require_open"), mock.patch.object(
+            MODULE.os,
+            "close",
+        ) as close:
+            with census:
+                pass
+            census.close()
+        self.assertEqual(close.call_args_list, [mock.call(40), mock.call(41)])
+
+    def test_borrowed_census_rejects_mutated_digest_preimage(self) -> None:
+        preimage = {"taskCount": 0}
+        digest = hashlib.sha256(MODULE.canonical_json(preimage)).hexdigest()
+        summary = {
+            "currentNamespaceCount": 0,
+            "namespaceFdCount": 0,
+            "mountNamespaceCount": 0,
+            "proofSha256": digest,
+            "processlessMountNamespaces": "not_observable_and_not_admitted",
+            "queuedScmRightsNamespaceFds": "not_observable_and_not_admitted",
+            "taskCount": 0,
+        }
+        census = MODULE.TaskNamespaceCensus(
+            frozenset(),
+            frozenset(),
+            (),
+            digest,
+            summary,
+            (),
+            preimage,
+        )
+        census.require_open()
+        preimage["taskCount"] = 1
+        with self.assertRaisesRegex(MODULE.DrainError, "digest or summary differs"):
+            census.require_open()
+
+    def test_current_namespace_change_inside_one_task_capture_rejects(self) -> None:
+        task = mock.Mock(thread_group_id=100, task_id=101, process_fd=31)
+        expected = MODULE.NamespaceIdentity("mnt", 4, 100)
+        with mock.patch.object(
+            MODULE.os,
+            "stat",
+            return_value=mock.Mock(st_dev=4, st_ino=101),
+        ), mock.patch.object(
+            MODULE.os,
+            "readlink",
+            return_value="mnt:[101]",
+        ), self.assertRaisesRegex(
+            MODULE.DrainError,
+            "current namespace changed during census",
+        ):
+            MODULE.require_current_task_namespace_identity(task, expected)
+
+    def test_namespace_census_fd_budget_fails_before_descriptor_custody(self) -> None:
+        with mock.patch.object(
+            MODULE.resource,
+            "getrlimit",
+            return_value=(188, 256),
+        ), mock.patch.object(
+            MODULE.os,
+            "listdir",
+            return_value=("0", "1", "2", "3"),
+        ):
+            self.assertEqual(
+                MODULE.require_task_namespace_census_fd_budget(10),
+                {
+                    "taskCount": 10,
+                    "baselineDescriptorReserve": 128,
+                    "externallyHeldDescriptorCount": 0,
+                    "requiredDescriptorLimit": 188,
+                    "softDescriptorLimit": 188,
+                    "hardDescriptorLimit": 256,
+                },
+            )
+        with mock.patch.object(
+            MODULE.resource,
+            "getrlimit",
+            return_value=(187, 256),
+        ), mock.patch.object(
+            MODULE.os,
+            "listdir",
+            return_value=("0", "1", "2", "3"),
+        ), self.assertRaisesRegex(
+            MODULE.ManualRecoveryRequired,
+            "file-descriptor limit is insufficient",
+        ):
+            MODULE.require_task_namespace_census_fd_budget(10)
+
+        with mock.patch.object(
+            MODULE.resource,
+            "getrlimit",
+            return_value=(188, 256),
+        ), mock.patch.object(
+            MODULE.os,
+            "listdir",
+            side_effect=(
+                ("0", "1", "2", "3"),
+                ("0", "1", "2", "3", "4"),
+            ),
+        ):
+            verify = MODULE.require_task_namespace_census_fd_budget(10)
+            drain_with_lease = MODULE.require_task_namespace_census_fd_budget(10)
+        self.assertEqual(verify, drain_with_lease)
+
+        with mock.patch.object(
+            MODULE.resource,
+            "getrlimit",
+            return_value=(190, 256),
+        ), mock.patch.object(
+            MODULE.os,
+            "listdir",
+            return_value=("0", "1", "2", "3"),
+        ):
+            self.assertEqual(
+                MODULE.require_task_namespace_census_fd_budget(
+                    10,
+                    externally_held=2,
+                )["requiredDescriptorLimit"],
+                190,
+            )
+
+    def test_self_fd_exclusion_requires_a_single_threaded_drain(self) -> None:
+        with mock.patch.object(MODULE.os, "getpid", return_value=100):
+            MODULE.require_single_threaded_drain_coordinates(((100, 100), (200, 200)))
+            with self.assertRaisesRegex(
+                MODULE.DrainError,
+                "not single-threaded",
+            ):
+                MODULE.require_single_threaded_drain_coordinates(
+                    ((100, 100), (100, 101))
+                )
+
+    def test_duplicate_namespace_descriptor_closes_on_divergence(self) -> None:
+        identity = MODULE.NamespaceIdentity("mnt", 4, 100)
+        held = {identity: 40}
+        with mock.patch.object(
+            MODULE.os,
+            "fstat",
+            side_effect=(
+                mock.Mock(st_dev=4, st_ino=100, st_mode=stat.S_IFREG),
+                mock.Mock(st_dev=4, st_ino=101, st_mode=stat.S_IFREG),
+            ),
+        ), mock.patch.object(
+            MODULE.os,
+            "close",
+        ) as close, self.assertRaisesRegex(
+            MODULE.DrainError,
+            "descriptor identity diverges",
+        ):
+            MODULE.admit_held_namespace_descriptor(held, identity, 41)
+        close.assert_called_once_with(41)
+        self.assertEqual(held, {identity: 40})
 
     def test_exact_process_status_uses_the_real_exact_vocabulary(self) -> None:
         recorded = captured_process().authority
@@ -1616,6 +2009,35 @@ class MountAuthorityTest(unittest.TestCase):
         with self.assertRaisesRegex(MODULE.DrainError, "not a projection"):
             MODULE.build_mount_namespace_authority(identity, (full, foreign))
 
+    def test_restricted_view_preserves_an_opaque_nsfs_source(self) -> None:
+        target = str(MODULE.TASK_NETNS_TARGET)
+        canonical = (
+            MODULE.MountRecord(
+                7,
+                1,
+                "0:4",
+                "net:[4026531833]",
+                target,
+                "nsfs",
+            ),
+        )
+        projected = MODULE.MountNamespaceView(
+            str(MODULE.TASK_NETNS_TARGET.parent),
+            (44, 99, stat.S_IFDIR, 0, 0),
+            False,
+            (
+                MODULE.MountRecord(
+                    7,
+                    1,
+                    "0:4",
+                    "net:[4026531833]",
+                    "/default",
+                    "nsfs",
+                ),
+            ),
+        )
+        MODULE.require_mount_view_projection(canonical, projected)
+
     def test_mount_namespace_without_full_root_representative_rejects(self) -> None:
         identity, _full, restricted = self.canonical_and_restricted_views()
         with self.assertRaisesRegex(
@@ -1623,6 +2045,25 @@ class MountAuthorityTest(unittest.TestCase):
             "no proven full-root representative",
         ):
             MODULE.build_mount_namespace_authority(identity, (restricted,))
+
+    def test_chroot_at_a_nested_filesystem_root_is_not_full_root_authority(self) -> None:
+        identity, full, _restricted = self.canonical_and_restricted_views()
+        root_record = full.records[0]
+        self.assertTrue(MODULE.is_proven_full_root_view("/", root_record))
+        self.assertFalse(
+            MODULE.is_proven_full_root_view("/mnt/nested-root", root_record)
+        )
+        nested = MODULE.MountNamespaceView(
+            "/mnt/nested-root",
+            full.root_identity,
+            MODULE.is_proven_full_root_view("/mnt/nested-root", root_record),
+            full.records,
+        )
+        with self.assertRaisesRegex(
+            MODULE.ManualRecoveryRequired,
+            "no proven full-root representative",
+        ):
+            MODULE.build_mount_namespace_authority(identity, (nested,))
 
     def test_divergent_full_root_representatives_reject(self) -> None:
         identity, full, _restricted = self.canonical_and_restricted_views()
@@ -1638,6 +2079,23 @@ class MountAuthorityTest(unittest.TestCase):
         ):
             MODULE.build_mount_namespace_authority(identity, (full, changed))
 
+    def test_full_root_canonical_roster_rejects_duplicate_mount_ids(self) -> None:
+        identity, full, _restricted = self.canonical_and_restricted_views()
+        duplicate = MODULE.MountNamespaceView(
+            full.root_link,
+            full.root_identity,
+            True,
+            (
+                full.records[0],
+                MODULE.MountRecord(1, 0, "8:1", "/", "/duplicate", "ext4"),
+            ),
+        )
+        with self.assertRaisesRegex(
+            MODULE.DrainError,
+            "canonical mount roster reuses a mount ID",
+        ):
+            MODULE.build_mount_namespace_authority(identity, (duplicate,))
+
     def test_mounted_nsfs_requires_a_live_current_namespace_representative(self) -> None:
         identity, full, restricted = self.canonical_and_restricted_views()
         authority = MODULE.build_mount_namespace_authority(
@@ -1650,7 +2108,7 @@ class MountAuthorityTest(unittest.TestCase):
                 (authority,),
                 {net},
             ),
-            {("net", 4026531833)},
+            {net},
         )
         with self.assertRaisesRegex(
             MODULE.ManualRecoveryRequired,
@@ -1660,6 +2118,100 @@ class MountAuthorityTest(unittest.TestCase):
                 (authority,),
                 set(),
             )
+        wrong_device = MODULE.NamespaceIdentity("net", 5, 4026531833)
+        with self.assertRaisesRegex(
+            MODULE.ManualRecoveryRequired,
+            "no live representative",
+        ):
+            MODULE.require_mounted_namespace_representatives(
+                (authority,),
+                {wrong_device},
+            )
+
+    def test_root_descriptor_mount_id_must_match_the_root_mount_record(self) -> None:
+        observed = mock.Mock(
+            st_dev=os.makedev(8, 1),
+            st_mode=stat.S_IFDIR | 0o755,
+        )
+        record = MODULE.MountRecord(7, 1, "8:1", "/", "/", "ext4")
+        MODULE.require_root_mount_binding(
+            observed,
+            7,
+            record,
+            label="test",
+        )
+        with self.assertRaisesRegex(MODULE.DrainError, "root mount identity differs"):
+            MODULE.require_root_mount_binding(
+                observed,
+                8,
+                record,
+                label="test",
+            )
+
+    def test_action_roster_persists_propagation_options_and_source(self) -> None:
+        identity = MODULE.NamespaceIdentity("mnt", 4, 100)
+
+        def roster(optional: tuple[str, ...]) -> dict[str, object]:
+            record = MODULE.MountRecord(
+                7,
+                1,
+                "0:4",
+                "net:[4026531833]",
+                str(MODULE.TASK_NETNS_TARGET),
+                "nsfs",
+                ("rw",),
+                optional,
+                "nsfs",
+                ("rw",),
+            )
+            view = MODULE.MountNamespaceView(
+                "/",
+                (8, 10, stat.S_IFDIR, 0, 0),
+                True,
+                (record,),
+            )
+            authority = MODULE.MountNamespaceAuthority(
+                identity,
+                view.root_identity,
+                (record,),
+                (view,),
+            )
+            census = namespace_census(current=(identity,), mounts=(authority,))
+            with mock.patch.object(
+                MODULE.os,
+                "stat",
+                return_value=mock.Mock(st_dev=4, st_ino=100),
+            ):
+                return MODULE.stable_global_mount_roster(
+                    MODULE.TASK_NETNS_TARGET,
+                    (("0:4", "net:[4026531833]"),),
+                    namespace_census=census,
+                )
+
+        recorded = roster(("shared:10", "master:9"))
+        changed = roster(("private",))
+        self.assertNotEqual(recorded["occurrences"], changed["occurrences"])
+        occurrence = recorded["occurrences"][0]
+        self.assertEqual(occurrence["optionalFields"], ["shared:10", "master:9"])
+        self.assertEqual(occurrence["mountOptions"], ["rw"])
+        self.assertEqual(occurrence["source"], "nsfs")
+        self.assertEqual(occurrence["superOptions"], ["rw"])
+
+    def test_namespace_census_emits_the_exact_digest_preimage_outside_control(self) -> None:
+        identity, full, _restricted = self.canonical_and_restricted_views()
+        net = MODULE.NamespaceIdentity("net", 4, 4026531833)
+        census = MODULE._task_namespace_census_from_observations(
+            {identity, net},
+            set(),
+            {identity: [full]},
+            2,
+            (),
+        )
+        self.assertEqual(
+            hashlib.sha256(MODULE.canonical_json(census.preimage)).hexdigest(),
+            census.proof_sha256,
+        )
+        self.assertNotIn("mountNamespaces", census.proof)
 
     def test_mount_records_preserve_ids_and_stacked_multiplicity(self) -> None:
         raw = (
@@ -1672,8 +2224,8 @@ class MountAuthorityTest(unittest.TestCase):
         self.assertEqual(records[0].optional_fields, ("shared:7",))
         self.assertEqual(records[0].source, "nsfs")
         self.assertEqual(records[0].super_options, ("rw",))
-        references = MODULE.mount_reference_records(
-            raw,
+        references = MODULE.mount_reference_records_from_records(
+            records,
             Path("/x"),
             (("0:4", "net:[4026531833]"),),
         )
@@ -1737,8 +2289,8 @@ class MountAuthorityTest(unittest.TestCase):
             "22 20 0:4 net:[1] /ambient rw - nsfs nsfs rw\n"
             "23 20 8:1 /foreign /ambient rw - ext4 /dev/root rw\n"
         )
-        records = MODULE.mount_reference_records(
-            raw,
+        records = MODULE.mount_reference_records_from_records(
+            MODULE.mount_records(raw),
             Path("/owned"),
             (("0:4", "net:[1]"),),
             ("/owned", "/ambient"),
@@ -1747,7 +2299,28 @@ class MountAuthorityTest(unittest.TestCase):
 
     def test_duplicate_same_source_ambient_occurrence_is_rejected(self) -> None:
         owned = str(MODULE.TASK_NETNS_TARGET)
-        raw = f"21 20 0:4 net:[4026531833] {owned} rw - nsfs nsfs rw\n"
+        record = MODULE.MountRecord(
+            21,
+            20,
+            "0:4",
+            "net:[4026531833]",
+            owned,
+            "nsfs",
+        )
+        identity = MODULE.NamespaceIdentity("mnt", 1, 2)
+        view = MODULE.MountNamespaceView(
+            "/",
+            (1, 10, stat.S_IFDIR, 0, 0),
+            True,
+            (record,),
+        )
+        authority = MODULE.MountNamespaceAuthority(
+            identity,
+            view.root_identity,
+            (record,),
+            (view,),
+        )
+        census = namespace_census(current=(identity,), mounts=(authority,))
         occurrences = [
             {
                 "mountNamespace": "4:19",
@@ -1764,12 +2337,16 @@ class MountAuthorityTest(unittest.TestCase):
                 (23, "/run/docker/netns/default"),
             )
         ]
-        with mock.patch.object(MODULE.Path, "read_text", return_value=raw), mock.patch.object(
+        with mock.patch.object(
+            MODULE.os,
+            "stat",
+            return_value=mock.Mock(st_dev=1, st_ino=2),
+        ), mock.patch.object(
             MODULE,
             "stable_global_mount_roster",
             return_value={"occurrences": occurrences},
         ), self.assertRaisesRegex(MODULE.ManualRecoveryRequired, "foreign target"):
-            MODULE.netns_baseline()
+            MODULE._netns_baseline_from_census(census)
 
     def test_held_fd_exposes_a_kernel_mount_id(self) -> None:
         with tempfile.NamedTemporaryFile() as value:
@@ -2042,6 +2619,56 @@ class ReducerStateMachineTest(unittest.TestCase):
             MODULE.run_reducer(control)
         self.assertNotIn("signal:dockerd", control.events)
         self.assertIn("phase:dockerd_stopped", control.events)
+
+    def test_response_loss_accepts_fresh_exact_census_but_not_detached_authority(self) -> None:
+        control = self.FakeControl("dockerd_stop_requested")
+        control.control["authority"]["namespaceCensus"] = {
+            "proofSha256": "a" * 64
+        }
+        current = {
+            "namespaceCensusSha256": "b" * 64,
+            "currentNamespaces": [],
+            "namespaceFds": [],
+            "related": [],
+        }
+        with self.patches(control), mock.patch.object(
+            MODULE,
+            "exact_process_status",
+            return_value="absent",
+        ), mock.patch.object(
+            MODULE,
+            "exists_nofollow",
+            return_value=False,
+        ), mock.patch.object(
+            MODULE,
+            "require_related_process_cutoff",
+            return_value=current,
+        ) as current_cutoff:
+            MODULE.run_reducer(control)
+        self.assertGreaterEqual(current_cutoff.call_count, 1)
+        self.assertIn("phase:dockerd_stopped", control.events)
+
+        blocked = self.FakeControl("dockerd_stop_requested")
+        with self.patches(blocked), mock.patch.object(
+            MODULE,
+            "exact_process_status",
+            return_value="absent",
+        ), mock.patch.object(
+            MODULE,
+            "exists_nofollow",
+            return_value=False,
+        ), mock.patch.object(
+            MODULE,
+            "require_related_process_cutoff",
+            side_effect=MODULE.ManualRecoveryRequired(
+                "detached or processless namespace FD"
+            ),
+        ), self.assertRaisesRegex(
+            MODULE.ManualRecoveryRequired,
+            "detached or processless",
+        ):
+            MODULE.run_reducer(blocked)
+        self.assertNotIn("phase:dockerd_stopped", blocked.events)
 
     def test_containerd_signal_response_loss_advances_without_resignal(self) -> None:
         control = self.FakeControl("containerd_stop_requested")
@@ -2411,7 +3038,10 @@ class DestructiveBoundaryTest(unittest.TestCase):
 
     def test_runtime_and_pidfile_have_complete_preflight_before_unlink(self) -> None:
         source = MODULE_PATH.read_text(encoding="utf-8")
-        reducer = source[source.index("def run_reducer") : source.index("def require_root")]
+        reducer_start = source.index("def run_reducer")
+        reducer = source[
+            reducer_start : source.index("def require_root", reducer_start)
+        ]
         self.assertLess(reducer.index("runtime_reduction_preflight"), reducer.index("reduce_runtime_tree"))
         self.assertNotIn("unlink_containerd_pidfile", source)
         self.assertIn("require_containerd_pidfile_exact", source)
