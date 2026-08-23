@@ -218,6 +218,129 @@ def plain_int(value: object, name: str, *, positive: bool = False) -> int:
     return value
 
 
+def _descriptor_roster(values: tuple[object, ...]) -> tuple[int, ...]:
+    descriptors: list[int] = []
+    for value in values:
+        require(
+            type(value) is int and value >= 0,
+            "owned file descriptor is not a nonnegative built-in integer",
+        )
+        descriptor = value
+        require(
+            descriptor not in descriptors,
+            "owned file descriptor roster contains a duplicate numeric alias",
+        )
+        descriptors.append(descriptor)
+    return tuple(descriptors)
+
+
+def _add_cleanup_note(
+    primary: BaseException,
+    descriptor: int,
+    cleanup_error: BaseException,
+) -> None:
+    """Attach cleanup context without allowing hostile exceptions to mask primary."""
+
+    try:
+        primary.add_note(
+            "additional descriptor cleanup failure "
+            f"for fd {descriptor}: {type(cleanup_error).__name__}"
+        )
+    except BaseException:
+        pass
+
+
+def _add_cleanup_validation_note(
+    primary: BaseException,
+    cleanup_error: BaseException,
+) -> None:
+    try:
+        primary.add_note(
+            "descriptor cleanup authority validation failed: "
+            f"{type(cleanup_error).__name__}"
+        )
+    except BaseException:
+        pass
+
+
+class DescriptorCustody:
+    """Lexically own a distinct descriptor roster until transfer or close.
+
+    Close marks the complete roster attempted before the first syscall.  A
+    numeric descriptor is therefore never retried after an ambiguous close
+    failure, while every other descriptor still receives one close attempt.
+    """
+
+    def __init__(self, descriptors: tuple[object, ...] = ()) -> None:
+        self._owned = list(_descriptor_roster(descriptors))
+        self._attempted: tuple[int, ...] = ()
+        self._failures: tuple[tuple[int, BaseException], ...] = ()
+        self._closed = False
+
+    def own(self, descriptor: object) -> int:
+        require(not self._closed, "descriptor custody is already closed")
+        value = _descriptor_roster((*self._owned, descriptor))[-1]
+        self._owned.append(value)
+        return value
+
+    def transfer_all(self) -> tuple[int, ...]:
+        require(not self._closed, "descriptor custody is already closed")
+        transferred = tuple(self._owned)
+        self._owned.clear()
+        return transferred
+
+    def transfer(self, descriptor: object) -> int:
+        require(not self._closed, "descriptor custody is already closed")
+        value = _descriptor_roster((descriptor,))[0]
+        require(value in self._owned, "transferred descriptor is not owned")
+        self._owned.remove(value)
+        return value
+
+    @property
+    def attempted(self) -> tuple[int, ...]:
+        return self._attempted
+
+    @property
+    def failures(self) -> tuple[tuple[int, BaseException], ...]:
+        return self._failures
+
+    def close(self, primary: BaseException | None = None) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._attempted = tuple(reversed(self._owned))
+        self._owned.clear()
+        failures: list[tuple[int, BaseException]] = []
+        for descriptor in self._attempted:
+            try:
+                os.close(descriptor)
+            except BaseException as cleanup_error:
+                failures.append((descriptor, cleanup_error))
+        self._failures = tuple(failures)
+        if primary is not None:
+            for descriptor, cleanup_error in failures:
+                _add_cleanup_note(primary, descriptor, cleanup_error)
+            return
+        if failures:
+            _, first_error = failures[0]
+            for descriptor, cleanup_error in failures[1:]:
+                _add_cleanup_note(first_error, descriptor, cleanup_error)
+            raise first_error
+
+    def __enter__(self) -> "DescriptorCustody":
+        require(not self._closed, "descriptor custody is already closed")
+        return self
+
+    def __exit__(
+        self,
+        _exception_type: object,
+        primary: BaseException | None,
+        _traceback: object,
+    ) -> bool:
+        self.close(primary)
+        return False
+
+
 def exact_keys(value: object, expected: set[str], name: str) -> dict[str, Any]:
     require(isinstance(value, dict), f"{name} is not an object")
     require(set(value) == expected, f"{name} shape differs")
@@ -471,9 +594,10 @@ class StateAuthority:
     def open(cls, path: Path, caller_uid: int, caller_gid: int) -> "StateAuthority":
         require(STATE_ROOT_RE.fullmatch(str(path)) is not None, "state root path is invalid")
         require(path.resolve(strict=True) == path, "state root is not canonical")
-        root_fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        evidence_fd: int | None = None
-        try:
+        with DescriptorCustody() as descriptors:
+            root_fd = descriptors.own(
+                os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            )
             root = os.fstat(root_fd)
             path_identity = os.stat(path, follow_symlinks=False)
             require(stat.S_ISDIR(root.st_mode), "state root is not a directory")
@@ -486,10 +610,12 @@ class StateAuthority:
                 == (caller_uid, caller_gid, 0o700),
                 "state root owner, group, or mode differs",
             )
-            evidence_fd = os.open(
-                "evidence",
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                dir_fd=root_fd,
+            evidence_fd = descriptors.own(
+                os.open(
+                    "evidence",
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=root_fd,
+                )
             )
             evidence = os.fstat(evidence_fd)
             evidence_path = os.stat("evidence", dir_fd=root_fd, follow_symlinks=False)
@@ -504,22 +630,23 @@ class StateAuthority:
                 == (caller_uid, caller_gid, 0o700),
                 "evidence root owner, group, or mode differs",
             )
-            return cls(path, caller_uid, caller_gid, root_fd, evidence_fd)
-        except BaseException:
-            if evidence_fd is not None:
-                os.close(evidence_fd)
-            os.close(root_fd)
-            raise
+            authority = cls(path, caller_uid, caller_gid, root_fd, evidence_fd)
+            descriptors.transfer_all()
+            return authority
 
-    def close(self) -> None:
-        os.close(self.evidence_fd)
-        os.close(self.root_fd)
+    def close(self, primary: BaseException | None = None) -> None:
+        close_runtime_authorities(state=self, lease=None, primary=primary)
 
     def __enter__(self) -> "StateAuthority":
         return self
 
-    def __exit__(self, *_: object) -> None:
-        self.close()
+    def __exit__(
+        self,
+        _exception_type: object,
+        primary: BaseException | None,
+        _traceback: object,
+    ) -> None:
+        self.close(primary)
 
     def identity_json(self) -> dict[str, object]:
         root = os.fstat(self.root_fd)
@@ -711,9 +838,13 @@ class RuntimeLease:
     def acquire(cls, state_root: Path, *, blocking: bool = False) -> "RuntimeLease":
         path = lease_path_for(state_root)
         require(LEASE_PATH_RE.fullmatch(str(path)) is not None, "runtime lease path is invalid")
-        parent_fd = os.open(RUNTIME_PARENT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        descriptor: int | None = None
-        try:
+        with DescriptorCustody() as descriptors:
+            parent_fd = descriptors.own(
+                os.open(
+                    RUNTIME_PARENT,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                )
+            )
             parent = os.fstat(parent_fd)
             require(
                 stat.S_ISDIR(parent.st_mode)
@@ -722,11 +853,13 @@ class RuntimeLease:
                 and stat.S_IMODE(parent.st_mode) & 0o022 == 0,
                 "runtime lease parent authority differs",
             )
-            descriptor = os.open(
-                path.name,
-                os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
-                0o600,
-                dir_fd=parent_fd,
+            descriptor = descriptors.own(
+                os.open(
+                    path.name,
+                    os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=parent_fd,
+                )
             )
             observed = os.fstat(descriptor)
             literal = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
@@ -746,26 +879,80 @@ class RuntimeLease:
                 raise SupervisorError("runtime lifecycle lease is busy") from error
             os.fsync(descriptor)
             os.fsync(parent_fd)
-            return cls(path, parent_fd, descriptor, observed.st_dev, observed.st_ino)
-        except BaseException:
-            if descriptor is not None:
-                os.close(descriptor)
-            os.close(parent_fd)
-            raise
+            lease = cls(path, parent_fd, descriptor, observed.st_dev, observed.st_ino)
+            descriptors.transfer_all()
+            return lease
 
-    def close(self) -> None:
-        if self.descriptor >= 0:
-            os.close(self.descriptor)
-            self.descriptor = -1
-        if self.parent_fd >= 0:
-            os.close(self.parent_fd)
-            self.parent_fd = -1
+    def close(self, primary: BaseException | None = None) -> None:
+        close_runtime_authorities(state=None, lease=self, primary=primary)
 
     def __enter__(self) -> "RuntimeLease":
         return self
 
-    def __exit__(self, *_: object) -> None:
-        self.close()
+    def __exit__(
+        self,
+        _exception_type: object,
+        primary: BaseException | None,
+        _traceback: object,
+    ) -> None:
+        self.close(primary)
+
+
+def _authority_descriptor_pair(
+    values: tuple[object, object],
+    name: str,
+) -> tuple[int, ...]:
+    require(
+        all(type(value) is int for value in values),
+        f"{name} descriptor state is not built-in integer authority",
+    )
+    if values == (-1, -1):
+        return ()
+    require(
+        all(value >= 0 for value in values),
+        f"{name} descriptor state is partial or invalid",
+    )
+    return _descriptor_roster(values)
+
+
+def close_runtime_authorities(
+    *,
+    state: StateAuthority | None,
+    lease: RuntimeLease | None,
+    primary: BaseException | None = None,
+) -> None:
+    """Atomically retire and close the composed state/lease descriptor roster."""
+
+    try:
+        lease_descriptors = (
+            _authority_descriptor_pair(
+                (lease.parent_fd, lease.descriptor),
+                "runtime lease",
+            )
+            if lease is not None
+            else ()
+        )
+        state_descriptors = (
+            _authority_descriptor_pair(
+                (state.root_fd, state.evidence_fd),
+                "state authority",
+            )
+            if state is not None
+            else ()
+        )
+        descriptors = DescriptorCustody((*lease_descriptors, *state_descriptors))
+    except BaseException as cleanup_error:
+        if primary is not None:
+            _add_cleanup_validation_note(primary, cleanup_error)
+            return
+        raise
+    if state is not None:
+        state.root_fd = -1
+        state.evidence_fd = -1
+    if lease is not None:
+        lease.parent_fd = -1
+        lease.descriptor = -1
+    descriptors.close(primary)
 
 
 def runtime_id_for(state_root: Path) -> str:
@@ -830,64 +1017,82 @@ def _write_at(directory_fd: int, name: str, value: bytes) -> None:
 def create_cgroup(state_root: Path) -> CgroupIdentity:
     path = cgroup_path_for(state_root)
     require(CGROUP_PATH_RE.fullmatch(str(path)) is not None, "runtime cgroup path is invalid")
-    parent_fd = os.open(CGROUP_PARENT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    descriptor: int | None = None
-    try:
-        parent = os.fstat(parent_fd)
-        require(
-            stat.S_ISDIR(parent.st_mode)
-            and parent.st_uid == 0
-            and parent.st_gid == 0
-            and stat.S_IMODE(parent.st_mode) & 0o022 == 0,
-            "runtime cgroup parent authority differs",
+    with DescriptorCustody() as descriptors:
+        parent_fd = descriptors.own(
+            os.open(CGROUP_PARENT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         )
-        parent_controllers = set(_read_at(parent_fd, "cgroup.controllers").split())
-        require(
-            {"cpu", "memory", "pids"} <= parent_controllers,
-            "required cgroup v2 controllers are unavailable",
-        )
-        os.mkdir(path.name, 0o700, dir_fd=parent_fd)
-        descriptor = os.open(
-            path.name,
-            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-            dir_fd=parent_fd,
-        )
-        observed = os.fstat(descriptor)
-        literal = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
-        require(
-            stat.S_ISDIR(observed.st_mode)
-            and observed.st_uid == 0
-            and observed.st_gid == 0
-            and stat.S_IMODE(observed.st_mode) == 0o700
-            and (observed.st_dev, observed.st_ino) == (literal.st_dev, literal.st_ino),
-            "runtime cgroup identity differs",
-        )
-        for name in ("cgroup.procs", "cgroup.events", "cgroup.freeze", "cgroup.kill"):
-            value = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
-            require(stat.S_ISREG(value.st_mode), f"runtime cgroup control is absent: {name}")
-        require(_read_at(descriptor, "cgroup.type").strip() == "domain", "runtime cgroup type differs")
-        available = set(_read_at(descriptor, "cgroup.controllers").split())
-        require(
-            {"cpu", "memory", "pids"} <= available,
-            "task cgroup controllers are unavailable",
-        )
-        _write_at(
-            descriptor,
-            "cgroup.subtree_control",
-            b"+cpu +memory +pids\n",
-        )
-        enabled = set(_read_at(descriptor, "cgroup.subtree_control").split())
-        require(
-            {"cpu", "memory", "pids"} <= enabled,
-            "task cgroup controllers were not enabled",
-        )
-        os.mkdir(CGROUP_EXECUTION_NAME, 0o700, dir_fd=descriptor)
-        execution_fd = os.open(
-            CGROUP_EXECUTION_NAME,
-            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-            dir_fd=descriptor,
-        )
+        descriptor: int | None = None
         try:
+            parent = os.fstat(parent_fd)
+            require(
+                stat.S_ISDIR(parent.st_mode)
+                and parent.st_uid == 0
+                and parent.st_gid == 0
+                and stat.S_IMODE(parent.st_mode) & 0o022 == 0,
+                "runtime cgroup parent authority differs",
+            )
+            parent_controllers = set(_read_at(parent_fd, "cgroup.controllers").split())
+            require(
+                {"cpu", "memory", "pids"} <= parent_controllers,
+                "required cgroup v2 controllers are unavailable",
+            )
+            os.mkdir(path.name, 0o700, dir_fd=parent_fd)
+            descriptor = descriptors.own(
+                os.open(
+                    path.name,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=parent_fd,
+                )
+            )
+            observed = os.fstat(descriptor)
+            literal = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+            require(
+                stat.S_ISDIR(observed.st_mode)
+                and observed.st_uid == 0
+                and observed.st_gid == 0
+                and stat.S_IMODE(observed.st_mode) == 0o700
+                and (observed.st_dev, observed.st_ino)
+                == (literal.st_dev, literal.st_ino),
+                "runtime cgroup identity differs",
+            )
+            for name in (
+                "cgroup.procs",
+                "cgroup.events",
+                "cgroup.freeze",
+                "cgroup.kill",
+            ):
+                value = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+                require(
+                    stat.S_ISREG(value.st_mode),
+                    f"runtime cgroup control is absent: {name}",
+                )
+            require(
+                _read_at(descriptor, "cgroup.type").strip() == "domain",
+                "runtime cgroup type differs",
+            )
+            available = set(_read_at(descriptor, "cgroup.controllers").split())
+            require(
+                {"cpu", "memory", "pids"} <= available,
+                "task cgroup controllers are unavailable",
+            )
+            _write_at(
+                descriptor,
+                "cgroup.subtree_control",
+                b"+cpu +memory +pids\n",
+            )
+            enabled = set(_read_at(descriptor, "cgroup.subtree_control").split())
+            require(
+                {"cpu", "memory", "pids"} <= enabled,
+                "task cgroup controllers were not enabled",
+            )
+            os.mkdir(CGROUP_EXECUTION_NAME, 0o700, dir_fd=descriptor)
+            execution_fd = descriptors.own(
+                os.open(
+                    CGROUP_EXECUTION_NAME,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=descriptor,
+                )
+            )
             execution = os.fstat(execution_fd)
             require(
                 stat.S_ISDIR(execution.st_mode)
@@ -896,41 +1101,40 @@ def create_cgroup(state_root: Path) -> CgroupIdentity:
                 and stat.S_IMODE(execution.st_mode) == 0o700,
                 "runtime execution cgroup identity differs",
             )
-        finally:
-            os.close(execution_fd)
-        return CgroupIdentity(path, observed.st_dev, observed.st_ino)
-    except BaseException:
-        if descriptor is not None:
+            return CgroupIdentity(path, observed.st_dev, observed.st_ino)
+        except BaseException:
+            if descriptor is not None:
+                try:
+                    os.rmdir(CGROUP_EXECUTION_NAME, dir_fd=descriptor)
+                except OSError:
+                    pass
             try:
-                os.rmdir(CGROUP_EXECUTION_NAME, dir_fd=descriptor)
+                os.rmdir(path.name, dir_fd=parent_fd)
             except OSError:
                 pass
-            os.close(descriptor)
-            descriptor = None
-        try:
-            os.rmdir(path.name, dir_fd=parent_fd)
-        except OSError:
-            pass
-        raise
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        os.close(parent_fd)
+            raise
 
 
 def open_cgroup(identity: CgroupIdentity) -> int:
     require(CGROUP_PATH_RE.fullmatch(str(identity.path)) is not None, "runtime cgroup path is invalid")
-    descriptor = os.open(identity.path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    observed = os.fstat(descriptor)
-    require(
-        stat.S_ISDIR(observed.st_mode)
-        and observed.st_uid == 0
-        and observed.st_gid == 0
-        and stat.S_IMODE(observed.st_mode) == 0o700
-        and (observed.st_dev, observed.st_ino) == (identity.device, identity.inode),
-        "runtime cgroup identity changed",
-    )
-    return descriptor
+    with DescriptorCustody() as descriptors:
+        descriptor = descriptors.own(
+            os.open(
+                identity.path,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            )
+        )
+        observed = os.fstat(descriptor)
+        require(
+            stat.S_ISDIR(observed.st_mode)
+            and observed.st_uid == 0
+            and observed.st_gid == 0
+            and stat.S_IMODE(observed.st_mode) == 0o700
+            and (observed.st_dev, observed.st_ino)
+            == (identity.device, identity.inode),
+            "runtime cgroup identity changed",
+        )
+        return descriptors.transfer(descriptor)
 
 
 def current_cgroup_path() -> str:
@@ -940,24 +1144,25 @@ def current_cgroup_path() -> str:
 
 
 def open_execution_cgroup(identity: CgroupIdentity) -> int:
-    root_fd = open_cgroup(identity)
-    try:
-        descriptor = os.open(
-            CGROUP_EXECUTION_NAME,
-            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-            dir_fd=root_fd,
-        )
-        observed = os.fstat(descriptor)
-        require(
-            stat.S_ISDIR(observed.st_mode)
-            and observed.st_uid == 0
-            and observed.st_gid == 0
-            and stat.S_IMODE(observed.st_mode) == 0o700,
-            "runtime execution cgroup identity changed",
-        )
-        return descriptor
-    finally:
-        os.close(root_fd)
+    with DescriptorCustody() as result:
+        with DescriptorCustody() as roots:
+            root_fd = roots.own(open_cgroup(identity))
+            descriptor = result.own(
+                os.open(
+                    CGROUP_EXECUTION_NAME,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=root_fd,
+                )
+            )
+            observed = os.fstat(descriptor)
+            require(
+                stat.S_ISDIR(observed.st_mode)
+                and observed.st_uid == 0
+                and observed.st_gid == 0
+                and stat.S_IMODE(observed.st_mode) == 0o700,
+                "runtime execution cgroup identity changed",
+            )
+        return result.transfer(descriptor)
 
 
 def enter_cgroup(identity: CgroupIdentity) -> None:
@@ -1021,21 +1226,19 @@ def kill_cgroup_and_wait(identity: CgroupIdentity, *, timeout: float = 30.0) -> 
 
 def remove_empty_cgroup(identity: CgroupIdentity) -> None:
     require(not cgroup_is_populated(identity), "runtime cgroup is still populated")
-    root_fd = open_cgroup(identity)
-    try:
+    with DescriptorCustody() as descriptors:
+        root_fd = descriptors.own(open_cgroup(identity))
         remove_empty_cgroup_children(root_fd)
-    finally:
-        os.close(root_fd)
-    parent_fd = os.open(CGROUP_PARENT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
+    with DescriptorCustody() as descriptors:
+        parent_fd = descriptors.own(
+            os.open(CGROUP_PARENT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        )
         literal = os.stat(identity.path.name, dir_fd=parent_fd, follow_symlinks=False)
         require(
             (literal.st_dev, literal.st_ino) == (identity.device, identity.inode),
             "runtime cgroup entry changed before removal",
         )
         os.rmdir(identity.path.name, dir_fd=parent_fd)
-    finally:
-        os.close(parent_fd)
 
 
 def remove_empty_cgroup_children(directory_fd: int) -> None:
@@ -1106,20 +1309,32 @@ def verify_runtime_root(
         path_pattern.fullmatch(str(identity.path)) is not None,
         "runtime root path is invalid",
     )
-    descriptor = os.open(identity.path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    observed = os.fstat(descriptor)
-    require(
-        (
-            observed.st_dev,
-            observed.st_ino,
-            observed.st_uid,
-            observed.st_gid,
-            stat.S_IMODE(observed.st_mode),
+    with DescriptorCustody() as descriptors:
+        descriptor = descriptors.own(
+            os.open(
+                identity.path,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            )
         )
-        == (identity.device, identity.inode, identity.uid, identity.gid, identity.mode),
-        "runtime root identity changed",
-    )
-    return descriptor
+        observed = os.fstat(descriptor)
+        require(
+            (
+                observed.st_dev,
+                observed.st_ino,
+                observed.st_uid,
+                observed.st_gid,
+                stat.S_IMODE(observed.st_mode),
+            )
+            == (
+                identity.device,
+                identity.inode,
+                identity.uid,
+                identity.gid,
+                identity.mode,
+            ),
+            "runtime root identity changed",
+        )
+        return descriptors.transfer(descriptor)
 
 
 def verify_runtime_entries(descriptor: int) -> None:
@@ -1676,15 +1891,15 @@ def read_mountinfo_for_namespace(
 
 
 def runtime_netns_entry_roster(runtime: RuntimeIdentity) -> tuple[str, ...]:
-    runtime_fd = verify_runtime_root(runtime)
-    docker_exec_fd: int | None = None
-    netns_fd: int | None = None
-    try:
+    with DescriptorCustody() as descriptors:
+        runtime_fd = descriptors.own(verify_runtime_root(runtime))
         try:
-            docker_exec_fd = os.open(
-                "docker-exec",
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                dir_fd=runtime_fd,
+            docker_exec_fd = descriptors.own(
+                os.open(
+                    "docker-exec",
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=runtime_fd,
+                )
             )
         except FileNotFoundError:
             return ()
@@ -1701,10 +1916,12 @@ def runtime_netns_entry_roster(runtime: RuntimeIdentity) -> tuple[str, ...]:
             "Docker execution root identity differs",
         )
         try:
-            netns_fd = os.open(
-                "netns",
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                dir_fd=docker_exec_fd,
+            netns_fd = descriptors.own(
+                os.open(
+                    "netns",
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=docker_exec_fd,
+                )
             )
         except FileNotFoundError:
             return ()
@@ -1732,12 +1949,6 @@ def runtime_netns_entry_roster(runtime: RuntimeIdentity) -> tuple[str, ...]:
                 f"task network namespace entry identity differs: {name}",
             )
         return names
-    finally:
-        if netns_fd is not None:
-            os.close(netns_fd)
-        if docker_exec_fd is not None:
-            os.close(docker_exec_fd)
-        os.close(runtime_fd)
 
 
 def build_task_netns_detach_manifest(
@@ -2031,8 +2242,14 @@ def _remove_tree_entry(directory_fd: int, name: str) -> None:
     value = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
     require(value.st_uid == 0, f"runtime cleanup entry owner differs: {name}")
     if stat.S_ISDIR(value.st_mode):
-        child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd)
-        try:
+        with DescriptorCustody() as descriptors:
+            child = descriptors.own(
+                os.open(
+                    name,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=directory_fd,
+                )
+            )
             literal = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
             observed = os.fstat(child)
             require(
@@ -2048,12 +2265,16 @@ def _remove_tree_entry(directory_fd: int, name: str) -> None:
                 f"runtime cleanup directory changed before removal: {name}",
             )
             os.rmdir(name, dir_fd=directory_fd)
-        finally:
-            os.close(child)
     elif stat.S_ISREG(value.st_mode) or stat.S_ISSOCK(value.st_mode) or stat.S_ISLNK(value.st_mode):
         require(hasattr(os, "O_PATH"), "descriptor-only runtime cleanup is unavailable")
-        leaf = os.open(name, os.O_PATH | os.O_NOFOLLOW, dir_fd=directory_fd)
-        try:
+        with DescriptorCustody() as descriptors:
+            leaf = descriptors.own(
+                os.open(
+                    name,
+                    os.O_PATH | os.O_NOFOLLOW,
+                    dir_fd=directory_fd,
+                )
+            )
             observed = os.fstat(leaf)
             literal = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
             require(
@@ -2063,8 +2284,6 @@ def _remove_tree_entry(directory_fd: int, name: str) -> None:
                 f"runtime cleanup leaf binding differs: {name}",
             )
             os.unlink(name, dir_fd=directory_fd)
-        finally:
-            os.close(leaf)
     else:
         raise SupervisorError(f"runtime cleanup entry type differs: {name}")
     os.fsync(directory_fd)
@@ -2079,37 +2298,44 @@ def reduce_runtime_removal_root(state_root: Path) -> bool:
         )
     except FileNotFoundError:
         return False
-    descriptor = verify_runtime_root(
-        identity,
-        path_pattern=RUNTIME_REMOVAL_ROOT_RE,
-    )
-    try:
+    with DescriptorCustody() as descriptors:
+        descriptor = descriptors.own(
+            verify_runtime_root(
+                identity,
+                path_pattern=RUNTIME_REMOVAL_ROOT_RE,
+            )
+        )
         verify_runtime_entries(descriptor)
         require(not stable_global_mount_targets(identity.path), "runtime root retains a mount")
         for name in tuple(sorted(os.listdir(descriptor))):
             _remove_tree_entry(descriptor, name)
         require(not os.listdir(descriptor), "runtime root did not become empty")
-        parent_fd = os.open(RUNTIME_PARENT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        try:
-            literal = os.stat(identity.path.name, dir_fd=parent_fd, follow_symlinks=False)
-            require(
-                (literal.st_dev, literal.st_ino) == (identity.device, identity.inode),
-                "runtime root entry changed before removal",
+        parent_fd = descriptors.own(
+            os.open(
+                RUNTIME_PARENT,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
             )
-            os.rmdir(identity.path.name, dir_fd=parent_fd)
-            os.fsync(parent_fd)
-        finally:
-            os.close(parent_fd)
-    finally:
-        os.close(descriptor)
+        )
+        literal = os.stat(identity.path.name, dir_fd=parent_fd, follow_symlinks=False)
+        require(
+            (literal.st_dev, literal.st_ino) == (identity.device, identity.inode),
+            "runtime root entry changed before removal",
+        )
+        os.rmdir(identity.path.name, dir_fd=parent_fd)
+        os.fsync(parent_fd)
     return True
 
 
 def remove_runtime_root(identity: RuntimeIdentity, state_root: Path) -> None:
     require(identity.path == runtime_root_for(state_root), "runtime removal state path differs")
-    descriptor = verify_runtime_root(identity)
-    parent_fd = os.open(RUNTIME_PARENT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
+    with DescriptorCustody() as descriptors:
+        descriptor = descriptors.own(verify_runtime_root(identity))
+        parent_fd = descriptors.own(
+            os.open(
+                RUNTIME_PARENT,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            )
+        )
         verify_runtime_entries(descriptor)
         require(not stable_global_mount_targets(identity.path), "runtime root retains a mount")
         removal_path = runtime_removal_root_for(state_root)
@@ -2129,9 +2355,6 @@ def remove_runtime_root(identity: RuntimeIdentity, state_root: Path) -> None:
             dst_dir_fd=parent_fd,
         )
         os.fsync(parent_fd)
-    finally:
-        os.close(parent_fd)
-        os.close(descriptor)
     require(
         reduce_runtime_removal_root(state_root),
         "runtime removal authority disappeared",
@@ -2140,54 +2363,56 @@ def remove_runtime_root(identity: RuntimeIdentity, state_root: Path) -> None:
 
 def create_socket_root(path: Path, caller_gid: int) -> SocketPathIdentity:
     require(SOCKET_ROOT_RE.fullmatch(str(path)) is not None, "Docker API root path is invalid")
-    parent_fd = os.open(RUNTIME_PARENT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    descriptor: int | None = None
-    try:
-        parent = os.fstat(parent_fd)
-        require(
-            stat.S_ISDIR(parent.st_mode)
-            and parent.st_uid == 0
-            and parent.st_gid == 0
-            and stat.S_IMODE(parent.st_mode) & 0o022 == 0,
-            "Docker API parent authority differs",
+    with DescriptorCustody() as descriptors:
+        parent_fd = descriptors.own(
+            os.open(
+                RUNTIME_PARENT,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            )
         )
-        os.mkdir(path.name, 0o700, dir_fd=parent_fd)
-        descriptor = os.open(
-            path.name,
-            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-            dir_fd=parent_fd,
-        )
-        os.fchown(descriptor, 0, caller_gid)
-        os.fchmod(descriptor, 0o750)
-        os.fsync(descriptor)
-        os.fsync(parent_fd)
-        observed = os.fstat(descriptor)
-        literal = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
-        require(
-            stat.S_ISDIR(observed.st_mode)
-            and (observed.st_dev, observed.st_ino) == (literal.st_dev, literal.st_ino)
-            and observed.st_uid == 0
-            and observed.st_gid == caller_gid
-            and stat.S_IMODE(observed.st_mode) == 0o750,
-            "Docker API root identity differs after creation",
-        )
-        return SocketPathIdentity(
-            path, observed.st_dev, observed.st_ino, 0, caller_gid, 0o750
-        )
-    except BaseException:
-        if descriptor is not None:
-            os.close(descriptor)
-            descriptor = None
+        descriptor: int | None = None
         try:
-            os.rmdir(path.name, dir_fd=parent_fd)
+            parent = os.fstat(parent_fd)
+            require(
+                stat.S_ISDIR(parent.st_mode)
+                and parent.st_uid == 0
+                and parent.st_gid == 0
+                and stat.S_IMODE(parent.st_mode) & 0o022 == 0,
+                "Docker API parent authority differs",
+            )
+            os.mkdir(path.name, 0o700, dir_fd=parent_fd)
+            descriptor = descriptors.own(
+                os.open(
+                    path.name,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=parent_fd,
+                )
+            )
+            os.fchown(descriptor, 0, caller_gid)
+            os.fchmod(descriptor, 0o750)
+            os.fsync(descriptor)
             os.fsync(parent_fd)
-        except OSError:
-            pass
-        raise
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        os.close(parent_fd)
+            observed = os.fstat(descriptor)
+            literal = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+            require(
+                stat.S_ISDIR(observed.st_mode)
+                and (observed.st_dev, observed.st_ino)
+                == (literal.st_dev, literal.st_ino)
+                and observed.st_uid == 0
+                and observed.st_gid == caller_gid
+                and stat.S_IMODE(observed.st_mode) == 0o750,
+                "Docker API root identity differs after creation",
+            )
+            return SocketPathIdentity(
+                path, observed.st_dev, observed.st_ino, 0, caller_gid, 0o750
+            )
+        except BaseException:
+            try:
+                os.rmdir(path.name, dir_fd=parent_fd)
+                os.fsync(parent_fd)
+            except OSError:
+                pass
+            raise
 
 
 def verify_socket_root(identity: SocketPathIdentity, caller_gid: int) -> int:
@@ -2195,27 +2420,33 @@ def verify_socket_root(identity: SocketPathIdentity, caller_gid: int) -> int:
         SOCKET_ROOT_RE.fullmatch(str(identity.path)) is not None,
         "Docker API root path is invalid",
     )
-    descriptor = os.open(identity.path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    observed = os.fstat(descriptor)
-    require(
-        stat.S_ISDIR(observed.st_mode)
-        and (
-            observed.st_dev,
-            observed.st_ino,
-            observed.st_uid,
-            observed.st_gid,
-            stat.S_IMODE(observed.st_mode),
+    with DescriptorCustody() as descriptors:
+        descriptor = descriptors.own(
+            os.open(
+                identity.path,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            )
         )
-        == (
-            identity.device,
-            identity.inode,
-            0,
-            caller_gid,
-            0o750,
-        ),
-        "Docker API root identity changed",
-    )
-    return descriptor
+        observed = os.fstat(descriptor)
+        require(
+            stat.S_ISDIR(observed.st_mode)
+            and (
+                observed.st_dev,
+                observed.st_ino,
+                observed.st_uid,
+                observed.st_gid,
+                stat.S_IMODE(observed.st_mode),
+            )
+            == (
+                identity.device,
+                identity.inode,
+                0,
+                caller_gid,
+                0o750,
+            ),
+            "Docker API root identity changed",
+        )
+        return descriptors.transfer(descriptor)
 
 
 def capture_socket_identity(
@@ -2272,47 +2503,51 @@ def remove_socket_root(
     socket_identity: SocketPathIdentity | None,
     caller_gid: int,
 ) -> None:
-    parent_fd = os.open(RUNTIME_PARENT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    descriptor = verify_socket_root(root, caller_gid)
-    try:
+    with DescriptorCustody() as descriptors:
+        parent_fd = descriptors.own(
+            os.open(
+                RUNTIME_PARENT,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            )
+        )
+        descriptor = descriptors.own(verify_socket_root(root, caller_gid))
         require(not stable_global_mount_targets(root.path), "Docker API root retains a mount")
         roster = tuple(sorted(os.listdir(descriptor)))
         require(roster in ((), (SOCKET_NAME,)), "Docker API root contains a foreign entry")
         if roster:
             require(hasattr(os, "O_PATH"), "descriptor-only socket cleanup is unavailable")
-            socket_fd = os.open(
-                SOCKET_NAME,
-                os.O_PATH | os.O_NOFOLLOW,
-                dir_fd=descriptor,
-            )
-            try:
-                observed = os.fstat(socket_fd)
-                literal = os.stat(SOCKET_NAME, dir_fd=descriptor, follow_symlinks=False)
-                require(
-                    socket_identity is not None
-                    and stat.S_ISSOCK(observed.st_mode)
-                    and (
-                        observed.st_dev,
-                        observed.st_ino,
-                        observed.st_uid,
-                        observed.st_gid,
-                        stat.S_IMODE(observed.st_mode),
-                    )
-                    == (
-                        socket_identity.device,
-                        socket_identity.inode,
-                        0,
-                        caller_gid,
-                        0o660,
-                    )
-                    and (literal.st_dev, literal.st_ino)
-                    == (observed.st_dev, observed.st_ino),
-                    "Docker API socket cannot be safely removed",
+            socket_fd = descriptors.own(
+                os.open(
+                    SOCKET_NAME,
+                    os.O_PATH | os.O_NOFOLLOW,
+                    dir_fd=descriptor,
                 )
-                os.unlink(SOCKET_NAME, dir_fd=descriptor)
-                os.fsync(descriptor)
-            finally:
-                os.close(socket_fd)
+            )
+            observed = os.fstat(socket_fd)
+            literal = os.stat(SOCKET_NAME, dir_fd=descriptor, follow_symlinks=False)
+            require(
+                socket_identity is not None
+                and stat.S_ISSOCK(observed.st_mode)
+                and (
+                    observed.st_dev,
+                    observed.st_ino,
+                    observed.st_uid,
+                    observed.st_gid,
+                    stat.S_IMODE(observed.st_mode),
+                )
+                == (
+                    socket_identity.device,
+                    socket_identity.inode,
+                    0,
+                    caller_gid,
+                    0o660,
+                )
+                and (literal.st_dev, literal.st_ino)
+                == (observed.st_dev, observed.st_ino),
+                "Docker API socket cannot be safely removed",
+            )
+            os.unlink(SOCKET_NAME, dir_fd=descriptor)
+            os.fsync(descriptor)
         require(not os.listdir(descriptor), "Docker API root did not become empty")
         literal = os.stat(root.path.name, dir_fd=parent_fd, follow_symlinks=False)
         require(
@@ -2321,9 +2556,6 @@ def remove_socket_root(
         )
         os.rmdir(root.path.name, dir_fd=parent_fd)
         os.fsync(parent_fd)
-    finally:
-        os.close(descriptor)
-        os.close(parent_fd)
 
 
 def classify_recovery_socket(
@@ -2483,32 +2715,30 @@ def write_root_manifest(
 ) -> str:
     encoded = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
     require(0 < len(encoded) <= 2 * 1024 * 1024, "root manifest size is invalid")
-    runtime_fd = verify_runtime_root(runtime_identity)
-    pending_name = _root_manifest_pending(name)
-    try:
+    with DescriptorCustody() as runtime_descriptors:
+        runtime_fd = runtime_descriptors.own(verify_runtime_root(runtime_identity))
+        pending_name = _root_manifest_pending(name)
         require(
             not _entry_exists(runtime_fd, name),
             f"root manifest already exists: {name}",
         )
         remove_root_manifest_pending(runtime_fd, name)
-        descriptor = os.open(
-            pending_name,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-            0o400,
-            dir_fd=runtime_fd,
-        )
-        try:
+        with DescriptorCustody() as pending_descriptors:
+            descriptor = pending_descriptors.own(
+                os.open(
+                    pending_name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o400,
+                    dir_fd=runtime_fd,
+                )
+            )
             offset = 0
             while offset < len(encoded):
                 offset += os.write(descriptor, encoded[offset:])
             os.fchmod(descriptor, 0o400)
             os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
         os.replace(pending_name, name, src_dir_fd=runtime_fd, dst_dir_fd=runtime_fd)
         os.fsync(runtime_fd)
-    finally:
-        os.close(runtime_fd)
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -2775,16 +3005,19 @@ def _require_runtime_lease_custody(lease: RuntimeLease) -> None:
 
 def settle_legacy_v3_terminal_archive(lease: RuntimeLease) -> dict[str, bool]:
     _require_runtime_lease_custody(lease)
-    state_fd = os.open(
-        LEGACY_V3_STATE_ROOT,
-        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-    )
-    evidence_fd: int | None = None
-    try:
-        evidence_fd = os.open(
-            "evidence",
-            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-            dir_fd=state_fd,
+    with DescriptorCustody() as descriptors:
+        state_fd = descriptors.own(
+            os.open(
+                LEGACY_V3_STATE_ROOT,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            )
+        )
+        evidence_fd = descriptors.own(
+            os.open(
+                "evidence",
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=state_fd,
+            )
         )
         _require_legacy_v3_evidence_binding(state_fd, evidence_fd)
         os.fsync(evidence_fd)
@@ -2799,10 +3032,6 @@ def settle_legacy_v3_terminal_archive(lease: RuntimeLease) -> dict[str, bool]:
             "legacy v3 terminal archive changed while completing durability",
         )
         return second
-    finally:
-        if evidence_fd is not None:
-            os.close(evidence_fd)
-        os.close(state_fd)
 
 
 def observe_legacy_v3_transition() -> dict[str, bool]:
@@ -2880,8 +3109,8 @@ def read_root_manifest(runtime_identity: RuntimeIdentity, name: str) -> dict[str
         ),
         "root manifest name is invalid",
     )
-    runtime_fd = verify_runtime_root(runtime_identity)
-    try:
+    with DescriptorCustody() as runtime_descriptors:
+        runtime_fd = runtime_descriptors.own(verify_runtime_root(runtime_identity))
         if not _entry_exists(runtime_fd, name):
             return None
         value = os.stat(name, dir_fd=runtime_fd, follow_symlinks=False)
@@ -2894,18 +3123,20 @@ def read_root_manifest(runtime_identity: RuntimeIdentity, name: str) -> dict[str
             and 0 < value.st_size <= 2 * 1024 * 1024,
             f"root manifest identity differs: {name}",
         )
-        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=runtime_fd)
-        try:
+        with DescriptorCustody() as manifest_descriptors:
+            descriptor = manifest_descriptors.own(
+                os.open(
+                    name,
+                    os.O_RDONLY | os.O_NOFOLLOW,
+                    dir_fd=runtime_fd,
+                )
+            )
             first = os.fstat(descriptor)
             require(
                 (first.st_dev, first.st_ino) == (value.st_dev, value.st_ino),
                 f"root manifest entry changed: {name}",
             )
             raw = _read_fd_all(descriptor, limit=2 * 1024 * 1024)
-        finally:
-            os.close(descriptor)
-    finally:
-        os.close(runtime_fd)
     parsed = json.loads(raw)
     require(isinstance(parsed, dict), f"root manifest is not an object: {name}")
     require(
@@ -4124,12 +4355,15 @@ def reduce_precontrol_runtime(
         runtime = None
     if runtime is not None:
         if runtime.mode == 0o000:
-            descriptor = os.open(runtime.path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-            try:
+            with DescriptorCustody() as descriptors:
+                descriptor = descriptors.own(
+                    os.open(
+                        runtime.path,
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    )
+                )
                 os.fchmod(descriptor, 0o700)
                 os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
             runtime = RuntimeIdentity(
                 runtime.path,
                 runtime.device,
@@ -4138,29 +4372,28 @@ def reduce_precontrol_runtime(
                 runtime.gid,
                 0o700,
             )
-        runtime_fd = verify_runtime_root(runtime)
-        try:
+        with DescriptorCustody() as descriptors:
+            runtime_fd = descriptors.own(verify_runtime_root(runtime))
             roster = set(os.listdir(runtime_fd))
             classify_precontrol_roster(roster)
             for name in ("containerd-state", "docker-exec"):
                 if name not in roster:
                     continue
-                descriptor = os.open(
-                    name,
-                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                    dir_fd=runtime_fd,
-                )
-                try:
-                    observed = os.fstat(descriptor)
-                    require(
-                        observed.st_uid == 0
-                        and observed.st_gid == 0
-                        and stat.S_IMODE(observed.st_mode) in (0o000, 0o700)
-                        and not os.listdir(descriptor),
-                        f"pre-control directory identity differs: {name}",
+                descriptor = descriptors.own(
+                    os.open(
+                        name,
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                        dir_fd=runtime_fd,
                     )
-                finally:
-                    os.close(descriptor)
+                )
+                observed = os.fstat(descriptor)
+                require(
+                    observed.st_uid == 0
+                    and observed.st_gid == 0
+                    and stat.S_IMODE(observed.st_mode) in (0o000, 0o700)
+                    and not os.listdir(descriptor),
+                    f"pre-control directory identity differs: {name}",
+                )
             snapshots = {
                 SUPERVISOR_SNAPSHOT_NAME: read_pinned_source(
                     script_directory / SUPERVISOR_SNAPSHOT_NAME,
@@ -4194,8 +4427,6 @@ def reduce_precontrol_runtime(
                     and value.st_size <= 2 * 1024 * 1024,
                     "pre-control manifest pending identity differs",
                 )
-        finally:
-            os.close(runtime_fd)
         remove_runtime_root(runtime, state_root)
 
     try:
@@ -4210,16 +4441,23 @@ def reduce_precontrol_runtime(
             and stat.S_IMODE(socket_stat.st_mode) in (0o000, 0o700, 0o750),
             "pre-control Docker API root identity differs",
         )
-        socket_fd = os.open(socket_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        parent_fd = os.open(RUNTIME_PARENT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        try:
+        with DescriptorCustody() as descriptors:
+            socket_fd = descriptors.own(
+                os.open(
+                    socket_path,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                )
+            )
+            parent_fd = descriptors.own(
+                os.open(
+                    RUNTIME_PARENT,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                )
+            )
             require(not os.listdir(socket_fd), "pre-control Docker API root is not empty")
             require(not stable_global_mount_targets(socket_path), "pre-control Docker API root is mounted")
             os.rmdir(socket_path.name, dir_fd=parent_fd)
             os.fsync(parent_fd)
-        finally:
-            os.close(parent_fd)
-            os.close(socket_fd)
 
     try:
         cgroup_stat = os.stat(cgroup_path, follow_symlinks=False)
@@ -4811,8 +5049,13 @@ class RuntimeSupervisor:
         require(self.runtime_identity is not None, "runtime identity is absent")
         require(self.storage is not None, "storage activation is absent")
         require(self.cgroup_identity is not None, "runtime cgroup authority is absent")
-        target_fd = os.open(MOUNT_TARGET, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        try:
+        with DescriptorCustody() as descriptors:
+            target_fd = descriptors.own(
+                os.open(
+                    MOUNT_TARGET,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                )
+            )
             target = os.fstat(target_fd)
             require(
                 target.st_uid == 0
@@ -4831,44 +5074,43 @@ class RuntimeSupervisor:
                 "runner storage target backing device changed after activation",
             )
             runner_data = target_fd
-            inner_fd = os.open(
-                "inner-runner",
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                dir_fd=runner_data,
+            inner_fd = descriptors.own(
+                os.open(
+                    "inner-runner",
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=runner_data,
+                )
             )
-            try:
-                inner = os.fstat(inner_fd)
-                expected_inner = exact_keys(
-                    self.storage["innerRunnerDataRoot"],
-                    {"path", "device", "inode"},
-                    "inner runner storage projection",
-                )
-                require(
-                    inner.st_uid == 0
-                    and inner.st_gid == 0
-                    and stat.S_IMODE(inner.st_mode) == 0o700
-                    and inner.st_dev == target.st_dev,
-                    "inner runner data-root authority differs",
-                )
-                require(
-                    expected_inner
-                    == {
-                        "path": str(MOUNT_TARGET / "inner-runner"),
-                        "device": inner.st_dev,
-                        "inode": inner.st_ino,
-                    },
-                    "inner runner data-root projection changed",
-                )
-            finally:
-                os.close(inner_fd)
-        finally:
-            os.close(target_fd)
+            inner = os.fstat(inner_fd)
+            expected_inner = exact_keys(
+                self.storage["innerRunnerDataRoot"],
+                {"path", "device", "inode"},
+                "inner runner storage projection",
+            )
+            require(
+                inner.st_uid == 0
+                and inner.st_gid == 0
+                and stat.S_IMODE(inner.st_mode) == 0o700
+                and inner.st_dev == target.st_dev,
+                "inner runner data-root authority differs",
+            )
+            require(
+                expected_inner
+                == {
+                    "path": str(MOUNT_TARGET / "inner-runner"),
+                    "device": inner.st_dev,
+                    "inode": inner.st_ino,
+                },
+                "inner runner data-root projection changed",
+            )
 
-        authority_fd = os.open(
-            AUTHORITY_ROOT,
-            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-        )
-        try:
+        with DescriptorCustody() as descriptors:
+            authority_fd = descriptors.own(
+                os.open(
+                    AUTHORITY_ROOT,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                )
+            )
             self.data_root = ensure_storage_directory(
                 authority_fd,
                 AUTHORITY_ROOT,
@@ -4883,11 +5125,9 @@ class RuntimeSupervisor:
                 required_mode=0o700,
                 recoverable_modes={0o700},
             )
-        finally:
-            os.close(authority_fd)
 
-        runtime_fd = verify_runtime_root(self.runtime_identity)
-        try:
+        with DescriptorCustody() as descriptors:
+            runtime_fd = descriptors.own(verify_runtime_root(self.runtime_identity))
             runtime = self.runtime_identity.path
             require(self.socket_root_identity is not None, "Docker API root is absent")
             self.socket = self.socket_root_identity.path / SOCKET_NAME
@@ -4915,8 +5155,6 @@ class RuntimeSupervisor:
             self.containerd_config_path, self.containerd_config_sha256 = write_runtime_file(
                 runtime_fd, "containerd.toml", containerd_value
             )
-        finally:
-            os.close(runtime_fd)
 
     def daemon_environment(self) -> dict[str, str]:
         return {"PATH": "/usr/bin:/bin", "LC_ALL": "C.UTF-8", "HOME": "/root"}
@@ -5514,12 +5752,15 @@ class RuntimeSupervisor:
                 raise
             return self.monitor()
         finally:
-            if self.state is not None:
-                self.state.close()
-                self.state = None
-            if self.lease is not None:
-                self.lease.close()
-                self.lease = None
+            state = self.state
+            lease = self.lease
+            self.state = None
+            self.lease = None
+            close_runtime_authorities(
+                state=state,
+                lease=lease,
+                primary=sys.exception(),
+            )
 
 
 def _validated_existing_authorities(
@@ -5842,9 +6083,11 @@ def ensure_runtime_stopped(
         state.write_json(STOP_RECEIPT_NAME, value)
         return value
     finally:
-        if lease is not None:
-            lease.close()
-        state.close()
+        close_runtime_authorities(
+            state=state,
+            lease=lease,
+            primary=sys.exception(),
+        )
 
 
 def ensure_orphaned_runtime_stopped(
@@ -5893,13 +6136,18 @@ def ensure_orphaned_runtime_stopped(
                 "cgroupRemoved": True,
             }
         finally:
-            lease.close()
+            close_runtime_authorities(
+                state=None,
+                lease=lease,
+                primary=sys.exception(),
+            )
     state, _, validated, _, process_authority = _validated_orphaned_authorities(
         state_root,
         caller_uid,
         caller_gid,
         script_directory,
     )
+    current_state: StateAuthority | None = state
     lease: RuntimeLease | None = None
     try:
         try:
@@ -5918,7 +6166,9 @@ def ensure_orphaned_runtime_stopped(
             except process_authority["ProcessIdentityError"]:
                 pass
             lease = acquire_runtime_lease_until(state_root, timeout=60.0)
-        state, _, _, _, _ = _validated_orphaned_authorities(
+        close_runtime_authorities(state=current_state, lease=None)
+        current_state = None
+        current_state, _, _, _, _ = _validated_orphaned_authorities(
             state_root,
             caller_uid,
             caller_gid,
@@ -5926,7 +6176,7 @@ def ensure_orphaned_runtime_stopped(
         )
         supervisor = RuntimeSupervisor(state_root, caller_uid, caller_gid)
         supervisor.lease = lease
-        supervisor.state = state
+        supervisor.state = current_state
         supervisor.namespace = prove_private_namespace(os.getppid())
         supervisor.process_verifier = load_process_verifier(script_directory)
         set_child_subreaper()
@@ -5942,8 +6192,11 @@ def ensure_orphaned_runtime_stopped(
             "cgroupRemoved": True,
         }
     finally:
-        if lease is not None:
-            lease.close()
+        close_runtime_authorities(
+            state=current_state,
+            lease=lease,
+            primary=sys.exception(),
+        )
 
 
 def parser() -> argparse.ArgumentParser:
