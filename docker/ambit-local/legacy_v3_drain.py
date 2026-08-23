@@ -972,26 +972,41 @@ class ResourceCustody:
 
     def open(self, *args: object, **kwargs: object) -> int:
         descriptor = os.open(*args, **kwargs)  # type: ignore[arg-type]
-        self._register("descriptor", descriptor)
+        require(
+            self._register("descriptor", descriptor),
+            f"{self.label} resource registration is duplicated",
+        )
         return descriptor
 
     def pidfd_open(self, pid: int, flags: int) -> int:
         descriptor = os.pidfd_open(pid, flags)
-        self._register("descriptor", descriptor)
+        require(
+            self._register("descriptor", descriptor),
+            f"{self.label} resource registration is duplicated",
+        )
         return descriptor
 
     def dup(self, descriptor: int) -> int:
         duplicate = os.dup(descriptor)
-        self._register("descriptor", duplicate)
+        require(
+            self._register("descriptor", duplicate),
+            f"{self.label} resource registration is duplicated",
+        )
         return duplicate
 
     def socket(self, *args: object, **kwargs: object) -> socket.socket:
         resource_value = socket.socket(*args, **kwargs)  # type: ignore[arg-type]
-        self._register("closeable", resource_value)
+        require(
+            self._register("closeable", resource_value),
+            f"{self.label} resource registration is duplicated",
+        )
         return resource_value
 
     def own_descriptor(self, descriptor: int) -> int:
-        self._register("descriptor", descriptor)
+        require(
+            self._register("descriptor", descriptor),
+            f"{self.label} resource registration is duplicated",
+        )
         return descriptor
 
     def own_descriptors(self, descriptors: tuple[int, ...]) -> tuple[int, ...]:
@@ -1002,7 +1017,10 @@ class ResourceCustody:
         result = descriptors
         for index, descriptor in enumerate(result):
             try:
-                self._register("descriptor", descriptor)
+                require(
+                    self._register("descriptor", descriptor),
+                    f"{self.label} resource registration is duplicated",
+                )
             except BaseException as error:
                 remaining_index = index + 1
                 while remaining_index < len(result):
@@ -1021,12 +1039,15 @@ class ResourceCustody:
         return result
 
     def own_closeable(self, resource_value: Closeable) -> Closeable:
-        self._register("closeable", resource_value)
+        require(
+            self._register("closeable", resource_value),
+            f"{self.label} resource registration is duplicated",
+        )
         return resource_value
 
-    def _register(self, kind: str, resource_value: int | Closeable) -> None:
-        require(
-            not any(
+    def _register(self, kind: str, resource_value: int | Closeable) -> bool:
+        try:
+            duplicate = any(
                 owned_kind == kind
                 and (
                     owned_value == resource_value
@@ -1034,10 +1055,9 @@ class ResourceCustody:
                     else owned_value is resource_value
                 )
                 for owned_kind, owned_value in self._resources
-            ),
-            f"{self.label} resource registration is duplicated",
-        )
-        try:
+            )
+            if duplicate:
+                return False
             self._resources.append((kind, resource_value))
         except BaseException as error:
             try:
@@ -1052,6 +1072,7 @@ class ResourceCustody:
                     f"{self.label} registration cleanup also failed: {cleanup_error}"
                 )
             raise
+        return True
 
     def release_descriptor(self, descriptor: int) -> int:
         self._release("descriptor", descriptor)

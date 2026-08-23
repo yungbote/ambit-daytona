@@ -2174,6 +2174,47 @@ class ProcessUniverseTest(unittest.TestCase):
                 [mock.call(41), mock.call(42), mock.call(40)],
             )
 
+    def test_resource_registration_preflight_failure_closes_incoming_owner(self) -> None:
+        class ExplodingOwnershipScan(list[object]):
+            def __iter__(self) -> object:
+                raise MemoryError("ownership scan failed")
+
+        custody = MODULE.ResourceCustody(label="registration")
+        custody._resources = ExplodingOwnershipScan()  # type: ignore[assignment]
+        with mock.patch.object(
+            MODULE.os,
+            "open",
+            return_value=40,
+        ), mock.patch.object(
+            MODULE.os,
+            "close",
+        ) as close, self.assertRaisesRegex(
+            MemoryError,
+            "ownership scan failed",
+        ):
+            custody.open("ignored", MODULE.os.O_RDONLY)
+        close.assert_called_once_with(40)
+
+        resource_value = mock.Mock()
+        custody = MODULE.ResourceCustody(label="registration")
+        custody._resources = ExplodingOwnershipScan()  # type: ignore[assignment]
+        with self.assertRaisesRegex(MemoryError, "ownership scan failed"):
+            custody.own_closeable(resource_value)
+        resource_value.close.assert_called_once_with()
+
+    def test_true_duplicate_registration_preserves_existing_owner(self) -> None:
+        custody = MODULE.ResourceCustody(label="registration")
+        custody.own_descriptor(40)
+        with mock.patch.object(MODULE.os, "close") as close, self.assertRaisesRegex(
+            MODULE.DrainError,
+            "registration is duplicated",
+        ):
+            custody.own_descriptor(40)
+        close.assert_not_called()
+        with mock.patch.object(MODULE.os, "close") as close:
+            custody.close()
+        close.assert_called_once_with(40)
+
     def test_batch_release_validates_before_releasing_any_descriptor(self) -> None:
         custody = MODULE.ResourceCustody(label="transfer")
         custody.own_descriptors((40, 41))
