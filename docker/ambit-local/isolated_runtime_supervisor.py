@@ -318,22 +318,36 @@ def restore_python_interruptions(
                 first_error = error
             else:
                 _add_cleanup_validation_note(first_error, error)
-    try:
-        sys.settrace(mask.trace); sys.setprofile(mask.profile)  # noqa: E702
-    except BaseException as error:
-        if first_error is None:
-            first_error = error
-        else:
-            _add_cleanup_validation_note(first_error, error)
+
+    def fail_stop_after_hook_attempts(primary: BaseException) -> NoReturn:
         try:
-            sys.setprofile(mask.profile)
-        except BaseException as profile_error:
-            if first_error is None:
-                first_error = profile_error
-            elif profile_error is not first_error:
-                _add_cleanup_validation_note(first_error, profile_error)
+            sys.setprofile(mask.profile); sys.setprofile(None)  # noqa: E702
+        except BaseException as hook_error:
+            _add_cleanup_validation_note(primary, hook_error)
+        try:
+            sys.settrace(mask.trace); sys.settrace(None)  # noqa: E702
+        except BaseException as hook_error:
+            _add_cleanup_validation_note(primary, hook_error)
+        try:
+            sys.setprofile(None)
+        except BaseException as hook_error:
+            _add_cleanup_validation_note(primary, hook_error)
+        try:
+            sys.settrace(None)
+        except BaseException as hook_error:
+            _add_cleanup_validation_note(primary, hook_error)
+        raise primary
+
     if first_error is not None:
-        raise first_error
+        fail_stop_after_hook_attempts(first_error)
+    try:
+        sys.setprofile(mask.profile)
+    except BaseException as error:
+        fail_stop_after_hook_attempts(error)
+    try:
+        sys.settrace(mask.trace); return  # noqa: E702
+    except BaseException as error:
+        fail_stop_after_hook_attempts(error)
 
 
 class DescriptorCustody:
