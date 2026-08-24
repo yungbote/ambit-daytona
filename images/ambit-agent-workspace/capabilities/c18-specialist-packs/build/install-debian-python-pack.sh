@@ -155,11 +155,16 @@ rm -rf \
   /usr/share/dpkg \
   /var/cache/apt \
   /var/cache/debconf \
+  /var/cache/fontconfig \
+  /var/cache/ldconfig \
   /var/lib/apt \
   /var/lib/debconf \
   /var/lib/dpkg \
-  /var/log/apt
+  /var/log/apt \
+  /var/log/alternatives.log \
+  /var/log/dpkg.log
 rm -f \
+  /etc/hostname \
   /usr/bin/apk \
   /usr/bin/apt \
   /usr/bin/apt-* \
