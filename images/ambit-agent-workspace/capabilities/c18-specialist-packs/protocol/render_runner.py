@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 import hashlib
 import importlib.util
 import json
 import os
 import re
+import secrets
 import signal
 import stat
 import sys
 import tempfile
 import time
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import ModuleType
 from typing import NamedTuple
 from typing import Any
@@ -73,9 +76,38 @@ class SemanticJobRoots(NamedTuple):
     job: Path
     inputs: Path
     outputs: Path
-    job_identity: tuple[int, int]
-    inputs_identity: tuple[int, int]
-    outputs_identity: tuple[int, int]
+    ancestor_identities: tuple[tuple[Path, int, int], ...]
+    job_fd: int
+    inputs_fd: int
+    outputs_fd: int
+
+
+class OpenHow(ctypes.Structure):
+    _fields_ = [
+        ("flags", ctypes.c_uint64),
+        ("mode", ctypes.c_uint64),
+        ("resolve", ctypes.c_uint64),
+    ]
+
+
+SYS_OPENAT2 = 437
+RESOLVE_NO_XDEV = 0x01
+RESOLVE_NO_MAGICLINKS = 0x02
+RESOLVE_NO_SYMLINKS = 0x04
+RESOLVE_BENEATH = 0x08
+OPENAT2_RESOLVE = (
+    RESOLVE_NO_XDEV
+    | RESOLVE_NO_MAGICLINKS
+    | RESOLVE_NO_SYMLINKS
+    | RESOLVE_BENEATH
+)
+LIBC = ctypes.CDLL(None, use_errno=True)
+PRODUCT_REQUEST_PATH = re.compile(
+    r"^(?P<root>/workspace/\.ambit/render-jobs/"
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-"
+    r"[89ab][0-9a-f]{3}-[0-9a-f]{12})/inputs/"
+    r"[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$"
+)
 
 
 def _directory_identity(path: Path) -> tuple[int, int]:
@@ -86,38 +118,155 @@ def _directory_identity(path: Path) -> tuple[int, int]:
 
 
 def _reprove_semantic_roots(roots: SemanticJobRoots) -> None:
-    if (
-        _directory_identity(roots.job) != roots.job_identity
-        or _directory_identity(roots.inputs) != roots.inputs_identity
-        or _directory_identity(roots.outputs) != roots.outputs_identity
+    for path, expected_device, expected_inode in roots.ancestor_identities:
+        if _directory_identity(path) != (expected_device, expected_inode):
+            raise RenderCommandError("semantic job ancestor identity changed")
+    for descriptor, path in (
+        (roots.job_fd, roots.job),
+        (roots.inputs_fd, roots.inputs),
+        (roots.outputs_fd, roots.outputs),
     ):
-        raise RenderCommandError("semantic job root identity changed")
+        metadata = os.fstat(descriptor)
+        expected = next(
+            (identity for identity in roots.ancestor_identities if identity[0] == path),
+            None,
+        )
+        if (
+            expected is None
+            or not stat.S_ISDIR(metadata.st_mode)
+            or (metadata.st_dev, metadata.st_ino) != expected[1:]
+        ):
+            raise RenderCommandError("semantic job directory descriptor changed")
 
 
-def _semantic_job_roots(request: dict[str, Any]) -> SemanticJobRoots:
-    root = Path(request["jobRoot"])
-    if not root.is_absolute() or str(root) != request["jobRoot"]:
-        raise RenderCommandError("semantic job root is not exact")
+def _open_beneath(directory_fd: int, relative: str, flags: int) -> int:
+    if (
+        not isinstance(relative, str)
+        or not relative
+        or relative.startswith("/")
+        or "\0" in relative
+        or PurePosixPath(relative).as_posix() != relative
+        or any(part in {"", ".", ".."} for part in PurePosixPath(relative).parts)
+    ):
+        raise RenderCommandError("descriptor-relative path is not canonical")
+    how = OpenHow(
+        flags=flags | getattr(os, "O_CLOEXEC", 0),
+        mode=0,
+        resolve=OPENAT2_RESOLVE,
+    )
+    descriptor = LIBC.syscall(
+        SYS_OPENAT2,
+        directory_fd,
+        relative.encode("utf-8"),
+        ctypes.byref(how),
+        ctypes.sizeof(how),
+    )
+    if descriptor < 0:
+        failure = ctypes.get_errno()
+        if failure in {errno.ENOSYS, errno.EINVAL}:
+            raise RenderCommandError("openat2 semantic containment is unavailable")
+        raise OSError(failure, os.strerror(failure), relative)
+    return int(descriptor)
+
+
+def _capture_directory_chain(root: Path) -> tuple[tuple[Path, int, int], ...]:
     current = Path("/")
+    paths = [current]
     for part in root.parts[1:]:
         current /= part
-        metadata = current.lstat()
-        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-            raise RenderCommandError("semantic job root contains an alias")
+        paths.append(current)
+    identities: list[tuple[Path, int, int]] = []
+    for path in paths:
+        device, inode = _directory_identity(path)
+        identities.append((path, device, inode))
+    return tuple(identities)
+
+
+def _open_exact_directory(path: Path, expected: tuple[int, int]) -> int:
+    descriptor = os.open(
+        path,
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0),
+    )
+    metadata = os.fstat(descriptor)
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or (metadata.st_dev, metadata.st_ino) != expected
+    ):
+        os.close(descriptor)
+        raise RenderCommandError("semantic job directory changed while opening")
+    return descriptor
+
+
+def _semantic_job_roots(job_root: str) -> SemanticJobRoots:
+    root = Path(job_root)
+    if not root.is_absolute() or str(root) != job_root:
+        raise RenderCommandError("semantic job root is not exact")
     inputs = root / "inputs"
     outputs = root / "outputs"
-    for zone in (inputs, outputs):
-        metadata = zone.lstat()
-        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-            raise RenderCommandError("semantic job zone is not a real directory")
-    return SemanticJobRoots(
+    identities = _capture_directory_chain(outputs)
+    input_identity = _directory_identity(inputs)
+    if not any(path == inputs for path, _device, _inode in identities):
+        identities = (*identities, (inputs, *input_identity))
+    identity_map = {path: (device, inode) for path, device, inode in identities}
+    job_fd = _open_exact_directory(root, identity_map[root])
+    try:
+        inputs_fd = _open_beneath(
+            job_fd,
+            "inputs",
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+        )
+        try:
+            outputs_fd = _open_beneath(
+                job_fd,
+                "outputs",
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+            )
+        except BaseException:
+            os.close(inputs_fd)
+            raise
+    except BaseException:
+        os.close(job_fd)
+        raise
+    roots = SemanticJobRoots(
         root,
         inputs,
         outputs,
-        _directory_identity(root),
-        _directory_identity(inputs),
-        _directory_identity(outputs),
+        tuple(identities),
+        job_fd,
+        inputs_fd,
+        outputs_fd,
     )
+    _reprove_semantic_roots(roots)
+    return roots
+
+
+def _close_semantic_job_roots(roots: SemanticJobRoots) -> None:
+    for descriptor in (roots.outputs_fd, roots.inputs_fd, roots.job_fd):
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+
+
+def _job_root_from_request_argument(value: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value.startswith("/")
+        or "\\" in value
+        or "//" in value
+        or PurePosixPath(value).as_posix() != value
+        or any(part in {"", ".", ".."} for part in PurePosixPath(value).parts)
+    ):
+        raise RenderCommandError("request argument is not one exact absolute path")
+    if value.startswith("/ambit/inputs/"):
+        return "/ambit"
+    match = PRODUCT_REQUEST_PATH.fullmatch(value)
+    if match is None:
+        raise RenderCommandError("request argument is outside a policy-admitted job root")
+    return match.group("root")
 
 
 def _deadline_monotonic(deadline_at: str) -> float:
@@ -133,37 +282,66 @@ def _check_deadline(deadline: float) -> None:
         raise CommandDeadlineExceeded
 
 
-def _absolute_protocol_path(value: str, zone: Path, roots: SemanticJobRoots) -> Path:
-    _reprove_semantic_roots(roots)
-    target = roots.job / value
-    try:
-        target.relative_to(zone)
-    except ValueError as error:
-        raise RenderCommandError(f"protocol path escapes {zone}") from error
-    return target
+def _zone_relative(value: str, zone: str) -> str:
+    prefix = zone + "/"
+    if not value.startswith(prefix) or len(value) == len(prefix):
+        raise RenderCommandError(f"protocol path escapes the {zone} zone")
+    return value[len(prefix) :]
 
 
-def _require_nonsymlink_chain(path: Path, root: Path, *, final_may_be_absent: bool) -> None:
+def _read_exact_regular_file(
+    directory_fd: int,
+    relative: str,
+    *,
+    minimum_bytes: int,
+    maximum_bytes: int,
+    expected_bytes: int | None = None,
+) -> bytes:
+    descriptor = _open_beneath(directory_fd, relative, os.O_RDONLY)
     try:
-        relative = path.relative_to(root)
-    except ValueError as error:
-        raise RenderCommandError("path escapes its semantic root") from error
-    current = root
-    root_status = root.lstat()
-    if not stat.S_ISDIR(root_status.st_mode) or stat.S_ISLNK(root_status.st_mode):
-        raise RenderCommandError("semantic root is not a real directory")
-    for index, part in enumerate(relative.parts):
-        current /= part
-        try:
-            metadata = current.lstat()
-        except FileNotFoundError:
-            if final_may_be_absent:
-                return
-            raise RenderCommandError("protocol path component is absent")
-        if stat.S_ISLNK(metadata.st_mode):
-            raise RenderCommandError("protocol path contains a symlink")
-        if index < len(relative.parts) - 1 and not stat.S_ISDIR(metadata.st_mode):
-            raise RenderCommandError("protocol path parent is not a directory")
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or before.st_size < minimum_bytes
+            or before.st_size > maximum_bytes
+            or (expected_bytes is not None and before.st_size != expected_bytes)
+        ):
+            raise RenderCommandError(
+                "authority input is not one exact bounded regular file"
+            )
+        chunks: list[bytes] = []
+        copied = 0
+        while True:
+            chunk = os.read(descriptor, min(READ_CHUNK_BYTES, maximum_bytes - copied + 1))
+            if not chunk:
+                break
+            copied += len(chunk)
+            if copied > maximum_bytes:
+                raise RenderCommandError("authority input exceeded its byte bound")
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+        identity_before = (
+            before.st_dev,
+            before.st_ino,
+            before.st_nlink,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        )
+        identity_after = (
+            after.st_dev,
+            after.st_ino,
+            after.st_nlink,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        )
+        if copied != before.st_size or identity_before != identity_after:
+            raise RenderCommandError("authority input identity changed while reading")
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
 
 
 def _copy_exact_source(
@@ -172,10 +350,13 @@ def _copy_exact_source(
     deadline: float,
     roots: SemanticJobRoots,
 ) -> None:
-    source = _absolute_protocol_path(request["source"]["path"], roots.inputs, roots)
-    _require_nonsymlink_chain(source, roots.inputs, final_may_be_absent=False)
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(source, flags)
+    _check_deadline(deadline)
+    _reprove_semantic_roots(roots)
+    descriptor = _open_beneath(
+        roots.inputs_fd,
+        _zone_relative(request["source"]["path"], "inputs"),
+        os.O_RDONLY,
+    )
     try:
         before = os.fstat(descriptor)
         if (
@@ -183,7 +364,7 @@ def _copy_exact_source(
             or before.st_nlink != 1
             or before.st_size != request["source"]["byteLength"]
         ):
-            raise RenderCommandError("source is not the exact bounded regular file")
+            raise RenderCommandError("source is not one exact regular file")
         digest = hashlib.sha256()
         copied = 0
         with destination.open("xb") as output:
@@ -195,72 +376,130 @@ def _copy_exact_source(
                     break
                 copied += len(chunk)
                 if copied > request["source"]["byteLength"]:
-                    raise RenderCommandError("source grew beyond its declared byte length")
+                    raise RenderCommandError("source exceeded its declared bytes")
                 digest.update(chunk)
                 output.write(chunk)
             output.flush()
             os.fsync(output.fileno())
         after = os.fstat(descriptor)
-        identity_before = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
-        identity_after = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+        before_identity = (
+            before.st_dev,
+            before.st_ino,
+            before.st_nlink,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        )
+        after_identity = (
+            after.st_dev,
+            after.st_ino,
+            after.st_nlink,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        )
         if (
             copied != request["source"]["byteLength"]
             or "sha256:" + digest.hexdigest() != request["source"]["digest"]
-            or identity_before != identity_after
+            or before_identity != after_identity
         ):
-            raise RenderCommandError("source bytes or identity differ from the request")
+            raise RenderCommandError("source bytes or identity differ")
     finally:
         os.close(descriptor)
 
 
-def _make_output_directory(path: Path, roots: SemanticJobRoots) -> None:
-    _reprove_semantic_roots(roots)
+def _output_parent_descriptor(
+    value: str,
+    roots: SemanticJobRoots,
+) -> tuple[int, str]:
+    relative = _zone_relative(value, "outputs")
+    parts = PurePosixPath(relative).parts
+    if not parts:
+        raise RenderCommandError("output target has no filename")
+    current_fd = os.dup(roots.outputs_fd)
     try:
-        relative = path.relative_to(roots.outputs)
-    except ValueError as error:
-        raise RenderCommandError("output directory escapes its semantic root") from error
-    current = roots.outputs
-    _require_nonsymlink_chain(
-        roots.outputs, roots.outputs, final_may_be_absent=False
-    )
-    for part in relative.parts:
-        current /= part
+        for part in parts[:-1]:
+            if part in {"", ".", ".."}:
+                raise RenderCommandError("output parent path is invalid")
+            try:
+                os.mkdir(part, mode=0o700, dir_fd=current_fd)
+            except FileExistsError:
+                pass
+            child_fd = _open_beneath(
+                current_fd,
+                part,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+            )
+            os.close(current_fd)
+            current_fd = child_fd
+        return current_fd, parts[-1]
+    except BaseException:
+        os.close(current_fd)
+        raise
+
+
+def _target_is_absent(parent_fd: int, leaf: str) -> bool:
+    try:
+        os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return True
+    return False
+
+
+def _temporary_output(parent_fd: int, leaf: str) -> tuple[int, str]:
+    for _attempt in range(8):
+        temporary = f".{leaf}.{secrets.token_hex(16)}"
         try:
-            os.mkdir(current, mode=0o700)
+            return (
+                os.open(
+                    temporary,
+                    os.O_WRONLY
+                    | os.O_CREAT
+                    | os.O_EXCL
+                    | getattr(os, "O_NOFOLLOW", 0)
+                    | getattr(os, "O_CLOEXEC", 0),
+                    0o400,
+                    dir_fd=parent_fd,
+                ),
+                temporary,
+            )
         except FileExistsError:
-            metadata = current.lstat()
-            if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
-                raise RenderCommandError("output parent is not a real directory")
+            continue
+    raise RenderCommandError("output temporary filename allocation failed")
 
 
-def _atomic_publish(path: Path, payload: bytes, roots: SemanticJobRoots) -> None:
-    _make_output_directory(path.parent, roots)
-    if path.exists() or path.is_symlink():
-        raise RenderCommandError("output target already exists")
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    temporary = Path(temporary_name)
+def _atomic_publish(value: str, payload: bytes, roots: SemanticJobRoots) -> None:
+    _reprove_semantic_roots(roots)
+    parent_fd, leaf = _output_parent_descriptor(value, roots)
+    temporary: str | None = None
     try:
+        if not _target_is_absent(parent_fd, leaf):
+            raise RenderCommandError("output target already exists")
+        descriptor, temporary = _temporary_output(parent_fd, leaf)
         with os.fdopen(descriptor, "wb", closefd=True) as output:
             output.write(payload)
             output.flush()
             os.fsync(output.fileno())
-        os.chmod(temporary, 0o400)
-        os.link(temporary, path, follow_symlinks=False)
-        directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        os.link(
+            temporary,
+            leaf,
+            src_dir_fd=parent_fd,
+            dst_dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+        os.fsync(parent_fd)
     finally:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
+        if temporary is not None:
+            try:
+                os.unlink(temporary, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
+        os.close(parent_fd)
 
 
 def _atomic_publish_file(
     source: Path,
-    target: Path,
+    target: str,
     scratch: Path,
     roots: SemanticJobRoots,
 ) -> dict[str, Any]:
@@ -273,18 +512,20 @@ def _atomic_publish_file(
     if (
         not stat.S_ISREG(metadata.st_mode)
         or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_nlink != 1
         or metadata.st_size < 1
         or metadata.st_size > MAXIMUM_EVIDENCE_ARTIFACT_BYTES
     ):
         raise RenderCommandError("evidence artifact is not a bounded regular file")
-    _make_output_directory(target.parent, roots)
-    if target.exists() or target.is_symlink():
-        raise RenderCommandError("evidence artifact target already exists")
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
-    temporary = Path(temporary_name)
+    _reprove_semantic_roots(roots)
+    parent_fd, leaf = _output_parent_descriptor(target, roots)
+    temporary: str | None = None
     digest = hashlib.sha256()
     copied = 0
     try:
+        if not _target_is_absent(parent_fd, leaf):
+            raise RenderCommandError("evidence artifact target already exists")
+        descriptor, temporary = _temporary_output(parent_fd, leaf)
         with source.open("rb") as input_file, os.fdopen(descriptor, "wb", closefd=True) as output:
             while chunk := input_file.read(READ_CHUNK_BYTES):
                 copied += len(chunk)
@@ -295,25 +536,37 @@ def _atomic_publish_file(
             output.flush()
             os.fsync(output.fileno())
         after = source.lstat()
-        if (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) != (
+        if (
+            after.st_dev,
+            after.st_ino,
+            after.st_nlink,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        ) != (
             metadata.st_dev,
             metadata.st_ino,
+            metadata.st_nlink,
             metadata.st_size,
             metadata.st_mtime_ns,
+            metadata.st_ctime_ns,
         ):
             raise RenderCommandError("evidence artifact changed during custody copy")
-        os.chmod(temporary, 0o400)
-        os.link(temporary, target, follow_symlinks=False)
-        directory = os.open(target.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        os.link(
+            temporary,
+            leaf,
+            src_dir_fd=parent_fd,
+            dst_dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+        os.fsync(parent_fd)
     finally:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
+        if temporary is not None:
+            try:
+                os.unlink(temporary, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
+        os.close(parent_fd)
     return {
         "byteLength": copied,
         "digest": "sha256:" + digest.hexdigest(),
@@ -481,9 +734,8 @@ def _write_evidence(
             cache_key = (str(source_path.resolve(strict=True)), relative)
             descriptor = artifact_cache.get(cache_key)
             if descriptor is None:
-                target = _absolute_protocol_path(relative, roots.outputs, roots)
                 identity = _atomic_publish_file(
-                    source_path, target, scratch, roots
+                    source_path, relative, scratch, roots
                 )
                 descriptor = {
                     "path": relative,
@@ -503,8 +755,7 @@ def _write_evidence(
         )
         payload = canonical_bytes(evidence)
         relative = _evidence_relative_path(request, index, check)
-        target = _absolute_protocol_path(relative, roots.outputs, roots)
-        _atomic_publish(target, payload, roots)
+        _atomic_publish(relative, payload, roots)
         checks.append(
             {
                 "check": check,
@@ -522,7 +773,7 @@ def _write_evidence(
 
 def _settle_result(
     request: dict[str, Any],
-    result_path: Path,
+    result_path: str,
     executor: dict[str, str],
     started_at: str,
     roots: SemanticJobRoots,
@@ -565,7 +816,7 @@ def _settle_or_unknown(*args: Any, **kwargs: Any) -> bool:
 def _render(
     pack_root: Path,
     request: dict[str, Any],
-    result_path: Path,
+    result_path: str,
     executor: dict[str, str],
     started_at: str,
     roots: SemanticJobRoots,
@@ -636,10 +887,7 @@ def _render(
         preview_bytes = encode_preview(preview_envelope)
         if len(preview_bytes) > request["output"]["maximumPreviewBytes"]:
             raise RenderCommandError("preview exceeds the request byte limit")
-        preview_path = _absolute_protocol_path(
-            request["output"]["previewPath"], roots.outputs, roots
-        )
-        _atomic_publish(preview_path, preview_bytes, roots)
+        _atomic_publish(request["output"]["previewPath"], preview_bytes, roots)
         _check_deadline(deadline)
         try:
             _settle_result(
@@ -666,44 +914,40 @@ def _render(
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(allow_abbrev=False)
-    parser.add_argument("--request", required=True, type=Path)
-    parser.add_argument("--result", required=True, type=Path)
+    parser.add_argument("--request", required=True)
+    parser.add_argument("--result", required=True)
     return parser
 
 
 def main(pack_root: Path, argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
+    roots: SemanticJobRoots | None = None
     try:
-        request_metadata = arguments.request.lstat()
-        if (
-            not stat.S_ISREG(request_metadata.st_mode)
-            or request_metadata.st_size < 1
-            or request_metadata.st_size > MAXIMUM_COMMAND_BYTES
-        ):
-            raise RenderCommandError("request file is not a bounded regular file")
-        request_bytes = arguments.request.read_bytes()
+        job_root = _job_root_from_request_argument(arguments.request)
+        roots = _semantic_job_roots(job_root)
+        relative_request = PurePosixPath(arguments.request).relative_to(
+            PurePosixPath(job_root)
+        ).as_posix()
+        request_bytes = _read_exact_regular_file(
+            roots.inputs_fd,
+            _zone_relative(relative_request, "inputs"),
+            minimum_bytes=1,
+            maximum_bytes=MAXIMUM_COMMAND_BYTES,
+        )
         request = parse_request_bytes(request_bytes)
         require_request_policy(request)
-        roots = _semantic_job_roots(request)
-        request_path = _absolute_protocol_path(
-            request["requestPath"], roots.inputs, roots
-        )
-        if arguments.request != request_path:
+        if request["jobRoot"] != job_root:
+            raise RenderCommandError("request semantic root differs from its argv")
+        if arguments.request != f"{job_root}/{request['requestPath']}":
             raise RenderCommandError(
                 "request argument differs from the exact request identity"
             )
-        _require_nonsymlink_chain(
-            request_path, roots.inputs, final_may_be_absent=False
-        )
-        result_path = _absolute_protocol_path(
-            request["output"]["resultPath"], roots.outputs, roots
-        )
-        if arguments.result != result_path:
+        result_path = request["output"]["resultPath"]
+        if arguments.result != f"{job_root}/{result_path}":
             raise RenderCommandError("result argument differs from the exact request")
-        _require_nonsymlink_chain(
-            result_path.parent, roots.outputs, final_may_be_absent=True
-        )
     except (OSError, RenderCommandError) as error:
+        if roots is not None:
+            _close_semantic_job_roots(roots)
         print(f"ambit-specialist-render: invalid request: {error}", file=sys.stderr)
         return 64
 
@@ -711,6 +955,7 @@ def main(pack_root: Path, argv: list[str] | None = None) -> int:
     try:
         executor = _load_executor(pack_root, request["facet"])
     except (OSError, json.JSONDecodeError, RenderCommandError) as error:
+        _close_semantic_job_roots(roots)
         print(
             f"ambit-specialist-render: executor identity unavailable: {error}",
             file=sys.stderr,
@@ -823,3 +1068,5 @@ def main(pack_root: Path, argv: list[str] | None = None) -> int:
             },
         )
         return 1 if settled else 70
+    finally:
+        _close_semantic_job_roots(roots)

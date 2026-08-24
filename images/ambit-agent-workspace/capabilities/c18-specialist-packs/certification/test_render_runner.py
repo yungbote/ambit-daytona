@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import unittest
@@ -11,16 +12,19 @@ sys.path.insert(0, str(PROTOCOL_ROOT))
 
 from render_command import RenderCommandError  # noqa: E402
 from render_runner import (  # noqa: E402
-    _absolute_protocol_path,
+    _atomic_publish,
     _adapter_proofs,
+    _close_semantic_job_roots,
     _fact_value,
-    _require_nonsymlink_chain,
+    _job_root_from_request_argument,
+    _read_exact_regular_file,
+    _reprove_semantic_roots,
     _semantic_job_roots,
 )
 
 
 class RenderRunnerTests(unittest.TestCase):
-    def test_binds_real_job_directories_and_rejects_path_aliases(self) -> None:
+    def test_fd_anchors_control_reads_and_output_publication(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             job_root = Path(temporary) / "job"
             inputs = job_root / "inputs"
@@ -29,43 +33,106 @@ class RenderRunnerTests(unittest.TestCase):
             outputs.mkdir()
             source = inputs / "source.txt"
             source.write_text("source", encoding="utf-8")
-            roots = _semantic_job_roots({"jobRoot": str(job_root)})
-            self.assertEqual(
-                _absolute_protocol_path("inputs/source.txt", inputs, roots),
-                source,
-            )
-            _require_nonsymlink_chain(
-                source,
-                inputs,
-                final_may_be_absent=False,
-            )
-
-            alias = inputs / "alias.txt"
-            alias.symlink_to(source)
-            with self.assertRaisesRegex(RenderCommandError, "symlink"):
-                _require_nonsymlink_chain(
-                    alias,
-                    inputs,
-                    final_may_be_absent=False,
+            roots = _semantic_job_roots(str(job_root))
+            try:
+                self.assertEqual(
+                    _read_exact_regular_file(
+                        roots.inputs_fd,
+                        "source.txt",
+                        minimum_bytes=1,
+                        maximum_bytes=16,
+                    ),
+                    b"source",
                 )
-            with self.assertRaisesRegex(RenderCommandError, "escapes"):
-                _absolute_protocol_path("outputs/result.json", inputs, roots)
+                _atomic_publish("outputs/render/result.json", b"result", roots)
+                self.assertEqual(
+                    (outputs / "render/result.json").read_bytes(),
+                    b"result",
+                )
+                with self.assertRaisesRegex(RenderCommandError, "already exists"):
+                    _atomic_publish("outputs/render/result.json", b"changed", roots)
+            finally:
+                _close_semantic_job_roots(roots)
 
-            moved = job_root.with_name("moved")
-            job_root.rename(moved)
+    def test_rejects_hardlinked_or_symlinked_control_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            job_root = Path(temporary) / "job"
+            inputs = job_root / "inputs"
+            (job_root / "outputs").mkdir(parents=True)
+            inputs.mkdir()
+            request = inputs / "request.json"
+            request.write_bytes(b"{}")
+            os.link(request, inputs / "request-hardlink.json")
+            roots = _semantic_job_roots(str(job_root))
+            try:
+                with self.assertRaisesRegex(RenderCommandError, "exact bounded"):
+                    _read_exact_regular_file(
+                        roots.inputs_fd,
+                        "request.json",
+                        minimum_bytes=1,
+                        maximum_bytes=16,
+                    )
+                request.unlink()
+                (inputs / "request-hardlink.json").unlink()
+                real = inputs / "real.json"
+                real.write_bytes(b"{}")
+                (inputs / "request.json").symlink_to(real)
+                with self.assertRaises(OSError):
+                    _read_exact_regular_file(
+                        roots.inputs_fd,
+                        "request.json",
+                        minimum_bytes=1,
+                        maximum_bytes=16,
+                    )
+            finally:
+                _close_semantic_job_roots(roots)
+
+    def test_rejects_rename_then_symlink_ancestor_substitution(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary) / "workspace"
+            ambit = workspace / ".ambit"
+            job_root = (
+                ambit
+                / "render-jobs"
+                / "018f6f56-7b2c-7d20-8a1f-a8022ef17aaa"
+            )
             (job_root / "inputs").mkdir(parents=True)
             (job_root / "outputs").mkdir()
-            with self.assertRaisesRegex(RenderCommandError, "identity changed"):
-                _absolute_protocol_path("inputs/source.txt", inputs, roots)
+            roots = _semantic_job_roots(str(job_root))
+            moved = workspace / ".ambit-real"
+            ambit.rename(moved)
+            ambit.symlink_to(moved, target_is_directory=True)
+            try:
+                with self.assertRaisesRegex(
+                    RenderCommandError,
+                    "directory is not real|ancestor identity changed",
+                ):
+                    _reprove_semantic_roots(roots)
+                with self.assertRaises(RenderCommandError):
+                    _atomic_publish("outputs/render/result.json", b"blocked", roots)
+            finally:
+                _close_semantic_job_roots(roots)
 
-        with tempfile.TemporaryDirectory() as temporary:
-            real = Path(temporary) / "real"
-            (real / "inputs").mkdir(parents=True)
-            (real / "outputs").mkdir()
-            alias = Path(temporary) / "alias"
-            alias.symlink_to(real, target_is_directory=True)
-            with self.assertRaisesRegex(RenderCommandError, "alias"):
-                _semantic_job_roots({"jobRoot": str(alias)})
+    def test_derives_only_policy_admitted_roots_from_exact_argv(self) -> None:
+        product = (
+            "/workspace/.ambit/render-jobs/"
+            "018f6f56-7b2c-7d20-8a1f-a8022ef17aaa/inputs/request.json"
+        )
+        self.assertEqual(
+            _job_root_from_request_argument(product),
+            product.removesuffix("/inputs/request.json"),
+        )
+        self.assertEqual(
+            _job_root_from_request_argument("/ambit/inputs/request.json"),
+            "/ambit",
+        )
+        for invalid in (
+            "/workspace/.ambit/render-jobs/not-a-job/inputs/request.json",
+            "/workspace/.ambit/render-jobs/018f6f56-7b2c-7d20-8a1f-a8022ef17aaa/inputs/../request.json",
+            "/tmp/request.json",
+        ):
+            with self.assertRaises(RenderCommandError):
+                _job_root_from_request_argument(invalid)
 
     def test_normalizes_real_observations_and_assigns_each_artifact_once(self) -> None:
         request = {
