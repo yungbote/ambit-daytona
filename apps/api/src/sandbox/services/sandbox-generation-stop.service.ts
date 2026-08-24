@@ -123,7 +123,10 @@ export class SandboxGenerationStopService {
     const current = await adapter.observeSandboxGeneration(sandbox.id, request)
     responseGuard(() => assertGenerationObservation(current, request))
     if (current.state !== 'stopped' || !sameCanonical(current.generation, receipt.request.expectedGeneration)) {
-      throw new ConflictException('Historical stop receipt is not current stopped-generation authority.')
+      // Immutable receipt truth remains observable after a later restart, but
+      // it cannot mutate current host lifecycle state. WorkingCopy capture
+      // separately requires a fresh current receipt proof and rejects staleness.
+      return
     }
     if (sandbox.state === SandboxState.STOPPED) return
     await this.sandboxes.updateState(sandbox.id, SandboxState.STOPPED)
