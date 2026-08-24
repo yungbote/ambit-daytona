@@ -1,0 +1,31 @@
+{
+  "binary": {
+    "bytes": 2568340,
+    "sha256": "sha256:8d4405a1bd8f5d9d65be0860e52cab75cc9b7f5f659e510b4932347e0c6008e5"
+  },
+  "interfaces": [
+    {
+      "digest": "sha256:1274e0bb27dfb15d9d7564d71fc02a7117631b405de73d84f39defb415a5f7ad",
+      "ref": "ambit.runtime-interface/immutable-file-frame@1"
+    },
+    {
+      "digest": "sha256:2c3e58eedfa0d268c9844c038baa49d2f896c4f42de783a5d3ee1762d5828e4d",
+      "ref": "ambit.runtime-interface/immutable-tree-frame@1"
+    }
+  ],
+  "license": {
+    "expression": "LicenseRef-Ambit-Proprietary",
+    "lockSha256": "sha256:710d581169c105538897e9b6a719c47d437ceaeb980784e7996f8227264cc89c",
+    "noticeSha256": "sha256:ebda4883114f2939d766c552df33881f40da5710f6af5abbfe31a92c73070aff",
+    "packageField": "UNLICENSED"
+  },
+  "roleRef": "ambit.runtime-component/immutable-file-materializer@1",
+  "schema": "ambit.runtime-component-input-lock/v1",
+  "source": {
+    "archiveBytes": 184320,
+    "archiveSha256": "sha256:af8db17dc5d7b2266444efc4911661659fdaf23035b7dde0172f29d9e55374ca",
+    "repository": "https://github.com/yungbote/m-backend",
+    "revision": "6d60ac6cfc1fa6ac8de433972e5be6defd656d81",
+    "tree": "a9e546be90ea1e16d2728ddf19af13e4d722a855"
+  }
+}
