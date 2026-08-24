@@ -360,6 +360,9 @@ func run() int {
 			if providerErr != nil {
 				logger.Warn("Specialist rendering is unavailable", "error", providerErr)
 				specialistRenders = nil
+			} else if reconcileErr := specialistRenders.Reconcile(ctx); reconcileErr != nil {
+				logger.Warn("Specialist rendering is unavailable because durable attempt reconciliation failed", "error", reconcileErr)
+				specialistRenders = nil
 			}
 		}
 	}

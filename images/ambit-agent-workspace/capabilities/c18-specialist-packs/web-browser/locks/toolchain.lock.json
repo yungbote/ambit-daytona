@@ -75,7 +75,8 @@
     "chromiumSandboxRequired": true,
     "conformanceSeccompProfile": {
       "renderer": "../../certification/render_browser_seccomp.py",
-      "renderedSha256": "sha256:a3e0f70679f0f24036763f34c69df1255bde7556a715b347209925edf4ae2c4c",
+      "renderedPath": "../../policy/specialist-seccomp-v1.json",
+      "renderedSha256": "sha256:9de0b08286e0c0ba068eb8f6bf9e2aa49860327b654b8f0b20bcabc4fdc796f2",
       "sourceCommit": "26a9e470a7b3c7822084b09fb7f13902c5f37b51",
       "sourceUrl": "https://raw.githubusercontent.com/microsoft/playwright/26a9e470a7b3c7822084b09fb7f13902c5f37b51/utils/docker/seccomp_profile.json",
       "tag": "v1.62.1",

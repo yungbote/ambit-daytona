@@ -54,6 +54,7 @@ type Request struct {
 	OperationID              string                            `json:"operationId" validate:"required"`
 	RequestFingerprint       string                            `json:"requestFingerprint" validate:"required"`
 	ArtifactRenderJobRef     string                            `json:"artifactRenderJobRef" validate:"required"`
+	Composition              Pin                               `json:"composition" validate:"required"`
 	Source                   generationstop.Source             `json:"source" validate:"required"`
 	Owner                    generationstop.ProviderOwner      `json:"owner" validate:"required"`
 	Fence                    generationstop.Fence              `json:"fence" validate:"required"`
@@ -107,6 +108,8 @@ type LaunchObservation struct {
 	ReadonlyRootfs         bool                              `json:"readonlyRootfs" validate:"required"`
 	CapDrop                []string                          `json:"capDrop" validate:"required"`
 	NoNewPrivileges        bool                              `json:"noNewPrivileges" validate:"required"`
+	SeccompKernelMode      int                               `json:"seccompKernelMode" validate:"required"`
+	EffectiveCapabilities  string                            `json:"effectiveCapabilities" validate:"required"`
 	SeccompMode            string                            `json:"seccompMode" validate:"required"`
 	SeccompDigest          string                            `json:"seccompDigest"`
 	Tmpfs                  map[string]string                 `json:"tmpfs" validate:"required"`
@@ -115,6 +118,8 @@ type LaunchObservation struct {
 	MemoryBytes            int64                             `json:"memoryBytes" validate:"required"`
 	NanoCPUs               int64                             `json:"nanoCpus" validate:"required"`
 	ShmSize                int64                             `json:"shmSize"`
+	Runtime                string                            `json:"runtime" validate:"required"`
+	RuntimeStatusDigest    string                            `json:"runtimeStatusDigest" validate:"required"`
 	ParentGeneration       generationstop.ExpectedGeneration `json:"parentGeneration" validate:"required"`
 }
 
@@ -139,7 +144,7 @@ type OutputFile struct {
 // Neither member is serialized into a receipt.
 type Payload struct {
 	File    OutputFile
-	Open    func() (io.ReadCloser, error)
+	Open    func(context.Context) (io.ReadCloser, error)
 	Cleanup func() error
 }
 
@@ -182,21 +187,27 @@ type ProviderExecutionRequest struct {
 // select an exactly equal entry; they cannot supply executable or seccomp
 // policy to Docker.
 type Policy struct {
-	Authority               Pin
-	Image                   ImagePin
-	Interface               Pin
-	Executor                Pin
-	Executable              string
-	ProcessExecutablePath   string
-	ProcessExecutableDigest string
-	EnvironmentDigest       string
-	Seccomp                 []byte
-	PIDsLimit               int64
-	MemoryBytes             int64
-	NanoCPUs                int64
-	WorkspaceSize           int64
-	ScratchSize             int64
-	ShmSize                 int64
+	Authority                Pin
+	Composition              Pin
+	Image                    ImagePin
+	Interface                Pin
+	Executor                 Pin
+	Executable               string
+	ProcessExecutablePath    string
+	ProcessExecutableDigest  string
+	EnvironmentDigest        string
+	Seccomp                  []byte
+	PIDsLimit                int64
+	MemoryBytes              int64
+	NanoCPUs                 int64
+	WorkspaceSize            int64
+	ScratchSize              int64
+	ShmSize                  int64
+	Runtime                  string
+	RuntimeStatusDigest      string
+	CustodyBytesPerSecond    int64
+	SettlementBaseSeconds    int64
+	SettlementMaximumSeconds int64
 }
 
 type Receipt struct {

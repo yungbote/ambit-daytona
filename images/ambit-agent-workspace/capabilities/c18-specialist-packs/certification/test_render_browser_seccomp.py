@@ -15,6 +15,7 @@ from render_browser_seccomp import (
 
 
 SOURCE = Path(__file__).resolve().parents[1] / "policy/playwright-seccomp-v1.62.1.json"
+RENDERED = Path(__file__).resolve().parents[1] / "policy/specialist-seccomp-v1.json"
 
 
 class BrowserSeccompTests(unittest.TestCase):
@@ -63,8 +64,9 @@ class BrowserSeccompTests(unittest.TestCase):
         self.assertEqual(profile["syscalls"][2:], upstream["syscalls"][2:])
         self.assertEqual(
             hashlib.sha256(rendered).hexdigest(),
-            "a3e0f70679f0f24036763f34c69df1255bde7556a715b347209925edf4ae2c4c",
+            "9de0b08286e0c0ba068eb8f6bf9e2aa49860327b654b8f0b20bcabc4fdc796f2",
         )
+        self.assertEqual(RENDERED.read_bytes(), rendered)
 
     def test_rejects_upstream_byte_or_rule_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

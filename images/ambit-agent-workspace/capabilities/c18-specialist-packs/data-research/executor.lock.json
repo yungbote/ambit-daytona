@@ -1,5 +1,5 @@
 {
-  "digest": "sha256:c8389c65dead8148d2092782c0950f8bddb4192626de0fdeac1c0389b95759e3",
+  "digest": "sha256:20de1f0be92a5f4332f2a316388be1c121e95dbbae4460eb3714ce9243a2dc8e",
   "facets": [
     "data_analysis",
     "research"
@@ -7,7 +7,7 @@
   "ref": "ambit://specialist-render-executors/data-research@1",
   "schema": "ambit.c18-specialist-render-executor-lock/v2",
   "transport": {
-    "digest": "sha256:253ea86e0d8f6593a5fa4a25c10db1971052539227cfac83207df9b34c11eff3",
+    "digest": "sha256:b4a5b3bb225cb0f9b5693b1300ecb325ce0019a47da8b44ee38103131b919033",
     "ref": "ambit.runtime-interface/specialist-render@1"
   }
 }

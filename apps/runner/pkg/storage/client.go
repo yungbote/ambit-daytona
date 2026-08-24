@@ -18,6 +18,7 @@ var (
 	ErrPrivateObjectAlreadyExists = errors.New("private object already exists")
 	ErrPrivateObjectNotFound      = errors.New("private object not found")
 	ErrPrivateObjectTooLarge      = errors.New("private object exceeds the read limit")
+	ErrPrivateObjectListTooLarge  = errors.New("private object list exceeds the bound")
 )
 
 // PrivateObjectInfo is the narrow metadata surface needed by provider-owned
@@ -61,4 +62,5 @@ type PrivateObjectStreamStorageClient interface {
 		metadata map[string]string,
 	) error
 	OpenPrivateObject(ctx context.Context, key string) (io.ReadCloser, PrivateObjectInfo, error)
+	ListPrivateObjects(ctx context.Context, prefix string, maximum int) ([]string, error)
 }

@@ -42,6 +42,17 @@ func ExecuteSpecialistRender(ctx *gin.Context) {
 		ctx.Error(common_errors.NewBadRequestError(errors.New("specialist-render content type is invalid")))
 		return
 	}
+	service, err := specialistRenderService()
+	if err != nil {
+		writeSpecialistRenderError(ctx, err)
+		return
+	}
+	admission, err := service.Acquire(ctx.Request.Context())
+	if err != nil {
+		writeSpecialistRenderError(ctx, err)
+		return
+	}
+	defer admission.Release()
 	stream, err := specialistrender.DecodeRequestStream(ctx.Request.Body)
 	if err != nil {
 		writeSpecialistRenderError(ctx, err)
@@ -52,13 +63,8 @@ func ExecuteSpecialistRender(ctx *gin.Context) {
 		writeSpecialistRenderError(ctx, fmt.Errorf("%w: source providerResourceId differs from sandbox", specialistrender.ErrInvalidRequest))
 		return
 	}
-	service, err := specialistRenderService()
-	if err != nil {
-		writeSpecialistRenderError(ctx, err)
-		return
-	}
-	result, executeErr := service.Execute(
-		ctx.Request.Context(), stream.Request, stream.Input, stream.Source,
+	result, executeErr := service.ExecuteAdmitted(
+		ctx.Request.Context(), admission, stream.Request, stream.Input, stream.Source,
 	)
 	if executeErr != nil && !errors.Is(executeErr, specialistrender.ErrRenderFailed) {
 		writeSpecialistRenderError(ctx, executeErr)
@@ -74,7 +80,7 @@ func ExecuteSpecialistRender(ctx *gin.Context) {
 		status = http.StatusUnprocessableEntity
 	}
 	ctx.Status(status)
-	if err := specialistrender.EncodeResponseStream(ctx.Writer, result); err != nil {
+	if err := specialistrender.EncodeResponseStream(ctx.Request.Context(), ctx.Writer, result); err != nil {
 		// Headers have already committed. Plaintext or JSON would corrupt the
 		// typed stream, so only abort the transport; the client must discard it
 		// without provider_response_end.

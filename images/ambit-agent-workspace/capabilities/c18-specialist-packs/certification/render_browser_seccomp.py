@@ -97,7 +97,13 @@ def render_profile(source: Path) -> bytes:
         *RENDER_CONTROL_SYSCALLS,
         *names[insertion:],
     ]
-    return (json.dumps(profile, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    return json.dumps(
+        profile,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -29,6 +29,7 @@ import (
 	filtertypes "github.com/docker/docker/api/types/filters"
 	imagetypes "github.com/docker/docker/api/types/image"
 	networktypes "github.com/docker/docker/api/types/network"
+	systemtypes "github.com/docker/docker/api/types/system"
 	clienttypes "github.com/docker/docker/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
@@ -41,9 +42,11 @@ const (
 	roleLabel               = "io.ambit.runtime-role"
 	defaultExecutionTimeout = 20 * time.Minute
 	cleanupTimeout          = 30 * time.Second
+	cancellationGrace       = 10 * time.Second
 )
 
 type DockerAPI interface {
+	Info(ctx context.Context) (systemtypes.Info, error)
 	ImageInspect(ctx context.Context, image string, options ...clienttypes.ImageInspectOption) (imagetypes.InspectResponse, error)
 	ContainerCreate(
 		ctx context.Context,
@@ -69,10 +72,13 @@ type DockerAPI interface {
 }
 
 type ProcessObservation struct {
-	StartTicks       string
-	NamespacePID     int
-	ExecutablePath   string
-	ExecutableDigest string
+	StartTicks            string
+	NamespacePID          int
+	ExecutablePath        string
+	ExecutableDigest      string
+	NoNewPrivileges       bool
+	SeccompKernelMode     int
+	EffectiveCapabilities string
 }
 
 type ProcessObserver interface {
@@ -106,9 +112,15 @@ func (linuxProcessObserver) ObserveHelper(
 	if path != expectedPath || digest != expectedDigest {
 		return ProcessObservation{}, errors.New("process executable differs from policy")
 	}
+	noNewPrivileges, seccompMode, capabilities, err := processSecurity(pid)
+	if err != nil {
+		return ProcessObservation{}, err
+	}
 	return ProcessObservation{
 		StartTicks: startTicks, NamespacePID: namespacePID,
 		ExecutablePath: path, ExecutableDigest: digest,
+		NoNewPrivileges: noNewPrivileges, SeccompKernelMode: seccompMode,
+		EffectiveCapabilities: capabilities,
 	}, nil
 }
 
@@ -129,6 +141,15 @@ func (adapter *Adapter) Execute(
 	ctx context.Context,
 	request specialistrender.ProviderExecutionRequest,
 ) (_ specialistrender.ProviderExecution, err error) {
+	providerInfo, err := adapter.api.Info(ctx)
+	if err != nil {
+		return specialistrender.ProviderExecution{}, fmt.Errorf("%w: inspect Docker runtime: %v", specialistrender.ErrUnavailable, err)
+	}
+	runtimeStatus, exists := providerInfo.Runtimes[request.Policy.Runtime]
+	runtimeStatusBytes, runtimeStatusErr := generationstop.CanonicalJSON(runtimeStatus.Status)
+	if !exists || runtimeStatusErr != nil || digestBytes(runtimeStatusBytes) != request.Policy.RuntimeStatusDigest {
+		return specialistrender.ProviderExecution{}, fmt.Errorf("%w: Docker OCI runtime status differs from policy", specialistrender.ErrConflict)
+	}
 	image, err := adapter.api.ImageInspect(ctx, request.Policy.Image.Ref)
 	if err != nil {
 		return specialistrender.ProviderExecution{}, fmt.Errorf("%w: inspect specialist image: %v", specialistrender.ErrUnavailable, err)
@@ -196,9 +217,39 @@ func (adapter *Adapter) Execute(
 	if deadline, ok := settlementCtx.Deadline(); ok {
 		_ = attach.Conn.SetDeadline(deadline)
 	}
+	locked := &lockedWriter{writer: attach.Conn}
+	cancelDone := make(chan struct{})
+	ready := make(chan struct{})
+	var cancelOnce sync.Once
+	var cancelGate sync.Mutex
+	terminalObserved := false
+	stopCancelWatcher := func() { cancelOnce.Do(func() { close(cancelDone) }) }
+	defer stopCancelWatcher()
+	go func() {
+		select {
+		case <-executionCtx.Done():
+			select {
+			case <-ready:
+				cancelGate.Lock()
+				defer cancelGate.Unlock()
+				if terminalObserved {
+					return
+				}
+				_ = specialistrender.WriteHelperCancel(locked, request.Nonce)
+				_ = attach.Conn.SetDeadline(time.Now().Add(cancellationGrace))
+			case <-time.After(cancellationGrace):
+				// No input is valid before ready. Force the broken/pre-admission
+				// transport closed and let cleanup prove child absence without
+				// claiming an exact cancelled terminal.
+				_ = attach.Conn.SetDeadline(time.Now())
+			case <-cancelDone:
+			}
+		case <-cancelDone:
+		}
+	}()
 	launch, err := adapter.observeLaunch(
 		settlementCtx, containerID, name, command, environmentDigest,
-		request, parentMount, parentPID,
+		digestBytes(runtimeStatusBytes), request, parentMount, parentPID,
 	)
 	if err != nil {
 		return specialistrender.ProviderExecution{}, err
@@ -212,19 +263,19 @@ func (adapter *Adapter) Execute(
 	if err := bridge.ReadReady(attach.Reader); err != nil {
 		return specialistrender.ProviderExecution{}, fmt.Errorf("%w: validate helper ready: %v", specialistrender.ErrOutcomeUnknown, err)
 	}
+	close(ready)
 
-	locked := &lockedWriter{writer: attach.Conn}
-	cancelDone := make(chan struct{})
-	go func() {
-		select {
-		case <-executionCtx.Done():
-			_ = bridge.WriteCancel(locked, request.Nonce)
-		case <-cancelDone:
-		}
-	}()
 	writeErr := bridge.WriteRequest(&contextWriter{ctx: executionCtx, writer: locked}, request)
 	result, collectErr := bridge.Collect(attach.Reader)
-	close(cancelDone)
+	cancelGate.Lock()
+	terminalObserved = collectErr == nil
+	if terminalObserved {
+		if deadline, ok := settlementCtx.Deadline(); ok {
+			_ = attach.Conn.SetDeadline(deadline)
+		}
+	}
+	cancelGate.Unlock()
+	stopCancelWatcher()
 	if writeErr != nil && !(executionCtx.Err() != nil && result.TerminalOutcome == "cancelled") {
 		return specialistrender.ProviderExecution{}, fmt.Errorf("%w: write helper request: %v", specialistrender.ErrOutcomeUnknown, writeErr)
 	}
@@ -270,6 +321,7 @@ func (adapter *Adapter) Execute(
 func validateImage(image imagetypes.InspectResponse, policy specialistrender.Policy) error {
 	if image.ID != policy.Image.ConfigDigest || image.Config == nil ||
 		image.Config.Labels["io.ambit.runtime-pack"] != policy.Image.PackRef ||
+		image.Config.Labels["io.ambit.activation"] != "provider-policy-and-composition-bound-only" ||
 		image.Config.User != "1000:1000" {
 		return fmt.Errorf("%w: specialist image identity, pack label, or user differs", specialistrender.ErrConflict)
 	}
@@ -323,10 +375,7 @@ func containerConfiguration(
 		},
 	}
 	pids := policy.PIDsLimit
-	securityOptions := []string{"no-new-privileges"}
-	if len(policy.Seccomp) != 0 {
-		securityOptions = append(securityOptions, "seccomp="+string(policy.Seccomp))
-	}
+	securityOptions := []string{"no-new-privileges", "seccomp=" + string(policy.Seccomp)}
 	tmpfs := map[string]string{
 		"/workspace":      fmt.Sprintf("rw,noexec,nosuid,nodev,size=%d,uid=1000,gid=1000,mode=0700", policy.WorkspaceSize),
 		"/tmp/ambit-task": fmt.Sprintf("rw,noexec,nosuid,nodev,size=%d,uid=1000,gid=1000,mode=0700", policy.ScratchSize),
@@ -335,6 +384,7 @@ func containerConfiguration(
 		NetworkMode: "none", ReadonlyRootfs: true, CapDrop: []string{"ALL"},
 		SecurityOpt: securityOptions, Tmpfs: tmpfs, ShmSize: policy.ShmSize,
 		AutoRemove: false, Privileged: false, IpcMode: "private", CgroupnsMode: "private",
+		Runtime: policy.Runtime,
 		Resources: containertypes.Resources{
 			PidsLimit: &pids, Memory: policy.MemoryBytes, MemorySwap: policy.MemoryBytes,
 			NanoCPUs: policy.NanoCPUs,
@@ -349,6 +399,7 @@ func (adapter *Adapter) observeLaunch(
 	name string,
 	command []string,
 	environmentDigest string,
+	runtimeStatusDigest string,
 	request specialistrender.ProviderExecutionRequest,
 	parentMount string,
 	parentPID string,
@@ -408,6 +459,21 @@ func (adapter *Adapter) observeLaunch(
 		return specialistrender.LaunchObservation{}, fmt.Errorf("%w: helper launch changed during observation", specialistrender.ErrOutcomeUnknown)
 	}
 	host := recheck.HostConfig
+	observedEnvironment, environmentErr := generationstop.CanonicalJSON(recheck.Config.Env)
+	labels := recheck.Config.Labels
+	if environmentErr != nil || digestBytes(observedEnvironment) != environmentDigest ||
+		recheck.Config.User != "1000:1000" || recheck.Config.WorkingDir != "/workspace" ||
+		!recheck.Config.Tty || !recheck.Config.OpenStdin || !recheck.Config.StdinOnce ||
+		!recheck.Config.AttachStdin || !recheck.Config.AttachStdout || !recheck.Config.AttachStderr ||
+		!equalStrings(recheck.Config.Entrypoint, command[:1]) || !equalStrings(recheck.Config.Cmd, command[1:]) ||
+		labels[runnerdocker.RunnerContainerKindLabel] != runnerdocker.RunnerContainerKindSpecialistRender ||
+		labels[operationLabel] != request.OperationID ||
+		labels[fingerprintLabel] != request.Authority.RequestFingerprint ||
+		labels[parentLabel] != request.Authority.ExpectedParentGeneration.ContainerID ||
+		labels[nonceLabel] != request.Nonce || labels[roleLabel] != specialistrender.RoleRef ||
+		len(recheck.Mounts) != 0 || len(recheck.Config.Volumes) != 0 {
+		return specialistrender.LaunchObservation{}, fmt.Errorf("%w: merged helper config, labels, or mounts differ", specialistrender.ErrOutcomeUnknown)
+	}
 	if host.PidsLimit == nil {
 		return specialistrender.LaunchObservation{}, fmt.Errorf("%w: helper PID limit is absent", specialistrender.ErrOutcomeUnknown)
 	}
@@ -425,6 +491,17 @@ func (adapter *Adapter) observeLaunch(
 			return specialistrender.LaunchObservation{}, fmt.Errorf("%w: unexpected helper security option", specialistrender.ErrOutcomeUnknown)
 		}
 	}
+	if !noNewPrivileges || seccompMode != "custom" ||
+		seccompDigest != digestBytes(request.Policy.Seccomp) || len(host.SecurityOpt) != 2 ||
+		host.NetworkMode != "none" || !host.ReadonlyRootfs || host.Privileged || host.AutoRemove ||
+		len(host.CapDrop) != 1 || host.CapDrop[0] != "ALL" || len(host.CapAdd) != 0 ||
+		len(host.Mounts) != 0 || len(host.Binds) != 0 || len(host.VolumesFrom) != 0 ||
+		host.Runtime != request.Policy.Runtime || host.PidsLimit == nil ||
+		*host.PidsLimit != request.Policy.PIDsLimit || host.Memory != request.Policy.MemoryBytes ||
+		host.MemorySwap != request.Policy.MemoryBytes || host.NanoCPUs != request.Policy.NanoCPUs ||
+		host.ShmSize != request.Policy.ShmSize || !equalStringMaps(host.Tmpfs, policyTmpfs(request.Policy)) {
+		return specialistrender.LaunchObservation{}, fmt.Errorf("%w: helper host isolation differs from policy", specialistrender.ErrOutcomeUnknown)
+	}
 	return specialistrender.LaunchObservation{
 		ObservedAt: formatTime(adapter.now()), ContainerID: containerID, ContainerName: name,
 		ImageID: recheck.Image, Command: append([]string(nil), command...),
@@ -436,10 +513,15 @@ func (adapter *Adapter) observeLaunch(
 		ParentMountNamespace: parentMount, ParentProcessNamespace: parentPID,
 		ProcessCount: len(top.Processes), NetworkMode: string(host.NetworkMode),
 		ReadonlyRootfs: host.ReadonlyRootfs, CapDrop: append([]string(nil), host.CapDrop...),
-		NoNewPrivileges: noNewPrivileges, SeccompMode: seccompMode, SeccompDigest: seccompDigest,
-		Tmpfs: cloneMap(host.Tmpfs), MountCount: len(host.Mounts) + len(host.Binds) + len(host.VolumesFrom),
+		NoNewPrivileges:       processObservation.NoNewPrivileges,
+		SeccompKernelMode:     processObservation.SeccompKernelMode,
+		EffectiveCapabilities: processObservation.EffectiveCapabilities,
+		SeccompMode:           seccompMode, SeccompDigest: seccompDigest,
+		Tmpfs: cloneMap(host.Tmpfs), MountCount: len(recheck.Mounts) + len(recheck.Config.Volumes) + len(host.Mounts) + len(host.Binds) + len(host.VolumesFrom),
 		PIDsLimit: *host.PidsLimit, MemoryBytes: host.Memory, NanoCPUs: host.NanoCPUs,
-		ShmSize: host.ShmSize, ParentGeneration: request.Authority.ExpectedParentGeneration,
+		ShmSize: host.ShmSize, Runtime: host.Runtime,
+		RuntimeStatusDigest: runtimeStatusDigest,
+		ParentGeneration:    request.Authority.ExpectedParentGeneration,
 	}, nil
 }
 
@@ -556,6 +638,36 @@ func processIdentity(pid int) (startTicks string, namespacePID int, err error) {
 	return "", 0, errors.New("process namespace PID is absent")
 }
 
+func processSecurity(pid int) (bool, int, string, error) {
+	status, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	if err != nil {
+		return false, 0, "", err
+	}
+	noNewPrivileges := ""
+	seccomp := ""
+	capabilities := ""
+	for _, line := range strings.Split(string(status), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		switch strings.TrimSuffix(fields[0], ":") {
+		case "NoNewPrivs":
+			noNewPrivileges = fields[1]
+		case "Seccomp":
+			seccomp = fields[1]
+		case "CapEff":
+			capabilities = strings.ToLower(fields[1])
+		}
+	}
+	seccompMode, err := strconv.Atoi(seccomp)
+	if err != nil || (noNewPrivileges != "0" && noNewPrivileges != "1") ||
+		len(capabilities) != 16 {
+		return false, 0, "", errors.New("process security status is incomplete")
+	}
+	return noNewPrivileges == "1", seccompMode, capabilities, nil
+}
+
 func processNamespaces(pid int) (string, string, error) {
 	mountNamespace, err := os.Readlink(fmt.Sprintf("/proc/%d/ns/mnt", pid))
 	if err != nil {
@@ -611,6 +723,37 @@ func cloneMap(value map[string]string) map[string]string {
 		result[key] = item
 	}
 	return result
+}
+
+func equalStrings(left []string, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func equalStringMaps(left map[string]string, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, value := range left {
+		if right[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+func policyTmpfs(policy specialistrender.Policy) map[string]string {
+	return map[string]string{
+		"/workspace":      fmt.Sprintf("rw,noexec,nosuid,nodev,size=%d,uid=1000,gid=1000,mode=0700", policy.WorkspaceSize),
+		"/tmp/ambit-task": fmt.Sprintf("rw,noexec,nosuid,nodev,size=%d,uid=1000,gid=1000,mode=0700", policy.ScratchSize),
+	}
 }
 
 type lockedWriter struct {

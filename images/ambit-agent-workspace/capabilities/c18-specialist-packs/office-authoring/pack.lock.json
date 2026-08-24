@@ -34,7 +34,7 @@
   ],
   "packRef": "ambit.runtime-pack/office-authoring",
   "packRevisionRef": "ambit.runtime-pack/office-authoring@1",
-  "promotion": "forbidden-until-full-image-binding-passes",
+  "promotion": "forbidden-until-provider-policy-and-composition-binding-passes",
   "revision": 1,
   "runtime": {
     "hostSockets": "absent",

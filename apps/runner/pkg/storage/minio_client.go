@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sort"
 	"strings"
 
 	"github.com/daytonaio/runner/cmd/runner/config"
@@ -188,6 +189,30 @@ func (m *minioClient) OpenPrivateObject(
 		return nil, PrivateObjectInfo{}, fmt.Errorf("open private object stream: %w", err)
 	}
 	return object, info, nil
+}
+
+func (m *minioClient) ListPrivateObjects(
+	ctx context.Context,
+	prefix string,
+	maximum int,
+) ([]string, error) {
+	if prefix == "" || maximum <= 0 {
+		return nil, fmt.Errorf("private object list prefix or bound is invalid")
+	}
+	keys := make([]string, 0)
+	for object := range m.client.ListObjects(ctx, m.bucketName, minio.ListObjectsOptions{
+		Prefix: prefix, Recursive: true,
+	}) {
+		if object.Err != nil {
+			return nil, fmt.Errorf("list private objects: %w", object.Err)
+		}
+		keys = append(keys, object.Key)
+		if len(keys) > maximum {
+			return nil, ErrPrivateObjectListTooLarge
+		}
+	}
+	sort.Strings(keys)
+	return keys, nil
 }
 
 func (m *minioClient) GetPrivateObject(ctx context.Context, key string, maximumBytes int64) ([]byte, error) {

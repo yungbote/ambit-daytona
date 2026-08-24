@@ -5,6 +5,9 @@ package specialistrenderdocker
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -33,8 +36,8 @@ func TestContainerConfigurationIsProviderOwnedAndIsolated(t *testing.T) {
 	}
 	if host.NetworkMode != "none" || !host.ReadonlyRootfs || host.Privileged || host.AutoRemove ||
 		len(host.CapDrop) != 1 || host.CapDrop[0] != "ALL" || len(host.Mounts) != 0 ||
-		len(host.Binds) != 0 || len(host.VolumesFrom) != 0 || len(host.SecurityOpt) != 1 ||
-		host.SecurityOpt[0] != "no-new-privileges" || host.PidsLimit == nil ||
+		len(host.Binds) != 0 || len(host.VolumesFrom) != 0 || len(host.SecurityOpt) != 2 ||
+		host.SecurityOpt[0] != "no-new-privileges" || !strings.HasPrefix(host.SecurityOpt[1], "seccomp=") || host.PidsLimit == nil ||
 		*host.PidsLimit != policy.PIDsLimit || host.Memory != policy.MemoryBytes ||
 		host.MemorySwap != policy.MemoryBytes || host.NanoCPUs != policy.NanoCPUs ||
 		host.Tmpfs["/workspace"] == "" || host.Tmpfs["/tmp/ambit-task"] == "" {
@@ -49,7 +52,7 @@ func TestContainerConfigurationIsProviderOwnedAndIsolated(t *testing.T) {
 
 func TestContainerConfigurationRequiresWebSeccompAndRejectsSecretEnvironment(t *testing.T) {
 	environment := []string{"HOME=/workspace", "PATH=/usr/bin:/bin"}
-	policy := dockerTestPolicy(t, "web-browser", []byte(`{"defaultAction":"SCMP_ACT_ERRNO"}`), environment)
+	policy := dockerTestPolicy(t, "web-browser", nil, environment)
 	request := dockerTestRequest(policy)
 	_, host, _, _, err := containerConfiguration(request, environment)
 	if err != nil {
@@ -79,8 +82,22 @@ func dockerTestPolicy(t *testing.T, pack string, seccomp []byte, environment []s
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(seccomp) == 0 {
+		_, current, _, ok := runtime.Caller(0)
+		if !ok {
+			t.Fatal("caller path unavailable")
+		}
+		seccomp, err = os.ReadFile(filepath.Clean(filepath.Join(
+			filepath.Dir(current),
+			"../../../../images/ambit-agent-workspace/capabilities/c18-specialist-packs/policy/specialist-seccomp-v1.json",
+		)))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	policy := specialistrender.Policy{
 		Authority:             specialistrender.Pin{Ref: "ambit.runtime-provider/specialist-render-" + pack + "@1"},
+		Composition:           specialistrender.Pin{Ref: "ambit.runtime-composition/test@2", Digest: "sha256:" + strings.Repeat("b", 64)},
 		Image:                 specialistrender.ImagePin{Ref: "image:" + pack, ConfigDigest: "sha256:" + strings.Repeat("1", 64), PackID: pack, PackRef: "ambit.runtime-pack/" + pack + "@1"},
 		Interface:             specialistrender.Pin{Ref: specialistrender.InterfaceRef, Digest: "sha256:" + strings.Repeat("2", 64)},
 		Executor:              specialistrender.Pin{Ref: "ambit://specialist-render-executors/" + pack + "@1", Digest: "sha256:" + strings.Repeat("3", 64)},
@@ -89,7 +106,12 @@ func dockerTestPolicy(t *testing.T, pack string, seccomp []byte, environment []s
 		EnvironmentDigest: digestBytes(environmentBytes), Seccomp: seccomp,
 		PIDsLimit: 512, MemoryBytes: 4 * 1024 * 1024 * 1024, NanoCPUs: 4_000_000_000,
 		WorkspaceSize: 1024 * 1024 * 1024, ScratchSize: 2 * 1024 * 1024 * 1024,
-		ShmSize: 64 * 1024 * 1024,
+		ShmSize:                  64 * 1024 * 1024,
+		Runtime:                  "runc",
+		RuntimeStatusDigest:      "sha256:" + strings.Repeat("c", 64),
+		CustodyBytesPerSecond:    4 * 1024 * 1024,
+		SettlementBaseSeconds:    30,
+		SettlementMaximumSeconds: 180,
 	}
 	if pack == "web-browser" {
 		policy.PIDsLimit = 1024

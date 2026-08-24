@@ -186,6 +186,8 @@
         "currentness": "exact-parent-generation-before-launch-and-after-child-quiescence",
         "durableIdempotency": "immutable-operation-claim-output-objects-and-receipt-by-operationId-plus-requestFingerprint",
         "filesystem": "runner-host-private-custody-only",
+        "composition": "exact-caller-authority-pin-bound-into-request-fingerprint-and-receipt",
+        "imageActivation": "provider-policy-and-composition-bound-only",
         "policy": "exact-caller-pin-selects-equal-runner-owned-canonical-policy",
         "workspacePtyOrExec": "forbidden"
       },
@@ -259,6 +261,7 @@
         "order": "provider_request_start;request_chunk*;source_chunk*;provider_request_end",
         "requestFields": [
           "artifactRenderJobRef",
+          "composition",
           "executable",
           "executor",
           "expectedParentGeneration",
@@ -290,6 +293,7 @@
       "policy": {
         "digest": "sha256-of-canonical-ambit.runtime-provider-specialist-render-policy/v1-payload",
         "requiredFacts": [
+          "composition",
           "image",
           "interface",
           "executor",
@@ -303,7 +307,12 @@
           "nanoCpus",
           "workspaceSize",
           "scratchSize",
-          "shmSize"
+          "shmSize",
+          "runtime",
+          "runtimeStatusDigest",
+          "custodyBytesPerSecond",
+          "settlementBaseSeconds",
+          "settlementMaximumSeconds"
         ]
       },
       "receipt": {
@@ -326,7 +335,9 @@
         "scratch": "/tmp/ambit-task"
       },
       "processNamespace": "provider-owned-no-agent-processes",
-      "rootFilesystem": "read-only"
+      "rootFilesystem": "read-only",
+      "seccomp": "exact-provider-policy-profile-all-packs",
+      "ociRuntime": "runc"
     },
     "schema": "ambit.runtime-interface-contract/v1",
     "transport": {
@@ -342,7 +353,7 @@
       "stdoutClosure": "terminal-frame-then-helper-exit"
     }
   },
-  "digest": "sha256:253ea86e0d8f6593a5fa4a25c10db1971052539227cfac83207df9b34c11eff3",
+  "digest": "sha256:b4a5b3bb225cb0f9b5693b1300ecb325ce0019a47da8b44ee38103131b919033",
   "schema": "ambit.runtime-interface-lock/v1",
   "state": "candidate-ready"
 }

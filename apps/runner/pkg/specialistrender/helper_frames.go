@@ -5,6 +5,7 @@ package specialistrender
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -225,6 +226,12 @@ func (session *HelperSession) WriteCancel(writer io.Writer, nonce string) error 
 	return writeHelperCancel(writer, nonce)
 }
 
+// WriteHelperCancel emits the exact nonce-bound cancellation frame before a
+// HelperSession exists or ready has arrived.
+func WriteHelperCancel(writer io.Writer, nonce string) error {
+	return writeHelperCancel(writer, nonce)
+}
+
 func (session *HelperSession) Collect(reader *bufio.Reader) (HelperResult, error) {
 	return session.collector.collect(reader)
 }
@@ -439,7 +446,7 @@ func (collector *helperCollector) acceptFileChunk(line []byte) error {
 				Path: current.start.Path, MediaType: current.start.MediaType,
 				ByteLength: current.start.ByteLength, Digest: current.start.Digest,
 			},
-			Open:    func() (io.ReadCloser, error) { return os.Open(path) },
+			Open:    func(_ context.Context) (io.ReadCloser, error) { return os.Open(path) },
 			Cleanup: func() error { return os.RemoveAll(root) },
 		})
 		collector.current = nil
@@ -576,7 +583,10 @@ type helperCommandUnsealed struct {
 }
 
 func parseHelperCommand(input Input, authority Request, policy Policy) (helperCommand, error) {
-	payload := Payload{File: OutputFile{ByteLength: input.ByteLength}, Open: input.Open}
+	payload := Payload{
+		File: OutputFile{ByteLength: input.ByteLength},
+		Open: func(_ context.Context) (io.ReadCloser, error) { return input.Open() },
+	}
 	value, err := readPayloadBounded(payload, MaximumRequestBytes)
 	if err != nil {
 		return helperCommand{}, fmt.Errorf("read canonical helper command: %w", err)
@@ -785,9 +795,14 @@ func (collector *helperCollector) validateSemantics(start helperResponseStart) e
 	}
 	evidenceFiles := make([]Payload, 0)
 	artifactFiles := make([]Payload, 0)
+	previewSeen := false
 	for _, payload := range collector.files[1:] {
 		switch payload.File.Role {
 		case "preview":
+			if previewSeen {
+				return errors.New("helper emitted more than one preview file")
+			}
+			previewSeen = true
 			if result.Preview == nil || !descriptorMatchesPreview(payload.File, *result.Preview) {
 				return errors.New("helper preview file differs from semantic result")
 			}
@@ -821,6 +836,9 @@ func (collector *helperCollector) validateSemantics(start helperResponseStart) e
 		case "artifact":
 			artifactFiles = append(artifactFiles, payload)
 		}
+	}
+	if (result.Preview != nil) != previewSeen {
+		return errors.New("helper preview transport presence differs from semantic result")
 	}
 	checkNames := make([]string, 0, len(result.Checks))
 	expectedEvidence := make([]helperExpectedEvidence, 0)
@@ -939,7 +957,7 @@ func readPayloadBounded(payload Payload, maximum int64) ([]byte, error) {
 	if payload.File.ByteLength <= 0 || payload.File.ByteLength > maximum {
 		return nil, errors.New("semantic payload exceeds its bound")
 	}
-	reader, err := payload.Open()
+	reader, err := payload.Open(context.Background())
 	if err != nil {
 		return nil, err
 	}

@@ -6,6 +6,7 @@ package specialistrender
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -259,7 +260,7 @@ func DecodeRequestStream(reader io.Reader) (_ *RequestStream, err error) {
 
 // EncodeResponseStream emits an already-committed receipt and its provider-
 // private bytes. The returned stream digest excludes provider_response_end.
-func EncodeResponseStream(writer io.Writer, result ExecutionResult) error {
+func EncodeResponseStream(ctx context.Context, writer io.Writer, result ExecutionResult) error {
 	if result.Receipt.Schema != ReceiptSchema || len(result.Files) != len(result.Receipt.Files) {
 		return fmt.Errorf("%w: response receipt and payload custody differ", ErrOutcomeUnknown)
 	}
@@ -294,7 +295,7 @@ func EncodeResponseStream(writer io.Writer, result ExecutionResult) error {
 		if payload.File != result.Receipt.Files[ordinal] {
 			return fmt.Errorf("%w: response file roster differs from receipt", ErrOutcomeUnknown)
 		}
-		reader, err := payload.Open()
+		reader, err := payload.Open(ctx)
 		if err != nil {
 			return fmt.Errorf("%w: open provider-private output: %v", ErrOutcomeUnknown, err)
 		}

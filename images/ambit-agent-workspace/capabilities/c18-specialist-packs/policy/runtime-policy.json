@@ -24,7 +24,7 @@
     "requiredSyscalls": [
       "openat2"
     ],
-    "seccomp": "provider-default-deny-escape"
+    "seccomp": "exact-provider-policy-profile-all-packs"
   },
   "runtimeInstallers": {
     "disposition": "absent",
@@ -60,7 +60,7 @@
       "logicalRootPattern": "/workspace/.ambit/render-jobs/<lowercase-uuid>",
       "matchingJobIdRequired": true,
       "transport": {
-        "digest": "sha256:253ea86e0d8f6593a5fa4a25c10db1971052539227cfac83207df9b34c11eff3",
+        "digest": "sha256:b4a5b3bb225cb0f9b5693b1300ecb325ce0019a47da8b44ee38103131b919033",
         "ref": "ambit.runtime-interface/specialist-render@1"
       }
     }

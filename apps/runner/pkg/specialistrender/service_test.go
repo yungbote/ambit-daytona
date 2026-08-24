@@ -9,6 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -82,7 +86,7 @@ func TestServiceExecutesOnceAndReplaysDurableResult(t *testing.T) {
 	if provider.calls != 1 || replayed.Receipt.ReceiptDigest != firstDigest {
 		t.Fatalf("replay re-executed or changed receipt: calls=%d digest=%q", provider.calls, replayed.Receipt.ReceiptDigest)
 	}
-	reader, err := replayed.Files[0].Open()
+	reader, err := replayed.Files[0].Open(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,6 +105,32 @@ func TestServiceExecutesOnceAndReplaysDurableResult(t *testing.T) {
 		observation.Receipt.ReceiptDigest != firstDigest {
 		t.Fatalf("complete observation differs: %#v %v", observation, err)
 	}
+}
+
+func TestAdmissionBoundsInputSpoolingBeforeDecode(t *testing.T) {
+	policy := testPolicy(t)
+	registry, _ := NewStaticPolicyRegistry([]Policy{policy})
+	service, err := NewServiceWithConcurrency(
+		&fakeProvider{}, &fakeGenerations{}, registry, newFakeOperationStore(), 1,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := service.Acquire(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	if _, err := service.Acquire(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("second pre-spool admission was not bounded: %v", err)
+	}
+	first.Release()
+	second, err := service.Acquire(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second.Release()
 }
 
 func TestServiceRejectsOperationIDClaimConflict(t *testing.T) {
@@ -133,6 +163,103 @@ func TestServiceRejectsOperationIDClaimConflict(t *testing.T) {
 	}
 }
 
+func TestServiceRecoversPartialAttemptWithReceiptNamespacedOutputs(t *testing.T) {
+	policy := testPolicy(t)
+	request := testRequest(t, policy)
+	command, source := []byte("canonical-command"), []byte("source")
+	request.RequestBytes, request.SourceBytes = int64(len(command)), int64(len(source))
+	request.RequestChunkCount, request.SourceChunkCount = 1, 1
+	request.RequestDigest, request.SourceDigest = sha256Digest(command), sha256Digest(source)
+	request.RequestFingerprint, _ = ComputeRequestFingerprint(request)
+	first := testExecution(request, policy)
+	provider := &fakeProvider{execution: first}
+	generations := &fakeGenerations{observation: testGenerationObservation(request)}
+	objects := newFakeOperationStore()
+	objects.failReceiptCreates = 1
+	registry, _ := NewStaticPolicyRegistry([]Policy{policy})
+	service, _ := NewService(provider, generations, registry, objects)
+	service.nonce = func() (string, error) { return strings.Repeat("a", 32), nil }
+	times := []time.Time{
+		mustProviderTime(t, "2026-08-24T00:00:00.000Z"),
+		mustProviderTime(t, "2026-08-24T00:00:01.000Z"),
+		mustProviderTime(t, "2026-08-24T00:00:02.000Z"),
+		mustProviderTime(t, "2026-08-24T00:00:03.000Z"),
+	}
+	service.now = func() time.Time { value := times[0]; times = times[1:]; return value }
+	if _, err := service.Execute(context.Background(), request, bytesInput(command), bytesInput(source)); !errors.Is(err, ErrOutcomeUnknown) {
+		t.Fatalf("interrupted receipt publication was not outcome-unknown: %v", err)
+	}
+	second := testExecution(request, policy)
+	second.Launch.ObservedAt = "2026-08-24T00:00:02.000Z"
+	second.Quiescence.ObservedAt = "2026-08-24T00:00:03.000Z"
+	changed := []byte("result-with-new-execution-times")
+	second.Files[0].File.ByteLength = int64(len(changed))
+	second.Files[0].File.Digest = sha256Digest(changed)
+	second.Files[0].Open = func(_ context.Context) (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(changed)), nil }
+	provider.execution = second
+	result, err := service.Execute(context.Background(), request, bytesInput(command), bytesInput(source))
+	if err != nil {
+		t.Fatalf("partial operation did not recover through a new receipt namespace: %v", err)
+	}
+	if provider.calls != 2 || result.Receipt.Files[0].Digest != sha256Digest(changed) {
+		t.Fatalf("recovered receipt differs: calls=%d receipt=%#v", provider.calls, result.Receipt)
+	}
+	objects.mu.Lock()
+	attemptObjects := 0
+	for key := range objects.objects {
+		if strings.Contains(key, "/attempts/") {
+			attemptObjects++
+		}
+	}
+	objects.mu.Unlock()
+	if attemptObjects != 1 {
+		t.Fatalf("abandoned receipt attempt was not collected: objects=%d", attemptObjects)
+	}
+}
+
+func TestServiceSettlesAndPersistsExactCancellationAfterCallerContextEnds(t *testing.T) {
+	policy := testPolicy(t)
+	request := testRequest(t, policy)
+	command, source := []byte("canonical-command"), []byte("source")
+	request.RequestBytes, request.SourceBytes = int64(len(command)), int64(len(source))
+	request.RequestChunkCount, request.SourceChunkCount = 1, 1
+	request.RequestDigest, request.SourceDigest = sha256Digest(command), sha256Digest(source)
+	request.RequestFingerprint, _ = ComputeRequestFingerprint(request)
+	execution := testExecution(request, policy)
+	execution.TerminalKind = "cancelled"
+	execution.TerminalOutcome = "cancelled"
+	execution.HelperExitCode = 130
+	execution.Files = nil
+	ctx, cancel := context.WithCancel(context.Background())
+	provider := &fakeProvider{execution: execution, beforeReturn: cancel}
+	generations := &fakeGenerations{observation: testGenerationObservation(request)}
+	objects := newFakeOperationStore()
+	registry, _ := NewStaticPolicyRegistry([]Policy{policy})
+	service, _ := NewService(provider, generations, registry, objects)
+	service.nonce = func() (string, error) { return strings.Repeat("a", 32), nil }
+	times := []time.Time{
+		mustProviderTime(t, "2026-08-24T00:00:00.000Z"),
+		mustProviderTime(t, "2026-08-24T00:00:01.000Z"),
+	}
+	service.now = func() time.Time { value := times[0]; times = times[1:]; return value }
+	result, err := service.Execute(ctx, request, bytesInput(command), bytesInput(source))
+	if !errors.Is(err, ErrRenderFailed) || result.Receipt.Outcome != "cancelled" {
+		t.Fatalf("exact cancellation was not durably settled: outcome=%q err=%v", result.Receipt.Outcome, err)
+	}
+	if generations.cancelledObservations != 0 {
+		t.Fatalf("post-terminal currentness reused cancelled caller context %d times", generations.cancelledObservations)
+	}
+	observation, err := service.Observe(context.Background(), ObserveRequest{
+		Schema: ObserveRequestSchema, OperationID: request.OperationID,
+		RequestFingerprint: request.RequestFingerprint, Source: request.Source,
+		Owner: request.Owner, Fence: request.Fence,
+	})
+	if err != nil || observation.Status != "complete" || observation.Receipt == nil ||
+		observation.Receipt.Outcome != "cancelled" {
+		t.Fatalf("cancelled durable observation differs: %#v %v", observation, err)
+	}
+}
+
 func TestValidateReceiptRejectsSelfConsistentLaunchForgery(t *testing.T) {
 	policy := testPolicy(t)
 	request := testRequest(t, policy)
@@ -151,11 +278,26 @@ func TestValidateReceiptRejectsSelfConsistentLaunchForgery(t *testing.T) {
 func TestProviderContractGoldenValues(t *testing.T) {
 	policy := testPolicy(t)
 	request := testRequest(t, policy)
-	if policy.Authority.Digest != "sha256:900ad61c2101d03ff376106c094251a163366f20bc02f5834f434eabda674303" {
+	if policy.Authority.Digest != "sha256:71628448f2de7d0291bb775f44695341ba70ab0c07a7ec306963eca847766101" {
 		t.Fatalf("policy digest golden drifted: %s", policy.Authority.Digest)
 	}
-	if request.RequestFingerprint != "f06704d69d849a3373eecf40aa0678149bfd999da9a8df38a9f38492ab72f1ce" {
+	if request.RequestFingerprint != "dd881cc25d1da01dd6ce346aa703a089db48c7163764f691f7ccf23dbc0146c2" {
 		t.Fatalf("request fingerprint golden drifted: %s", request.RequestFingerprint)
+	}
+	receipt := receiptFromExecution(t, request, policy, testExecution(request, policy))
+	encoded, err := generationstop.CanonicalJSON(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.ReceiptDigest != "sha256:b718dadf27a47d58a9ddf4f7f8c0b7f2bbc4736c5ff292c147233c5dbcfa3581" {
+		t.Fatalf("receipt digest golden drifted: %s", receipt.ReceiptDigest)
+	}
+	fixture, err := os.ReadFile("testdata/provider-contract-golden.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(fixture) != string(encoded)+"\n" {
+		t.Fatal("canonical provider contract fixture drifted")
 	}
 }
 
@@ -187,7 +329,7 @@ func TestMaximumReceiptFitsOneProviderFrame(t *testing.T) {
 		files[index] = Payload{File: OutputFile{
 			Ordinal: index, Role: role, Path: path,
 			MediaType: mediaType, ByteLength: 1, Digest: sha256Digest(payload),
-		}, Open: func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(payload)), nil }, Cleanup: func() error { return nil }}
+		}, Open: func(_ context.Context) (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(payload)), nil }, Cleanup: func() error { return nil }}
 	}
 	execution.Files = files
 	receipt := receiptFromExecution(t, request, policy, execution)
@@ -212,6 +354,7 @@ func testPolicy(t *testing.T) Policy {
 	t.Helper()
 	policy := Policy{
 		Authority:               Pin{Ref: "ambit.runtime-provider/specialist-render-data-research@1"},
+		Composition:             Pin{Ref: "ambit.runtime-composition/test@2", Digest: "sha256:" + strings.Repeat("b", 64)},
 		Image:                   ImagePin{Ref: "ambit-c18-data-research:test", ConfigDigest: "sha256:" + strings.Repeat("1", 64), PackID: "data-research", PackRef: "ambit.runtime-pack/data-research@1"},
 		Interface:               Pin{Ref: InterfaceRef, Digest: "sha256:" + strings.Repeat("2", 64)},
 		Executor:                Pin{Ref: "ambit://specialist-render-executors/data-research@1", Digest: "sha256:" + strings.Repeat("3", 64)},
@@ -219,9 +362,15 @@ func testPolicy(t *testing.T) Policy {
 		ProcessExecutablePath:   "/usr/local/bin/python3.14",
 		ProcessExecutableDigest: "sha256:" + strings.Repeat("4", 64),
 		EnvironmentDigest:       "sha256:" + strings.Repeat("5", 64),
+		Seccomp:                 testSeccomp(t),
 		PIDsLimit:               512, MemoryBytes: 4 * 1024 * 1024 * 1024, NanoCPUs: 4_000_000_000,
 		WorkspaceSize: 1024 * 1024 * 1024, ScratchSize: 2 * 1024 * 1024 * 1024,
-		ShmSize: 64 * 1024 * 1024,
+		ShmSize:                  64 * 1024 * 1024,
+		Runtime:                  "runc",
+		RuntimeStatusDigest:      "sha256:" + strings.Repeat("c", 64),
+		CustodyBytesPerSecond:    4 * 1024 * 1024,
+		SettlementBaseSeconds:    30,
+		SettlementMaximumSeconds: 180,
 	}
 	digest, err := ComputePolicyDigest(policy)
 	if err != nil {
@@ -236,6 +385,7 @@ func testRequest(t *testing.T, policy Policy) Request {
 	request := Request{
 		Schema: RequestSchema, OperationID: "11111111-1111-4111-8111-111111111111",
 		ArtifactRenderJobRef: "ambit://artifact-render-jobs/11111111-1111-4111-8111-111111111111",
+		Composition:          policy.Composition,
 		Source:               generationstop.Source{ProviderResourceID: "sandbox", ExpectedProfile: "profile", ExpectedRuntimeKind: "full_image_runtime_pack"},
 		Owner: generationstop.ProviderOwner{
 			TenantID: "11111111-1111-4111-8111-111111111111", UserID: "22222222-2222-4222-8222-222222222222",
@@ -276,15 +426,19 @@ func testExecution(request Request, policy Policy) ProviderExecution {
 			MountNamespace: "mnt:[2]", ProcessNamespace: "pid:[2]",
 			ParentMountNamespace: "mnt:[1]", ParentProcessNamespace: "pid:[1]", ProcessCount: 1,
 			NetworkMode: "none", ReadonlyRootfs: true, CapDrop: []string{"ALL"}, NoNewPrivileges: true,
-			SeccompMode: "docker-default", Tmpfs: expectedTmpfs(policy), MountCount: 0,
+			SeccompKernelMode: 2, EffectiveCapabilities: "0000000000000000",
+			SeccompMode: "custom", SeccompDigest: sha256Digest(policy.Seccomp),
+			Tmpfs: expectedTmpfs(policy), MountCount: 0,
 			PIDsLimit: policy.PIDsLimit, MemoryBytes: policy.MemoryBytes, NanoCPUs: policy.NanoCPUs,
-			ShmSize: policy.ShmSize, ParentGeneration: request.ExpectedParentGeneration,
+			ShmSize: policy.ShmSize, Runtime: policy.Runtime,
+			RuntimeStatusDigest: policy.RuntimeStatusDigest,
+			ParentGeneration:    request.ExpectedParentGeneration,
 		},
 		ReadyDigest: "sha256:" + strings.Repeat("9", 64), TerminalDigest: "sha256:" + strings.Repeat("a", 64),
 		TerminalKind: "response_end", TerminalOutcome: "succeeded", HelperExitCode: 0,
 		Files: []Payload{{
 			File: OutputFile{Ordinal: 0, Role: "result", Path: "outputs/render/result.json", MediaType: "application/vnd.ambit.c18-specialist-render-command-result+json", ByteLength: int64(len(payload)), Digest: sha256Digest(payload)},
-			Open: func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(payload)), nil }, Cleanup: func() error { return nil },
+			Open: func(_ context.Context) (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(payload)), nil }, Cleanup: func() error { return nil },
 		}},
 		Quiescence: QuiescenceReceipt{Schema: QuiescenceSchema, ContainerID: strings.Repeat("8", 64), ContainerAbsent: true, ObservedAt: "2026-08-24T00:00:01.000Z"},
 	}
@@ -317,24 +471,50 @@ func bytesInput(value []byte) Input {
 	}}
 }
 
+func testSeccomp(t *testing.T) []byte {
+	t.Helper()
+	_, current, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("caller path unavailable")
+	}
+	path := filepath.Clean(filepath.Join(
+		filepath.Dir(current),
+		"../../../../images/ambit-agent-workspace/capabilities/c18-specialist-packs/policy/specialist-seccomp-v1.json",
+	))
+	value, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
+
 type fakeProvider struct {
-	mu        sync.Mutex
-	calls     int
-	execution ProviderExecution
+	mu           sync.Mutex
+	calls        int
+	execution    ProviderExecution
+	beforeReturn func()
 }
 
 func (provider *fakeProvider) Execute(_ context.Context, _ ProviderExecutionRequest) (ProviderExecution, error) {
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
 	provider.calls++
+	if provider.beforeReturn != nil {
+		provider.beforeReturn()
+	}
 	return provider.execution, nil
 }
 
 type fakeGenerations struct {
-	observation generationstop.ProviderGenerationObservation
+	observation           generationstop.ProviderGenerationObservation
+	cancelledObservations int
 }
 
-func (fake *fakeGenerations) ObserveProviderCurrent(_ context.Context, _ generationstop.ProviderGenerationObservationRequest) (generationstop.ProviderGenerationObservation, error) {
+func (fake *fakeGenerations) ObserveProviderCurrent(ctx context.Context, _ generationstop.ProviderGenerationObservationRequest) (generationstop.ProviderGenerationObservation, error) {
+	if ctx.Err() != nil {
+		fake.cancelledObservations++
+		return generationstop.ProviderGenerationObservation{}, ctx.Err()
+	}
 	return fake.observation, nil
 }
 
@@ -344,8 +524,9 @@ type storedObject struct {
 }
 
 type fakeOperationStore struct {
-	mu      sync.Mutex
-	objects map[string]storedObject
+	mu                 sync.Mutex
+	objects            map[string]storedObject
+	failReceiptCreates int
 }
 
 func newFakeOperationStore() *fakeOperationStore {
@@ -355,6 +536,10 @@ func newFakeOperationStore() *fakeOperationStore {
 func (store *fakeOperationStore) CreatePrivateObject(_ context.Context, key string, data []byte, _ string, metadata map[string]string) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	if strings.HasSuffix(key, "/receipt.json") && store.failReceiptCreates > 0 {
+		store.failReceiptCreates--
+		return errors.New("injected receipt publication failure")
+	}
 	if _, exists := store.objects[key]; exists {
 		return storage.ErrPrivateObjectAlreadyExists
 	}
@@ -400,6 +585,29 @@ func (store *fakeOperationStore) StatPrivateObject(_ context.Context, key string
 		_ = reader.Close()
 	}
 	return info, err
+}
+
+func (store *fakeOperationStore) ListPrivateObjects(_ context.Context, prefix string, maximum int) ([]string, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	keys := make([]string, 0)
+	for key := range store.objects {
+		if strings.HasPrefix(key, prefix) {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	if len(keys) > maximum {
+		return nil, storage.ErrPrivateObjectListTooLarge
+	}
+	return keys, nil
+}
+
+func (store *fakeOperationStore) DeletePrivateObject(_ context.Context, key string) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	delete(store.objects, key)
+	return nil
 }
 
 func mustProviderTime(t *testing.T, value string) time.Time {

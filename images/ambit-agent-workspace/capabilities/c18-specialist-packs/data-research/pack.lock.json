@@ -32,7 +32,7 @@
   ],
   "packRef": "ambit.runtime-pack/data-research",
   "packRevisionRef": "ambit.runtime-pack/data-research@1",
-  "promotion": "forbidden-until-full-image-binding-passes",
+  "promotion": "forbidden-until-provider-policy-and-composition-binding-passes",
   "revision": 1,
   "runtime": {
     "hostSockets": "absent",

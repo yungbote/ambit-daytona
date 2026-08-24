@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -56,6 +57,27 @@ type Service struct {
 type ExecutionResult struct {
 	Receipt Receipt
 	Files   []Payload
+}
+
+type Admission struct {
+	service *Service
+	once    sync.Once
+}
+
+func (service *Service) Acquire(ctx context.Context) (*Admission, error) {
+	select {
+	case service.concurrency <- struct{}{}:
+		return &Admission{service: service}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (admission *Admission) Release() {
+	if admission == nil || admission.service == nil {
+		return
+	}
+	admission.once.Do(func() { <-admission.service.concurrency })
 }
 
 func NewService(
@@ -107,11 +129,23 @@ func (service *Service) Execute(
 	requestInput Input,
 	sourceInput Input,
 ) (ExecutionResult, error) {
-	select {
-	case service.concurrency <- struct{}{}:
-		defer func() { <-service.concurrency }()
-	case <-ctx.Done():
-		return ExecutionResult{}, ctx.Err()
+	admission, err := service.Acquire(ctx)
+	if err != nil {
+		return ExecutionResult{}, err
+	}
+	defer admission.Release()
+	return service.ExecuteAdmitted(ctx, admission, request, requestInput, sourceInput)
+}
+
+func (service *Service) ExecuteAdmitted(
+	ctx context.Context,
+	admission *Admission,
+	request Request,
+	requestInput Input,
+	sourceInput Input,
+) (ExecutionResult, error) {
+	if admission == nil || admission.service != service {
+		return ExecutionResult{}, invalidf("specialist-render admission lease is invalid")
 	}
 	startedAt := service.now().UTC()
 	request = cloneRequest(request)
@@ -176,15 +210,23 @@ func (service *Service) Execute(
 	if err := validateProviderExecution(execution, request, policy, nonce, before.Generation, startedAt); err != nil {
 		return ExecutionResult{}, err
 	}
-	if _, err := service.observeExactParent(ctx, request); err != nil {
-		return ExecutionResult{}, fmt.Errorf("%w: parent currentness after helper quiescence: %v", ErrOutcomeUnknown, err)
-	}
-
 	files := make([]OutputFile, len(execution.Files))
 	var total int64
 	for index, payload := range execution.Files {
 		files[index] = payload.File
 		total += payload.File.ByteLength
+	}
+	settlementSeconds := policy.SettlementBaseSeconds +
+		(total+policy.CustodyBytesPerSecond-1)/policy.CustodyBytesPerSecond
+	if settlementSeconds > policy.SettlementMaximumSeconds {
+		return ExecutionResult{}, fmt.Errorf("%w: output exceeds provider settlement budget", ErrOutcomeUnknown)
+	}
+	settlementCtx, cancelSettlement := context.WithTimeout(
+		context.Background(), time.Duration(settlementSeconds)*time.Second,
+	)
+	defer cancelSettlement()
+	if _, err := service.observeExactParent(settlementCtx, request); err != nil {
+		return ExecutionResult{}, fmt.Errorf("%w: parent currentness after helper quiescence: %v", ErrOutcomeUnknown, err)
 	}
 	receipt := Receipt{
 		Schema:           ReceiptSchema,
@@ -212,7 +254,7 @@ func (service *Service) Execute(
 		return ExecutionResult{}, fmt.Errorf("%w: constructed receipt is invalid: %v", ErrOutcomeUnknown, err)
 	}
 	result, err := service.publishResult(
-		ctx,
+		settlementCtx,
 		keys,
 		ExecutionResult{Receipt: receipt, Files: execution.Files},
 	)
@@ -270,6 +312,9 @@ func ValidateRequest(request Request) error {
 	jobID := strings.TrimPrefix(request.ArtifactRenderJobRef, "ambit://artifact-render-jobs/")
 	if parsed, err := uuid.Parse(jobID); err != nil || parsed.String() != jobID || parsed == uuid.Nil {
 		return invalidf("artifactRenderJobRef must end in a canonical UUID")
+	}
+	if !boundedOperationalRef(request.Composition.Ref, 512) || !exactDigest(request.Composition.Digest) {
+		return invalidf("composition pin is invalid")
 	}
 	if err := generationstop.ValidateSource(request.Source); err != nil {
 		return invalidf("source is invalid: %v", err)
@@ -338,6 +383,8 @@ func ComputeRequestFingerprint(request Request) (string, error) {
 		RequestSchema,
 		request.OperationID,
 		request.ArtifactRenderJobRef,
+		request.Composition.Ref,
+		request.Composition.Digest,
 		request.Source.ProviderResourceID,
 		request.Source.ExpectedProfile,
 		request.Source.ExpectedRuntimeKind,
@@ -508,15 +555,12 @@ func ValidateReceiptWithPolicy(receipt Receipt, policy Policy) error {
 		launch.ExecutableDigest != policy.ProcessExecutableDigest ||
 		launch.EnvironmentDigest != policy.EnvironmentDigest ||
 		launch.PIDsLimit != policy.PIDsLimit || launch.MemoryBytes != policy.MemoryBytes ||
-		launch.NanoCPUs != policy.NanoCPUs || launch.ShmSize != policy.ShmSize ||
+		launch.NanoCPUs != policy.NanoCPUs || launch.ShmSize != policy.ShmSize || launch.Runtime != policy.Runtime ||
+		launch.RuntimeStatusDigest != policy.RuntimeStatusDigest ||
 		!stringMapsEqual(launch.Tmpfs, expectedTmpfs(policy)) {
 		return invalidf("receipt launch differs from its provider policy")
 	}
-	if len(policy.Seccomp) == 0 {
-		if launch.SeccompMode != "docker-default" || launch.SeccompDigest != "" {
-			return invalidf("receipt default seccomp differs from its provider policy")
-		}
-	} else if launch.SeccompMode != "custom" || launch.SeccompDigest != sha256Digest(policy.Seccomp) {
+	if launch.SeccompMode != "custom" || launch.SeccompDigest != sha256Digest(policy.Seccomp) {
 		return invalidf("receipt custom seccomp differs from its provider policy")
 	}
 	return nil
@@ -540,9 +584,11 @@ func validateReceiptLaunch(receipt Receipt) error {
 		launch.ProcessNamespace == launch.ParentProcessNamespace ||
 		launch.NetworkMode != "none" || !launch.ReadonlyRootfs ||
 		len(launch.CapDrop) != 1 || launch.CapDrop[0] != "ALL" || !launch.NoNewPrivileges ||
+		launch.SeccompKernelMode != 2 || launch.EffectiveCapabilities != "0000000000000000" ||
 		launch.MountCount != 0 || launch.PIDsLimit <= 0 || launch.MemoryBytes <= 0 ||
 		launch.NanoCPUs <= 0 || launch.ShmSize < 0 || len(launch.Tmpfs) != 2 ||
-		launch.Tmpfs["/workspace"] == "" || launch.Tmpfs["/tmp/ambit-task"] == "" {
+		launch.Tmpfs["/workspace"] == "" || launch.Tmpfs["/tmp/ambit-task"] == "" || launch.Runtime != "runc" ||
+		!exactDigest(launch.RuntimeStatusDigest) {
 		return invalidf("receipt launch does not satisfy intrinsic provider isolation")
 	}
 	if _, err := hex.DecodeString(launch.ContainerID); err != nil {
@@ -552,12 +598,8 @@ func validateReceiptLaunch(receipt Receipt) error {
 		launch.ProcessIdentity.StartTicks == "0" {
 		return invalidf("receipt launch process identity is invalid")
 	}
-	if request.Image.PackID == "web-browser" {
-		if launch.SeccompMode != "custom" || !exactDigest(launch.SeccompDigest) {
-			return invalidf("browser receipt requires exact custom seccomp")
-		}
-	} else if launch.SeccompMode != "docker-default" || launch.SeccompDigest != "" {
-		return invalidf("non-browser receipt requires Docker default seccomp")
+	if launch.SeccompMode != "custom" || !exactDigest(launch.SeccompDigest) {
+		return invalidf("receipt requires exact provider-policy seccomp")
 	}
 	return nil
 }
@@ -600,7 +642,8 @@ func requireInput(input Input, bytes int64, digest string, maximum int64, label 
 }
 
 func requireExactPolicy(request Request, policy Policy) error {
-	if request.ProviderPolicy != policy.Authority || request.Image != policy.Image || request.Interface != policy.Interface ||
+	if request.ProviderPolicy != policy.Authority || request.Composition != policy.Composition ||
+		request.Image != policy.Image || request.Interface != policy.Interface ||
 		request.Executor != policy.Executor || request.Executable != policy.Executable {
 		return fmt.Errorf("%w: caller pins differ from runner-owned policy", ErrConflict)
 	}
@@ -633,19 +676,18 @@ func validateProviderExecution(
 		execution.Launch.ProcessNamespace == execution.Launch.ParentProcessNamespace ||
 		execution.Launch.NetworkMode != "none" || !execution.Launch.ReadonlyRootfs ||
 		len(execution.Launch.CapDrop) != 1 || execution.Launch.CapDrop[0] != "ALL" ||
-		!execution.Launch.NoNewPrivileges || execution.Launch.MountCount != 0 ||
+		!execution.Launch.NoNewPrivileges || execution.Launch.SeccompKernelMode != 2 ||
+		execution.Launch.EffectiveCapabilities != "0000000000000000" || execution.Launch.MountCount != 0 ||
 		!stringMapsEqual(execution.Launch.Tmpfs, expectedTmpfs(policy)) ||
 		execution.Launch.ExecutablePath != policy.ProcessExecutablePath ||
 		execution.Launch.ExecutableDigest != policy.ProcessExecutableDigest ||
 		execution.Launch.PIDsLimit != policy.PIDsLimit || execution.Launch.MemoryBytes != policy.MemoryBytes ||
-		execution.Launch.NanoCPUs != policy.NanoCPUs || execution.Launch.ShmSize != policy.ShmSize {
+		execution.Launch.NanoCPUs != policy.NanoCPUs || execution.Launch.ShmSize != policy.ShmSize ||
+		execution.Launch.Runtime != policy.Runtime ||
+		execution.Launch.RuntimeStatusDigest != policy.RuntimeStatusDigest {
 		return fmt.Errorf("%w: provider launch observation is incomplete or differs", ErrOutcomeUnknown)
 	}
-	if len(policy.Seccomp) == 0 {
-		if execution.Launch.SeccompMode != "docker-default" || execution.Launch.SeccompDigest != "" {
-			return fmt.Errorf("%w: provider default seccomp observation differs", ErrOutcomeUnknown)
-		}
-	} else if execution.Launch.SeccompMode != "custom" ||
+	if execution.Launch.SeccompMode != "custom" ||
 		execution.Launch.SeccompDigest != sha256Digest(policy.Seccomp) {
 		return fmt.Errorf("%w: provider custom seccomp observation differs", ErrOutcomeUnknown)
 	}

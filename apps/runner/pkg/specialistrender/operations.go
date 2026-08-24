@@ -43,6 +43,8 @@ type OperationStore interface {
 	GetPrivateObject(ctx context.Context, key string, maximumBytes int64) ([]byte, error)
 	OpenPrivateObject(ctx context.Context, key string) (io.ReadCloser, storage.PrivateObjectInfo, error)
 	StatPrivateObject(ctx context.Context, key string) (storage.PrivateObjectInfo, error)
+	ListPrivateObjects(ctx context.Context, prefix string, maximum int) ([]string, error)
+	DeletePrivateObject(ctx context.Context, key string) error
 }
 
 type operationClaim struct {
@@ -104,8 +106,13 @@ func keysForObserve(request ObserveRequest) operationKeys {
 	})
 }
 
-func fileKey(keys operationKeys, ordinal int) string {
-	return fmt.Sprintf("%s/files/%03d.bin", keys.root, ordinal)
+func fileKey(keys operationKeys, receiptDigest string, ordinal int) string {
+	return fmt.Sprintf(
+		"%s/attempts/%s/files/%03d.bin",
+		keys.root,
+		strings.TrimPrefix(receiptDigest, "sha256:"),
+		ordinal,
+	)
 }
 
 func (service *Service) ensureClaim(ctx context.Context, keys operationKeys, request Request) error {
@@ -157,7 +164,7 @@ func (service *Service) readReceipt(
 	}
 	files := make([]Payload, len(receipt.Files))
 	for index, descriptor := range receipt.Files {
-		key := fileKey(keys, index)
+		key := fileKey(keys, receipt.ReceiptDigest, index)
 		info, err := service.store.StatPrivateObject(ctx, key)
 		if err != nil || info.Size != descriptor.ByteLength ||
 			(info.ContentSHA256 != "" && info.ContentSHA256 != descriptor.Digest) ||
@@ -168,8 +175,8 @@ func (service *Service) readReceipt(
 		descriptorCopy := descriptor
 		files[index] = Payload{
 			File: descriptorCopy,
-			Open: func() (io.ReadCloser, error) {
-				reader, info, err := service.store.OpenPrivateObject(ctx, fileKeyCopy)
+			Open: func(openCtx context.Context) (io.ReadCloser, error) {
+				reader, info, err := service.store.OpenPrivateObject(openCtx, fileKeyCopy)
 				if err != nil {
 					return nil, err
 				}
@@ -184,7 +191,77 @@ func (service *Service) readReceipt(
 			Cleanup: func() error { return nil },
 		}
 	}
+	if err := service.garbageCollectAttempts(ctx, keys, receipt.ReceiptDigest); err != nil {
+		return ExecutionResult{}, false, err
+	}
 	return ExecutionResult{Receipt: receipt, Files: files}, true, nil
+}
+
+func (service *Service) garbageCollectAttempts(
+	ctx context.Context,
+	keys operationKeys,
+	winningReceiptDigest string,
+) error {
+	objects, err := service.store.ListPrivateObjects(ctx, keys.root+"/attempts/", MaximumOutputFiles*256)
+	if err != nil {
+		return fmt.Errorf("%w: list specialist-render attempt custody: %v", ErrUnavailable, err)
+	}
+	winningPrefix := keys.root + "/attempts/" + strings.TrimPrefix(winningReceiptDigest, "sha256:") + "/"
+	for _, key := range objects {
+		if winningReceiptDigest != "" && strings.HasPrefix(key, winningPrefix) {
+			continue
+		}
+		if err := service.store.DeletePrivateObject(ctx, key); err != nil {
+			return fmt.Errorf("%w: delete abandoned specialist-render attempt: %v", ErrUnavailable, err)
+		}
+		if _, err := service.store.StatPrivateObject(ctx, key); !errors.Is(err, storage.ErrPrivateObjectNotFound) {
+			return fmt.Errorf("%w: abandoned specialist-render attempt remains after deletion", ErrUnavailable)
+		}
+	}
+	return nil
+}
+
+// Reconcile removes only abandoned attempt namespaces. Main calls it after
+// Docker orphan reconciliation and before exposing the execute route, so no
+// live provider task can own the deleted bytes.
+func (service *Service) Reconcile(ctx context.Context) error {
+	objects, err := service.store.ListPrivateObjects(ctx, operationRoot+"/", 100_000)
+	if err != nil {
+		return fmt.Errorf("%w: list specialist-render operations: %v", ErrUnavailable, err)
+	}
+	roots := make(map[string]struct{})
+	for _, key := range objects {
+		relative := strings.TrimPrefix(key, operationRoot+"/")
+		parts := strings.SplitN(relative, "/", 2)
+		if len(parts) != 2 || len(parts[0]) != 64 {
+			return fmt.Errorf("%w: private specialist-render key is malformed", ErrConflict)
+		}
+		if _, err := hex.DecodeString(parts[0]); err != nil {
+			return fmt.Errorf("%w: private specialist-render operation identity is malformed", ErrConflict)
+		}
+		roots[operationRoot+"/"+parts[0]] = struct{}{}
+	}
+	for root := range roots {
+		keys := operationKeys{root: root, claim: root + "/claim.json", receipt: root + "/receipt.json"}
+		winningDigest := ""
+		data, err := service.store.GetPrivateObject(ctx, keys.receipt, MaximumReceiptBytes)
+		switch {
+		case err == nil:
+			var receipt Receipt
+			if decodeErr := generationstop.DecodeCanonicalJSON(data, &receipt); decodeErr != nil ||
+				!exactDigest(receipt.ReceiptDigest) {
+				return fmt.Errorf("%w: durable specialist-render receipt is malformed", ErrConflict)
+			}
+			winningDigest = receipt.ReceiptDigest
+		case errors.Is(err, storage.ErrPrivateObjectNotFound):
+		default:
+			return fmt.Errorf("%w: read specialist-render receipt during reconciliation: %v", ErrUnavailable, err)
+		}
+		if err := service.garbageCollectAttempts(ctx, keys, winningDigest); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (service *Service) publishResult(
@@ -193,11 +270,11 @@ func (service *Service) publishResult(
 	result ExecutionResult,
 ) (ExecutionResult, error) {
 	for index, payload := range result.Files {
-		reader, err := payload.Open()
+		reader, err := payload.Open(ctx)
 		if err != nil {
 			return ExecutionResult{}, fmt.Errorf("%w: open provider output for durable custody: %v", ErrOutcomeUnknown, err)
 		}
-		key := fileKey(keys, index)
+		key := fileKey(keys, result.Receipt.ReceiptDigest, index)
 		createErr := service.store.CreatePrivateObjectStream(
 			ctx, key, reader, payload.File.ByteLength, payload.File.MediaType,
 			map[string]string{"sha256": payload.File.Digest},

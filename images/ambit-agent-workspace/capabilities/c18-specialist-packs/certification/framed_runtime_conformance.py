@@ -73,7 +73,7 @@ class PtyProcess:
         name: str,
         job_root: str,
         hostile: bool,
-        seccomp: Path | None,
+        seccomp: bytes,
     ) -> None:
         master, slave = os.openpty()
         tty.setraw(master)
@@ -124,8 +124,23 @@ class PtyProcess:
         ]
         if pack == "web-browser":
             command.extend(["--shm-size", "1g"])
-        if seccomp is not None:
-            command.extend(["--security-opt", f"seccomp={seccomp}"])
+        seccomp_descriptor = os.memfd_create(
+            "ambit-specialist-seccomp",
+            flags=os.MFD_ALLOW_SEALING | os.MFD_CLOEXEC,
+        )
+        os.write(seccomp_descriptor, seccomp)
+        os.lseek(seccomp_descriptor, 0, os.SEEK_SET)
+        fcntl.fcntl(
+            seccomp_descriptor,
+            fcntl.F_ADD_SEALS,
+            fcntl.F_SEAL_SEAL
+            | fcntl.F_SEAL_SHRINK
+            | fcntl.F_SEAL_GROW
+            | fcntl.F_SEAL_WRITE,
+        )
+        command.extend(
+            ["--security-opt", f"seccomp=/proc/self/fd/{seccomp_descriptor}"]
+        )
         command.extend(
             [
                 "--entrypoint",
@@ -142,13 +157,17 @@ class PtyProcess:
         self.name = name
         self.master = master
         self.pending = bytearray()
-        self.process = subprocess.Popen(
-            command,
-            stdin=slave,
-            stdout=slave,
-            stderr=slave,
-            close_fds=True,
-        )
+        try:
+            self.process = subprocess.Popen(
+                command,
+                stdin=slave,
+                stdout=slave,
+                stderr=slave,
+                close_fds=True,
+                pass_fds=(seccomp_descriptor,),
+            )
+        finally:
+            os.close(seccomp_descriptor)
         os.close(slave)
         flags = fcntl.fcntl(master, fcntl.F_GETFL)
         fcntl.fcntl(master, fcntl.F_SETFL, flags | os.O_NONBLOCK)
@@ -454,30 +473,29 @@ def run_case(args: argparse.Namespace, mode: str) -> dict[str, Any]:
         or image_values[0].get("Id") != args.image_config_digest
     ):
         raise ValueError("provider image config digest differs")
-    seccomp_digest: str | None = None
-    if args.pack == "web-browser":
-        if args.seccomp is None:
-            raise ValueError("web-browser framed conformance requires exact seccomp")
-        seccomp_digest = sha256_file(args.seccomp)
-        expected_seccomp = json.loads(
-            (SOURCE_ROOT / "web-browser/locks/toolchain.lock.json").read_text()
-        )["sandbox"]["conformanceSeccompProfile"]["renderedSha256"]
-        if seccomp_digest != expected_seccomp:
-            raise ValueError("web-browser framed seccomp digest differs")
-    elif args.seccomp is not None:
-        raise ValueError("non-browser framed conformance does not own custom seccomp")
+    if args.seccomp is None:
+        raise ValueError("framed conformance requires exact provider seccomp")
+    seccomp_bytes = args.seccomp.read_bytes()
+    seccomp_digest = sha256_bytes(seccomp_bytes)
+    expected_seccomp = json.loads(
+        (SOURCE_ROOT / "web-browser/locks/toolchain.lock.json").read_text()
+    )["sandbox"]["conformanceSeccompProfile"]["renderedSha256"]
+    if seccomp_digest != expected_seccomp:
+        raise ValueError("framed provider seccomp digest differs")
     name = f"ambit-c18-framed-{mode}-{secrets.token_hex(4)}"
     process = PtyProcess(
-        image=args.image,
+        image=args.image_config_digest,
         pack=args.pack,
         nonce=nonce,
         name=name,
         job_root=request["jobRoot"],
         hostile=mode == "hostile",
-        seccomp=args.seccomp,
+        seccomp=seccomp_bytes,
     )
     try:
         launch = process.provider_launch_observation()
+        if launch["imageId"] != args.image_config_digest:
+            raise ValueError("provider launched a different image config")
         collector = FramedResponseCollector(
             nonce=nonce,
             interface={

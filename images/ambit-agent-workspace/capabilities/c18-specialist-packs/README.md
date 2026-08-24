@@ -123,14 +123,17 @@ Partial frames or transport loss are discarded and remain outcome-unknown until
 provider reconciliation proves a terminal state. Both conformance and framed
 product lanes run with network disabled, all capabilities dropped,
 no-new-privileges, read-only rootfs, bounded PID/memory/CPU resources, private
-tmpfs scratch, and the exact rootless browser seccomp profile for `web-browser`.
+tmpfs scratch, and one exact provider-policy seccomp profile for every pack;
+that profile includes the pinned rootless browser rules required by
+`web-browser`.
 
 The authenticated Runner route is
 `POST /sandboxes/:sandboxId/specialist-renders` with the exact provider JSONL
 content type frozen in `protocol/specialist-render-interface.lock.json`.
 The Runner spools request/source bytes into host-private custody, generates the
 helper nonce, resolves the caller pins against one canonical runner-owned
-policy, and creates an isolated sibling container by immutable image config
+policy, requires the exact caller-authoritative composition pin, and creates an
+isolated sibling container by immutable image config
 digest. It never calls workspace toolbox exec or PTY. Immutable operation
 claims, output objects, and receipts make operation ID plus request fingerprint
 replayable; `POST /sandboxes/:sandboxId/specialist-renders/observe` reports only
@@ -138,6 +141,13 @@ absent, partial, or complete durable state. Current parent generation discovery
 uses the provider-owner contract at
 `POST /sandboxes/:sandboxId/generation/observe-current`, avoiding any fabricated
 working-copy identity.
+
+Runner policy generation is fail-closed: `cmd/specialist-render-policy` accepts
+the complete canonical FullImageCompositionV2 and routing documents, recreates
+both document/receipt digests, proves the exact four routed pack image config
+digests are locally present, probes each pinned interpreter under the sealed
+source-owned seccomp profile and exact `runc` status, and only then writes a
+new no-replace policy file. Free composition or image pins are not accepted.
 
 Reproducible image export must set BuildKit's predefined
 `SOURCE_DATE_EPOCH=0` build argument and use an OCI or Docker output with

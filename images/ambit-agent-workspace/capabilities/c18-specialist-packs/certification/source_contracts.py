@@ -346,8 +346,12 @@ def _verify_web_pack(root: Path) -> None:
     rendered = render_profile(root / "policy/playwright-seccomp-v1.62.1.json")
     _require(
         seccomp.get("renderer") == "../../certification/render_browser_seccomp.py"
+        and seccomp.get("renderedPath")
+        == "../../policy/specialist-seccomp-v1.json"
         and seccomp.get("renderedSha256")
-        == f"sha256:{hashlib.sha256(rendered).hexdigest()}",
+        == f"sha256:{hashlib.sha256(rendered).hexdigest()}"
+        and (root / "policy/specialist-seccomp-v1.json").read_bytes()
+        == rendered,
         "web rendered seccomp profile identity is invalid",
     )
     npm = _load_json(lock_root / "npm-inputs.lock.json")
@@ -391,7 +395,11 @@ def _verify_dockerfile(root: Path, pack_id: str, expected: dict[str, object]) ->
     _require("verify-build-identity.sh" in source, f"{pack_id} does not bind the source set")
     _require(f'io.ambit.runtime-pack="{expected["ref"]}"' in source, f"{pack_id} OCI label mismatch")
     _require("USER 1000:1000" in source, f"{pack_id} final runtime is not non-root")
-    _require("forbidden-until-full-image-binding" in source, f"{pack_id} activation is not fail-closed")
+    _require(
+        'io.ambit.activation="provider-policy-and-composition-bound-only"'
+        in source,
+        f"{pack_id} activation is not policy-and-composition bound",
+    )
     _require(
         not re.search(r"\b(?:apt-get\s+(?:install|update)|curl\s|wget\s|npm\s+install|pip\s+install)\b", source),
         f"{pack_id} Dockerfile contains an online/bootstrap installer",
@@ -489,6 +497,8 @@ def _framed_interface_pin(root: Path) -> dict[str, str]:
             },
             "processNamespace": "provider-owned-no-agent-processes",
             "rootFilesystem": "read-only",
+            "seccomp": "exact-provider-policy-profile-all-packs",
+            "ociRuntime": "runc",
         },
         "specialist framed runtime isolation differs",
     )
@@ -507,6 +517,10 @@ def _framed_interface_pin(root: Path) -> dict[str, str]:
         and provider.get("authority", {}).get("workspacePtyOrExec") == "forbidden"
         and provider.get("authority", {}).get("filesystem")
         == "runner-host-private-custody-only"
+        and provider.get("authority", {}).get("composition")
+        == "exact-caller-authority-pin-bound-into-request-fingerprint-and-receipt"
+        and provider.get("authority", {}).get("imageActivation")
+        == "provider-policy-and-composition-bound-only"
         and provider.get("authority", {}).get("currentness")
         == "exact-parent-generation-before-launch-and-after-child-quiescence"
         and provider.get("authority", {}).get("durableIdempotency")
@@ -639,6 +653,11 @@ def verify_source(root: Path, *, verify_hashes: bool = True) -> dict[str, object
         _require(pack.get("packRevisionRef") == expected["ref"], f"{pack_id} revision ref mismatch")
         _require(pack.get("revision") == 1 and pack.get("installMode") == "image_layer", f"{pack_id} revision/install mode is invalid")
         _require(pack.get("state") == "candidate", f"{pack_id} source state is invalid")
+        _require(
+            pack.get("promotion")
+            == "forbidden-until-provider-policy-and-composition-binding-passes",
+            f"{pack_id} promotion authority is invalid",
+        )
         _require(pack.get("capabilities") == {"provides": expected["provides"], "requires": expected["requires"]}, f"{pack_id} capabilities are invalid")
         _require(pack.get("runtime") == {"hostSockets": "absent", "networkDuringConformance": "none", "packageInstallers": "absent", "uid": 1000}, f"{pack_id} runtime boundary is invalid")
         checks = pack.get("conformance", {}).get("requiredChecks")
