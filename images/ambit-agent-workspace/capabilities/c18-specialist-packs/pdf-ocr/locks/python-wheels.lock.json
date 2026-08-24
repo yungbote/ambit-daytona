@@ -1,0 +1,89 @@
+{
+  "directRequirements": [
+    "pikepdf",
+    "pillow",
+    "pypdf",
+    "reportlab"
+  ],
+  "installScripts": "forbidden",
+  "packRef": "ambit.runtime-pack/pdf-ocr@1",
+  "platform": "linux/amd64-glibc-manylinux_2_28",
+  "pythonVersion": "3.14.7",
+  "resolvedDistributionCount": 7,
+  "resolver": "pip-download-only-binary-require-hashes",
+  "runtimeInstaller": "absent",
+  "schema": "ambit.c18-python-wheel-lock/v1",
+  "transitiveGraphDigest": "sha256:946719ccd62f8a1da166154d5026684db2fd3b44cedf2c426d251bc0b2b72876",
+  "wheels": [
+    {
+      "abiTag": "cp314",
+      "bytes": 251240,
+      "distribution": "charset-normalizer",
+      "filename": "charset_normalizer-3.5.1-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "platformTag": "manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64",
+      "pythonTag": "cp314",
+      "sha256": "sha256:15f024313246a4ed976c60f440bb8d257815513a681d212ff74fd46f7d715a90",
+      "version": "3.5.1"
+    },
+    {
+      "abiTag": "cp314",
+      "bytes": 5246003,
+      "distribution": "lxml",
+      "filename": "lxml-6.1.2-cp314-cp314-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl",
+      "platformTag": "manylinux_2_26_x86_64.manylinux_2_28_x86_64",
+      "pythonTag": "cp314",
+      "sha256": "sha256:47e367dfe341521426692819803e260d0673899c0ff611f14af978d725e2c999",
+      "version": "6.1.2"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 129956,
+      "distribution": "packaging",
+      "filename": "packaging-26.3-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c",
+      "version": "26.3"
+    },
+    {
+      "abiTag": "abi3",
+      "bytes": 2262093,
+      "distribution": "pikepdf",
+      "filename": "pikepdf-10.12.0-cp314-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "platformTag": "manylinux_2_27_x86_64.manylinux_2_28_x86_64",
+      "pythonTag": "cp314",
+      "sha256": "sha256:84c3dcf8aefcc12d4d0642bbbceaf198acfb4a29a4630bbc134423378f824cd8",
+      "version": "10.12.0"
+    },
+    {
+      "abiTag": "cp314",
+      "bytes": 6936962,
+      "distribution": "pillow",
+      "filename": "pillow-12.3.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "platformTag": "manylinux_2_27_x86_64.manylinux_2_28_x86_64",
+      "pythonTag": "cp314",
+      "sha256": "sha256:251bf95b67017e27b13d82f5b326234ca62d70f9cf4c2b9032de2358a3b12c7b",
+      "version": "12.3.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 385060,
+      "distribution": "pypdf",
+      "filename": "pypdf-6.16.2-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:c8b09a59399062fb45a1b8156c18a787a10a3dae03ac9674397a226712c94604",
+      "version": "6.16.2"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 1957258,
+      "distribution": "reportlab",
+      "filename": "reportlab-5.0.1-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:1c36e6bb0e71780c72331eba60da7f602e8d4389a8723825af71342e49d791e8",
+      "version": "5.0.1"
+    }
+  ]
+}

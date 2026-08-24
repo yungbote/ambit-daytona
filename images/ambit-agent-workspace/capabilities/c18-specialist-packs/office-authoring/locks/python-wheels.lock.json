@@ -1,0 +1,88 @@
+{
+  "directRequirements": [
+    "openpyxl",
+    "python-pptx",
+    "xlsxwriter"
+  ],
+  "installScripts": "forbidden",
+  "packRef": "ambit.runtime-pack/office-authoring@1",
+  "platform": "linux/amd64-glibc-manylinux_2_28",
+  "pythonVersion": "3.14.7",
+  "resolvedDistributionCount": 7,
+  "resolver": "pip-download-only-binary-require-hashes",
+  "runtimeInstaller": "absent",
+  "schema": "ambit.c18-python-wheel-lock/v1",
+  "transitiveGraphDigest": "sha256:a037985b2ce422fc14e7cc6d8ac0f94f2296912c33b22715926c02ec4b58661d",
+  "wheels": [
+    {
+      "abiTag": "none",
+      "bytes": 18059,
+      "distribution": "et-xmlfile",
+      "filename": "et_xmlfile-2.0.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa",
+      "version": "2.0.0"
+    },
+    {
+      "abiTag": "cp314",
+      "bytes": 5246003,
+      "distribution": "lxml",
+      "filename": "lxml-6.1.2-cp314-cp314-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl",
+      "platformTag": "manylinux_2_26_x86_64.manylinux_2_28_x86_64",
+      "pythonTag": "cp314",
+      "sha256": "sha256:47e367dfe341521426692819803e260d0673899c0ff611f14af978d725e2c999",
+      "version": "6.1.2"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 250910,
+      "distribution": "openpyxl",
+      "filename": "openpyxl-3.1.5-py2.py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py2.py3",
+      "sha256": "sha256:5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2",
+      "version": "3.1.5"
+    },
+    {
+      "abiTag": "cp314",
+      "bytes": 6936962,
+      "distribution": "pillow",
+      "filename": "pillow-12.3.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "platformTag": "manylinux_2_27_x86_64.manylinux_2_28_x86_64",
+      "pythonTag": "cp314",
+      "sha256": "sha256:251bf95b67017e27b13d82f5b326234ca62d70f9cf4c2b9032de2358a3b12c7b",
+      "version": "12.3.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 472788,
+      "distribution": "python-pptx",
+      "filename": "python_pptx-1.0.2-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:160838e0b8565a8b1f67947675886e9fea18aa5e795db7ae531606d68e785cba",
+      "version": "1.0.2"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 45571,
+      "distribution": "typing-extensions",
+      "filename": "typing_extensions-4.16.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+      "version": "4.16.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 175315,
+      "distribution": "xlsxwriter",
+      "filename": "xlsxwriter-3.2.9-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:9a5db42bc5dff014806c58a20b9eae7322a134abb6fce3c92c181bfb275ec5b3",
+      "version": "3.2.9"
+    }
+  ]
+}

@@ -1,0 +1,1096 @@
+{
+  "directRequirements": [
+    "duckdb",
+    "ipykernel",
+    "jupyterlab",
+    "matplotlib",
+    "networkx",
+    "numpy",
+    "pandas",
+    "polars",
+    "pyarrow",
+    "scipy",
+    "sympy"
+  ],
+  "installScripts": "forbidden",
+  "packRef": "ambit.runtime-pack/data-research@1",
+  "platform": "linux/amd64-glibc-manylinux_2_28",
+  "pythonVersion": "3.14.7",
+  "resolvedDistributionCount": 107,
+  "resolver": "pip-download-only-binary-require-hashes",
+  "runtimeInstaller": "absent",
+  "schema": "ambit.c18-python-wheel-lock/v1",
+  "transitiveGraphDigest": "sha256:8fb47a1cf1c78e344a65e38225591eae2f7120fcbc92d8ae22a3f0b8beda7f2c",
+  "wheels": [
+    {
+      "abiTag": "none",
+      "bytes": 125813,
+      "distribution": "anyio",
+      "filename": "anyio-4.14.2-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494",
+      "version": "4.14.2"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 14657,
+      "distribution": "argon2-cffi",
+      "filename": "argon2_cffi-25.1.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:fdc8b074db390fccb6eb4a3604ae7231f219aa669a2652e0f20e16ba513d5741",
+      "version": "25.1.0"
+    },
+    {
+      "abiTag": "abi3",
+      "bytes": 26597,
+      "distribution": "argon2-cffi-bindings",
+      "filename": "argon2_cffi_bindings-26.1.0-cp310-abi3-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl",
+      "platformTag": "manylinux_2_26_x86_64.manylinux_2_28_x86_64",
+      "pythonTag": "cp310",
+      "sha256": "sha256:27f1821903e2ceadcb88ec2b45ef190897b7682449c772f4d9b53e42c520cf29",
+      "version": "26.1.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 68797,
+      "distribution": "arrow",
+      "filename": "arrow-1.4.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:749f0769958ebdc79c173ff0b0670d59051a535fa26e8eba02953dc19eb43205",
+      "version": "1.4.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 28702,
+      "distribution": "asttokens",
+      "filename": "asttokens-3.0.2-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:9da13157f5b28becde0bd374fc677dcd3c290614264eff096f167c469cd9f933",
+      "version": "3.0.2"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 8403,
+      "distribution": "async-lru",
+      "filename": "async_lru-2.3.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:eea27b01841909316f2cc739807acea1c623df2be8c5cfad7583286397bb8315",
+      "version": "2.3.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 67548,
+      "distribution": "attrs",
+      "filename": "attrs-26.1.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309",
+      "version": "26.1.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 10196845,
+      "distribution": "babel",
+      "filename": "babel-2.18.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:e2b422b277c2b9a9630c1d7903c2a00d0830c409c59ac8cae9081c92f1aeba35",
+      "version": "2.18.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 109924,
+      "distribution": "beautifulsoup4",
+      "filename": "beautifulsoup4-4.15.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:d6f88de62e1d4e38ecb1077eb9724cd0eff29d2a08ca16a401e9b9e93f117cf9",
+      "version": "4.15.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 165109,
+      "distribution": "bleach",
+      "filename": "bleach-6.4.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:4b6b6a54fff2e69a3dde9d21cc6301220bee3c3cb792187d11403fd795031081",
+      "version": "6.4.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 136983,
+      "distribution": "certifi",
+      "filename": "certifi-2026.7.22-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775",
+      "version": "2026.7.22"
+    },
+    {
+      "abiTag": "cp314",
+      "bytes": 221525,
+      "distribution": "cffi",
+      "filename": "cffi-2.1.1-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+      "platformTag": "manylinux2014_x86_64.manylinux_2_17_x86_64",
+      "pythonTag": "cp314",
+      "sha256": "sha256:b0431303acaea1089ad4b3e9ce4e6518193def1118d4073ca848635ee4ea2e96",
+      "version": "2.1.1"
+    },
+    {
+      "abiTag": "cp314",
+      "bytes": 251240,
+      "distribution": "charset-normalizer",
+      "filename": "charset_normalizer-3.5.1-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "platformTag": "manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64",
+      "pythonTag": "cp314",
+      "sha256": "sha256:15f024313246a4ed976c60f440bb8d257815513a681d212ff74fd46f7d715a90",
+      "version": "3.5.1"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 7294,
+      "distribution": "comm",
+      "filename": "comm-0.2.3-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:c615d91d75f7f04f095b30d1c1711babd43bdc6419c1be9886a85f2f4e489417",
+      "version": "0.2.3"
+    },
+    {
+      "abiTag": "cp314",
+      "bytes": 363819,
+      "distribution": "contourpy",
+      "filename": "contourpy-1.3.3-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "platformTag": "manylinux_2_27_x86_64.manylinux_2_28_x86_64",
+      "pythonTag": "cp314",
+      "sha256": "sha256:f64836de09927cba6f79dcd00fdd7d5329f3fccc633468507079c829ca4db4e3",
+      "version": "1.3.3"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 8321,
+      "distribution": "cycler",
+      "filename": "cycler-0.12.1-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:85cef7cff222d8644161529808465972e51340599459b8ac3ccbac5a854e0d30",
+      "version": "0.12.1"
+    },
+    {
+      "abiTag": "cp314",
+      "bytes": 3927115,
+      "distribution": "debugpy",
+      "filename": "debugpy-1.8.21-cp314-cp314-manylinux_2_34_x86_64.whl",
+      "platformTag": "manylinux_2_34_x86_64",
+      "pythonTag": "cp314",
+      "sha256": "sha256:3d6922439bf33fd38a3e2c447869ebc7b97da5cd3d329ff1ef9bc06c4903437e",
+      "version": "1.8.21"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 25604,
+      "distribution": "defusedxml",
+      "filename": "defusedxml-0.7.1-py2.py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py2.py3",
+      "sha256": "sha256:a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61",
+      "version": "0.7.1"
+    },
+    {
+      "abiTag": "cp314",
+      "bytes": 21513851,
+      "distribution": "duckdb",
+      "filename": "duckdb-1.5.5-cp314-cp314-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl",
+      "platformTag": "manylinux_2_26_x86_64.manylinux_2_28_x86_64",
+      "pythonTag": "cp314",
+      "sha256": "sha256:fbf0f2d48b43c6c304d00463b463c27ead6c4b01c3c1816b750f728decf71afe",
+      "version": "1.5.5"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 28317,
+      "distribution": "executing",
+      "filename": "executing-2.2.1-py2.py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py2.py3",
+      "sha256": "sha256:760643d3452b4d777d295bb167ccc74c64a81df23fb5e08eff250c425a4b2017",
+      "version": "2.2.1"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 27413,
+      "distribution": "fastjsonschema",
+      "filename": "fastjsonschema-2.22.2-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:0fb3915616adac85ccfdd737d26be1089845d2019819505b42d39888458f74d4",
+      "version": "2.22.2"
+    },
+    {
+      "abiTag": "cp314",
+      "bytes": 4923946,
+      "distribution": "fonttools",
+      "filename": "fonttools-4.63.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+      "platformTag": "manylinux2014_x86_64.manylinux_2_17_x86_64",
+      "pythonTag": "cp314",
+      "sha256": "sha256:308f957cdeaf8abe4e5f2f124902ef405448af92c90f80e302a3b771c2e6116b",
+      "version": "4.63.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 9121,
+      "distribution": "fqdn",
+      "filename": "fqdn-1.5.1-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:3a179af3761e4df6eb2e026ff9e1a3033d3587bf980a0b1b2e1e5d08d7358014",
+      "version": "1.5.1"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 37515,
+      "distribution": "h11",
+      "filename": "h11-0.16.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86",
+      "version": "0.16.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 78784,
+      "distribution": "httpcore",
+      "filename": "httpcore-1.0.9-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55",
+      "version": "1.0.9"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 73517,
+      "distribution": "httpx",
+      "filename": "httpx-0.28.1-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad",
+      "version": "0.28.1"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 68550,
+      "distribution": "idna",
+      "filename": "idna-3.19-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:815e7be7a7806d54abb586dc943addc79e8b2ee16915059658cbeff4b1b43bf4",
+      "version": "3.19"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 120583,
+      "distribution": "ipykernel",
+      "filename": "ipykernel-7.3.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:897eb64da762549ef610698fca5e9675195ec6ac8ec7f19d81ce1ca20c876057",
+      "version": "7.3.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 625974,
+      "distribution": "ipython",
+      "filename": "ipython-9.16.1-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:4acae635506f6d352d94c4899a19d5f85f8bc4d230932342dca556fdab1c69b4",
+      "version": "9.16.1"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 8074,
+      "distribution": "ipython-pygments-lexers",
+      "filename": "ipython_pygments_lexers-1.1.1-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:a9462224a505ade19a605f71f8fa63c2048833ce50abc86768a0d81d876dc81c",
+      "version": "1.1.1"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 11321,
+      "distribution": "isoduration",
+      "filename": "isoduration-20.11.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:b2904c2a4228c3d44f409c8ae8e2370eb21a26f7ac2ec5446df141dde3452042",
+      "version": "20.11.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 4884812,
+      "distribution": "jedi",
+      "filename": "jedi-0.20.0-py2.py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py2.py3",
+      "sha256": "sha256:7bdd9c2634f56713299976f4cbd59cb3fa92165cc5e05ea811fb253480728b67",
+      "version": "0.20.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 134899,
+      "distribution": "jinja2",
+      "filename": "jinja2-3.1.6-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67",
+      "version": "3.1.6"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 36570,
+      "distribution": "json5",
+      "filename": "json5-0.15.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:56636a30c0e8a4665fe2179c0212f32eae3796dea89ea6f649b9436ecdb39618",
+      "version": "0.15.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 7659,
+      "distribution": "jsonpointer",
+      "filename": "jsonpointer-3.1.1-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:8ff8b95779d071ba472cf5bc913028df06031797532f08a7d5b602d8b2a488ca",
+      "version": "3.1.1"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 90630,
+      "distribution": "jsonschema",
+      "filename": "jsonschema-4.26.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:d489f15263b8d200f8387e64b4c3a75f06629559fb73deb8fdfb525f2dab50ce",
+      "version": "4.26.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 18437,
+      "distribution": "jsonschema-specifications",
+      "filename": "jsonschema_specifications-2025.9.1-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe",
+      "version": "2025.9.1"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 915266,
+      "distribution": "jupyter-builder",
+      "filename": "jupyter_builder-1.2.2-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:6ebcd4c49daf5df6a18068a74a48010406700ed90a76c189fac43eaf85c60c63",
+      "version": "1.2.2"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 109828,
+      "distribution": "jupyter-client",
+      "filename": "jupyter_client-8.9.1-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:0b7a295bc46e8751e9adae84781f726c851c1d911bd793edc4a3bde942e3da81",
+      "version": "8.9.1"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 29032,
+      "distribution": "jupyter-core",
+      "filename": "jupyter_core-5.9.1-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:ebf87fdc6073d142e114c72c9e29a9d7ca03fad818c5d300ce2adc1fb0743407",
+      "version": "5.9.1"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 19512,
+      "distribution": "jupyter-events",
+      "filename": "jupyter_events-0.12.1-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:c366585253f537a627da52fa7ca7410c5b5301fe893f511e7b077c2d93ec8bcf",
+      "version": "0.12.1"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 77513,
+      "distribution": "jupyter-lsp",
+      "filename": "jupyter_lsp-2.3.1-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:71b954d834e85ff3096400554f2eefaf7fe37053036f9a782b0f7c5e42dadb81",
+      "version": "2.3.1"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 393143,
+      "distribution": "jupyter-server",
+      "filename": "jupyter_server-2.20.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:c3b67c93c471e947c18b5026f04f21614218adb706df8f48227d3ee8e0a7cdcc",
+      "version": "2.20.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 13704,
+      "distribution": "jupyter-server-terminals",
+      "filename": "jupyter_server_terminals-0.5.4-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:55be353fc74a80bc7f3b20e6be50a55a61cd525626f578dcb66a5708e2007d14",
+      "version": "0.5.4"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 17168312,
+      "distribution": "jupyterlab",
+      "filename": "jupyterlab-4.6.3-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:0a1ebc6567186f1eabd99536e94df7ed9e96d1e7c5ddf3e4406ae16e88abacb7",
+      "version": "4.6.3"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 15884,
+      "distribution": "jupyterlab-pygments",
+      "filename": "jupyterlab_pygments-0.3.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:841a89020971da1d8693f1a99997aefc5dc424bb1b251fd6322462a1b8842780",
+      "version": "0.3.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 59830,
+      "distribution": "jupyterlab-server",
+      "filename": "jupyterlab_server-2.28.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:e4355b148fdcf34d312bbbc80f22467d6d20460e8b8736bf235577dd18506968",
+      "version": "2.28.0"
+    },
+    {
+      "abiTag": "cp314",
+      "bytes": 1475913,
+      "distribution": "kiwisolver",
+      "filename": "kiwisolver-1.5.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+      "platformTag": "manylinux2014_x86_64.manylinux_2_17_x86_64",
+      "pythonTag": "cp314",
+      "sha256": "sha256:80aa065ffd378ff784822a6d7c3212f2d5f5e9c3589614b5c228b311fd3063ac",
+      "version": "1.5.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 113151,
+      "distribution": "lark",
+      "filename": "lark-1.3.1-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:c629b661023a014c37da873b4ff58a817398d12635d3bbb2c5a03be7fe5d1e12",
+      "version": "1.3.1"
+    },
+    {
+      "abiTag": "cp314",
+      "bytes": 23005,
+      "distribution": "markupsafe",
+      "filename": "markupsafe-3.0.3-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "platformTag": "manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64",
+      "pythonTag": "cp314",
+      "sha256": "sha256:457a69a9577064c05a97c41f4e65148652db078a3a509039e64d3467b9e7ef97",
+      "version": "3.0.3"
+    },
+    {
+      "abiTag": "cp314",
+      "bytes": 11131087,
+      "distribution": "matplotlib",
+      "filename": "matplotlib-3.11.1-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "platformTag": "manylinux_2_27_x86_64.manylinux_2_28_x86_64",
+      "pythonTag": "cp314",
+      "sha256": "sha256:5af0dcda57d471440a7b5b623e70e0a61003518443d9098f211a96ecfbbc25be",
+      "version": "3.11.1"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 9534,
+      "distribution": "matplotlib-inline",
+      "filename": "matplotlib_inline-0.2.2-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:3c821cf1c209f59fb2d2d64abbf5b23b67bcb2210d663f9918dd851c6da1fcf6",
+      "version": "0.2.2"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 66862,
+      "distribution": "mistune",
+      "filename": "mistune-3.3.4-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:ee015381e955e370962968befe1d729ab60fafb6a715ac6751763fbce38c8d4a",
+      "version": "3.3.4"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 536198,
+      "distribution": "mpmath",
+      "filename": "mpmath-1.3.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c",
+      "version": "1.3.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 25288,
+      "distribution": "nbclient",
+      "filename": "nbclient-0.11.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:ef7fa0d59d6e1d41103933d8a445a18d5de860ca6b613b87b8574accdb3c2895",
+      "version": "0.11.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 261927,
+      "distribution": "nbconvert",
+      "filename": "nbconvert-7.17.1-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:aa85c087b435e7bf1ffd03319f658e285f2b89eccab33bc1ba7025495ab3e7c8",
+      "version": "7.17.1"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 79849,
+      "distribution": "nbformat",
+      "filename": "nbformat-5.11.1-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:cc6698fa75f4fab8755ead786317815f13a6fee3b53311c0abb1a8b51d52f7ec",
+      "version": "5.11.1"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 7843,
+      "distribution": "nest-asyncio2",
+      "filename": "nest_asyncio2-1.7.2-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:f5dfa702f3f81f6a03857e9a19e2ba578c0946a4ad417b4c50a24d7ba641fe01",
+      "version": "1.7.2"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 2068504,
+      "distribution": "networkx",
+      "filename": "networkx-3.6.1-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:d47fbf302e7d9cbbb9e2555a0d267983d2aa476bac30e90dfbe5669bd57f3762",
+      "version": "3.6.1"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 13307,
+      "distribution": "notebook-shim",
+      "filename": "notebook_shim-0.2.4-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:411a5be4e9dc882a074ccbcae671eda64cceb068767e9a3419096986560e1cef",
+      "version": "0.2.4"
+    },
+    {
+      "abiTag": "cp314",
+      "bytes": 16713701,
+      "distribution": "numpy",
+      "filename": "numpy-2.5.2-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "platformTag": "manylinux_2_27_x86_64.manylinux_2_28_x86_64",
+      "pythonTag": "cp314",
+      "sha256": "sha256:318b9a4c845dbea06708a29c84ee429cc3065048db34cdb799047643492050ee",
+      "version": "2.5.2"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 129956,
+      "distribution": "packaging",
+      "filename": "packaging-26.3-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c",
+      "version": "26.3"
+    },
+    {
+      "abiTag": "cp314",
+      "bytes": 10963120,
+      "distribution": "pandas",
+      "filename": "pandas-3.0.5-cp314-cp314-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl",
+      "platformTag": "manylinux_2_24_x86_64.manylinux_2_28_x86_64",
+      "pythonTag": "cp314",
+      "sha256": "sha256:9e94c2c5ca43bd3ca32bf64d32308887b65e5f9bfd8023ea52755107a999f93b",
+      "version": "3.0.5"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 8663,
+      "distribution": "pandocfilters",
+      "filename": "pandocfilters-1.5.1-py2.py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py2.py3",
+      "sha256": "sha256:93be382804a9cdb0a7267585f157e5d1731bbe5545a85b268d6f5fe6232de2bc",
+      "version": "1.5.1"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 107025,
+      "distribution": "parso",
+      "filename": "parso-0.8.7-py2.py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py2.py3",
+      "sha256": "sha256:a8926eb2a1b915486941fdbd31e86a4baf88fe8c210f25f2f35ecec5b574ca1c",
+      "version": "0.8.7"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 63772,
+      "distribution": "pexpect",
+      "filename": "pexpect-4.9.0-py2.py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py2.py3",
+      "sha256": "sha256:7236d1e080e4936be2dc3e326cec0af72acf9212a7e1d060210e70a47e253523",
+      "version": "4.9.0"
+    },
+    {
+      "abiTag": "cp314",
+      "bytes": 6936962,
+      "distribution": "pillow",
+      "filename": "pillow-12.3.0-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "platformTag": "manylinux_2_27_x86_64.manylinux_2_28_x86_64",
+      "pythonTag": "cp314",
+      "sha256": "sha256:251bf95b67017e27b13d82f5b326234ca62d70f9cf4c2b9032de2358a3b12c7b",
+      "version": "12.3.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 23491,
+      "distribution": "platformdirs",
+      "filename": "platformdirs-4.11.3-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:5ed065d443751de711da036041a7a214122efc4a4de393b3f4137ba5576540e7",
+      "version": "4.11.3"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 847150,
+      "distribution": "polars",
+      "filename": "polars-1.43.2-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:22aa0cb92a1ee2d60d6a15a638b2e8e0dd99aea21ac0cd8fb29da8e382e075a9",
+      "version": "1.43.2"
+    },
+    {
+      "abiTag": "abi3",
+      "bytes": 57304599,
+      "distribution": "polars-runtime-32",
+      "filename": "polars_runtime_32-1.43.2-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "platformTag": "manylinux_2_17_x86_64.manylinux2014_x86_64",
+      "pythonTag": "cp310",
+      "sha256": "sha256:6d5a7ae004a2723ebf4427f6d6a639f30f86af4cf077075f6b35d04711154fc3",
+      "version": "1.43.2"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 64494,
+      "distribution": "prometheus-client",
+      "filename": "prometheus_client-0.26.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:fa93d06737aa02bacd05794768508bb97d2fbee28cb3bca04eaae92f0ca953d6",
+      "version": "0.26.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 392288,
+      "distribution": "prompt-toolkit",
+      "filename": "prompt_toolkit-3.0.53-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:01c0891d7f9237d5e339f7d3e42cdae80b7534abb1c7c0e3352efba6231492f2",
+      "version": "3.0.53"
+    },
+    {
+      "abiTag": "abi3",
+      "bytes": 155560,
+      "distribution": "psutil",
+      "filename": "psutil-7.2.2-cp36-abi3-manylinux2010_x86_64.manylinux_2_12_x86_64.manylinux_2_28_x86_64.whl",
+      "platformTag": "manylinux2010_x86_64.manylinux_2_12_x86_64.manylinux_2_28_x86_64",
+      "pythonTag": "cp36",
+      "sha256": "sha256:076a2d2f923fd4821644f5ba89f059523da90dc9014e85f8e45a5774ca5bc6f9",
+      "version": "7.2.2"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 13993,
+      "distribution": "ptyprocess",
+      "filename": "ptyprocess-0.7.0-py2.py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py2.py3",
+      "sha256": "sha256:4b41f3967fce3af57cc7e94b888626c18bf37a083e3651ca8feeb66d492fef35",
+      "version": "0.7.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 11842,
+      "distribution": "pure-eval",
+      "filename": "pure_eval-0.2.3-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:1db8e35b67b3d218d818ae653e27f06c3aa420901fa7b081ca98cbedc874e0d0",
+      "version": "0.2.3"
+    },
+    {
+      "abiTag": "cp314",
+      "bytes": 50131616,
+      "distribution": "pyarrow",
+      "filename": "pyarrow-25.0.1-cp314-cp314-manylinux_2_28_x86_64.whl",
+      "platformTag": "manylinux_2_28_x86_64",
+      "pythonTag": "cp314",
+      "sha256": "sha256:9171748cdf796972d85a4b60157c279913e242992e350c90c7450182a9838b2a",
+      "version": "25.0.1"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 48172,
+      "distribution": "pycparser",
+      "filename": "pycparser-3.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992",
+      "version": "3.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 1250147,
+      "distribution": "pygments",
+      "filename": "pygments-2.21.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9",
+      "version": "2.21.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 122781,
+      "distribution": "pyparsing",
+      "filename": "pyparsing-3.3.2-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:850ba148bd908d7e2411587e247a1e4f0327839c40e2e5e6d05a007ecc69911d",
+      "version": "3.3.2"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 229892,
+      "distribution": "python-dateutil",
+      "filename": "python_dateutil-2.9.0.post0-py2.py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py2.py3",
+      "sha256": "sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427",
+      "version": "2.9.0.post0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 14988,
+      "distribution": "python-json-logger",
+      "filename": "python_json_logger-4.2.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:158a52126fcd6869e09574d2b66272666f3dc8f468c62637ef9a1fa883719cb9",
+      "version": "4.2.0"
+    },
+    {
+      "abiTag": "cp314",
+      "bytes": 794175,
+      "distribution": "pyyaml",
+      "filename": "pyyaml-6.0.3-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "platformTag": "manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64",
+      "pythonTag": "cp314",
+      "sha256": "sha256:c458b6d084f9b935061bc36216e8a69a7e293a2f1e68bf956dcd9e6cbcd143f5",
+      "version": "6.0.3"
+    },
+    {
+      "abiTag": "abi3",
+      "bytes": 872258,
+      "distribution": "pyzmq",
+      "filename": "pyzmq-27.2.0-cp312-abi3-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl",
+      "platformTag": "manylinux_2_26_x86_64.manylinux_2_28_x86_64",
+      "pythonTag": "cp312",
+      "sha256": "sha256:dea74fd65f1fc5f7fe167916a473ebe6ed6174e5e5d9de11ea6583661be6cf43",
+      "version": "27.2.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 26766,
+      "distribution": "referencing",
+      "filename": "referencing-0.37.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:381329a9f99628c9069361716891d34ad94af76e461dcb0335825aecc7692231",
+      "version": "0.37.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 73075,
+      "distribution": "requests",
+      "filename": "requests-2.34.2-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0",
+      "version": "2.34.2"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 3490,
+      "distribution": "rfc3339-validator",
+      "filename": "rfc3339_validator-0.1.4-py2.py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py2.py3",
+      "sha256": "sha256:24f6ec1eda14ef823da9e36ec7113124b39c04d50a4d3d3a3c2859577e7791fa",
+      "version": "0.1.4"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 4242,
+      "distribution": "rfc3986-validator",
+      "filename": "rfc3986_validator-0.1.1-py2.py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py2.py3",
+      "sha256": "sha256:2f235c432ef459970b4306369336b9d5dbdda31b510ca1e327636e01f528bfa9",
+      "version": "0.1.1"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 8046,
+      "distribution": "rfc3987-syntax",
+      "filename": "rfc3987_syntax-1.1.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:6c3d97604e4c5ce9f714898e05401a0445a641cfa276432b0a648c80856f6a3f",
+      "version": "1.1.0"
+    },
+    {
+      "abiTag": "cp314",
+      "bytes": 367255,
+      "distribution": "rpds-py",
+      "filename": "rpds_py-2026.6.3-cp314-cp314-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "platformTag": "manylinux_2_17_x86_64.manylinux2014_x86_64",
+      "pythonTag": "cp314",
+      "sha256": "sha256:dc319e5a1de4b6913aac94bf6a2f9e847371e0a140a43dd4991db1a09bc2d504",
+      "version": "2026.6.3"
+    },
+    {
+      "abiTag": "cp314",
+      "bytes": 35329183,
+      "distribution": "scipy",
+      "filename": "scipy-1.18.1-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "platformTag": "manylinux_2_27_x86_64.manylinux_2_28_x86_64",
+      "pythonTag": "cp314",
+      "sha256": "sha256:ac0333bdf38309aa3dcbe7e3fa7ea29e7a2c37c6ea306a757b700ded8e4596ad",
+      "version": "1.18.1"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 17610,
+      "distribution": "send2trash",
+      "filename": "send2trash-2.1.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:0da2f112e6d6bb22de6aa6daa7e144831a4febf2a87261451c4ad849fe9a873c",
+      "version": "2.1.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 11050,
+      "distribution": "six",
+      "filename": "six-1.17.0-py2.py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py2.py3",
+      "sha256": "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274",
+      "version": "1.17.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 37370,
+      "distribution": "soupsieve",
+      "filename": "soupsieve-2.9.2-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:8089a26fd974ca7a1f30276d3d8492ab266ab15af581642dfe8aa162e0c1c823",
+      "version": "2.9.2"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 24521,
+      "distribution": "stack-data",
+      "filename": "stack_data-0.6.3-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:d5558e0c25a4cb0853cddad3d77da9891a08cb85dd9f9f91b9f8cd66e511e695",
+      "version": "0.6.3"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 6299353,
+      "distribution": "sympy",
+      "filename": "sympy-1.14.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5",
+      "version": "1.14.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 14154,
+      "distribution": "terminado",
+      "filename": "terminado-0.18.1-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:a4468e1b37bb318f8a86514f65814e1afc977cf29b3992a4500d9dd305dcceb0",
+      "version": "0.18.1"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 28404,
+      "distribution": "tinycss2",
+      "filename": "tinycss2-1.5.1-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:3415ba0f5839c062696996998176c4a3751d18b7edaaeeb658c9ce21ec150661",
+      "version": "1.5.1"
+    },
+    {
+      "abiTag": "abi3",
+      "bytes": 450707,
+      "distribution": "tornado",
+      "filename": "tornado-6.5.8-cp39-abi3-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl",
+      "platformTag": "manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64",
+      "pythonTag": "cp39",
+      "sha256": "sha256:547d63f450d570c14fe0e8db2cfb14c9bbd1c2503b4a6612586267955aa47b58",
+      "version": "6.5.8"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 86211,
+      "distribution": "traitlets",
+      "filename": "traitlets-5.16.1-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:f775618166caa0396c8e337099240f2bd3e5e917d203b2e6fbe21a58d3cb1f6b",
+      "version": "5.16.1"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 45571,
+      "distribution": "typing-extensions",
+      "filename": "typing_extensions-4.16.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+      "version": "4.16.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 348168,
+      "distribution": "tzdata",
+      "filename": "tzdata-2026.3-py2.py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py2.py3",
+      "sha256": "sha256:dc096730c87af6cab1b171c9d532be840741ff5d459015e7f6947bd7d7e54931",
+      "version": "2026.3"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 11140,
+      "distribution": "uri-template",
+      "filename": "uri_template-1.3.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:a44a133ea12d44a0c0f06d7d42a52d71282e77e2f937d8abd5655b8d56fc1363",
+      "version": "1.3.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 131087,
+      "distribution": "urllib3",
+      "filename": "urllib3-2.7.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897",
+      "version": "2.7.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 323166,
+      "distribution": "wcwidth",
+      "filename": "wcwidth-0.8.2-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:d63947694a0539a1d51e01eda7caf800c291020e6cdd7e28ad7b14dd33ad4f85",
+      "version": "0.8.2"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 14905,
+      "distribution": "webcolors",
+      "filename": "webcolors-25.10.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:032c727334856fc0b968f63daa252a1ac93d33db2f5267756623c210e57a4f1d",
+      "version": "25.10.0"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 8745,
+      "distribution": "webencodings",
+      "filename": "webencodings-0.6.1-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:7fab6269c8bf237c657876b52058ccb182e861518d1c695c1a9aaa8c1c105d5b",
+      "version": "0.6.1"
+    },
+    {
+      "abiTag": "none",
+      "bytes": 82616,
+      "distribution": "websocket-client",
+      "filename": "websocket_client-1.9.0-py3-none-any.whl",
+      "platformTag": "any",
+      "pythonTag": "py3",
+      "sha256": "sha256:af248a825037ef591efbf6ed20cc5faa03d3b47b9e5a2230a529eeee1c1fc3ef",
+      "version": "1.9.0"
+    }
+  ]
+}
