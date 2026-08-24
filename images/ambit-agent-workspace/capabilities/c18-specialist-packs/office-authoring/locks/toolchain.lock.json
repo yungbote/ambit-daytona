@@ -13,6 +13,11 @@
     "microsoftPowerPoint": "unsupported",
     "windowsOfficeExecutor": "separate-licensed-profile-required"
   },
+  "renderValidation": {
+    "poppler": "25.03.0",
+    "rasterizer": "pdftoppm",
+    "textExtractor": "pdftotext"
+  },
   "osClosureLock": "debian-binary-closure.lock.json",
   "packRef": "ambit.runtime-pack/office-authoring@1",
   "python": {
