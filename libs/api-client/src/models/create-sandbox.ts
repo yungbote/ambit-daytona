@@ -101,6 +101,10 @@ export interface CreateSandbox {
      */
     'autoDeleteInterval'?: number;
     /**
+     * Maximum time to live in minutes, counted as wall-clock time since creation regardless of sandbox state (0 means disabled)
+     */
+    'ttlMinutes'?: number;
+    /**
      * Array of volumes to attach to the sandbox
      */
     'volumes'?: Array<SandboxVolume>;

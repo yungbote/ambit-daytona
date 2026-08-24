@@ -52,6 +52,12 @@ import type { Sandbox } from '../models';
 // @ts-ignore
 import type { SandboxClass } from '../models';
 // @ts-ignore
+import type { SandboxGenerationObservation } from '../models';
+// @ts-ignore
+import type { SandboxGenerationObservationRequest } from '../models';
+// @ts-ignore
+import type { SandboxGenerationStopObservation } from '../models';
+// @ts-ignore
 import type { SandboxLabels } from '../models';
 // @ts-ignore
 import type { SandboxListSortDirection } from '../models';
@@ -66,6 +72,10 @@ import type { SshAccessDto } from '../models';
 // @ts-ignore
 import type { SshAccessValidationDto } from '../models';
 // @ts-ignore
+import type { StopSandboxGenerationRequest } from '../models';
+// @ts-ignore
+import type { StoppedSandboxGenerationReceipt } from '../models';
+// @ts-ignore
 import type { ToolboxProxyUrl } from '../models';
 // @ts-ignore
 import type { TraceSpan } from '../models';
@@ -77,6 +87,22 @@ import type { UpdateSandboxSecrets } from '../models';
 import type { UpdateSandboxStateDto } from '../models';
 // @ts-ignore
 import type { Url } from '../models';
+// @ts-ignore
+import type { WorkingCopyCaptureBinding } from '../models';
+// @ts-ignore
+import type { WorkingCopyCaptureDeleteReceipt } from '../models';
+// @ts-ignore
+import type { WorkingCopyCaptureExistsResponse } from '../models';
+// @ts-ignore
+import type { WorkingCopyCaptureIdentity } from '../models';
+// @ts-ignore
+import type { WorkingCopyCaptureObservation } from '../models';
+// @ts-ignore
+import type { WorkingCopyCaptureRead } from '../models';
+// @ts-ignore
+import type { WorkingCopyCaptureReadResponse } from '../models';
+// @ts-ignore
+import type { WorkingCopyCaptureReceipt } from '../models';
 /**
  * SandboxApi - axios parameter creator
  */
@@ -120,6 +146,55 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Capture one file from an exact stopped sandbox generation
+         * @param {string} sandboxIdOrName 
+         * @param {WorkingCopyCaptureBinding} workingCopyCaptureBinding 
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        captureSandboxWorkingCopy: async (sandboxIdOrName: string, workingCopyCaptureBinding: WorkingCopyCaptureBinding, xDaytonaOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxIdOrName' is not null or undefined
+            assertParamExists('captureSandboxWorkingCopy', 'sandboxIdOrName', sandboxIdOrName)
+            // verify required parameter 'workingCopyCaptureBinding' is not null or undefined
+            assertParamExists('captureSandboxWorkingCopy', 'workingCopyCaptureBinding', workingCopyCaptureBinding)
+            const localVarPath = `/sandbox/{sandboxIdOrName}/working-copy-captures`
+                .replace(`{${"sandboxIdOrName"}}`, encodeURIComponent(String(sandboxIdOrName)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            if (xDaytonaOrganizationID != null) {
+                localVarHeaderParameter['X-Daytona-Organization-ID'] = String(xDaytonaOrganizationID);
+            }
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(workingCopyCaptureBinding, localVarRequestOptions, configuration)
 
             return {
                 url: toPathString(localVarUrlObj),
@@ -351,6 +426,55 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Delete an exact private working-copy capture
+         * @param {string} sandboxIdOrName 
+         * @param {WorkingCopyCaptureIdentity} workingCopyCaptureIdentity 
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        deleteSandboxWorkingCopyCapture: async (sandboxIdOrName: string, workingCopyCaptureIdentity: WorkingCopyCaptureIdentity, xDaytonaOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxIdOrName' is not null or undefined
+            assertParamExists('deleteSandboxWorkingCopyCapture', 'sandboxIdOrName', sandboxIdOrName)
+            // verify required parameter 'workingCopyCaptureIdentity' is not null or undefined
+            assertParamExists('deleteSandboxWorkingCopyCapture', 'workingCopyCaptureIdentity', workingCopyCaptureIdentity)
+            const localVarPath = `/sandbox/{sandboxIdOrName}/working-copy-captures/delete`
+                .replace(`{${"sandboxIdOrName"}}`, encodeURIComponent(String(sandboxIdOrName)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            if (xDaytonaOrganizationID != null) {
+                localVarHeaderParameter['X-Daytona-Organization-ID'] = String(xDaytonaOrganizationID);
+            }
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(workingCopyCaptureIdentity, localVarRequestOptions, configuration)
 
             return {
                 url: toPathString(localVarUrlObj),
@@ -1314,12 +1438,14 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
          * @param {Date} [createdAtBefore] Include items created before this timestamp
          * @param {Date} [lastEventAfter] Include items with last event after this timestamp
          * @param {Date} [lastEventBefore] Include items with last event before this timestamp
+         * @param {Date} [autoDestroyAtAfter] Include items scheduled for automatic destruction after this timestamp
+         * @param {Date} [autoDestroyAtBefore] Include items scheduled for automatic destruction before this timestamp
          * @param {SandboxListSortField} [sort] Field to sort by
          * @param {SandboxListSortDirection} [order] Direction to sort by
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        listSandboxes: async (xDaytonaOrganizationID?: string, cursor?: string, limit?: number, id?: string, name?: string, labels?: string, includeErroredDeleted?: boolean, states?: Array<SandboxState>, snapshots?: Array<string>, regionIds?: Array<string>, sandboxClasses?: Array<SandboxClass>, minCpu?: number, maxCpu?: number, minMemoryGiB?: number, maxMemoryGiB?: number, minDiskGiB?: number, maxDiskGiB?: number, isPublic?: boolean, isRecoverable?: boolean, createdAtAfter?: Date, createdAtBefore?: Date, lastEventAfter?: Date, lastEventBefore?: Date, sort?: SandboxListSortField, order?: SandboxListSortDirection, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        listSandboxes: async (xDaytonaOrganizationID?: string, cursor?: string, limit?: number, id?: string, name?: string, labels?: string, includeErroredDeleted?: boolean, states?: Array<SandboxState>, snapshots?: Array<string>, regionIds?: Array<string>, sandboxClasses?: Array<SandboxClass>, minCpu?: number, maxCpu?: number, minMemoryGiB?: number, maxMemoryGiB?: number, minDiskGiB?: number, maxDiskGiB?: number, isPublic?: boolean, isRecoverable?: boolean, createdAtAfter?: Date, createdAtBefore?: Date, lastEventAfter?: Date, lastEventBefore?: Date, autoDestroyAtAfter?: Date, autoDestroyAtBefore?: Date, sort?: SandboxListSortField, order?: SandboxListSortDirection, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             const localVarPath = `/sandbox`;
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
@@ -1432,6 +1558,18 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
                 localVarQueryParameter['lastEventBefore'] = (lastEventBefore as any instanceof Date) ?
                     (lastEventBefore as any).toISOString() :
                     lastEventBefore;
+            }
+
+            if (autoDestroyAtAfter !== undefined) {
+                localVarQueryParameter['autoDestroyAtAfter'] = (autoDestroyAtAfter as any instanceof Date) ?
+                    (autoDestroyAtAfter as any).toISOString() :
+                    autoDestroyAtAfter;
+            }
+
+            if (autoDestroyAtBefore !== undefined) {
+                localVarQueryParameter['autoDestroyAtBefore'] = (autoDestroyAtBefore as any instanceof Date) ?
+                    (autoDestroyAtBefore as any).toISOString() :
+                    autoDestroyAtBefore;
             }
 
             if (sort !== undefined) {
@@ -1598,6 +1736,153 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
         },
         /**
          * 
+         * @summary Observe one exact sandbox execution generation
+         * @param {string} sandboxIdOrName 
+         * @param {SandboxGenerationObservationRequest} sandboxGenerationObservationRequest 
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        observeSandboxGeneration: async (sandboxIdOrName: string, sandboxGenerationObservationRequest: SandboxGenerationObservationRequest, xDaytonaOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxIdOrName' is not null or undefined
+            assertParamExists('observeSandboxGeneration', 'sandboxIdOrName', sandboxIdOrName)
+            // verify required parameter 'sandboxGenerationObservationRequest' is not null or undefined
+            assertParamExists('observeSandboxGeneration', 'sandboxGenerationObservationRequest', sandboxGenerationObservationRequest)
+            const localVarPath = `/sandbox/{sandboxIdOrName}/generation/observe`
+                .replace(`{${"sandboxIdOrName"}}`, encodeURIComponent(String(sandboxIdOrName)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            if (xDaytonaOrganizationID != null) {
+                localVarHeaderParameter['X-Daytona-Organization-ID'] = String(xDaytonaOrganizationID);
+            }
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(sandboxGenerationObservationRequest, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Observe one durable exact-generation stop
+         * @param {string} sandboxIdOrName 
+         * @param {StopSandboxGenerationRequest} stopSandboxGenerationRequest 
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        observeSandboxGenerationStop: async (sandboxIdOrName: string, stopSandboxGenerationRequest: StopSandboxGenerationRequest, xDaytonaOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxIdOrName' is not null or undefined
+            assertParamExists('observeSandboxGenerationStop', 'sandboxIdOrName', sandboxIdOrName)
+            // verify required parameter 'stopSandboxGenerationRequest' is not null or undefined
+            assertParamExists('observeSandboxGenerationStop', 'stopSandboxGenerationRequest', stopSandboxGenerationRequest)
+            const localVarPath = `/sandbox/{sandboxIdOrName}/stop-generation-once/observe`
+                .replace(`{${"sandboxIdOrName"}}`, encodeURIComponent(String(sandboxIdOrName)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            if (xDaytonaOrganizationID != null) {
+                localVarHeaderParameter['X-Daytona-Organization-ID'] = String(xDaytonaOrganizationID);
+            }
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(stopSandboxGenerationRequest, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Observe an exact private working-copy capture
+         * @param {string} sandboxIdOrName 
+         * @param {WorkingCopyCaptureBinding} workingCopyCaptureBinding 
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        observeSandboxWorkingCopyCapture: async (sandboxIdOrName: string, workingCopyCaptureBinding: WorkingCopyCaptureBinding, xDaytonaOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxIdOrName' is not null or undefined
+            assertParamExists('observeSandboxWorkingCopyCapture', 'sandboxIdOrName', sandboxIdOrName)
+            // verify required parameter 'workingCopyCaptureBinding' is not null or undefined
+            assertParamExists('observeSandboxWorkingCopyCapture', 'workingCopyCaptureBinding', workingCopyCaptureBinding)
+            const localVarPath = `/sandbox/{sandboxIdOrName}/working-copy-captures/observe`
+                .replace(`{${"sandboxIdOrName"}}`, encodeURIComponent(String(sandboxIdOrName)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            if (xDaytonaOrganizationID != null) {
+                localVarHeaderParameter['X-Daytona-Organization-ID'] = String(xDaytonaOrganizationID);
+            }
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(workingCopyCaptureBinding, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
          * @summary Pause sandbox
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -1634,6 +1919,55 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Read an exact immutable private working-copy capture
+         * @param {string} sandboxIdOrName 
+         * @param {WorkingCopyCaptureRead} workingCopyCaptureRead 
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        readSandboxWorkingCopyCapture: async (sandboxIdOrName: string, workingCopyCaptureRead: WorkingCopyCaptureRead, xDaytonaOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxIdOrName' is not null or undefined
+            assertParamExists('readSandboxWorkingCopyCapture', 'sandboxIdOrName', sandboxIdOrName)
+            // verify required parameter 'workingCopyCaptureRead' is not null or undefined
+            assertParamExists('readSandboxWorkingCopyCapture', 'workingCopyCaptureRead', workingCopyCaptureRead)
+            const localVarPath = `/sandbox/{sandboxIdOrName}/working-copy-captures/read`
+                .replace(`{${"sandboxIdOrName"}}`, encodeURIComponent(String(sandboxIdOrName)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            if (xDaytonaOrganizationID != null) {
+                localVarHeaderParameter['X-Daytona-Organization-ID'] = String(xDaytonaOrganizationID);
+            }
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(workingCopyCaptureRead, localVarRequestOptions, configuration)
 
             return {
                 url: toPathString(localVarUrlObj),
@@ -1882,6 +2216,55 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
         },
         /**
          * 
+         * @summary Check an exact private working-copy capture identity
+         * @param {string} sandboxIdOrName 
+         * @param {WorkingCopyCaptureIdentity} workingCopyCaptureIdentity 
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        sandboxWorkingCopyCaptureExists: async (sandboxIdOrName: string, workingCopyCaptureIdentity: WorkingCopyCaptureIdentity, xDaytonaOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxIdOrName' is not null or undefined
+            assertParamExists('sandboxWorkingCopyCaptureExists', 'sandboxIdOrName', sandboxIdOrName)
+            // verify required parameter 'workingCopyCaptureIdentity' is not null or undefined
+            assertParamExists('sandboxWorkingCopyCaptureExists', 'workingCopyCaptureIdentity', workingCopyCaptureIdentity)
+            const localVarPath = `/sandbox/{sandboxIdOrName}/working-copy-captures/exists`
+                .replace(`{${"sandboxIdOrName"}}`, encodeURIComponent(String(sandboxIdOrName)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            if (xDaytonaOrganizationID != null) {
+                localVarHeaderParameter['X-Daytona-Organization-ID'] = String(xDaytonaOrganizationID);
+            }
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(workingCopyCaptureIdentity, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
          * @summary Set sandbox auto-archive interval
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {number} interval Auto-archive interval in minutes (0 means the maximum interval will be used)
@@ -2073,6 +2456,54 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
+         * 
+         * @summary Set sandbox TTL
+         * @param {string} sandboxIdOrName ID or name of the sandbox
+         * @param {number} ttlMinutes Maximum time to live in minutes, re-anchored from the current time (0 to disable)
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        setTtl: async (sandboxIdOrName: string, ttlMinutes: number, xDaytonaOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxIdOrName' is not null or undefined
+            assertParamExists('setTtl', 'sandboxIdOrName', sandboxIdOrName)
+            // verify required parameter 'ttlMinutes' is not null or undefined
+            assertParamExists('setTtl', 'ttlMinutes', ttlMinutes)
+            const localVarPath = `/sandbox/{sandboxIdOrName}/ttl/{ttlMinutes}`
+                .replace(`{${"sandboxIdOrName"}}`, encodeURIComponent(String(sandboxIdOrName)))
+                .replace(`{${"ttlMinutes"}}`, encodeURIComponent(String(ttlMinutes)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            if (xDaytonaOrganizationID != null) {
+                localVarHeaderParameter['X-Daytona-Organization-ID'] = String(xDaytonaOrganizationID);
+            }
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
          * Starts a stopped or archived sandbox, or resumes a paused sandbox. The transition taken depends on the current sandbox state.
          * @summary Start or resume sandbox
          * @param {string} sandboxIdOrName ID or name of the sandbox
@@ -2159,6 +2590,55 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Durably stop one exact sandbox generation once
+         * @param {string} sandboxIdOrName 
+         * @param {StopSandboxGenerationRequest} stopSandboxGenerationRequest 
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        stopSandboxGenerationOnce: async (sandboxIdOrName: string, stopSandboxGenerationRequest: StopSandboxGenerationRequest, xDaytonaOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxIdOrName' is not null or undefined
+            assertParamExists('stopSandboxGenerationOnce', 'sandboxIdOrName', sandboxIdOrName)
+            // verify required parameter 'stopSandboxGenerationRequest' is not null or undefined
+            assertParamExists('stopSandboxGenerationOnce', 'stopSandboxGenerationRequest', stopSandboxGenerationRequest)
+            const localVarPath = `/sandbox/{sandboxIdOrName}/stop-generation-once`
+                .replace(`{${"sandboxIdOrName"}}`, encodeURIComponent(String(sandboxIdOrName)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            if (xDaytonaOrganizationID != null) {
+                localVarHeaderParameter['X-Daytona-Organization-ID'] = String(xDaytonaOrganizationID);
+            }
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(stopSandboxGenerationRequest, localVarRequestOptions, configuration)
 
             return {
                 url: toPathString(localVarUrlObj),
@@ -2474,6 +2954,21 @@ export const SandboxApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
+         * @summary Capture one file from an exact stopped sandbox generation
+         * @param {string} sandboxIdOrName 
+         * @param {WorkingCopyCaptureBinding} workingCopyCaptureBinding 
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async captureSandboxWorkingCopy(sandboxIdOrName: string, workingCopyCaptureBinding: WorkingCopyCaptureBinding, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingCopyCaptureReceipt>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.captureSandboxWorkingCopy(sandboxIdOrName, workingCopyCaptureBinding, xDaytonaOrganizationID, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.captureSandboxWorkingCopy']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
          * @summary Create sandbox backup
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -2542,6 +3037,21 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.deleteSandbox(sandboxIdOrName, xDaytonaOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['SandboxApi.deleteSandbox']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Delete an exact private working-copy capture
+         * @param {string} sandboxIdOrName 
+         * @param {WorkingCopyCaptureIdentity} workingCopyCaptureIdentity 
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async deleteSandboxWorkingCopyCapture(sandboxIdOrName: string, workingCopyCaptureIdentity: WorkingCopyCaptureIdentity, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingCopyCaptureDeleteReceipt>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.deleteSandboxWorkingCopyCapture(sandboxIdOrName, workingCopyCaptureIdentity, xDaytonaOrganizationID, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.deleteSandboxWorkingCopyCapture']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -2847,13 +3357,15 @@ export const SandboxApiFp = function(configuration?: Configuration) {
          * @param {Date} [createdAtBefore] Include items created before this timestamp
          * @param {Date} [lastEventAfter] Include items with last event after this timestamp
          * @param {Date} [lastEventBefore] Include items with last event before this timestamp
+         * @param {Date} [autoDestroyAtAfter] Include items scheduled for automatic destruction after this timestamp
+         * @param {Date} [autoDestroyAtBefore] Include items scheduled for automatic destruction before this timestamp
          * @param {SandboxListSortField} [sort] Field to sort by
          * @param {SandboxListSortDirection} [order] Direction to sort by
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async listSandboxes(xDaytonaOrganizationID?: string, cursor?: string, limit?: number, id?: string, name?: string, labels?: string, includeErroredDeleted?: boolean, states?: Array<SandboxState>, snapshots?: Array<string>, regionIds?: Array<string>, sandboxClasses?: Array<SandboxClass>, minCpu?: number, maxCpu?: number, minMemoryGiB?: number, maxMemoryGiB?: number, minDiskGiB?: number, maxDiskGiB?: number, isPublic?: boolean, isRecoverable?: boolean, createdAtAfter?: Date, createdAtBefore?: Date, lastEventAfter?: Date, lastEventBefore?: Date, sort?: SandboxListSortField, order?: SandboxListSortDirection, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ListSandboxesResponse>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.listSandboxes(xDaytonaOrganizationID, cursor, limit, id, name, labels, includeErroredDeleted, states, snapshots, regionIds, sandboxClasses, minCpu, maxCpu, minMemoryGiB, maxMemoryGiB, minDiskGiB, maxDiskGiB, isPublic, isRecoverable, createdAtAfter, createdAtBefore, lastEventAfter, lastEventBefore, sort, order, options);
+        async listSandboxes(xDaytonaOrganizationID?: string, cursor?: string, limit?: number, id?: string, name?: string, labels?: string, includeErroredDeleted?: boolean, states?: Array<SandboxState>, snapshots?: Array<string>, regionIds?: Array<string>, sandboxClasses?: Array<SandboxClass>, minCpu?: number, maxCpu?: number, minMemoryGiB?: number, maxMemoryGiB?: number, minDiskGiB?: number, maxDiskGiB?: number, isPublic?: boolean, isRecoverable?: boolean, createdAtAfter?: Date, createdAtBefore?: Date, lastEventAfter?: Date, lastEventBefore?: Date, autoDestroyAtAfter?: Date, autoDestroyAtBefore?: Date, sort?: SandboxListSortField, order?: SandboxListSortDirection, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ListSandboxesResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.listSandboxes(xDaytonaOrganizationID, cursor, limit, id, name, labels, includeErroredDeleted, states, snapshots, regionIds, sandboxClasses, minCpu, maxCpu, minMemoryGiB, maxMemoryGiB, minDiskGiB, maxDiskGiB, isPublic, isRecoverable, createdAtAfter, createdAtBefore, lastEventAfter, lastEventBefore, autoDestroyAtAfter, autoDestroyAtBefore, sort, order, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['SandboxApi.listSandboxes']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -2893,6 +3405,51 @@ export const SandboxApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
+         * @summary Observe one exact sandbox execution generation
+         * @param {string} sandboxIdOrName 
+         * @param {SandboxGenerationObservationRequest} sandboxGenerationObservationRequest 
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async observeSandboxGeneration(sandboxIdOrName: string, sandboxGenerationObservationRequest: SandboxGenerationObservationRequest, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<SandboxGenerationObservation>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.observeSandboxGeneration(sandboxIdOrName, sandboxGenerationObservationRequest, xDaytonaOrganizationID, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.observeSandboxGeneration']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Observe one durable exact-generation stop
+         * @param {string} sandboxIdOrName 
+         * @param {StopSandboxGenerationRequest} stopSandboxGenerationRequest 
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async observeSandboxGenerationStop(sandboxIdOrName: string, stopSandboxGenerationRequest: StopSandboxGenerationRequest, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<SandboxGenerationStopObservation>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.observeSandboxGenerationStop(sandboxIdOrName, stopSandboxGenerationRequest, xDaytonaOrganizationID, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.observeSandboxGenerationStop']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Observe an exact private working-copy capture
+         * @param {string} sandboxIdOrName 
+         * @param {WorkingCopyCaptureBinding} workingCopyCaptureBinding 
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async observeSandboxWorkingCopyCapture(sandboxIdOrName: string, workingCopyCaptureBinding: WorkingCopyCaptureBinding, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingCopyCaptureObservation>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.observeSandboxWorkingCopyCapture(sandboxIdOrName, workingCopyCaptureBinding, xDaytonaOrganizationID, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.observeSandboxWorkingCopyCapture']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
          * @summary Pause sandbox
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -2903,6 +3460,21 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.pauseSandbox(sandboxIdOrName, xDaytonaOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['SandboxApi.pauseSandbox']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Read an exact immutable private working-copy capture
+         * @param {string} sandboxIdOrName 
+         * @param {WorkingCopyCaptureRead} workingCopyCaptureRead 
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async readSandboxWorkingCopyCapture(sandboxIdOrName: string, workingCopyCaptureRead: WorkingCopyCaptureRead, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingCopyCaptureReadResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.readSandboxWorkingCopyCapture(sandboxIdOrName, workingCopyCaptureRead, xDaytonaOrganizationID, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.readSandboxWorkingCopyCapture']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -2981,6 +3553,21 @@ export const SandboxApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
+         * @summary Check an exact private working-copy capture identity
+         * @param {string} sandboxIdOrName 
+         * @param {WorkingCopyCaptureIdentity} workingCopyCaptureIdentity 
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async sandboxWorkingCopyCaptureExists(sandboxIdOrName: string, workingCopyCaptureIdentity: WorkingCopyCaptureIdentity, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingCopyCaptureExistsResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.sandboxWorkingCopyCaptureExists(sandboxIdOrName, workingCopyCaptureIdentity, xDaytonaOrganizationID, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.sandboxWorkingCopyCaptureExists']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
          * @summary Set sandbox auto-archive interval
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {number} interval Auto-archive interval in minutes (0 means the maximum interval will be used)
@@ -3040,6 +3627,21 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
+         * 
+         * @summary Set sandbox TTL
+         * @param {string} sandboxIdOrName ID or name of the sandbox
+         * @param {number} ttlMinutes Maximum time to live in minutes, re-anchored from the current time (0 to disable)
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async setTtl(sandboxIdOrName: string, ttlMinutes: number, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Sandbox>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.setTtl(sandboxIdOrName, ttlMinutes, xDaytonaOrganizationID, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.setTtl']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
          * Starts a stopped or archived sandbox, or resumes a paused sandbox. The transition taken depends on the current sandbox state.
          * @summary Start or resume sandbox
          * @param {string} sandboxIdOrName ID or name of the sandbox
@@ -3066,6 +3668,21 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.stopSandbox(sandboxIdOrName, xDaytonaOrganizationID, force, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['SandboxApi.stopSandbox']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Durably stop one exact sandbox generation once
+         * @param {string} sandboxIdOrName 
+         * @param {StopSandboxGenerationRequest} stopSandboxGenerationRequest 
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async stopSandboxGenerationOnce(sandboxIdOrName: string, stopSandboxGenerationRequest: StopSandboxGenerationRequest, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<StoppedSandboxGenerationReceipt>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.stopSandboxGenerationOnce(sandboxIdOrName, stopSandboxGenerationRequest, xDaytonaOrganizationID, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.stopSandboxGenerationOnce']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -3178,6 +3795,18 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
         },
         /**
          * 
+         * @summary Capture one file from an exact stopped sandbox generation
+         * @param {string} sandboxIdOrName 
+         * @param {WorkingCopyCaptureBinding} workingCopyCaptureBinding 
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        captureSandboxWorkingCopy(sandboxIdOrName: string, workingCopyCaptureBinding: WorkingCopyCaptureBinding, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<WorkingCopyCaptureReceipt> {
+            return localVarFp.captureSandboxWorkingCopy(sandboxIdOrName, workingCopyCaptureBinding, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
          * @summary Create sandbox backup
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3232,6 +3861,18 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
          */
         deleteSandbox(sandboxIdOrName: string, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Sandbox> {
             return localVarFp.deleteSandbox(sandboxIdOrName, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Delete an exact private working-copy capture
+         * @param {string} sandboxIdOrName 
+         * @param {WorkingCopyCaptureIdentity} workingCopyCaptureIdentity 
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        deleteSandboxWorkingCopyCapture(sandboxIdOrName: string, workingCopyCaptureIdentity: WorkingCopyCaptureIdentity, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<WorkingCopyCaptureDeleteReceipt> {
+            return localVarFp.deleteSandboxWorkingCopyCapture(sandboxIdOrName, workingCopyCaptureIdentity, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -3482,13 +4123,15 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
          * @param {Date} [createdAtBefore] Include items created before this timestamp
          * @param {Date} [lastEventAfter] Include items with last event after this timestamp
          * @param {Date} [lastEventBefore] Include items with last event before this timestamp
+         * @param {Date} [autoDestroyAtAfter] Include items scheduled for automatic destruction after this timestamp
+         * @param {Date} [autoDestroyAtBefore] Include items scheduled for automatic destruction before this timestamp
          * @param {SandboxListSortField} [sort] Field to sort by
          * @param {SandboxListSortDirection} [order] Direction to sort by
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        listSandboxes(xDaytonaOrganizationID?: string, cursor?: string, limit?: number, id?: string, name?: string, labels?: string, includeErroredDeleted?: boolean, states?: Array<SandboxState>, snapshots?: Array<string>, regionIds?: Array<string>, sandboxClasses?: Array<SandboxClass>, minCpu?: number, maxCpu?: number, minMemoryGiB?: number, maxMemoryGiB?: number, minDiskGiB?: number, maxDiskGiB?: number, isPublic?: boolean, isRecoverable?: boolean, createdAtAfter?: Date, createdAtBefore?: Date, lastEventAfter?: Date, lastEventBefore?: Date, sort?: SandboxListSortField, order?: SandboxListSortDirection, options?: RawAxiosRequestConfig): AxiosPromise<ListSandboxesResponse> {
-            return localVarFp.listSandboxes(xDaytonaOrganizationID, cursor, limit, id, name, labels, includeErroredDeleted, states, snapshots, regionIds, sandboxClasses, minCpu, maxCpu, minMemoryGiB, maxMemoryGiB, minDiskGiB, maxDiskGiB, isPublic, isRecoverable, createdAtAfter, createdAtBefore, lastEventAfter, lastEventBefore, sort, order, options).then((request) => request(axios, basePath));
+        listSandboxes(xDaytonaOrganizationID?: string, cursor?: string, limit?: number, id?: string, name?: string, labels?: string, includeErroredDeleted?: boolean, states?: Array<SandboxState>, snapshots?: Array<string>, regionIds?: Array<string>, sandboxClasses?: Array<SandboxClass>, minCpu?: number, maxCpu?: number, minMemoryGiB?: number, maxMemoryGiB?: number, minDiskGiB?: number, maxDiskGiB?: number, isPublic?: boolean, isRecoverable?: boolean, createdAtAfter?: Date, createdAtBefore?: Date, lastEventAfter?: Date, lastEventBefore?: Date, autoDestroyAtAfter?: Date, autoDestroyAtBefore?: Date, sort?: SandboxListSortField, order?: SandboxListSortDirection, options?: RawAxiosRequestConfig): AxiosPromise<ListSandboxesResponse> {
+            return localVarFp.listSandboxes(xDaytonaOrganizationID, cursor, limit, id, name, labels, includeErroredDeleted, states, snapshots, regionIds, sandboxClasses, minCpu, maxCpu, minMemoryGiB, maxMemoryGiB, minDiskGiB, maxDiskGiB, isPublic, isRecoverable, createdAtAfter, createdAtBefore, lastEventAfter, lastEventBefore, autoDestroyAtAfter, autoDestroyAtBefore, sort, order, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -3522,6 +4165,42 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
         },
         /**
          * 
+         * @summary Observe one exact sandbox execution generation
+         * @param {string} sandboxIdOrName 
+         * @param {SandboxGenerationObservationRequest} sandboxGenerationObservationRequest 
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        observeSandboxGeneration(sandboxIdOrName: string, sandboxGenerationObservationRequest: SandboxGenerationObservationRequest, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<SandboxGenerationObservation> {
+            return localVarFp.observeSandboxGeneration(sandboxIdOrName, sandboxGenerationObservationRequest, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Observe one durable exact-generation stop
+         * @param {string} sandboxIdOrName 
+         * @param {StopSandboxGenerationRequest} stopSandboxGenerationRequest 
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        observeSandboxGenerationStop(sandboxIdOrName: string, stopSandboxGenerationRequest: StopSandboxGenerationRequest, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<SandboxGenerationStopObservation> {
+            return localVarFp.observeSandboxGenerationStop(sandboxIdOrName, stopSandboxGenerationRequest, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Observe an exact private working-copy capture
+         * @param {string} sandboxIdOrName 
+         * @param {WorkingCopyCaptureBinding} workingCopyCaptureBinding 
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        observeSandboxWorkingCopyCapture(sandboxIdOrName: string, workingCopyCaptureBinding: WorkingCopyCaptureBinding, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<WorkingCopyCaptureObservation> {
+            return localVarFp.observeSandboxWorkingCopyCapture(sandboxIdOrName, workingCopyCaptureBinding, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
          * @summary Pause sandbox
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3530,6 +4209,18 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
          */
         pauseSandbox(sandboxIdOrName: string, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Sandbox> {
             return localVarFp.pauseSandbox(sandboxIdOrName, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Read an exact immutable private working-copy capture
+         * @param {string} sandboxIdOrName 
+         * @param {WorkingCopyCaptureRead} workingCopyCaptureRead 
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        readSandboxWorkingCopyCapture(sandboxIdOrName: string, workingCopyCaptureRead: WorkingCopyCaptureRead, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<WorkingCopyCaptureReadResponse> {
+            return localVarFp.readSandboxWorkingCopyCapture(sandboxIdOrName, workingCopyCaptureRead, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -3592,6 +4283,18 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
         },
         /**
          * 
+         * @summary Check an exact private working-copy capture identity
+         * @param {string} sandboxIdOrName 
+         * @param {WorkingCopyCaptureIdentity} workingCopyCaptureIdentity 
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        sandboxWorkingCopyCaptureExists(sandboxIdOrName: string, workingCopyCaptureIdentity: WorkingCopyCaptureIdentity, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<WorkingCopyCaptureExistsResponse> {
+            return localVarFp.sandboxWorkingCopyCaptureExists(sandboxIdOrName, workingCopyCaptureIdentity, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
          * @summary Set sandbox auto-archive interval
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {number} interval Auto-archive interval in minutes (0 means the maximum interval will be used)
@@ -3639,6 +4342,18 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.setAutostopInterval(sandboxIdOrName, interval, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
+         * 
+         * @summary Set sandbox TTL
+         * @param {string} sandboxIdOrName ID or name of the sandbox
+         * @param {number} ttlMinutes Maximum time to live in minutes, re-anchored from the current time (0 to disable)
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        setTtl(sandboxIdOrName: string, ttlMinutes: number, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Sandbox> {
+            return localVarFp.setTtl(sandboxIdOrName, ttlMinutes, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
+        },
+        /**
          * Starts a stopped or archived sandbox, or resumes a paused sandbox. The transition taken depends on the current sandbox state.
          * @summary Start or resume sandbox
          * @param {string} sandboxIdOrName ID or name of the sandbox
@@ -3660,6 +4375,18 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
          */
         stopSandbox(sandboxIdOrName: string, xDaytonaOrganizationID?: string, force?: boolean, options?: RawAxiosRequestConfig): AxiosPromise<Sandbox> {
             return localVarFp.stopSandbox(sandboxIdOrName, xDaytonaOrganizationID, force, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Durably stop one exact sandbox generation once
+         * @param {string} sandboxIdOrName 
+         * @param {StopSandboxGenerationRequest} stopSandboxGenerationRequest 
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        stopSandboxGenerationOnce(sandboxIdOrName: string, stopSandboxGenerationRequest: StopSandboxGenerationRequest, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<StoppedSandboxGenerationReceipt> {
+            return localVarFp.stopSandboxGenerationOnce(sandboxIdOrName, stopSandboxGenerationRequest, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -3752,6 +4479,19 @@ export class SandboxApi extends BaseAPI {
 
     /**
      * 
+     * @summary Capture one file from an exact stopped sandbox generation
+     * @param {string} sandboxIdOrName 
+     * @param {WorkingCopyCaptureBinding} workingCopyCaptureBinding 
+     * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public captureSandboxWorkingCopy(sandboxIdOrName: string, workingCopyCaptureBinding: WorkingCopyCaptureBinding, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).captureSandboxWorkingCopy(sandboxIdOrName, workingCopyCaptureBinding, xDaytonaOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
      * @summary Create sandbox backup
      * @param {string} sandboxIdOrName ID or name of the sandbox
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3810,6 +4550,19 @@ export class SandboxApi extends BaseAPI {
      */
     public deleteSandbox(sandboxIdOrName: string, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return SandboxApiFp(this.configuration).deleteSandbox(sandboxIdOrName, xDaytonaOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Delete an exact private working-copy capture
+     * @param {string} sandboxIdOrName 
+     * @param {WorkingCopyCaptureIdentity} workingCopyCaptureIdentity 
+     * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public deleteSandboxWorkingCopyCapture(sandboxIdOrName: string, workingCopyCaptureIdentity: WorkingCopyCaptureIdentity, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).deleteSandboxWorkingCopyCapture(sandboxIdOrName, workingCopyCaptureIdentity, xDaytonaOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -4079,13 +4832,15 @@ export class SandboxApi extends BaseAPI {
      * @param {Date} [createdAtBefore] Include items created before this timestamp
      * @param {Date} [lastEventAfter] Include items with last event after this timestamp
      * @param {Date} [lastEventBefore] Include items with last event before this timestamp
+     * @param {Date} [autoDestroyAtAfter] Include items scheduled for automatic destruction after this timestamp
+     * @param {Date} [autoDestroyAtBefore] Include items scheduled for automatic destruction before this timestamp
      * @param {SandboxListSortField} [sort] Field to sort by
      * @param {SandboxListSortDirection} [order] Direction to sort by
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
-    public listSandboxes(xDaytonaOrganizationID?: string, cursor?: string, limit?: number, id?: string, name?: string, labels?: string, includeErroredDeleted?: boolean, states?: Array<SandboxState>, snapshots?: Array<string>, regionIds?: Array<string>, sandboxClasses?: Array<SandboxClass>, minCpu?: number, maxCpu?: number, minMemoryGiB?: number, maxMemoryGiB?: number, minDiskGiB?: number, maxDiskGiB?: number, isPublic?: boolean, isRecoverable?: boolean, createdAtAfter?: Date, createdAtBefore?: Date, lastEventAfter?: Date, lastEventBefore?: Date, sort?: SandboxListSortField, order?: SandboxListSortDirection, options?: RawAxiosRequestConfig) {
-        return SandboxApiFp(this.configuration).listSandboxes(xDaytonaOrganizationID, cursor, limit, id, name, labels, includeErroredDeleted, states, snapshots, regionIds, sandboxClasses, minCpu, maxCpu, minMemoryGiB, maxMemoryGiB, minDiskGiB, maxDiskGiB, isPublic, isRecoverable, createdAtAfter, createdAtBefore, lastEventAfter, lastEventBefore, sort, order, options).then((request) => request(this.axios, this.basePath));
+    public listSandboxes(xDaytonaOrganizationID?: string, cursor?: string, limit?: number, id?: string, name?: string, labels?: string, includeErroredDeleted?: boolean, states?: Array<SandboxState>, snapshots?: Array<string>, regionIds?: Array<string>, sandboxClasses?: Array<SandboxClass>, minCpu?: number, maxCpu?: number, minMemoryGiB?: number, maxMemoryGiB?: number, minDiskGiB?: number, maxDiskGiB?: number, isPublic?: boolean, isRecoverable?: boolean, createdAtAfter?: Date, createdAtBefore?: Date, lastEventAfter?: Date, lastEventBefore?: Date, autoDestroyAtAfter?: Date, autoDestroyAtBefore?: Date, sort?: SandboxListSortField, order?: SandboxListSortDirection, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).listSandboxes(xDaytonaOrganizationID, cursor, limit, id, name, labels, includeErroredDeleted, states, snapshots, regionIds, sandboxClasses, minCpu, maxCpu, minMemoryGiB, maxMemoryGiB, minDiskGiB, maxDiskGiB, isPublic, isRecoverable, createdAtAfter, createdAtBefore, lastEventAfter, lastEventBefore, autoDestroyAtAfter, autoDestroyAtBefore, sort, order, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -4121,6 +4876,45 @@ export class SandboxApi extends BaseAPI {
 
     /**
      * 
+     * @summary Observe one exact sandbox execution generation
+     * @param {string} sandboxIdOrName 
+     * @param {SandboxGenerationObservationRequest} sandboxGenerationObservationRequest 
+     * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public observeSandboxGeneration(sandboxIdOrName: string, sandboxGenerationObservationRequest: SandboxGenerationObservationRequest, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).observeSandboxGeneration(sandboxIdOrName, sandboxGenerationObservationRequest, xDaytonaOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Observe one durable exact-generation stop
+     * @param {string} sandboxIdOrName 
+     * @param {StopSandboxGenerationRequest} stopSandboxGenerationRequest 
+     * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public observeSandboxGenerationStop(sandboxIdOrName: string, stopSandboxGenerationRequest: StopSandboxGenerationRequest, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).observeSandboxGenerationStop(sandboxIdOrName, stopSandboxGenerationRequest, xDaytonaOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Observe an exact private working-copy capture
+     * @param {string} sandboxIdOrName 
+     * @param {WorkingCopyCaptureBinding} workingCopyCaptureBinding 
+     * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public observeSandboxWorkingCopyCapture(sandboxIdOrName: string, workingCopyCaptureBinding: WorkingCopyCaptureBinding, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).observeSandboxWorkingCopyCapture(sandboxIdOrName, workingCopyCaptureBinding, xDaytonaOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
      * @summary Pause sandbox
      * @param {string} sandboxIdOrName ID or name of the sandbox
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -4129,6 +4923,19 @@ export class SandboxApi extends BaseAPI {
      */
     public pauseSandbox(sandboxIdOrName: string, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return SandboxApiFp(this.configuration).pauseSandbox(sandboxIdOrName, xDaytonaOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Read an exact immutable private working-copy capture
+     * @param {string} sandboxIdOrName 
+     * @param {WorkingCopyCaptureRead} workingCopyCaptureRead 
+     * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public readSandboxWorkingCopyCapture(sandboxIdOrName: string, workingCopyCaptureRead: WorkingCopyCaptureRead, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).readSandboxWorkingCopyCapture(sandboxIdOrName, workingCopyCaptureRead, xDaytonaOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -4197,6 +5004,19 @@ export class SandboxApi extends BaseAPI {
 
     /**
      * 
+     * @summary Check an exact private working-copy capture identity
+     * @param {string} sandboxIdOrName 
+     * @param {WorkingCopyCaptureIdentity} workingCopyCaptureIdentity 
+     * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public sandboxWorkingCopyCaptureExists(sandboxIdOrName: string, workingCopyCaptureIdentity: WorkingCopyCaptureIdentity, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).sandboxWorkingCopyCaptureExists(sandboxIdOrName, workingCopyCaptureIdentity, xDaytonaOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
      * @summary Set sandbox auto-archive interval
      * @param {string} sandboxIdOrName ID or name of the sandbox
      * @param {number} interval Auto-archive interval in minutes (0 means the maximum interval will be used)
@@ -4248,6 +5068,19 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
+     * 
+     * @summary Set sandbox TTL
+     * @param {string} sandboxIdOrName ID or name of the sandbox
+     * @param {number} ttlMinutes Maximum time to live in minutes, re-anchored from the current time (0 to disable)
+     * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public setTtl(sandboxIdOrName: string, ttlMinutes: number, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).setTtl(sandboxIdOrName, ttlMinutes, xDaytonaOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
      * Starts a stopped or archived sandbox, or resumes a paused sandbox. The transition taken depends on the current sandbox state.
      * @summary Start or resume sandbox
      * @param {string} sandboxIdOrName ID or name of the sandbox
@@ -4270,6 +5103,19 @@ export class SandboxApi extends BaseAPI {
      */
     public stopSandbox(sandboxIdOrName: string, xDaytonaOrganizationID?: string, force?: boolean, options?: RawAxiosRequestConfig) {
         return SandboxApiFp(this.configuration).stopSandbox(sandboxIdOrName, xDaytonaOrganizationID, force, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Durably stop one exact sandbox generation once
+     * @param {string} sandboxIdOrName 
+     * @param {StopSandboxGenerationRequest} stopSandboxGenerationRequest 
+     * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public stopSandboxGenerationOnce(sandboxIdOrName: string, stopSandboxGenerationRequest: StopSandboxGenerationRequest, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).stopSandboxGenerationOnce(sandboxIdOrName, stopSandboxGenerationRequest, xDaytonaOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

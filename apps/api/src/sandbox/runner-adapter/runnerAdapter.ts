@@ -15,6 +15,23 @@ import { SandboxState } from '../enums/sandbox-state.enum'
 import { SandboxClass } from '../enums/sandbox-class.enum'
 import { BackupState } from '../enums/backup-state.enum'
 import { RunnerServiceInfo } from '../common/runner-service-info'
+import {
+  WorkingCopyCaptureBindingDto,
+  WorkingCopyCaptureDeleteReceiptDto,
+  WorkingCopyCaptureExistsResponseDto,
+  WorkingCopyCaptureIdentityDto,
+  WorkingCopyCaptureObservationDto,
+  WorkingCopyCaptureReadDto,
+  WorkingCopyCaptureReadResponseDto,
+  WorkingCopyCaptureReceiptDto,
+} from '../dto/working-copy-capture.dto'
+import {
+  SandboxGenerationObservationDto,
+  SandboxGenerationObservationRequestDto,
+  SandboxGenerationStopObservationDto,
+  StopSandboxGenerationRequestDto,
+  StoppedSandboxGenerationReceiptDto,
+} from '../dto/sandbox-generation-stop.dto'
 
 export interface RunnerSandboxInfo {
   state: SandboxState
@@ -36,6 +53,45 @@ export interface RunnerSnapshotInfo {
 export interface SnapshotDigestResponse {
   hash: string
   sizeGB: number
+}
+
+const RUNNER_AUTHORITY_METADATA_PREFIX = 'daytona.authority-label.'
+
+/**
+ * Projects the provider-neutral `ambit*` authority namespace into immutable
+ * container labels at creation. The runner later observes those labels rather
+ * than trusting a stop/capture request echo. Organization metadata cannot
+ * inject this reserved transport prefix, while future Ambit authority fields
+ * do not require another provider-specific DTO change.
+ */
+export function runnerProviderAuthorityMetadata(
+  sandbox: Pick<Sandbox, 'labels'>,
+  metadata?: Readonly<Record<string, string>>,
+): Record<string, string> {
+  const projected: Record<string, string> = {}
+  for (const [key, value] of Object.entries(metadata ?? {})) {
+    if (key.startsWith(RUNNER_AUTHORITY_METADATA_PREFIX)) {
+      throw new Error('Sandbox metadata uses the reserved provider-authority namespace.')
+    }
+    projected[key] = value
+  }
+  for (const [key, value] of Object.entries(sandbox.labels ?? {})) {
+    if (!/^ambit[A-Z][A-Za-z0-9]{0,127}$/.test(key)) continue
+    if (
+      typeof value !== 'string' ||
+      value.length === 0 ||
+      Buffer.byteLength(value, 'utf8') > 2048 ||
+      value !== value.trim() ||
+      [...value].some((character) => {
+        const code = character.codePointAt(0) as number
+        return code === 0 || code < 32 || code === 127
+      })
+    ) {
+      throw new Error(`Sandbox authority label ${key} is not a bounded canonical string.`)
+    }
+    projected[`${RUNNER_AUTHORITY_METADATA_PREFIX}${key}`] = value
+  }
+  return projected
 }
 
 // Result returned when the runner finished a snapshot-from-sandbox operation
@@ -155,6 +211,37 @@ export interface RunnerAdapter {
     disk?: number,
     registry?: DockerRegistry,
   ): Promise<void>
+
+  captureWorkingCopy(sandboxId: string, binding: WorkingCopyCaptureBindingDto): Promise<WorkingCopyCaptureReceiptDto>
+  observeWorkingCopyCapture(
+    sandboxId: string,
+    binding: WorkingCopyCaptureBindingDto,
+  ): Promise<WorkingCopyCaptureObservationDto>
+  readWorkingCopyCapture(
+    sandboxId: string,
+    request: WorkingCopyCaptureReadDto,
+  ): Promise<WorkingCopyCaptureReadResponseDto>
+  deleteWorkingCopyCapture(
+    sandboxId: string,
+    identity: WorkingCopyCaptureIdentityDto,
+  ): Promise<WorkingCopyCaptureDeleteReceiptDto>
+  workingCopyCaptureExists(
+    sandboxId: string,
+    identity: WorkingCopyCaptureIdentityDto,
+  ): Promise<WorkingCopyCaptureExistsResponseDto>
+
+  observeSandboxGeneration(
+    sandboxId: string,
+    request: SandboxGenerationObservationRequestDto,
+  ): Promise<SandboxGenerationObservationDto>
+  stopSandboxGenerationOnce(
+    sandboxId: string,
+    request: StopSandboxGenerationRequestDto,
+  ): Promise<StoppedSandboxGenerationReceiptDto>
+  observeSandboxGenerationStop(
+    sandboxId: string,
+    request: StopSandboxGenerationRequestDto,
+  ): Promise<SandboxGenerationStopObservationDto>
 }
 
 @Injectable()
