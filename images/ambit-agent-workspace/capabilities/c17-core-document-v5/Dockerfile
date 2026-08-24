@@ -1,15 +1,75 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
 ARG BASE_IMAGE=docker.io/library/debian@sha256:38a76d01668772e381ad2826d876627c89e7133e2f8a0f5d567306798b0f2a16
+ARG SOURCE_DATE_EPOCH=0
+ARG BUILD_SOURCE_REVISION=unbound
+ARG BUILD_SOURCE_TREE=unbound
+ARG BUILD_SOURCE_SUBTREE=unbound
+ARG BUILD_SOURCE_ARCHIVE_SHA256=unbound
+ARG BUILD_SOURCE_CONTEXT_SHA256=unbound
+ARG BUILD_SOURCE_FILES_SHA256=unbound
+ARG BUILD_SOURCE_MODES_SHA256=unbound
+ARG BUILD_SOURCE_IDENTITY_SHA256=unbound
+
+FROM core_parent AS qualified_core_parent
 
 FROM ${BASE_IMAGE} AS input_guard
+ARG SOURCE_DATE_EPOCH
+ARG BUILD_SOURCE_REVISION
+ARG BUILD_SOURCE_TREE
+ARG BUILD_SOURCE_SUBTREE
+ARG BUILD_SOURCE_ARCHIVE_SHA256
+ARG BUILD_SOURCE_CONTEXT_SHA256
+ARG BUILD_SOURCE_FILES_SHA256
+ARG BUILD_SOURCE_MODES_SHA256
+ARG BUILD_SOURCE_IDENTITY_SHA256
 COPY . /source/
+COPY --from=source_identity /daytona-source.tar /source-identity/daytona-source.tar
+COPY --from=source_identity /source-files.sha256 /source-identity/source-files.sha256
+COPY --from=source_identity /source-modes.tsv /source-identity/source-modes.tsv
+COPY --from=source_identity /source-identity.json /source-identity/source-identity.json
 RUN --network=none \
     --mount=type=bind,from=public_inputs,source=.,target=/inputs,ro \
     --mount=type=bind,from=materializer_inputs,source=.,target=/materializer-inputs,ro \
+    --mount=type=bind,from=composition_source,source=.,target=/composition-source,ro \
     set -eu; \
+    printf '%s\n' "${BUILD_SOURCE_REVISION}" | grep -Eq '^[0-9a-f]{40}$'; \
+    printf '%s\n' "${BUILD_SOURCE_TREE}" | grep -Eq '^[0-9a-f]{40}$'; \
+    printf '%s\n' "${BUILD_SOURCE_SUBTREE}" | grep -Eq '^[0-9a-f]{40}$'; \
+    case "${SOURCE_DATE_EPOCH}" in ''|*[!0-9]*|0) exit 44 ;; esac; \
+    for digest in \
+      "${BUILD_SOURCE_ARCHIVE_SHA256}" \
+      "${BUILD_SOURCE_CONTEXT_SHA256}" \
+      "${BUILD_SOURCE_FILES_SHA256}" \
+      "${BUILD_SOURCE_MODES_SHA256}" \
+      "${BUILD_SOURCE_IDENTITY_SHA256}"; do \
+      printf '%s\n' "${digest}" | grep -Eq '^sha256:[0-9a-f]{64}$'; \
+    done; \
+    test "$(find /source-identity -maxdepth 1 -type f | wc -l)" = 4; \
+    test -z "$(find /source-identity -mindepth 1 ! -type f -print -quit)"; \
+    echo "${BUILD_SOURCE_ARCHIVE_SHA256#sha256:}  /source-identity/daytona-source.tar" | sha256sum -c -; \
+    echo "${BUILD_SOURCE_FILES_SHA256#sha256:}  /source-identity/source-files.sha256" | sha256sum -c -; \
+    echo "${BUILD_SOURCE_MODES_SHA256#sha256:}  /source-identity/source-modes.tsv" | sha256sum -c -; \
+    echo "${BUILD_SOURCE_IDENTITY_SHA256#sha256:}  /source-identity/source-identity.json" | sha256sum -c -; \
+    printf '%s\n' \
+      "{\"archiveSha256\":\"${BUILD_SOURCE_ARCHIVE_SHA256}\",\"contextSha256\":\"${BUILD_SOURCE_CONTEXT_SHA256}\",\"path\":\"images/ambit-agent-workspace/capabilities/c17-core-document-v5\",\"repositoryTree\":\"${BUILD_SOURCE_TREE}\",\"revision\":\"${BUILD_SOURCE_REVISION}\",\"schema\":\"ambit.git-source-identity/v1\",\"sourceDateEpoch\":${SOURCE_DATE_EPOCH},\"sourceFilesManifestSha256\":\"${BUILD_SOURCE_FILES_SHA256}\",\"sourceModesManifestSha256\":\"${BUILD_SOURCE_MODES_SHA256}\",\"subtree\":\"${BUILD_SOURCE_SUBTREE}\"}" \
+      > /tmp/source-identity.expected; \
+    cmp /source-identity/source-identity.json /tmp/source-identity.expected; \
+    install -d -m 0700 /source-authority; \
+    tar -xf /source-identity/daytona-source.tar -C /source-authority; \
+    diff -r /source \
+      /source-authority/images/ambit-agent-workspace/capabilities/c17-core-document-v5; \
     cd /source; \
     sha256sum -c certification/source-contracts.sha256; \
+    sha256sum -c /source-identity/source-files.sha256; \
+    cut -d ' ' -f 3 /source-identity/source-files.sha256 | LC_ALL=C sort \
+      > /tmp/source-files.expected; \
+    find . -type f -print | LC_ALL=C sort > /tmp/source-files.actual; \
+    cmp /tmp/source-files.expected /tmp/source-files.actual; \
+    tab="$(printf '\t')"; \
+    while IFS="${tab}" read -r expected_mode path; do \
+      test "$(stat -c '%a' "${path}")" = "${expected_mode}"; \
+    done < /source-identity/source-modes.tsv; \
     grep -Fx '  "state": "candidate-ready",' locks/offline-build-input.lock.json; \
     cd /inputs; \
     sha256sum -c /source/locks/offline-public-artifacts.sha256; \
@@ -111,7 +171,9 @@ RUN --network=none \
     test "$(wc -c < /materializer-inputs/backend-atomic-materializer-source.tar)" = 184320; \
     echo 'af8db17dc5d7b2266444efc4911661659fdaf23035b7dde0172f29d9e55374ca  /materializer-inputs/backend-atomic-materializer-source.tar' | sha256sum -c -; \
     test "$(wc -c < /materializer-inputs/ambit-atomic-materialize)" = 2568340; \
-    echo '8d4405a1bd8f5d9d65be0860e52cab75cc9b7f5f659e510b4932347e0c6008e5  /materializer-inputs/ambit-atomic-materialize' | sha256sum -c -
+    echo '8d4405a1bd8f5d9d65be0860e52cab75cc9b7f5f659e510b4932347e0c6008e5  /materializer-inputs/ambit-atomic-materialize' | sha256sum -c -; \
+    echo '65573a7b6d903a8faf8f51d20609f91071336b61c46128a40615f20ff71820c8  /composition-source/runtime-composition/build_union_overlay.py' | sha256sum -c -; \
+    echo 'bdd2c891a3481b29834d8fd482e262051bc564bdf3e802b92730e0c973870ca8  /composition-source/capabilities/c16b-core-base/composition/union-overlay-contract.lock.json' | sha256sum -c -
 
 FROM ${BASE_IMAGE} AS runtime_debian
 COPY --from=input_guard /etc/debian_version /tmp/input-guard
@@ -338,7 +400,7 @@ LABEL org.opencontainers.image.title="ambit-c17-core-document-v5-structural-rend
       io.ambit.activation="candidate-only"
 USER 1000:1000
 
-FROM structural_renderer_substrate AS core_document_v5
+FROM structural_renderer_substrate AS document_target
 USER root
 RUN --network=none set -eu; \
     export HOME=/tmp/final-verification-home; \
@@ -368,6 +430,72 @@ LABEL org.opencontainers.image.title="ambit-c17-core-document-v5" \
       org.opencontainers.image.source="https://github.com/yungbote/ambit-daytona" \
       io.ambit.runtime-pack="ambit.runtime-pack/core-document@5" \
       io.ambit.runtime-pack-authority="candidate-only" \
+      io.ambit.debian-snapshot="debian@20260802T202614Z,debian-security@20260802T121235Z" \
+      io.ambit.activation="requires-backend-registration" \
+      io.ambit.evidence-state="candidate-ready"
+USER 1000:1000
+
+FROM ${BASE_IMAGE} AS union_overlay_builder
+USER root
+COPY --from=qualified_core_parent / /core-root/
+COPY --from=document_target / /target-root/
+COPY --from=document_target /opt/ambit/structural-runtime/ /opt/ambit/structural-runtime/
+COPY --from=document_target /opt/ambit/runtime-pack/core-document-v5/bin/ambit-structural-python \
+  /usr/local/bin/ambit-union-python
+COPY --from=composition_source /runtime-composition/build_union_overlay.py \
+  /tmp/build_union_overlay.py
+RUN --network=none set -eu; \
+    echo '65573a7b6d903a8faf8f51d20609f91071336b61c46128a40615f20ff71820c8  /tmp/build_union_overlay.py' | sha256sum -c -; \
+    /usr/local/bin/ambit-union-python /tmp/build_union_overlay.py \
+      --core-root /core-root \
+      --target-root /target-root \
+      --output /union \
+      --protected-path /opt/ambit/runtime-base/core/lineage/base-installed-dpkg.lock \
+      --protected-path /opt/ambit/runtime-pack/core-document/bin/ambit-atomic-materialize \
+      --protected-path /usr/share/licenses/ambit-atomic-materialize/ATOMIC-MATERIALIZER-LICENSE.md \
+      --protected-path /usr/share/licenses/ambit-atomic-materialize/atomic-materializer-license.lock.json; \
+    test -s /union/overlay-build-receipt.json; \
+    test -s /union/overlay-entry-manifest.jsonl; \
+    test -z "$(find /union/overlay \( -type s -o -type b -o -type c -o -type p \) -print -quit)"
+
+FROM qualified_core_parent AS core_document_v5
+ARG SOURCE_DATE_EPOCH
+ARG BUILD_SOURCE_REVISION
+ARG BUILD_SOURCE_TREE
+ARG BUILD_SOURCE_SUBTREE
+ARG BUILD_SOURCE_ARCHIVE_SHA256
+ARG BUILD_SOURCE_CONTEXT_SHA256
+ARG BUILD_SOURCE_FILES_SHA256
+ARG BUILD_SOURCE_MODES_SHA256
+ARG BUILD_SOURCE_IDENTITY_SHA256
+USER root
+COPY --from=union_overlay_builder /union/overlay/ /
+ENV PATH=/opt/ambit/runtime-pack/core-document-v5/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    HOME=/workspace \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    TZ=UTC \
+    DISABLE_SYSTEM_FONTS_LOAD=1
+LABEL org.opencontainers.image.title="ambit-c17-core-document-v5" \
+      org.opencontainers.image.description="Ambit core-derived structural and paginated DOCX runtime candidate" \
+      org.opencontainers.image.version="5.0.0-candidate" \
+      org.opencontainers.image.source="https://github.com/yungbote/ambit-daytona" \
+      org.opencontainers.image.revision="${BUILD_SOURCE_REVISION}" \
+      io.ambit.source-date-epoch="${SOURCE_DATE_EPOCH}" \
+      io.ambit.source-tree="${BUILD_SOURCE_TREE}" \
+      io.ambit.source-subtree="${BUILD_SOURCE_SUBTREE}" \
+      io.ambit.source-archive-sha256="${BUILD_SOURCE_ARCHIVE_SHA256}" \
+      io.ambit.source-context-sha256="${BUILD_SOURCE_CONTEXT_SHA256}" \
+      io.ambit.source-files-sha256="${BUILD_SOURCE_FILES_SHA256}" \
+      io.ambit.source-modes-sha256="${BUILD_SOURCE_MODES_SHA256}" \
+      io.ambit.source-identity-sha256="${BUILD_SOURCE_IDENTITY_SHA256}" \
+      io.ambit.source-identity-meaning="bound-claim-external-git-admission-required" \
+      io.ambit.runtime-pack="ambit.runtime-pack/core-document@5" \
+      io.ambit.runtime-pack-authority="candidate-only" \
+      io.ambit.core-parent-pack="ambit.runtime-pack/core@1" \
+      io.ambit.core-parent-platform-manifest="sha256:ebedd4a1dbca59499468595db8f3aba140234eeb2b2fdcd4fcc0c8f99a5dda94" \
+      io.ambit.core-parent-source-identity="sha256:4f36259ba173bcae67c80c6b4d3178890cad02198f7e2ca6831c13a9ca0ee835" \
+      io.ambit.composition="literal-core-parent-plus-one-closed-overlay" \
       io.ambit.debian-snapshot="debian@20260802T202614Z,debian-security@20260802T121235Z" \
       io.ambit.activation="requires-backend-registration" \
       io.ambit.evidence-state="candidate-ready"
