@@ -113,6 +113,7 @@ export function admitRenderPolicy(value) {
     value,
     [
       'canonicalArtifactBoundary',
+      'execution',
       'input',
       'libreOffice',
       'pages',
@@ -120,6 +121,7 @@ export function admitRenderPolicy(value) {
       'policyRef',
       'renderOutputGrantsCanonicalAuthority',
       'schema',
+      'scratch',
     ],
     'Render policy',
   )
@@ -195,6 +197,20 @@ export function admitRenderPolicy(value) {
   ) {
     throw new TypeError('Render input policy is invalid.')
   }
+  const execution = exactKeys(
+    policy.execution,
+    [
+      'maximumChildStderrBytes',
+      'maximumChildStdoutBytes',
+      'maximumCleanupMilliseconds',
+      'maximumPipelineWallMilliseconds',
+      'maximumTerminalWriteMilliseconds',
+    ],
+    'Render execution policy',
+  )
+  for (const key of Object.keys(execution)) {
+    positiveSafeInteger(execution[key], `Render execution policy ${key}`)
+  }
   const libreOffice = exactKeys(
     policy.libreOffice,
     [
@@ -269,6 +285,16 @@ export function admitRenderPolicy(value) {
   ) {
     throw new TypeError('Render page encoding policy is invalid.')
   }
+  if (
+    execution.maximumPipelineWallMilliseconds <=
+      libreOffice.maximumWallMilliseconds ||
+    execution.maximumCleanupMilliseconds >=
+      execution.maximumPipelineWallMilliseconds ||
+    execution.maximumTerminalWriteMilliseconds >=
+      execution.maximumPipelineWallMilliseconds
+  ) {
+    throw new TypeError('Render execution deadline policy is invalid.')
+  }
   const pdfjs = exactKeys(
     policy.pdfjs,
     [
@@ -297,12 +323,44 @@ export function admitRenderPolicy(value) {
   ) {
     throw new TypeError('PDF.js execution policy is invalid.')
   }
+  const scratch = exactKeys(
+    policy.scratch,
+    [
+      'cacheRequiredBytes',
+      'derivation',
+      'workspaceOverheadBytes',
+      'workspaceRequiredBytes',
+    ],
+    'Render scratch policy',
+  )
+  for (const key of [
+    'cacheRequiredBytes',
+    'workspaceOverheadBytes',
+    'workspaceRequiredBytes',
+  ]) {
+    positiveSafeInteger(scratch[key], `Render scratch policy ${key}`)
+  }
+  const derivedWorkspaceBytes =
+    Math.max(
+      input.maximumBytes + libreOffice.maximumPdfBytes,
+      libreOffice.maximumPdfBytes + pages.maximumTotalOutputBytes,
+    ) + scratch.workspaceOverheadBytes
+  if (
+    scratch.derivation !==
+      'max(input-docx+intermediate-pdf,intermediate-pdf+page-output)+bounded-overhead' ||
+    !Number.isSafeInteger(derivedWorkspaceBytes) ||
+    scratch.workspaceRequiredBytes !== derivedWorkspaceBytes
+  ) {
+    throw new TypeError('Render scratch derivation is invalid.')
+  }
   return Object.freeze({
     ...policy,
+    execution: Object.freeze(execution),
     input: Object.freeze(input),
     libreOffice: Object.freeze(libreOffice),
     pages: Object.freeze(pages),
     pdfjs: Object.freeze(pdfjs),
+    scratch: Object.freeze(scratch),
   })
 }
 

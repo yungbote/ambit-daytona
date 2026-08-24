@@ -63,7 +63,8 @@ export async function executeBoundedProcessGroup({
   cwd,
   env,
   maximumWallMilliseconds,
-  maximumOutputBytes,
+  maximumStdoutBytes,
+  maximumStderrBytes,
   signal,
   spawnProcess = spawn,
 }) {
@@ -85,9 +86,13 @@ export async function executeBoundedProcessGroup({
     maximumWallMilliseconds,
     'Process maximum wall milliseconds',
   )
-  const outputLimit = positiveSafeInteger(
-    maximumOutputBytes,
-    'Process maximum output bytes',
+  const stdoutLimit = positiveSafeInteger(
+    maximumStdoutBytes,
+    'Process maximum stdout bytes',
+  )
+  const stderrLimit = positiveSafeInteger(
+    maximumStderrBytes,
+    'Process maximum stderr bytes',
   )
   if (signal?.aborted) throw signal.reason
 
@@ -105,7 +110,8 @@ export async function executeBoundedProcessGroup({
   const processGroupId = child.pid
   const stdout = []
   const stderr = []
-  const outputState = { bytes: 0, maximumBytes: outputLimit }
+  const stdoutState = { bytes: 0, maximumBytes: stdoutLimit }
+  const stderrState = { bytes: 0, maximumBytes: stderrLimit }
   let terminalReason = null
   let spawnError = null
   let forcedKillTimer = null
@@ -131,13 +137,13 @@ export async function executeBoundedProcessGroup({
   timer.unref?.()
 
   child.stdout?.on('data', (chunk) => {
-    if (!appendBounded(stdout, chunk, outputState)) {
-      terminate(new Error('Process output exceeded its byte policy.'))
+    if (!appendBounded(stdout, chunk, stdoutState)) {
+      terminate(new Error('Process stdout exceeded its byte policy.'))
     }
   })
   child.stderr?.on('data', (chunk) => {
-    if (!appendBounded(stderr, chunk, outputState)) {
-      terminate(new Error('Process output exceeded its byte policy.'))
+    if (!appendBounded(stderr, chunk, stderrState)) {
+      terminate(new Error('Process stderr exceeded its byte policy.'))
     }
   })
   child.once('error', (error) => {

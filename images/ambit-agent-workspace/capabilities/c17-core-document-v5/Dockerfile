@@ -177,11 +177,13 @@ COPY renderer/ambit-render-document.mjs \
   renderer/ambit-render-pages.mjs \
   renderer/docx-package-admission.mjs \
   renderer/framed-jsonl-protocol.mjs \
-  renderer/libreoffice-subreaper.py \
   renderer/pdfjs-page-renderer.mjs \
   renderer/process-group-execution.mjs \
+  renderer/process-group-subreaper.py \
+  renderer/render-terminal-arbiter.mjs \
   renderer/render-output-verification.mjs \
   renderer/render-contracts.mjs \
+  renderer/restricted-xml.mjs \
   /opt/ambit/runtime-pack/core-document-v5/renderer/
 COPY policy /opt/ambit/runtime-pack/core-document-v5/policy
 COPY locks /opt/ambit/runtime-pack/core-document-v5/locks

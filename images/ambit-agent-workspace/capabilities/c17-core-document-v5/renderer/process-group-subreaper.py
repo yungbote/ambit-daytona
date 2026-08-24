@@ -1,5 +1,5 @@
 #!/opt/ambit/runtime-pack/core-document-v5/bin/ambit-structural-python
-"""Run one LibreOffice invocation under an exact descendant reaper."""
+"""Run one bounded child invocation under an exact descendant reaper."""
 
 from __future__ import annotations
 
@@ -112,7 +112,7 @@ def main() -> int:
                 os.kill(os.getpid(), signal.SIGTERM)
             os.execve(executable, arguments, dict(os.environ))
         except BaseException as error:
-            os.write(2, f"LibreOffice exec failed: {error}\n".encode("utf-8", "replace"))
+            os.write(2, f"Bounded child exec failed: {error}\n".encode("utf-8", "replace"))
             os._exit(127)
 
     process_group = os.getpgrp()
@@ -143,5 +143,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except (OSError, RuntimeError, ValueError) as error:
-        print(f"LibreOffice subreaper failed: {error}", file=sys.stderr, flush=True)
+        print(f"Bounded child subreaper failed: {error}", file=sys.stderr, flush=True)
         raise SystemExit(70)
