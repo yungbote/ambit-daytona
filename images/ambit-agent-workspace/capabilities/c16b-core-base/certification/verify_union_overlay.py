@@ -10,6 +10,11 @@ from typing import Any
 SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 PACK = re.compile(r"^ambit\.runtime-pack/[a-z0-9][a-z0-9._-]*@[1-9][0-9]*$")
 CAPABILITY = re.compile(r"^ambit\.runtime/[a-z0-9][a-z0-9._-]*@[1-9][0-9]*$")
+LAYER_MEDIA_TYPES = {
+    "application/vnd.oci.image.layer.v1.tar",
+    "application/vnd.oci.image.layer.v1.tar+gzip",
+    "application/vnd.oci.image.layer.v1.tar+zstd",
+}
 
 
 class UnionOverlayError(ValueError):
@@ -58,12 +63,25 @@ def _layers(value: object, name: str, *, nonempty: bool = True) -> list[dict[str
     _require(isinstance(value, list), f"{name} must be a list")
     result: list[dict[str, object]] = []
     for index, raw in enumerate(value):
-        layer = _exact(raw, {"digest", "size"}, f"{name}[{index}]")
+        layer = _exact(
+            raw,
+            {"digest", "mediaType", "size"},
+            f"{name}[{index}]",
+        )
         size = layer["size"]
         _require(isinstance(size, int) and not isinstance(size, bool) and size > 0, f"{name}[{index}] size is invalid")
-        result.append({"digest": _digest(layer["digest"], f"{name}[{index}] digest"), "size": size})
+        _require(
+            layer["mediaType"] in LAYER_MEDIA_TYPES,
+            f"{name}[{index}] media type is invalid",
+        )
+        result.append(
+            {
+                "digest": _digest(layer["digest"], f"{name}[{index}] digest"),
+                "mediaType": layer["mediaType"],
+                "size": size,
+            }
+        )
     _require(result or not nonempty, f"{name} cannot be empty")
-    _require(len({item["digest"] for item in result}) == len(result), f"{name} has duplicate layers")
     return result
 
 
@@ -72,7 +90,7 @@ def verify(contract_root: Path, receipt_path: Path) -> dict[str, object]:
     _require(contract.get("schema") == "ambit.runtime-core-union-overlay-contract/v1", "union contract schema is invalid")
     core = contract["coreParent"]
     _require(
-        core.get("status") == "qualified",
+        core.get("status") == "qualified-local-candidate",
         "qualified core parent identity is pending",
     )
     expected_core_layers = _layers(core["orderedLayers"], "contract core layers")

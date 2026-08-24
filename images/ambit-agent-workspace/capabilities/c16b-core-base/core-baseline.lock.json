@@ -66,6 +66,46 @@
       "backend RuntimeCapabilityPackRevision CapabilityPackPromotion and CertifiedCoreProfile admission"
     ]
   },
+  "qualification": {
+    "state": "qualified-local-candidate",
+    "sourceRevision": "ebbeb2bcc2caa695a6102946eebad9359ea8ba58",
+    "sourceTree": "72ed172fb21e9b66951f8166747cca262d0c4ba6",
+    "sourceSubtree": "30ff7ff0bad15efbdb335d5cb3f014337969df10",
+    "sourceIdentitySha256": "sha256:4f36259ba173bcae67c80c6b4d3178890cad02198f7e2ca6831c13a9ca0ee835",
+    "buildReceipt": {
+      "ref": "ambit.runtime-core-build-receipt/core@1",
+      "digest": "sha256:89ed9a2146300ebbd5779bd20396d859c07fe5d6451bc722df954bf76fa6a5c2"
+    },
+    "runtimeConformanceReceipt": {
+      "ref": "ambit.runtime-core-conformance-receipt/core@1",
+      "digest": "sha256:65f4e8f2c2e1e2c0aa5d3191165d9cb6fbac5ab2d82c082347b1b7dee5307233"
+    },
+    "reproducibleBuildCount": 2,
+    "byteIdenticalOciArchives": true,
+    "ociArchiveSha256": "sha256:9f1645744d0c646e25b075787beb4bdaa4074301c695cf4f142f3fee685492fc",
+    "ociArchiveBytes": 28264448,
+    "platformManifestDigest": "sha256:ebedd4a1dbca59499468595db8f3aba140234eeb2b2fdcd4fcc0c8f99a5dda94",
+    "configDigest": "sha256:3e609a4df9b53cc4022d70a73d342d387e3bd06bdfa43ad3443f17d8dcfddcbe",
+    "orderedLayers": [
+      {
+        "digest": "sha256:a32e473fab3e33bc66148a3e0734b5ad33dbeaf4ef4ef1c92b035de4ac6aeeea",
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "size": 28248810
+      },
+      {
+        "digest": "sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1",
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "size": 32
+      },
+      {
+        "digest": "sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1",
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "size": 32
+      }
+    ],
+    "externalGitAdmission": "pending",
+    "productionEvidence": "pending"
+  },
   "rollback": {
     "historicalArtifactsRemainImmutable": true,
     "predecessorActivation": null,
@@ -73,5 +113,5 @@
     "requiresSeparateDemotionReceipt": true
   },
   "schema": "ambit.runtime-core-baseline/v2",
-  "state": "source-ready-contract-pending-unbuilt"
+  "state": "locally-qualified-contract-pending-external-gates"
 }
