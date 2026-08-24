@@ -287,7 +287,7 @@ describe(WorkingCopyCaptureService.name, () => {
     expect(sandboxService.findOneByIdOrName).not.toHaveBeenCalled()
   })
 
-  it('rejects provider receipts that mutate exact shape, binding, total length, digest, identity or time', async () => {
+  it('classifies provider receipts outside exact shape, binding, length, digest, identity or time as outcome unknown', async () => {
     const binding = validBinding()
     const mutations: Array<(receipt: WorkingCopyCaptureReceiptDto & Record<string, unknown>) => void> = [
       (receipt) => {
@@ -320,7 +320,12 @@ describe(WorkingCopyCaptureService.name, () => {
       const receipt = validReceipt(binding) as WorkingCopyCaptureReceiptDto & Record<string, unknown>
       mutate(receipt)
       adapter.captureWorkingCopy.mockResolvedValueOnce(receipt)
-      await expect(service.capture('daytona-org-1', 'sandbox-1', binding)).rejects.toBeInstanceOf(ConflictException)
+      await expect(service.capture('daytona-org-1', 'sandbox-1', binding)).rejects.toMatchObject({
+        response: expect.objectContaining({
+          code: 'WORKING_COPY_CAPTURE_OUTCOME_UNKNOWN',
+          statusCode: 503,
+        }),
+      })
     }
   })
 
@@ -467,7 +472,7 @@ describe(WorkingCopyCaptureService.name, () => {
     expect(adapter.deleteWorkingCopyCapture).toHaveBeenNthCalledWith(2, 'sandbox-1', identity)
   })
 
-  it('rejects deletion receipts with a non-exact shape, outcome, identity or binding', async () => {
+  it('classifies deletion receipts with non-exact shape, outcome, identity or binding as outcome unknown', async () => {
     const identity = validIdentity(validBinding())
     const candidates: Array<WorkingCopyCaptureDeleteReceiptDto & Record<string, unknown>> = []
 
@@ -493,7 +498,31 @@ describe(WorkingCopyCaptureService.name, () => {
 
     for (const candidate of candidates) {
       adapter.deleteWorkingCopyCapture.mockResolvedValueOnce(candidate)
-      await expect(service.delete('daytona-org-1', 'sandbox-1', identity)).rejects.toBeInstanceOf(ConflictException)
+      await expect(service.delete('daytona-org-1', 'sandbox-1', identity)).rejects.toMatchObject({
+        response: expect.objectContaining({
+          code: 'WORKING_COPY_CAPTURE_OUTCOME_UNKNOWN',
+          statusCode: 503,
+        }),
+      })
+    }
+  })
+
+  it('classifies blank mutation responses as outcome unknown instead of a contract conflict', async () => {
+    const binding = validBinding()
+    const identity = validIdentity(binding)
+    adapter.captureWorkingCopy.mockResolvedValueOnce(undefined as never)
+    adapter.deleteWorkingCopyCapture.mockResolvedValueOnce(undefined as never)
+
+    for (const operation of [
+      () => service.capture('daytona-org-1', 'sandbox-1', binding),
+      () => service.delete('daytona-org-1', 'sandbox-1', identity),
+    ]) {
+      await expect(operation()).rejects.toMatchObject({
+        response: expect.objectContaining({
+          code: 'WORKING_COPY_CAPTURE_OUTCOME_UNKNOWN',
+          statusCode: 503,
+        }),
+      })
     }
   })
 
@@ -562,7 +591,7 @@ describe(WorkingCopyCaptureService.name, () => {
     }
   })
 
-  it('maps all runner contract statuses, preserves 503 outcome-unknown detail and hides unknown transport failures', async () => {
+  it('maps runner statuses and treats response-less mutation transport as outcome unknown', async () => {
     const binding = validBinding()
     const mapped = [
       [400, BadRequestException, 'invalid capture authority', 'capture_invalid'],
@@ -580,8 +609,28 @@ describe(WorkingCopyCaptureService.name, () => {
       })
     }
 
-    adapter.captureWorkingCopy.mockRejectedValueOnce(new RunnerApiError('wire failure', 502, 'bad_gateway'))
-    await expect(service.capture('daytona-org-1', 'sandbox-1', binding)).rejects.toMatchObject({
+    const identity = validIdentity(binding)
+    for (const invoke of [
+      () => {
+        adapter.captureWorkingCopy.mockRejectedValueOnce(new RunnerApiError('wire failure', undefined, 'ECONNRESET'))
+        return service.capture('daytona-org-1', 'sandbox-1', binding)
+      },
+      () => {
+        adapter.deleteWorkingCopyCapture.mockRejectedValueOnce(new RunnerApiError('wire failure', 502, 'bad_gateway'))
+        return service.delete('daytona-org-1', 'sandbox-1', identity)
+      },
+    ]) {
+      await expect(invoke()).rejects.toMatchObject({
+        response: expect.objectContaining({
+          code: 'WORKING_COPY_CAPTURE_OUTCOME_UNKNOWN',
+          message: 'Working-copy capture outcome is unknown; observe the exact operation before retrying.',
+          statusCode: 503,
+        }),
+      })
+    }
+
+    adapter.observeWorkingCopyCapture.mockRejectedValueOnce(new RunnerApiError('wire failure', 502, 'bad_gateway'))
+    await expect(service.observe('daytona-org-1', 'sandbox-1', binding)).rejects.toMatchObject({
       response: expect.objectContaining({
         message: 'The sandbox runner could not complete working-copy capture.',
         statusCode: 503,
