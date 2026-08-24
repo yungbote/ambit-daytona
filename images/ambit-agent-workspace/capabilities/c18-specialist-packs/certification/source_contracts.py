@@ -260,6 +260,10 @@ def _verify_dockerfile(root: Path, pack_id: str, expected: dict[str, object]) ->
     if pack_id == "web-browser":
         conformance = (root / pack_id / "conformance/verify.mjs").read_text(encoding="utf-8")
         _require("--no-sandbox" not in conformance, "browser conformance disables the browser sandbox")
+        _require(
+            "chromiumSandbox: browserName === 'chromium'" in conformance,
+            "browser conformance does not enable the Chromium sandbox",
+        )
 
 
 def verify_source(root: Path, *, verify_hashes: bool = True) -> dict[str, object]:

@@ -170,7 +170,13 @@ const viewports = [
 const results = [];
 try {
   for (const [browserName, browserType, expectedVersion] of browserTypes) {
-    const browser = await browserType.launch({ headless: true });
+    const browser = await browserType.launch({
+      headless: true,
+      // Playwright otherwise disables Chromium's sandbox by default. The
+      // browser pack is a distinct high-risk parser boundary, so a passing
+      // conformance run must prove that sandboxed Chromium actually launches.
+      chromiumSandbox: browserName === 'chromium',
+    });
     if (expectedVersion && browser.version() !== expectedVersion) {
       throw new Error(`${browserName} version mismatch: ${browser.version()}`);
     }

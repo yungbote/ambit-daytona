@@ -90,6 +90,22 @@ class SourceContractTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(SourceContractError, "disables the browser sandbox"):
                 verify_source(root, verify_hashes=False)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "source"
+            shutil.copytree(SOURCE_ROOT, root)
+            conformance = root / "web-browser/conformance/verify.mjs"
+            conformance.write_text(
+                conformance.read_text().replace(
+                    "chromiumSandbox: browserName === 'chromium'",
+                    "chromiumSandbox: false",
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                SourceContractError,
+                "does not enable the Chromium sandbox",
+            ):
+                verify_source(root, verify_hashes=False)
 
 
 if __name__ == "__main__":
