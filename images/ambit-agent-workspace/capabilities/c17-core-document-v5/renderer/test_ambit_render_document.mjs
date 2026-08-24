@@ -3,9 +3,11 @@ import { execFile as execFileCallback } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
   chmod,
+  lstat,
   mkdir,
   mkdtemp,
   readdir,
+  readFile,
   rename,
   rm,
   symlink,
@@ -199,6 +201,40 @@ test('removes private staging when conversion output is noncanonical', async () 
   }
 })
 
+test('rejects a converted-PDF symlink before mutating its victim', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'ambit-document-wrapper-'))
+  const cache = await mkdtemp(join(tmpdir(), 'ambit-document-cache-'))
+  const external = await mkdtemp(join(tmpdir(), 'ambit-document-victim-'))
+  const victim = join(external, 'victim.pdf')
+  const victimBytes = Buffer.from('%PDF-external-victim\n%%EOF\n')
+  await writeFile(victim, victimBytes, { mode: 0o644 })
+  try {
+    await assert.rejects(
+      convertDocxToPdf({
+        documentBytes: DOCX,
+        policy: POLICY,
+        workspaceRoot: workspace,
+        cacheRoot: cache,
+        execute: async (options) => {
+          const output =
+            options.arguments[options.arguments.indexOf('--outdir') + 1]
+          await symlink(victim, join(output, 'document.pdf'))
+          return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }
+        },
+      }),
+      /ELOOP|symbolic link/,
+    )
+    assert.deepEqual(await readFile(victim), victimBytes)
+    assert.equal((await lstat(victim)).mode & 0o777, 0o644)
+    assert.deepEqual(await readdir(workspace), [])
+    assert.deepEqual(await readdir(cache), [])
+  } finally {
+    await rm(workspace, { recursive: true, force: true })
+    await rm(cache, { recursive: true, force: true })
+    await rm(external, { recursive: true, force: true })
+  }
+})
+
 test('cleans the held mount rosters after hostile root renames', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'ambit-document-wrapper-'))
   const cache = await mkdtemp(join(tmpdir(), 'ambit-document-cache-'))
@@ -253,7 +289,7 @@ test('admits the exact PDF limit and rejects its first excess byte', async () =>
     await exact.dispose()
     await assert.rejects(
       convert(Buffer.concat([PDF, Buffer.from('x')])),
-      /bounded immutable regular file/,
+      /bounded owned regular file/,
     )
     assert.deepEqual(await readdir(workspace), [])
     assert.deepEqual(await readdir(cache), [])
