@@ -597,6 +597,61 @@ def create_check_evidence(
     return evidence
 
 
+def parse_check_evidence(value: object) -> dict[str, Any]:
+    record = _exact_record(
+        value,
+        {
+            "artifacts",
+            "check",
+            "contract",
+            "digest",
+            "executorRevision",
+            "facts",
+            "outcome",
+            "request",
+        },
+        "check evidence",
+    )
+    if record["contract"] != EVIDENCE_CONTRACT:
+        raise RenderCommandError("check evidence contract identity is invalid")
+    request = _exact_record(
+        record["request"],
+        {"digest", "jobRef", "sourceDigest"},
+        "check evidence request",
+    )
+    normalized_request = {
+        "jobRef": _operational_ref(request["jobRef"], "evidence job ref"),
+        "digest": _digest(request["digest"], "evidence request digest"),
+        "sourceDigest": _digest(
+            request["sourceDigest"], "evidence source digest"
+        ),
+    }
+    executor = _pinned(record["executorRevision"], "evidence executor revision")
+    check = _token(record["check"], "evidence check")
+    outcome = record["outcome"]
+    if outcome not in {"failed", "passed"}:
+        raise RenderCommandError("evidence outcome is invalid")
+    evidence = create_check_evidence(
+        {
+            "jobRef": normalized_request["jobRef"],
+            "digest": normalized_request["digest"],
+            "source": {"digest": normalized_request["sourceDigest"]},
+        },
+        executor,
+        check,
+        outcome,
+        record["facts"],
+        record["artifacts"],
+    )
+    if evidence != record:
+        raise RenderCommandError("check evidence is noncanonical or forged")
+    return evidence
+
+
+def parse_check_evidence_bytes(value: bytes) -> dict[str, Any]:
+    return _parse_exact_bytes(value, parse_check_evidence)
+
+
 def _parse_exact_bytes(value: bytes, parser: Any) -> dict[str, Any]:
     if not isinstance(value, bytes) or not 1 <= len(value) <= MAXIMUM_COMMAND_BYTES:
         raise RenderCommandError("command bytes are empty or exceed their bound")

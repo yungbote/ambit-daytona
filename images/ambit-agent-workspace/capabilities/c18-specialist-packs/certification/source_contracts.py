@@ -418,6 +418,21 @@ def _verify_executor(root: Path, pack_id: str) -> None:
         (root / pack_id / "runtime/adapter.py").is_file(),
         f"{pack_id} runtime adapter is absent",
     )
+    if pack_id == "pdf-ocr":
+        fixture = root / pack_id / "conformance/fixtures/tagged-source.pdf"
+        provenance = _load_json(
+            root
+            / pack_id
+            / "conformance/fixtures/tagged-source.provenance.json"
+        )
+        _require(
+            fixture.read_bytes().startswith(b"%PDF-")
+            and provenance.get("schema")
+            == "ambit.c18-generated-conformance-fixture-provenance/v1"
+            and provenance.get("sha256") == f"sha256:{_sha256(fixture)}"
+            and provenance.get("nativeMicrosoftOfficeFidelity") == "unsupported",
+            "PDF render-command conformance fixture provenance is invalid",
+        )
 
 
 def verify_source(root: Path, *, verify_hashes: bool = True) -> dict[str, object]:

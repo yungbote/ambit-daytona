@@ -17,6 +17,7 @@ from render_command import (  # noqa: E402
     create_request,
     create_result,
     parse_request_bytes,
+    parse_check_evidence_bytes,
     parse_result_bytes,
 )
 
@@ -96,6 +97,11 @@ class RenderCommandTests(unittest.TestCase):
             parse_result_bytes(request, GOLDENS["success"].encode("utf-8")),
             json.loads(GOLDENS["success"]),
         )
+        for golden in GOLDENS["evidence"]:
+            self.assertEqual(
+                parse_check_evidence_bytes(golden["body"].encode("utf-8")),
+                json.loads(golden["body"]),
+            )
 
     def test_rejects_unsafe_paths_wrong_pack_and_noncanonical_bytes(self) -> None:
         body = {

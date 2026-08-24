@@ -23,6 +23,7 @@ cp -a "${pack_source}/conformance/." "${pack_root}/conformance/"
 cp -a "${pack_source}/runtime/." "${pack_root}/runtime/"
 cp -a "${source_root}/protocol/." "${pack_root}/protocol/"
 cp -a "${source_root}/conformance/runtime-guard.sh" "${pack_root}/conformance/"
+cp -a "${source_root}/conformance/render-probe.py" "${pack_root}/conformance/"
 install -m 0555 "${source_root}/protocol/render_cli.py" \
   "${pack_root}/bin/ambit-specialist-render"
 tar -xzf "${input_root}/npm/playwright-core-1.62.1.tgz" \

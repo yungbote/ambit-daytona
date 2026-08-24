@@ -326,7 +326,7 @@ def _views(
                 "bodyBase64": base64.b64encode(payload).decode(),
             }
         )
-    normalized = text.replace("\r", "")
+    normalized = text.replace("\r", "").replace("\f", "\n")
     encoded = normalized.encode("utf-8")
     if encoded:
         if len(encoded) > 1024 * 1024:

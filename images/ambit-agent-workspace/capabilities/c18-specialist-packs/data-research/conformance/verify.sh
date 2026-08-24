@@ -35,8 +35,22 @@ SQL
     "${source}/research.md" -o "${native}/research.html"
   dot -Tsvg "${source}/lineage.dot" -o "${native}/lineage.svg"
 done
+python3 "${pack_root}/conformance/render-probe.py" \
+  --name data-analysis-csv \
+  --facet data_analysis \
+  --media-type text/csv \
+  --source "${output_root}/run-a/revenue.csv" \
+  --receipt "${output_root}/data-analysis-render-probe.json"
+python3 "${pack_root}/conformance/render-probe.py" \
+  --name research-markdown \
+  --facet research \
+  --media-type text/markdown \
+  --source "${output_root}/run-a/research.md" \
+  --receipt "${output_root}/research-render-probe.json"
 
 rm -rf "${HOME}" "${XDG_CACHE_HOME}" "${XDG_CONFIG_HOME}" "${XDG_RUNTIME_DIR}" \
   "${MPLCONFIGDIR}"
 python3 "${pack_root}/conformance/verify.py" finalize "${output_root}"
+test -s "${output_root}/data-analysis-render-probe.json"
+test -s "${output_root}/research-render-probe.json"
 test -s "${output_root}/conformance-receipt.json"

@@ -54,6 +54,7 @@ def _environment(scratch: Path) -> dict[str, str]:
         "LC_ALL": "C.UTF-8",
         "PATH": PATH,
         "PYTHONDONTWRITEBYTECODE": "1",
+        "SAL_DISABLE_JAVA": "1",
         "TZ": "UTC",
         "XDG_CACHE_HOME": str(cache),
         "XDG_CONFIG_HOME": str(config),
@@ -209,7 +210,7 @@ def _font_environment(
             )
         verified += 1
     actual = _run(
-        ["fc-list", ":", "family", "style", "file"],
+        ["fc-list", "-f", "%{file}\t%{family}\t%{style}\n"],
         scratch=scratch,
         deadline=deadline,
         environment=environment,
@@ -519,7 +520,7 @@ def _views(
                 "bodyBase64": base64.b64encode(payload).decode(),
             }
         )
-    normalized = text.replace("\r", "")
+    normalized = text.replace("\r", "").replace("\f", "\n")
     encoded = normalized.encode("utf-8")
     if encoded:
         if len(encoded) > 1024 * 1024:
