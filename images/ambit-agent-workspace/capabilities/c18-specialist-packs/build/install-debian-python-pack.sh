@@ -108,8 +108,25 @@ fc-cache -f
 )
 fc-list -f '%{file}\t%{family}\t%{style}\n' | LC_ALL=C sort \
   > /tmp/fontconfig-roster.actual
-cmp "${pack_root}/locks/fonts/fontconfig-roster.tsv" \
-  /tmp/fontconfig-roster.actual
+comm -23 "${pack_root}/locks/fonts/fontconfig-roster.tsv" \
+  /tmp/fontconfig-roster.actual > /tmp/fontconfig-roster.missing
+test ! -s /tmp/fontconfig-roster.missing
+comm -13 "${pack_root}/locks/fonts/fontconfig-roster.tsv" \
+  /tmp/fontconfig-roster.actual > /tmp/fontconfig-roster.extra
+if [[ ${pack_id} == pdf-ocr ]]; then
+  cut -f 1 /tmp/fontconfig-roster.extra | LC_ALL=C sort -u \
+    > /tmp/fontconfig-extra-paths.actual
+  dpkg-query -L fonts-urw-base35 | LC_ALL=C sort -u \
+    > /tmp/fontconfig-extra-paths.allowed
+  comm -23 /tmp/fontconfig-extra-paths.actual \
+    /tmp/fontconfig-extra-paths.allowed \
+    > /tmp/fontconfig-extra-paths.forbidden
+  test ! -s /tmp/fontconfig-extra-paths.forbidden
+else
+  test ! -s /tmp/fontconfig-roster.extra
+fi
+install -m 0444 /tmp/fontconfig-roster.actual \
+  "${pack_root}/locks/installed-fontconfig-roster.lock"
 
 groupadd --gid 1000 daytona
 useradd --uid 1000 --gid 1000 --home-dir /workspace --shell /bin/bash daytona
@@ -120,6 +137,11 @@ rm -rf \
   /etc/dpkg \
   /root/.cache \
   /tmp/fontconfig-roster.actual \
+  /tmp/fontconfig-roster.extra \
+  /tmp/fontconfig-roster.missing \
+  /tmp/fontconfig-extra-paths.actual \
+  /tmp/fontconfig-extra-paths.allowed \
+  /tmp/fontconfig-extra-paths.forbidden \
   /tmp/installed-dpkg.actual \
   /usr/local/lib/python3.14/ensurepip \
   /usr/local/lib/python3.14/site-packages/pip \

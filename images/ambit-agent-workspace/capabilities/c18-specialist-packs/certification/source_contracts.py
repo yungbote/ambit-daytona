@@ -256,6 +256,11 @@ def _verify_debian_pack(root: Path, pack_id: str, expected: dict[str, object]) -
     _require(installed_lines == sorted(set(installed_lines)), f"{pack_id} installed closure is not sorted and unique")
     _require(len(installed_lines) == installed.get("entryCount"), f"{pack_id} installed closure count mismatch")
     _require(f"sha256:{_sha256(installed_path)}" == installed.get("sha256"), f"{pack_id} installed closure digest mismatch")
+    font_set = _load_json(root / "locks/font-set.lock.json")
+    _require(
+        set(font_set.get("packages", [])).issubset(installed_lines),
+        f"{pack_id} does not close the exact shared font set",
+    )
 
 
 def _verify_web_pack(root: Path) -> None:
