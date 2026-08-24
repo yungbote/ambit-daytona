@@ -14,6 +14,7 @@
   "canvasInputLock": "locks/canvas-input.lock.json",
   "documentRenderInterfaceLock": "locks/document-render-interface.lock.json",
   "runtimeCancellationAuthorityLock": "locks/runtime-cancellation-authority.lock.json",
+  "unionOverlayInputLock": "locks/union-overlay-builder-input.lock.json",
   "offlineBuildInputLock": "locks/offline-build-input.lock.json",
   "structuralCompatibilityInputLock": "locks/structural-compatibility-input.lock.json",
   "captureHelperInputLock": "locks/capture-helper-input.lock.json",

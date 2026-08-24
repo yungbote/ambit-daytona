@@ -60,6 +60,7 @@ SOURCE_CONTRACT_PATHS = (
     "locks/structural-runtime-links.txt",
     "locks/structural-runtime-loaded-elf.sha256",
     "locks/structural-runtime-tree.jsonl",
+    "locks/union-overlay-builder-input.lock.json",
     "policy/license-policy.json",
     "policy/render-policy.json",
     "policy/runtime-policy.json",
@@ -99,6 +100,7 @@ PROTOCOL_SOURCE_PATHS = (
     "renderer/render-output-verification.mjs",
     "renderer/render-terminal-arbiter.mjs",
     "renderer/restricted-xml.mjs",
+    "locks/union-overlay-builder-input.lock.json",
     "structural/ambit-structural-python",
     "toolchain-manifest.json",
 )
@@ -462,6 +464,7 @@ def _verify_candidate_evidence(
             "arguments",
             "authority",
             "cancellation",
+            "composition",
             "execution",
             "executable",
             "frames",
@@ -482,6 +485,90 @@ def _verify_candidate_evidence(
         ["--framed-jsonl", "--nonce", "LOWERCASE_128_BIT_HEX"],
         "document render arguments",
     )
+    composition = contract["composition"]
+    _keys(
+        composition,
+        {
+            "coreParent",
+            "deletions",
+            "lastWriterWins",
+            "mode",
+            "overlayBuilder",
+            "protectedCorePaths",
+        },
+        "document render composition",
+    )
+    union_input = _read(root / "locks/union-overlay-builder-input.lock.json")
+    _keys(
+        union_input,
+        {
+            "activation",
+            "builder",
+            "composition",
+            "coreContract",
+            "coreParent",
+            "protectedCorePaths",
+            "schema",
+            "state",
+        },
+        "union overlay input lock",
+    )
+    _expect(
+        union_input["schema"],
+        "ambit.runtime-pack-union-overlay-input-lock/v1",
+        "union overlay input schema",
+    )
+    _expect(
+        union_input["state"],
+        "qualified-local-candidate",
+        "union overlay input state",
+    )
+    _expect(
+        union_input["builder"],
+        {
+            "path": "images/ambit-agent-workspace/runtime-composition/build_union_overlay.py",
+            "sha256": "sha256:65573a7b6d903a8faf8f51d20609f91071336b61c46128a40615f20ff71820c8",
+        },
+        "union overlay builder input",
+    )
+    _expect(
+        union_input["coreContract"],
+        {
+            "path": "images/ambit-agent-workspace/capabilities/c16b-core-base/composition/union-overlay-contract.lock.json",
+            "sha256": "sha256:bdd2c891a3481b29834d8fd482e262051bc564bdf3e802b92730e0c973870ca8",
+        },
+        "union overlay core contract input",
+    )
+    _expect(
+        union_input["activation"],
+        "candidate-only",
+        "union overlay activation",
+    )
+    _expect(
+        composition["coreParent"],
+        union_input["coreParent"],
+        "document render core parent",
+    )
+    _expect(
+        composition["overlayBuilder"],
+        {
+            "path": union_input["builder"]["path"],
+            "digest": union_input["builder"]["sha256"],
+        },
+        "document render overlay builder",
+    )
+    _expect(
+        composition["protectedCorePaths"],
+        union_input["protectedCorePaths"],
+        "document render protected core paths",
+    )
+    _expect(
+        composition["mode"],
+        union_input["composition"],
+        "document render composition mode",
+    )
+    _expect(composition["deletions"], "forbidden", "overlay deletions")
+    _expect(composition["lastWriterWins"], False, "overlay write ownership")
     _expect(contract["runtime"]["pathAuthority"], "none", "render path authority")
     _expect(contract["transport"]["medium"], "raw-noecho-pty", "render transport")
     _expect(contract["transport"]["chunkBytes"], 49152, "render chunk bytes")
@@ -552,6 +639,13 @@ def _verify_candidate_evidence(
         "renderer/process-group-subreaper.py",
         "renderer/render-terminal-arbiter.mjs",
         "renderer/restricted-xml.mjs",
+        "runtime-composition/build_union_overlay.py",
+        "FROM core_parent AS qualified_core_parent",
+        "COPY --from=qualified_core_parent / /core-root/",
+        "FROM qualified_core_parent AS core_document_v5",
+        "COPY --from=source_identity /daytona-source.tar",
+        "BUILD_SOURCE_IDENTITY_SHA256",
+        "io.ambit.source-identity-meaning",
     ):
         if required not in dockerfile_source:
             raise ValueError(f"runtime image omits transitive behavior owner: {required}")
@@ -1100,6 +1194,8 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
             "baseOci",
             "buildFrontend",
             "buildTargets",
+            "compositionNamedBuildContext",
+            "coreParentNamedBuildContext",
             "frozenEvidence",
             "frozenEvidenceByteManifest",
             "frozenEvidenceSha256Manifest",
@@ -1114,7 +1210,9 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
             "publicArtifacts",
             "requiredUnfrozenEvidence",
             "schema",
+            "sourceIdentityNamedBuildContext",
             "state",
+            "unionOverlayInputLock",
         },
         "offline build input lock",
     )
@@ -1213,6 +1311,26 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
         offline["materializerNamedBuildContext"],
         "materializer_inputs",
         "materializer named build context",
+    )
+    _expect(
+        offline["coreParentNamedBuildContext"],
+        "core_parent",
+        "core-parent named build context",
+    )
+    _expect(
+        offline["compositionNamedBuildContext"],
+        "composition_source",
+        "composition named build context",
+    )
+    _expect(
+        offline["sourceIdentityNamedBuildContext"],
+        "source_identity",
+        "source-identity named build context",
+    )
+    _expect(
+        offline["unionOverlayInputLock"],
+        "locks/union-overlay-builder-input.lock.json",
+        "union-overlay input lock",
     )
     expected_public_artifacts = [
         {
@@ -1544,6 +1662,7 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
             "platform",
             "runtime",
             "runtimeCancellationAuthorityLock",
+            "unionOverlayInputLock",
             "schema",
             "state",
             "structuralCompatibility",

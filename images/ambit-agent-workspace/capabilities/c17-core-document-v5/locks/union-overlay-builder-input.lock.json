@@ -1,0 +1,44 @@
+{
+  "schema": "ambit.runtime-pack-union-overlay-input-lock/v1",
+  "state": "qualified-local-candidate",
+  "builder": {
+    "path": "images/ambit-agent-workspace/runtime-composition/build_union_overlay.py",
+    "sha256": "sha256:65573a7b6d903a8faf8f51d20609f91071336b61c46128a40615f20ff71820c8"
+  },
+  "coreContract": {
+    "path": "images/ambit-agent-workspace/capabilities/c16b-core-base/composition/union-overlay-contract.lock.json",
+    "sha256": "sha256:bdd2c891a3481b29834d8fd482e262051bc564bdf3e802b92730e0c973870ca8"
+  },
+  "coreParent": {
+    "packRevisionRef": "ambit.runtime-pack/core@1",
+    "sourceRevision": "ebbeb2bcc2caa695a6102946eebad9359ea8ba58",
+    "sourceIdentitySha256": "sha256:4f36259ba173bcae67c80c6b4d3178890cad02198f7e2ca6831c13a9ca0ee835",
+    "platformManifestDigest": "sha256:ebedd4a1dbca59499468595db8f3aba140234eeb2b2fdcd4fcc0c8f99a5dda94",
+    "configDigest": "sha256:3e609a4df9b53cc4022d70a73d342d387e3bd06bdfa43ad3443f17d8dcfddcbe",
+    "orderedLayers": [
+      {
+        "digest": "sha256:a32e473fab3e33bc66148a3e0734b5ad33dbeaf4ef4ef1c92b035de4ac6aeeea",
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "size": 28248810
+      },
+      {
+        "digest": "sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1",
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "size": 32
+      },
+      {
+        "digest": "sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1",
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "size": 32
+      }
+    ]
+  },
+  "protectedCorePaths": [
+    "/opt/ambit/runtime-base/core/lineage/base-installed-dpkg.lock",
+    "/opt/ambit/runtime-pack/core-document/bin/ambit-atomic-materialize",
+    "/usr/share/licenses/ambit-atomic-materialize/ATOMIC-MATERIALIZER-LICENSE.md",
+    "/usr/share/licenses/ambit-atomic-materialize/atomic-materializer-license.lock.json"
+  ],
+  "composition": "literal-core-oci-parent-plus-one-closed-additive-overlay",
+  "activation": "candidate-only"
+}
