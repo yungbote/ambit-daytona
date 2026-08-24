@@ -7,7 +7,13 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from wheel_lock import WheelLockError, build_lock, verify_lock, write_lock
+from wheel_lock import (
+    WheelLockError,
+    build_lock,
+    requirements_from_lock,
+    verify_lock,
+    write_lock,
+)
 
 
 class WheelLockTests(unittest.TestCase):
@@ -118,6 +124,18 @@ class WheelLockTests(unittest.TestCase):
         lock_path.write_text('{"schema":"x","schema":"y"}', encoding="utf-8")
         with self.assertRaisesRegex(WheelLockError, "duplicate JSON key"):
             verify_lock(lock_path, self.wheels)
+
+    def test_renders_hash_required_offline_requirements(self) -> None:
+        lock_path = self.root / "wheel.lock.json"
+        write_lock(lock_path, self._lock())
+        rendered = requirements_from_lock(lock_path)
+        self.assertEqual(
+            rendered.splitlines(),
+            [
+                f"alpha-pkg==1.2.3 --hash={self._lock()['wheels'][0]['sha256']}",
+                f"beta==4.5 --hash={self._lock()['wheels'][1]['sha256']}",
+            ],
+        )
 
 
 if __name__ == "__main__":

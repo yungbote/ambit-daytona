@@ -107,7 +107,10 @@ class DebianLockTests(unittest.TestCase):
     def test_freezes_and_replays_exact_signed_index_membership(self) -> None:
         lock = self._lock()
         self.assertEqual(lock["archiveCount"], 1)
-        self.assertEqual(lock["archives"][0]["repositoryPath"], "pool/f/fixture.deb")
+        self.assertEqual(
+            lock["archives"][0]["signedLocations"],
+            [{"repository": "debian", "repositoryPath": "pool/f/fixture.deb"}],
+        )
         lock_path = self.root / "lock.json"
         lock_path.write_text(json.dumps(lock, indent=2, sort_keys=True) + "\n")
         self.assertEqual(
@@ -147,6 +150,17 @@ class DebianLockTests(unittest.TestCase):
         lock_path.write_text('{"schema":"a","schema":"b"}', encoding="utf-8")
         with self.assertRaisesRegex(DebianLockError, "duplicate JSON key"):
             verify_lock(lock_path, self.debs, self.closure, self.indexes)
+
+    def test_rejects_mutable_base_image(self) -> None:
+        with self.assertRaisesRegex(DebianLockError, "immutable sha256"):
+            build_lock(
+                self.debs,
+                pack_ref="ambit.runtime-pack/test@1",
+                requested_packages=["fixture=1.2.3"],
+                installed_closure=self.closure,
+                package_indexes=self.indexes,
+                base_image="docker.io/library/debian:latest",
+            )
 
 
 if __name__ == "__main__":
