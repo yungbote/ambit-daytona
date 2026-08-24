@@ -2,22 +2,16 @@
 
 ARG BASE_IMAGE=docker.io/library/python@sha256:d6e0850f13fda0e2305d4c3c1c2f7930fe1042d34ddd958e49bba6ef685d0bb2
 
-FROM ${BASE_IMAGE} AS input_guard
-COPY . /source/
-RUN --network=none --mount=type=bind,from=pack_inputs,source=.,target=/inputs,ro \
-    /source/build/verify-input-context.sh data-research /source /inputs
-
 FROM ${BASE_IMAGE}
 ARG BUILD_SOURCE_REVISION=unbound
 ARG BUILD_SOURCE_TREE=unbound
 ARG BUILD_SOURCE_SET_SHA256=unbound
-COPY . /source/
-COPY --from=pack_inputs / /inputs/
 RUN --network=none \
+    --mount=type=bind,source=.,target=/source,ro \
+    --mount=type=bind,from=pack_inputs,source=.,target=/inputs,ro \
     /source/build/verify-build-identity.sh /source \
     && /source/build/verify-input-context.sh data-research /source /inputs \
-    && /source/build/install-debian-python-pack.sh data-research /source /inputs \
-    && rm -rf /inputs /source
+    && /source/build/install-debian-python-pack.sh data-research /source /inputs
 LABEL org.opencontainers.image.title="ambit-c18-data-research" \
       org.opencontainers.image.description="Ambit C18 numerical, local-query, notebook, and research specialist pack" \
       org.opencontainers.image.version="1.0.0-candidate" \
