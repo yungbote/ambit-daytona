@@ -51,3 +51,22 @@ an independently admitted external Git-object/remote-ref receipt anchored to
 the exact source-identity raw digest. Building an image remains candidate
 production until the full evidence roster in `core-baseline.lock.json`,
 backend registration, and a distinct rollback/demotion receipt all exist.
+
+## Descendant union overlay
+
+Document and specialist images inherit the exact core manifest through an OCI
+named context. Their package managers never return to the runtime parent.
+Instead, isolated network-none builders consume the canonically ordered set of
+selected offline pack artifact/installer bundles, resolve the complete global
+dependency and path-ownership union before any install, install the union once,
+prune once, and emit one closed rootfs overlay/result receipt. Sequential opaque
+pack layers and last-writer-wins ownership are invalid. The ordinary document
+image is simply the one-bundle case of the same mechanism.
+
+`composition/union-overlay-contract.lock.json` freezes the core parent and
+receipt obligations. `certification/verify_union_overlay.py` verifies the
+literal seven-layer core prefix, selected-bundle closure, pre/post global
+state, conflict and ownership receipts, the exact overlay suffix, protected
+core paths, final installer absence, and full runtime/pack conformance. The
+backend authority discriminator intentionally remains null until its matching
+equality-deleting successor contract is frozen.

@@ -241,6 +241,66 @@ def verify(root: Path) -> dict[str, object]:
         "materializer binary changed",
     )
 
+    overlay = _exact(
+        _load(root / "composition/union-overlay-contract.lock.json"),
+        {"backendAuthority", "coreParent", "finalRuntime", "schema", "union"},
+        "union overlay contract",
+    )
+    _require(
+        overlay["schema"] == "ambit.runtime-core-union-overlay-contract/v1",
+        "union overlay contract schema changed",
+    )
+    overlay_backend = _exact(
+        overlay["backendAuthority"],
+        {"contractDiscriminator", "sourceBlobSha", "status"},
+        "union overlay backend authority",
+    )
+    _require(
+        overlay_backend
+        == {
+            "contractDiscriminator": None,
+            "sourceBlobSha": None,
+            "status": "pending-equality-deleting-successor-contract",
+        },
+        "union overlay guessed an unfrozen backend authority",
+    )
+    overlay_core = _exact(
+        overlay["coreParent"],
+        {
+            "configDigest",
+            "orderedLayers",
+            "platform",
+            "platformManifestDigest",
+            "sourceIdentitySha256",
+        },
+        "union overlay core parent",
+    )
+    _require(
+        overlay_core["platform"] == "linux/amd64"
+        and overlay_core["platformManifestDigest"]
+        == "sha256:56a5c23d33a9b6ef2605d830605ec82bb9faa069a2d1dbe86d8662c8801fb419"
+        and overlay_core["configDigest"]
+        == "sha256:891b92f96814b8deeda10e8ecf4154562a5e9ff38f8665803cc937e9d89a537a"
+        and overlay_core["sourceIdentitySha256"]
+        == "sha256:39ee58cffe5a41c2124a09b135d7f79beedf8424eff018ffadb3ec553c160744"
+        and isinstance(overlay_core["orderedLayers"], list)
+        and len(overlay_core["orderedLayers"]) == 7,
+        "union overlay core identity differs from the qualified candidate",
+    )
+    overlay_union = overlay["union"]
+    _require(
+        isinstance(overlay_union, dict)
+        and overlay_union.get("compositionMethod")
+        == "literal-core-oci-parent-plus-one-closed-union-overlay"
+        and overlay_union.get("installPasses") == 1
+        and overlay_union.get("prunePasses") == 1
+        and overlay_union.get("lastWriterWins") is False
+        and overlay_union.get("opaqueSequentialPackLayers") is False
+        and isinstance(overlay_union.get("requiredReceipts"), list)
+        and len(overlay_union["requiredReceipts"]) == 11,
+        "union overlay no longer proves one closed conflict-free install",
+    )
+
     dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
     required_fragments = (
         "debian@sha256:38a76d01668772e381ad2826d876627c89e7133e2f8a0f5d567306798b0f2a16",
@@ -284,6 +344,7 @@ def verify(root: Path) -> dict[str, object]:
         "historicalCoreDocumentReusable": False,
         "promotionPerformed": False,
         "backendCompositionContractFrozen": False,
+        "descendantUnionOverlayContractFrozen": True,
     }
 
 
