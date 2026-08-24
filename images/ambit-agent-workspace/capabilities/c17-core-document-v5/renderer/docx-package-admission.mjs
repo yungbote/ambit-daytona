@@ -1,5 +1,10 @@
 import { inflateRawSync } from 'node:zlib'
 
+import {
+  exactUnqualifiedAttributes,
+  parseRestrictedXml,
+} from './restricted-xml.mjs'
+
 const CENTRAL_DIRECTORY_SIGNATURE = 0x02014b50
 const END_OF_CENTRAL_DIRECTORY_SIGNATURE = 0x06054b50
 const LOCAL_FILE_SIGNATURE = 0x04034b50
@@ -15,7 +20,12 @@ const DOCUMENT_CONTENT_TYPE =
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml'
 const FORBIDDEN_CONTENT_TYPE =
   /macroEnabled|vbaProject|activeX|oleObject|xhtml|html/iu
-const EXTERNAL_RELATIONSHIP = /\bTargetMode\s*=/u
+const CONTENT_TYPES_NAMESPACE =
+  'http://schemas.openxmlformats.org/package/2006/content-types'
+const RELATIONSHIPS_NAMESPACE =
+  'http://schemas.openxmlformats.org/package/2006/relationships'
+const FORBIDDEN_RELATIONSHIP_TYPE = /activeX|oleObject|vbaProject|macro/iu
+const URI_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/u
 
 function exactPositiveSafeInteger(value, label) {
   if (!Number.isSafeInteger(value) || value <= 0) {
@@ -44,6 +54,34 @@ function admitLimits(value) {
     maximumUncompressedBytes: exactPositiveSafeInteger(
       value.maximumUncompressedBytes,
       'DOCX maximum uncompressed bytes',
+    ),
+    maximumXmlBytes: exactPositiveSafeInteger(
+      value.maximumXmlBytes,
+      'DOCX maximum XML bytes',
+    ),
+    maximumXmlNodes: exactPositiveSafeInteger(
+      value.maximumXmlNodes,
+      'DOCX maximum XML nodes',
+    ),
+    maximumXmlDepth: exactPositiveSafeInteger(
+      value.maximumXmlDepth,
+      'DOCX maximum XML depth',
+    ),
+    maximumXmlAttributesPerElement: exactPositiveSafeInteger(
+      value.maximumXmlAttributesPerElement,
+      'DOCX maximum XML attributes per element',
+    ),
+    maximumXmlAttributeBytes: exactPositiveSafeInteger(
+      value.maximumXmlAttributeBytes,
+      'DOCX maximum XML attribute bytes',
+    ),
+    maximumXmlEntityReferences: exactPositiveSafeInteger(
+      value.maximumXmlEntityReferences,
+      'DOCX maximum XML entity references',
+    ),
+    maximumXmlDecodedTextBytes: exactPositiveSafeInteger(
+      value.maximumXmlDecodedTextBytes,
+      'DOCX maximum decoded XML text bytes',
     ),
   })
 }
@@ -168,16 +206,119 @@ function readEntry(bytes, entry, limits) {
   return output
 }
 
-function xmlText(bytes, label) {
-  try {
-    const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
-    if (text.includes('\0')) {
-      throw new TypeError(`${label} contains a NUL byte.`)
+function requireElement(node, namespaceUri, localName, label) {
+  if (
+    node.namespaceUri !== namespaceUri ||
+    node.localName !== localName ||
+    node.text.trim() !== ''
+  ) {
+    throw new TypeError(`${label} element identity is invalid.`)
+  }
+  return node
+}
+
+function admitContentTypes(bytes, limits) {
+  const root = requireElement(
+    parseRestrictedXml(bytes, limits, 'DOCX content types'),
+    CONTENT_TYPES_NAMESPACE,
+    'Types',
+    'DOCX content types root',
+  )
+  exactUnqualifiedAttributes(root, [], 'DOCX content types root')
+  let documentOverrideCount = 0
+  for (const child of root.children) {
+    requireElement(
+      child,
+      CONTENT_TYPES_NAMESPACE,
+      child.localName,
+      'DOCX content type',
+    )
+    if (child.children.length !== 0) {
+      throw new TypeError('DOCX content type declarations must be empty.')
     }
-    return text
-  } catch (error) {
-    if (error instanceof TypeError && error.message.includes(label)) throw error
-    throw new TypeError(`${label} is not exact UTF-8 XML.`, { cause: error })
+    if (child.localName === 'Default') {
+      const attributes = exactUnqualifiedAttributes(
+        child,
+        ['ContentType', 'Extension'],
+        'DOCX default content type',
+      )
+      if (
+        attributes.Extension.length === 0 ||
+        FORBIDDEN_CONTENT_TYPE.test(attributes.ContentType)
+      ) {
+        throw new TypeError('DOCX default content type is active or invalid.')
+      }
+      continue
+    }
+    if (child.localName === 'Override') {
+      const attributes = exactUnqualifiedAttributes(
+        child,
+        ['ContentType', 'PartName'],
+        'DOCX override content type',
+      )
+      if (
+        !attributes.PartName.startsWith('/') ||
+        FORBIDDEN_CONTENT_TYPE.test(attributes.ContentType)
+      ) {
+        throw new TypeError('DOCX override content type is active or invalid.')
+      }
+      if (attributes.PartName === '/word/document.xml') {
+        documentOverrideCount += 1
+        if (attributes.ContentType !== DOCUMENT_CONTENT_TYPE) {
+          throw new TypeError('DOCX main document content type is invalid.')
+        }
+      }
+      continue
+    }
+    throw new TypeError('DOCX content types contain an unsupported element.')
+  }
+  if (documentOverrideCount !== 1) {
+    throw new TypeError('DOCX content types do not bind one exact main document.')
+  }
+}
+
+function admitRelationships(bytes, limits, name) {
+  const root = requireElement(
+    parseRestrictedXml(bytes, limits, `DOCX relationships ${name}`),
+    RELATIONSHIPS_NAMESPACE,
+    'Relationships',
+    'DOCX relationships root',
+  )
+  exactUnqualifiedAttributes(root, [], 'DOCX relationships root')
+  const identifiers = new Set()
+  for (const child of root.children) {
+    requireElement(
+      child,
+      RELATIONSHIPS_NAMESPACE,
+      'Relationship',
+      'DOCX relationship',
+    )
+    if (child.children.length !== 0) {
+      throw new TypeError('DOCX relationship declarations must be empty.')
+    }
+    const fields = child.attributes.map((attribute) => attribute.localName)
+    if (fields.includes('TargetMode')) {
+      throw new TypeError('DOCX package contains an external relationship.')
+    }
+    const attributes = exactUnqualifiedAttributes(
+      child,
+      ['Id', 'Target', 'Type'],
+      'DOCX relationship',
+    )
+    if (
+      attributes.Id.length === 0 ||
+      identifiers.has(attributes.Id) ||
+      attributes.Target.length === 0 ||
+      attributes.Type.length === 0 ||
+      FORBIDDEN_RELATIONSHIP_TYPE.test(attributes.Type) ||
+      URI_SCHEME.test(attributes.Target) ||
+      attributes.Target.startsWith('//') ||
+      attributes.Target.includes('\\') ||
+      /[\u0000-\u001f\u007f]/u.test(attributes.Target)
+    ) {
+      throw new TypeError('DOCX relationship identity or target is unsafe.')
+    }
+    identifiers.add(attributes.Id)
   }
 }
 
@@ -301,16 +442,10 @@ export function admitDocxPackage(bytes, limitValue) {
     }
   }
 
-  const contentTypes = xmlText(
+  admitContentTypes(
     admittedParts.get('[Content_Types].xml'),
-    'DOCX content types',
+    limits,
   )
-  if (
-    !contentTypes.includes(DOCUMENT_CONTENT_TYPE) ||
-    FORBIDDEN_CONTENT_TYPE.test(contentTypes)
-  ) {
-    throw new TypeError('DOCX content types are not one macro-free Word document.')
-  }
   let relationshipBytes = 0
   for (const [name, entry] of entries) {
     if (!name.endsWith('.rels')) continue
@@ -320,13 +455,7 @@ export function admitDocxPackage(bytes, limitValue) {
       limits.maximumRelationshipBytes,
       'DOCX relationship bytes',
     )
-    const relationships = xmlText(
-      admittedParts.get(name),
-      `DOCX relationships ${name}`,
-    )
-    if (EXTERNAL_RELATIONSHIP.test(relationships)) {
-      throw new TypeError('DOCX package contains an external relationship.')
-    }
+    admitRelationships(admittedParts.get(name), limits, name)
   }
   return Object.freeze({ entryCount, totalUncompressedBytes, relationshipBytes })
 }

@@ -8,6 +8,13 @@ export const DOCX_LIMITS = Object.freeze({
   maximumPackageEntries: 128,
   maximumRelationshipBytes: 1024 * 1024,
   maximumUncompressedBytes: 4 * 1024 * 1024,
+  maximumXmlAttributeBytes: 256 * 1024,
+  maximumXmlAttributesPerElement: 64,
+  maximumXmlBytes: 1024 * 1024,
+  maximumXmlDecodedTextBytes: 1024 * 1024,
+  maximumXmlDepth: 64,
+  maximumXmlEntityReferences: 4096,
+  maximumXmlNodes: 4096,
 })
 
 export function minimalDocxEntries() {
@@ -15,13 +22,13 @@ export function minimalDocxEntries() {
     {
       name: '[Content_Types].xml',
       bytes: Buffer.from(
-        `<Types><Override PartName="/word/document.xml" ContentType="${CONTENT_TYPE}"/></Types>`,
+        `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="${CONTENT_TYPE}"/></Types>`,
       ),
     },
     {
       name: '_rels/.rels',
       bytes: Buffer.from(
-        '<Relationships><Relationship Target="word/document.xml"/></Relationships>',
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>',
       ),
     },
     { name: 'word/document.xml', bytes: Buffer.from('<w:document/>') },
