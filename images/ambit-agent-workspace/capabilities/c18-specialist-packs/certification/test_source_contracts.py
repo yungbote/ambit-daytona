@@ -100,6 +100,21 @@ class SourceContractTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(SourceContractError, "online/bootstrap installer"):
                 verify_source(root, verify_hashes=False)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "source"
+            shutil.copytree(SOURCE_ROOT, root)
+            dockerfile = root / "office-authoring/Dockerfile"
+            dockerfile.write_text(
+                dockerfile.read_text().replace(
+                    "--mount=type=bind,source=.,target=/source,ro",
+                    "COPY . /source/",
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                SourceContractError, "source-and-input read-only build mounts"
+            ):
+                verify_source(root, verify_hashes=False)
 
     def test_rejects_browser_sandbox_disable(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

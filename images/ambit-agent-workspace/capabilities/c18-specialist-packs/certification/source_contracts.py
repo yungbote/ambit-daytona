@@ -381,7 +381,13 @@ def _verify_dockerfile(root: Path, pack_id: str, expected: dict[str, object]) ->
     _require(f"ARG BASE_IMAGE={base}" in source, f"{pack_id} base image is not exact")
     run_lines = re.findall(r"^RUN .*", source, flags=re.MULTILINE)
     _require(run_lines and all("--network=none" in line for line in run_lines), f"{pack_id} has a networked build step")
-    _require("from=pack_inputs" in source, f"{pack_id} has no external exact input context")
+    _require(
+        "--mount=type=bind,source=.,target=/source,ro" in source
+        and "--mount=type=bind,from=pack_inputs,source=.,target=/inputs,ro"
+        in source
+        and not re.search(r"^COPY\s", source, flags=re.MULTILINE),
+        f"{pack_id} does not use source-and-input read-only build mounts",
+    )
     _require("verify-build-identity.sh" in source, f"{pack_id} does not bind the source set")
     _require(f'io.ambit.runtime-pack="{expected["ref"]}"' in source, f"{pack_id} OCI label mismatch")
     _require("USER 1000:1000" in source, f"{pack_id} final runtime is not non-root")
