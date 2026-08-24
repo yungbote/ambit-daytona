@@ -41,8 +41,13 @@ python3 -B \
   --root images/ambit-agent-workspace/capabilities/c16b-core-base
 ```
 
-Builds must supply the exact two-file `materializer_inputs` context and must
-pass immutable source revision/tree/context identities. Building an image is
-still only candidate production. Promotion separately requires the evidence
-roster in `core-baseline.lock.json`, followed by backend registration and a
-distinct rollback/demotion receipt.
+Builds must supply the exact two-file `materializer_inputs` context and a
+separately frozen source archive, file/mode manifests, and their raw identity
+digest. The image guard proves the build context is byte-for-byte and
+mode-for-mode equal to that supplied archive, and that every label is bound to
+the supplied identity. It does **not** authenticate a Git remote or prove that
+arbitrary 40-hex claims are real Git objects. Promotion therefore also needs
+an independently admitted external Git-object/remote-ref receipt anchored to
+the exact source-identity raw digest. Building an image remains candidate
+production until the full evidence roster in `core-baseline.lock.json`,
+backend registration, and a distinct rollback/demotion receipt all exist.

@@ -57,6 +57,7 @@
     "certifiedCoreProfile": "not-issued",
     "disposition": "candidate",
     "requiredBeforePromotion": [
+      "external Git object and remote-ref receipt independently admits the exact source identity raw digest",
       "two no-cache builds with one platform manifest digest",
       "complete recursive OCI layout",
       "SBOM provenance publisher signature license and vulnerability evidence bound to the successor manifest",
