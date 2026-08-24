@@ -900,7 +900,7 @@ class RunnerStorageLifecycleTest(unittest.TestCase):
                 guardian.wait(timeout=5)
                 os.close(lock_fd)
                 self.fail("production guardian did not start its mutating tool")
-            child_pid = int(pid_path.read_text())
+            int(pid_path.read_text())
             os.kill(guardian.pid, signal.SIGKILL)
             guardian.wait(timeout=5)
             os.close(lock_fd)
