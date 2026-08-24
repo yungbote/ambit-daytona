@@ -3,10 +3,6 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import axios, { AxiosError } from 'axios'
-import axiosDebug from 'axios-debug-log'
-import axiosRetry from 'axios-retry'
-
 import { Injectable, Logger } from '@nestjs/common'
 import {
   CreateSandboxSnapshotResult,
@@ -14,6 +10,7 @@ import {
   RunnerInfo,
   RunnerSandboxInfo,
   RunnerSnapshotInfo,
+  runnerProviderAuthorityMetadata,
   StartSandboxResponse,
   SnapshotDigestResponse,
 } from './runnerAdapter'
@@ -43,11 +40,24 @@ import { SandboxState } from '../enums/sandbox-state.enum'
 import { SandboxClass } from '../enums/sandbox-class.enum'
 import { BackupState } from '../enums/backup-state.enum'
 import { RunnerApiError } from '../errors/runner-api-error'
-
-const isDebugEnabled = process.env.DEBUG === 'true'
-
-// Network error codes that should trigger a retry
-const RETRYABLE_NETWORK_ERROR_CODES = ['ECONNRESET', 'ETIMEDOUT']
+import { createRunnerHttpClient } from './runner-http-client'
+import {
+  WorkingCopyCaptureBindingDto,
+  WorkingCopyCaptureDeleteReceiptDto,
+  WorkingCopyCaptureExistsResponseDto,
+  WorkingCopyCaptureIdentityDto,
+  WorkingCopyCaptureObservationDto,
+  WorkingCopyCaptureReadDto,
+  WorkingCopyCaptureReadResponseDto,
+  WorkingCopyCaptureReceiptDto,
+} from '../dto/working-copy-capture.dto'
+import {
+  SandboxGenerationObservationDto,
+  SandboxGenerationObservationRequestDto,
+  SandboxGenerationStopObservationDto,
+  StopSandboxGenerationRequestDto,
+  StoppedSandboxGenerationReceiptDto,
+} from '../dto/sandbox-generation-stop.dto'
 
 @Injectable()
 export class RunnerAdapterV0 implements RunnerAdapter {
@@ -104,57 +114,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       throw new Error('Runner API URL is required')
     }
 
-    const axiosInstance = axios.create({
-      baseURL: runner.apiUrl,
-      headers: {
-        Authorization: `Bearer ${runner.apiKey}`,
-      },
-      timeout: 15 * 60 * 1000, // 15 minutes
-    })
-
-    const retryErrorMap = new WeakMap<AxiosError, string>()
-
-    // Configure axios-retry to handle network errors
-    axiosRetry(axiosInstance, {
-      retries: 3,
-      retryDelay: axiosRetry.exponentialDelay,
-      retryCondition: (error) => {
-        // Check if error code or message matches any retryable error
-        const matchedErrorCode = RETRYABLE_NETWORK_ERROR_CODES.find(
-          (code) =>
-            (error as any).code === code || error.message?.includes(code) || (error as any).cause?.code === code,
-        )
-
-        if (matchedErrorCode) {
-          retryErrorMap.set(error, matchedErrorCode)
-          return true
-        }
-
-        return false
-      },
-      onRetry: (retryCount, error, requestConfig) => {
-        this.logger.warn(
-          `Retrying request due to ${retryErrorMap.get(error)} (attempt ${retryCount}): ${requestConfig.method?.toUpperCase()} ${requestConfig.url}`,
-        )
-      },
-    })
-
-    axiosInstance.interceptors.response.use(
-      (response) => {
-        return response
-      },
-      (error) => {
-        const errorMessage = error.response?.data?.message || error.response?.data || error.message || String(error)
-        const statusCode = error.response?.data?.statusCode || error.response?.status || error.status
-        const code = error.response?.data?.code || (error as any).code || (error as any).cause?.code || ''
-
-        throw new RunnerApiError(String(errorMessage), statusCode, code)
-      },
-    )
-
-    if (isDebugEnabled) {
-      axiosDebug.addLogger(axiosInstance)
-    }
+    const axiosInstance = createRunnerHttpClient(runner, this.logger)
 
     this.sandboxApiClient = new SandboxApi(new Configuration(), '', axiosInstance)
     this.snapshotApiClient = new SnapshotsApi(new Configuration(), '', axiosInstance)
@@ -176,6 +136,70 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       metrics: response.data.metrics,
       appVersion: response.data.appVersion,
     }
+  }
+
+  async captureWorkingCopy(
+    sandboxId: string,
+    binding: WorkingCopyCaptureBindingDto,
+  ): Promise<WorkingCopyCaptureReceiptDto> {
+    const response = await this.sandboxApiClient.captureWorkingCopy(sandboxId, binding)
+    return response.data as WorkingCopyCaptureReceiptDto
+  }
+
+  async observeWorkingCopyCapture(
+    sandboxId: string,
+    binding: WorkingCopyCaptureBindingDto,
+  ): Promise<WorkingCopyCaptureObservationDto> {
+    const response = await this.sandboxApiClient.observeWorkingCopyCapture(sandboxId, binding)
+    return response.data as WorkingCopyCaptureObservationDto
+  }
+
+  async readWorkingCopyCapture(
+    sandboxId: string,
+    request: WorkingCopyCaptureReadDto,
+  ): Promise<WorkingCopyCaptureReadResponseDto> {
+    const response = await this.sandboxApiClient.readWorkingCopyCapture(sandboxId, request)
+    return response.data as WorkingCopyCaptureReadResponseDto
+  }
+
+  async deleteWorkingCopyCapture(
+    sandboxId: string,
+    identity: WorkingCopyCaptureIdentityDto,
+  ): Promise<WorkingCopyCaptureDeleteReceiptDto> {
+    const response = await this.sandboxApiClient.deleteWorkingCopyCapture(sandboxId, identity)
+    return response.data as WorkingCopyCaptureDeleteReceiptDto
+  }
+
+  async workingCopyCaptureExists(
+    sandboxId: string,
+    identity: WorkingCopyCaptureIdentityDto,
+  ): Promise<WorkingCopyCaptureExistsResponseDto> {
+    const response = await this.sandboxApiClient.workingCopyCaptureExists(sandboxId, identity)
+    return response.data as WorkingCopyCaptureExistsResponseDto
+  }
+
+  async observeSandboxGeneration(
+    sandboxId: string,
+    request: SandboxGenerationObservationRequestDto,
+  ): Promise<SandboxGenerationObservationDto> {
+    const response = await this.sandboxApiClient.observeSandboxGeneration(sandboxId, request)
+    return response.data as SandboxGenerationObservationDto
+  }
+
+  async stopSandboxGenerationOnce(
+    sandboxId: string,
+    request: StopSandboxGenerationRequestDto,
+  ): Promise<StoppedSandboxGenerationReceiptDto> {
+    const response = await this.sandboxApiClient.stopSandboxGenerationOnce(sandboxId, request)
+    return response.data as StoppedSandboxGenerationReceiptDto
+  }
+
+  async observeSandboxGenerationStop(
+    sandboxId: string,
+    request: StopSandboxGenerationRequestDto,
+  ): Promise<SandboxGenerationStopObservationDto> {
+    const response = await this.sandboxApiClient.observeSandboxGenerationStop(sandboxId, request)
+    return response.data as SandboxGenerationStopObservationDto
   }
 
   async sandboxInfo(sandboxId: string): Promise<RunnerSandboxInfo> {
@@ -227,7 +251,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       networkBlockAll: sandbox.networkBlockAll,
       networkAllowList: sandbox.networkAllowList,
       domainAllowList: sandbox.domainAllowList,
-      metadata: metadata,
+      metadata: runnerProviderAuthorityMetadata(sandbox, metadata),
       authToken: sandbox.authToken,
       secretsToken: sandbox.secretsToken ?? undefined,
       otelEndpoint,

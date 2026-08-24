@@ -124,6 +124,10 @@ export interface SandboxListItem {
      */
     'autoDeleteInterval'?: number;
     /**
+     * Absolute wall-clock destruction deadline
+     */
+    'autoDestroyAt'?: string;
+    /**
      * The creation timestamp of the sandbox
      */
     'createdAt'?: string;

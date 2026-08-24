@@ -19,6 +19,7 @@ import {
   RunnerInfo,
   RunnerSandboxInfo,
   RunnerSnapshotInfo,
+  runnerProviderAuthorityMetadata,
   StartSandboxResponse,
   SnapshotDigestResponse,
 } from './runnerAdapter'
@@ -36,6 +37,7 @@ import { ResourceType } from '../enums/resource-type.enum'
 import { JobService } from '../services/job.service'
 import { SandboxRepository } from '../repositories/sandbox.repository'
 import {
+  Configuration,
   CreateSandboxDTO,
   CreateBackupDTO,
   BuildSnapshotRequestDTO,
@@ -43,8 +45,27 @@ import {
   UpdateNetworkSettingsDTO,
   InspectSnapshotInRegistryRequest,
   RecoverSandboxDTO,
+  SandboxApi,
 } from '@daytona/runner-api-client'
 import { SnapshotStateError } from '../errors/snapshot-state-error'
+import { createRunnerHttpClient } from './runner-http-client'
+import {
+  WorkingCopyCaptureBindingDto,
+  WorkingCopyCaptureDeleteReceiptDto,
+  WorkingCopyCaptureExistsResponseDto,
+  WorkingCopyCaptureIdentityDto,
+  WorkingCopyCaptureObservationDto,
+  WorkingCopyCaptureReadDto,
+  WorkingCopyCaptureReadResponseDto,
+  WorkingCopyCaptureReceiptDto,
+} from '../dto/working-copy-capture.dto'
+import {
+  SandboxGenerationObservationDto,
+  SandboxGenerationObservationRequestDto,
+  SandboxGenerationStopObservationDto,
+  StopSandboxGenerationRequestDto,
+  StoppedSandboxGenerationReceiptDto,
+} from '../dto/sandbox-generation-stop.dto'
 
 /**
  * RunnerAdapterV2 implements RunnerAdapter for v2 runners.
@@ -55,6 +76,7 @@ import { SnapshotStateError } from '../errors/snapshot-state-error'
 export class RunnerAdapterV2 implements RunnerAdapter {
   private readonly logger = new Logger(RunnerAdapterV2.name)
   protected runner: Runner
+  private workingCopyCaptureApiClient: SandboxApi | null = null
 
   constructor(
     protected readonly sandboxRepository: SandboxRepository,
@@ -65,6 +87,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
 
   async init(runner: Runner): Promise<void> {
     this.runner = runner
+    this.workingCopyCaptureApiClient = null
   }
 
   async healthCheck(_signal?: AbortSignal): Promise<void> {
@@ -73,6 +96,81 @@ export class RunnerAdapterV2 implements RunnerAdapter {
 
   async runnerInfo(_signal?: AbortSignal): Promise<RunnerInfo> {
     throw new Error('runnerInfo is not supported for V2 runners')
+  }
+
+  async captureWorkingCopy(
+    sandboxId: string,
+    binding: WorkingCopyCaptureBindingDto,
+  ): Promise<WorkingCopyCaptureReceiptDto> {
+    const response = await this.captureApi().captureWorkingCopy(sandboxId, binding)
+    return response.data as WorkingCopyCaptureReceiptDto
+  }
+
+  async observeWorkingCopyCapture(
+    sandboxId: string,
+    binding: WorkingCopyCaptureBindingDto,
+  ): Promise<WorkingCopyCaptureObservationDto> {
+    const response = await this.captureApi().observeWorkingCopyCapture(sandboxId, binding)
+    return response.data as WorkingCopyCaptureObservationDto
+  }
+
+  async readWorkingCopyCapture(
+    sandboxId: string,
+    request: WorkingCopyCaptureReadDto,
+  ): Promise<WorkingCopyCaptureReadResponseDto> {
+    const response = await this.captureApi().readWorkingCopyCapture(sandboxId, request)
+    return response.data as WorkingCopyCaptureReadResponseDto
+  }
+
+  async deleteWorkingCopyCapture(
+    sandboxId: string,
+    identity: WorkingCopyCaptureIdentityDto,
+  ): Promise<WorkingCopyCaptureDeleteReceiptDto> {
+    const response = await this.captureApi().deleteWorkingCopyCapture(sandboxId, identity)
+    return response.data as WorkingCopyCaptureDeleteReceiptDto
+  }
+
+  async workingCopyCaptureExists(
+    sandboxId: string,
+    identity: WorkingCopyCaptureIdentityDto,
+  ): Promise<WorkingCopyCaptureExistsResponseDto> {
+    const response = await this.captureApi().workingCopyCaptureExists(sandboxId, identity)
+    return response.data as WorkingCopyCaptureExistsResponseDto
+  }
+
+  async observeSandboxGeneration(
+    sandboxId: string,
+    request: SandboxGenerationObservationRequestDto,
+  ): Promise<SandboxGenerationObservationDto> {
+    const response = await this.captureApi().observeSandboxGeneration(sandboxId, request)
+    return response.data as SandboxGenerationObservationDto
+  }
+
+  async stopSandboxGenerationOnce(
+    sandboxId: string,
+    request: StopSandboxGenerationRequestDto,
+  ): Promise<StoppedSandboxGenerationReceiptDto> {
+    const response = await this.captureApi().stopSandboxGenerationOnce(sandboxId, request)
+    return response.data as StoppedSandboxGenerationReceiptDto
+  }
+
+  async observeSandboxGenerationStop(
+    sandboxId: string,
+    request: StopSandboxGenerationRequestDto,
+  ): Promise<SandboxGenerationStopObservationDto> {
+    const response = await this.captureApi().observeSandboxGenerationStop(sandboxId, request)
+    return response.data as SandboxGenerationStopObservationDto
+  }
+
+  private captureApi(): SandboxApi {
+    if (!this.workingCopyCaptureApiClient) {
+      this.workingCopyCaptureApiClient = new SandboxApi(
+        new Configuration(),
+        '',
+        createRunnerHttpClient(this.runner, this.logger),
+      )
+    }
+    return this.workingCopyCaptureApiClient
   }
 
   async sandboxInfo(sandboxId: string): Promise<RunnerSandboxInfo> {
@@ -187,7 +285,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       networkBlockAll: sandbox.networkBlockAll,
       networkAllowList: sandbox.networkAllowList,
       domainAllowList: sandbox.domainAllowList,
-      metadata: metadata,
+      metadata: runnerProviderAuthorityMetadata(sandbox, metadata),
       authToken: sandbox.authToken,
       secretsToken: sandbox.secretsToken ?? undefined,
       otelEndpoint: otelEndpoint,
