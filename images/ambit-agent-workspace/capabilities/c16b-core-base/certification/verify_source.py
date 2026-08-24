@@ -72,7 +72,10 @@ def verify(root: Path) -> dict[str, object]:
         "core baseline",
     )
     _require(baseline["schema"] == "ambit.runtime-core-baseline/v2", "schema drift")
-    _require(baseline["state"] == "source-ready-unbuilt", "source must remain unbuilt")
+    _require(
+        baseline["state"] == "source-ready-contract-pending-unbuilt",
+        "source must remain unbuilt with backend composition pending",
+    )
 
     artifact = _exact(
         baseline["artifact"],
@@ -162,6 +165,7 @@ def verify(root: Path) -> dict[str, object]:
         baseline["composition"],
         {
             "backendContract",
+            "backendContractSourceBlobSha",
             "backendPlanKind",
             "backendPlanVersion",
             "descendantRequirement",
@@ -172,10 +176,12 @@ def verify(root: Path) -> dict[str, object]:
         "composition",
     )
     _require(
-        composition["backendContract"] == "RuntimeCapabilityFullImageDeploymentBinding@1"
-        and composition["backendPlanKind"] == "full_image_runtime_pack_plan"
-        and composition["backendPlanVersion"] == 2,
-        "V2 composition authority changed",
+        composition["backendContract"] is None
+        and composition["backendContractSourceBlobSha"] is None
+        and composition["backendPlanKind"] is None
+        and composition["backendPlanVersion"] is None
+        and composition["packArtifactRefRule"] is None,
+        "unfrozen backend composition authority was guessed",
     )
     _require(
         composition["distinctDocumentArtifactRequired"] is True
@@ -239,6 +245,7 @@ def verify(root: Path) -> dict[str, object]:
     required_fragments = (
         "debian@sha256:38a76d01668772e381ad2826d876627c89e7133e2f8a0f5d567306798b0f2a16",
         "RUN --network=none",
+        "COPY --from=source_identity /daytona-source.tar",
         "USER 1000:1000",
         'io.ambit.runtime-base="ambit.runtime-base/debian-core@1"',
         'io.ambit.runtime-pack="ambit.runtime-pack/core@1"',
@@ -264,6 +271,7 @@ def verify(root: Path) -> dict[str, object]:
         "provides": provides,
         "historicalCoreDocumentReusable": False,
         "promotionPerformed": False,
+        "backendCompositionContractFrozen": False,
     }
 
 
