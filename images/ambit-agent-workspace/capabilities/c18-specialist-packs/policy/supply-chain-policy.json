@@ -1,0 +1,30 @@
+{
+  "attestations": {
+    "licenseReport": "required-content-addressed",
+    "provenance": "required-slsa-v1-bound-to-full-image",
+    "sbom": "required-spdx-2.3-bound-to-full-image",
+    "signature": "required-dsse-or-sigstore-bound-to-full-image",
+    "vulnerabilityReport": "required-content-addressed-bound-to-scanner-db"
+  },
+  "licenses": {
+    "deniedExpressions": [
+      "LicenseRef-Proprietary-Unreviewed"
+    ],
+    "unknownDisposition": "deny-promotion",
+    "unreviewedDisposition": "deny-promotion"
+  },
+  "provenance": {
+    "binaryAndSourceClosureRequired": true,
+    "builderIdentityRequired": true,
+    "completeMaterialRosterRequired": true,
+    "reproducibilityReceiptRequired": true
+  },
+  "schema": "ambit.c18-supply-chain-policy/v1",
+  "vulnerabilities": {
+    "maximumCritical": 0,
+    "maximumHigh": 0,
+    "scannerDatabaseDigestRequired": true,
+    "unknownSeverityDisposition": "deny-promotion",
+    "vexRequiresPrimaryEvidence": true
+  }
+}

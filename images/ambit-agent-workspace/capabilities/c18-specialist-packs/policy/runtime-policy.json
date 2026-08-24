@@ -1,0 +1,61 @@
+{
+  "filesystem": {
+    "packRootsReadOnly": true,
+    "rootFilesystemReadOnly": true,
+    "writableRoots": [
+      "/workspace",
+      "/tmp/ambit-task"
+    ]
+  },
+  "identity": {
+    "gid": 1000,
+    "group": "daytona",
+    "uid": 1000,
+    "user": "daytona"
+  },
+  "network": {
+    "conformance": "none",
+    "runtime": "provider-policy-owned"
+  },
+  "process": {
+    "linuxCapabilities": [],
+    "noNewPrivileges": true,
+    "seccomp": "provider-default-deny-escape"
+  },
+  "runtimeInstallers": {
+    "disposition": "absent",
+    "forbiddenCommands": [
+      "apk",
+      "apt",
+      "apt-get",
+      "conda",
+      "corepack",
+      "dpkg",
+      "dpkg-deb",
+      "mamba",
+      "micromamba",
+      "npm",
+      "npx",
+      "pip",
+      "pip3",
+      "pnpm",
+      "uv",
+      "yarn"
+    ]
+  },
+  "schema": "ambit.c18-runtime-policy/v1",
+  "secrets": {
+    "secretShapedEnvironmentForbidden": true,
+    "workspacePlaintextPersistenceForbidden": true
+  },
+  "sockets": {
+    "forbidden": [
+      "/run/containerd/containerd.sock",
+      "/run/k3s/containerd/containerd.sock",
+      "/run/podman/podman.sock",
+      "/var/run/crio/crio.sock",
+      "/var/run/docker.sock",
+      "/var/run/podman/podman.sock"
+    ]
+  }
+}

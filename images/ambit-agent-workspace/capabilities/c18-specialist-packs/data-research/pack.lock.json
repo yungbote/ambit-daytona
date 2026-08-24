@@ -1,0 +1,45 @@
+{
+  "capabilities": {
+    "provides": [
+      "data_local_query",
+      "research_scientific"
+    ],
+    "requires": [
+      "core",
+      "python"
+    ]
+  },
+  "conformance": {
+    "network": "none",
+    "requiredChecks": [
+      "csv-json-parquet-arrow-roundtrip-and-schema",
+      "sqlite-duckdb-query-and-bounded-export",
+      "numpy-scipy-pandas-polars-numerical-invariants",
+      "seed-environment-and-result-reproduction",
+      "notebook-kernel-and-static-publishing",
+      "plot-structure-font-and-accessibility",
+      "nonroot-installer-socket-and-secret-denial"
+    ],
+    "script": "conformance/verify.sh"
+  },
+  "installMode": "image_layer",
+  "limitations": [
+    "r-and-julia-not-claimed-at-revision-1",
+    "geospatial-native-stack-not-claimed-at-revision-1",
+    "no-external-database-authority",
+    "no-runtime-package-installation"
+  ],
+  "packRef": "ambit.runtime-pack/data-research",
+  "packRevisionRef": "ambit.runtime-pack/data-research@1",
+  "promotion": "forbidden-until-full-image-binding-passes",
+  "revision": 1,
+  "runtime": {
+    "hostSockets": "absent",
+    "networkDuringConformance": "none",
+    "packageInstallers": "absent",
+    "uid": 1000
+  },
+  "schema": "ambit.c18-specialist-pack/v1",
+  "state": "candidate",
+  "toolchainLock": "locks/toolchain.lock.json"
+}

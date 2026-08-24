@@ -1,0 +1,24 @@
+{
+  "baseImage": "docker.io/library/python@sha256:d6e0850f13fda0e2305d4c3c1c2f7930fe1042d34ddd958e49bba6ef685d0bb2",
+  "fontSetLock": "../../locks/font-set.lock.json",
+  "libreOffice": {
+    "build": "520(Build:2)",
+    "calcPackage": "libreoffice-calc-nogui=4:25.2.3-2+deb13u6",
+    "impressPackage": "libreoffice-impress-nogui=4:25.2.3-2+deb13u6",
+    "mode": "headless-private-profile-per-invocation",
+    "version": "25.2.3.2"
+  },
+  "nativeOfficeFidelity": {
+    "microsoftExcel": "unsupported",
+    "microsoftPowerPoint": "unsupported",
+    "windowsOfficeExecutor": "separate-licensed-profile-required"
+  },
+  "osClosureLock": "debian-binary-closure.lock.json",
+  "packRef": "ambit.runtime-pack/office-authoring@1",
+  "python": {
+    "version": "3.14.7",
+    "wheelLock": "python-wheels.lock.json"
+  },
+  "schema": "ambit.c18-toolchain-lock/v1",
+  "state": "candidate"
+}

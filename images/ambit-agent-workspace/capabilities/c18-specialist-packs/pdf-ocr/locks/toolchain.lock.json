@@ -1,0 +1,27 @@
+{
+  "baseImage": "docker.io/library/python@sha256:d6e0850f13fda0e2305d4c3c1c2f7930fe1042d34ddd958e49bba6ef685d0bb2",
+  "nativeTools": {
+    "exiftool": "13.25",
+    "ghostscript": "10.05.1",
+    "poppler": "25.03.0",
+    "qpdf": "12.2.0",
+    "tesseract": "5.5.0",
+    "tesseractLanguages": [
+      "eng@4.1.0-2",
+      "osd@4.1.0-2"
+    ],
+    "unpaper": "7.0.0"
+  },
+  "osClosureLock": "debian-binary-closure.lock.json",
+  "packRef": "ambit.runtime-pack/pdf-ocr@1",
+  "python": {
+    "version": "3.14.7",
+    "wheelLock": "python-wheels.lock.json"
+  },
+  "schema": "ambit.c18-toolchain-lock/v1",
+  "signing": {
+    "privateKeys": "absent",
+    "signingEffect": "external-approved-action-only"
+  },
+  "state": "candidate"
+}
