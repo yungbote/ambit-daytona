@@ -7,6 +7,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common'
@@ -35,6 +36,8 @@ import { SandboxService } from './sandbox.service'
 
 @Injectable()
 export class SandboxGenerationStopService {
+  private readonly logger = new Logger(SandboxGenerationStopService.name)
+
   constructor(
     private readonly executionAuthority: SandboxExecutionAuthorityService,
     private readonly sandboxes: SandboxService,
@@ -52,7 +55,7 @@ export class SandboxGenerationStopService {
       responseGuard(() => assertGenerationObservation(observation, request))
       return observation
     } catch (error) {
-      throw translateGenerationStopError(error)
+      throw translateGenerationStopError(error, false)
     }
   }
 
@@ -69,7 +72,7 @@ export class SandboxGenerationStopService {
       await this.reconcileStoppedState(sandbox, adapter, receipt)
       return receipt
     } catch (error) {
-      throw translateGenerationStopError(error)
+      throw translateGenerationStopError(error, true)
     }
   }
 
@@ -88,7 +91,7 @@ export class SandboxGenerationStopService {
       }
       return observation
     } catch (error) {
-      throw translateGenerationStopError(error)
+      throw translateGenerationStopError(error, false)
     }
   }
 
@@ -115,21 +118,29 @@ export class SandboxGenerationStopService {
     adapter: RunnerAdapter,
     receipt: StoppedSandboxGenerationReceiptDto,
   ): Promise<void> {
-    const request = {
-      source: receipt.request.source,
-      owner: receipt.request.owner,
-      fence: receipt.request.fence,
+    try {
+      const request = {
+        source: receipt.request.source,
+        owner: receipt.request.owner,
+        fence: receipt.request.fence,
+      }
+      const current = await adapter.observeSandboxGeneration(sandbox.id, request)
+      responseGuard(() => assertGenerationObservation(current, request))
+      if (current.state !== 'stopped' || !sameCanonical(current.generation, receipt.request.expectedGeneration)) {
+        this.logger.warn(
+          `Skipped stopped-state projection for sandbox ${sandbox.id}: current generation differs from receipt ${receipt.receiptRef}`,
+        )
+        return
+      }
+      if (sandbox.state === SandboxState.STOPPED) return
+      await this.sandboxes.updateState(sandbox.id, SandboxState.STOPPED)
+    } catch (error) {
+      // Projection is a recoverable control-plane convenience. It must never
+      // make an already validated immutable provider receipt inaccessible.
+      this.logger.warn(
+        `Stopped-generation receipt ${receipt.receiptRef} is durable, but sandbox ${sandbox.id} state projection failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+      )
     }
-    const current = await adapter.observeSandboxGeneration(sandbox.id, request)
-    responseGuard(() => assertGenerationObservation(current, request))
-    if (current.state !== 'stopped' || !sameCanonical(current.generation, receipt.request.expectedGeneration)) {
-      // Immutable receipt truth remains observable after a later restart, but
-      // it cannot mutate current host lifecycle state. WorkingCopy capture
-      // separately requires a fresh current receipt proof and rejects staleness.
-      return
-    }
-    if (sandbox.state === SandboxState.STOPPED) return
-    await this.sandboxes.updateState(sandbox.id, SandboxState.STOPPED)
   }
 }
 
@@ -149,7 +160,7 @@ function responseGuard(action: () => void): void {
   }
 }
 
-function translateGenerationStopError(error: unknown): unknown {
+function translateGenerationStopError(error: unknown, mutating: boolean): unknown {
   if (!(error instanceof RunnerApiError)) return error
   switch (error.statusCode) {
     case 400:
@@ -169,6 +180,14 @@ function translateGenerationStopError(error: unknown): unknown {
             : 'STOPPED_GENERATION_UNAVAILABLE',
       })
     default:
+      if (mutating) {
+        return new ServiceUnavailableException({
+          statusCode: 503,
+          message: 'Stopped-generation outcome is unknown; observe the exact operation before retrying.',
+          error: 'Service Unavailable',
+          code: 'STOPPED_GENERATION_OUTCOME_UNKNOWN',
+        })
+      }
       return new ServiceUnavailableException('The sandbox runner could not settle stopped-generation authority.')
   }
 }

@@ -1171,99 +1171,13 @@ func validateProviderResourceID(value string) error {
 }
 
 func strictJSON(data []byte, target any) error {
-	if !utf8.Valid(data) {
-		return errors.New("JSON is not valid UTF-8")
-	}
-	if err := rejectDuplicateJSONKeys(data); err != nil {
-		return err
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return err
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return errors.New("trailing JSON data")
-	}
-	return nil
+	return generationstop.DecodeExactJSON(data, target)
 }
 
-// DecodeExactJSON is the shared request/stored-object decoder for this exact
-// authority boundary. DisallowUnknownFields alone accepts duplicate keys and
-// therefore cannot distinguish two conflicting identities in one envelope.
+// DecodeExactJSON keeps the WorkingCopy API name while delegating schema
+// exactness to the shared stopped-generation decoder.
 func DecodeExactJSON(data []byte, target any) error {
 	return strictJSON(data, target)
-}
-
-func rejectDuplicateJSONKeys(data []byte) error {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	if err := consumeJSONValue(decoder); err != nil {
-		return err
-	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return errors.New("JSON contains trailing data")
-		}
-		return err
-	}
-	return nil
-}
-
-func consumeJSONValue(decoder *json.Decoder) error {
-	token, err := decoder.Token()
-	if err != nil {
-		return err
-	}
-	delimiter, isDelimiter := token.(json.Delim)
-	if !isDelimiter {
-		return nil
-	}
-	switch delimiter {
-	case '{':
-		seen := make(map[string]struct{})
-		for decoder.More() {
-			keyToken, err := decoder.Token()
-			if err != nil {
-				return err
-			}
-			key, ok := keyToken.(string)
-			if !ok {
-				return errors.New("JSON object key is not a string")
-			}
-			if _, duplicate := seen[key]; duplicate {
-				return fmt.Errorf("duplicate JSON object key %q", key)
-			}
-			seen[key] = struct{}{}
-			if err := consumeJSONValue(decoder); err != nil {
-				return err
-			}
-		}
-		closing, err := decoder.Token()
-		if err != nil {
-			return err
-		}
-		if closing != json.Delim('}') {
-			return errors.New("JSON object is not closed")
-		}
-		return nil
-	case '[':
-		for decoder.More() {
-			if err := consumeJSONValue(decoder); err != nil {
-				return err
-			}
-		}
-		closing, err := decoder.Token()
-		if err != nil {
-			return err
-		}
-		if closing != json.Delim(']') {
-			return errors.New("JSON array is not closed")
-		}
-		return nil
-	default:
-		return errors.New("unexpected JSON delimiter")
-	}
 }
 
 func samePathStat(left, right containertypes.PathStat) bool {

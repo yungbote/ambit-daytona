@@ -142,6 +142,20 @@ describe(SandboxGenerationStopService.name, () => {
     expect(sandboxes.updateState).not.toHaveBeenCalled()
   })
 
+  it('returns durable receipt truth when fresh projection observation or DB update is unavailable', async () => {
+    const request = validStopRequest()
+    const receipt = validReceipt(request)
+    adapter.stopSandboxGenerationOnce.mockResolvedValue(receipt)
+    adapter.observeSandboxGeneration.mockRejectedValueOnce(new Error('projection observation unavailable'))
+
+    await expect(service.stopOnce('org-1', 'sandbox-1', request)).resolves.toEqual(receipt)
+    expect(sandboxes.updateState).not.toHaveBeenCalled()
+
+    adapter.observeSandboxGeneration.mockResolvedValueOnce(validGenerationObservation('stopped'))
+    ;(sandboxes.updateState as jest.Mock).mockRejectedValueOnce(new Error('projection database unavailable'))
+    await expect(service.stopOnce('org-1', 'sandbox-1', request)).resolves.toEqual(receipt)
+  })
+
   it('rejects stale fingerprints and non-exact purpose shapes before sandbox lookup', async () => {
     const stale = validStopRequest()
     stale.expectedGeneration.restartCount++
@@ -201,8 +215,21 @@ describe(SandboxGenerationStopService.name, () => {
       response: expect.objectContaining({ code: 'STOPPED_GENERATION_OUTCOME_UNKNOWN', statusCode: 503 }),
     })
 
-    adapter.stopSandboxGenerationOnce.mockRejectedValueOnce(new RunnerApiError('gateway detail', 502, 'bad_gateway'))
+    adapter.stopSandboxGenerationOnce.mockRejectedValueOnce(
+      new RunnerApiError('gateway detail', undefined, 'ECONNRESET'),
+    )
     await expect(service.stopOnce('org-1', 'sandbox-1', request)).rejects.toMatchObject({
+      response: expect.objectContaining({
+        message: 'Stopped-generation outcome is unknown; observe the exact operation before retrying.',
+        statusCode: 503,
+        code: 'STOPPED_GENERATION_OUTCOME_UNKNOWN',
+      }),
+    })
+
+    adapter.observeSandboxGenerationStop.mockRejectedValueOnce(
+      new RunnerApiError('gateway detail', undefined, 'ECONNRESET'),
+    )
+    await expect(service.observeStop('org-1', 'sandbox-1', request)).rejects.toMatchObject({
       response: expect.objectContaining({
         message: 'The sandbox runner could not settle stopped-generation authority.',
         statusCode: 503,
