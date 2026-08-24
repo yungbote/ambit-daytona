@@ -362,6 +362,11 @@ def verify(root: Path) -> dict[str, object]:
         and overlay_union.get("prunePasses") == 1
         and overlay_union.get("lastWriterWins") is False
         and overlay_union.get("opaqueSequentialPackLayers") is False
+        and overlay_union.get("overlayBuilder")
+        == {
+            "ref": "images/ambit-agent-workspace/runtime-composition/build_union_overlay.py",
+            "digest": "sha256:65573a7b6d903a8faf8f51d20609f91071336b61c46128a40615f20ff71820c8",
+        }
         and isinstance(overlay_union.get("requiredReceipts"), list)
         and len(overlay_union["requiredReceipts"]) == 11,
         "union overlay no longer proves one closed conflict-free install",
