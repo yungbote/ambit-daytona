@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SHA = "sha256:" + "1" * 64
 CONTRACT_PENDING = (
     json.loads((ROOT / "composition/union-overlay-contract.lock.json").read_text())["coreParent"]["status"]
-    != "qualified"
+    != "qualified-local-candidate"
 )
 
 
@@ -41,7 +41,11 @@ class UnionOverlayTests(unittest.TestCase):
         with self.assertRaisesRegex(UnionOverlayError, "exact core layer prefix"):
             self._verify(value)
         value = self._receipt()
-        value["finalImage"]["orderedLayers"][-1] = {"digest": "sha256:" + "9" * 64, "size": 10}
+        value["finalImage"]["orderedLayers"][-1] = {
+            "digest": "sha256:" + "9" * 64,
+            "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+            "size": 10,
+        }
         with self.assertRaisesRegex(UnionOverlayError, "suffix"):
             self._verify(value)
 
@@ -87,7 +91,13 @@ class UnionOverlayTests(unittest.TestCase):
             }
             for index, ref in enumerate(refs)
         ]
-        overlay = [{"digest": "sha256:" + "2" * 64, "size": 10}]
+        overlay = [
+            {
+                "digest": "sha256:" + "2" * 64,
+                "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+                "size": 10,
+            }
+        ]
         conformance = [
             {
                 "packRevisionRef": ref,
