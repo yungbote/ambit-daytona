@@ -43,23 +43,29 @@ def git(repo: Path, *arguments: str, input_bytes: bytes | None = None) -> bytes:
     return process.stdout
 
 
-def freeze(repo: Path, revision: str, output: Path) -> dict[str, object]:
+def freeze(
+    repo: Path,
+    revision: str,
+    output: Path,
+    source_path: str = SOURCE_PATH,
+) -> dict[str, object]:
     repo = repo.resolve(strict=True)
+    source_path = _source_path(source_path)
     commit = git(repo, "rev-parse", "--verify", f"{revision}^{{commit}}").decode().strip()
     if not HEX40.fullmatch(commit):
         raise SourceIdentityError("resolved revision is not a full commit id")
     repository_tree = git(repo, "rev-parse", f"{commit}^{{tree}}").decode().strip()
-    subtree = git(repo, "rev-parse", f"{commit}:{SOURCE_PATH}").decode().strip()
+    subtree = git(repo, "rev-parse", f"{commit}:{source_path}").decode().strip()
     source_date_epoch_text = git(repo, "show", "-s", "--format=%ct", commit).decode().strip()
     if not source_date_epoch_text.isdigit() or source_date_epoch_text == "0":
         raise SourceIdentityError("source commit time is invalid")
     source_date_epoch = int(source_date_epoch_text)
-    archive = git(repo, "archive", "--format=tar", commit, "--", SOURCE_PATH)
-    files, modes = _manifests(archive)
+    archive = git(repo, "archive", "--format=tar", commit, "--", source_path)
+    files, modes = _manifests(archive, source_path)
     identity = {
         "archiveSha256": sha256(archive),
         "contextSha256": sha256(files + modes),
-        "path": SOURCE_PATH,
+        "path": source_path,
         "repositoryTree": repository_tree,
         "revision": commit,
         "schema": "ambit.git-source-identity/v1",
@@ -109,17 +115,19 @@ def verify_context(source: Path, context: Path, expected_identity_sha256: str) -
         raise SourceIdentityError("source mode manifest digest differs")
     if identity.get("contextSha256") != sha256(files + modes):
         raise SourceIdentityError("source context digest differs")
-    expected_files, expected_modes = _manifests(archive)
+    source_path = _source_path(identity.get("path"))
+    expected_files, expected_modes = _manifests(archive, source_path)
     if files != expected_files or modes != expected_modes:
         raise SourceIdentityError("source manifests do not derive from the archive")
     _verify_source(source, files, modes)
     return {**identity, "identitySha256": expected_identity_sha256}
 
 
-def _manifests(archive: bytes) -> tuple[bytes, bytes]:
+def _manifests(archive: bytes, source_path: str = SOURCE_PATH) -> tuple[bytes, bytes]:
     file_rows: list[str] = []
     mode_rows: list[str] = []
-    prefix = SOURCE_PATH + "/"
+    source_path = _source_path(source_path)
+    prefix = source_path + "/"
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as source_tar:
         for member in source_tar.getmembers():
             path = PurePosixPath(member.name)
@@ -170,6 +178,20 @@ def _verify_source(source: Path, files: bytes, modes: bytes) -> None:
             raise SourceIdentityError(f"source mode differs: {path}")
 
 
+def _source_path(value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value.startswith("/")
+        or value.endswith("/")
+        or "//" in value
+        or any(part in ("", ".", "..") for part in value.split("/"))
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", value) is None
+    ):
+        raise SourceIdentityError("source path is invalid")
+    return value
+
+
 def _write_new(path: Path, data: bytes) -> None:
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
@@ -186,9 +208,16 @@ def main() -> int:
     parser.add_argument("--repo", required=True, type=Path)
     parser.add_argument("--revision", required=True)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--source-path", default=SOURCE_PATH)
     args = parser.parse_args()
     try:
-        print(json.dumps(freeze(args.repo, args.revision, args.output), indent=2, sort_keys=True))
+        print(
+            json.dumps(
+                freeze(args.repo, args.revision, args.output, args.source_path),
+                indent=2,
+                sort_keys=True,
+            )
+        )
     except (OSError, SourceIdentityError) as error:
         print(f"freeze-source-identity: {error}")
         return 1
