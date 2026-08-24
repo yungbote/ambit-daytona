@@ -45,6 +45,13 @@ const POLICY = {
     externalLinks: 'disabled',
     passwordProtected: 'unsupported',
   },
+  execution: {
+    maximumChildStderrBytes: 65536,
+    maximumChildStdoutBytes: 16384,
+    maximumCleanupMilliseconds: 10000,
+    maximumPipelineWallMilliseconds: 180000,
+    maximumTerminalWriteMilliseconds: 5000,
+  },
   libreOffice: {
     processModel: 'one-process-per-render',
     privateUserProfile: 'required',
@@ -81,6 +88,13 @@ const POLICY = {
     canvasFactory: 'ambit.pdfjs-canvas-factory/napi-rs@1',
     executionState: 'available',
   },
+  scratch: {
+    cacheRequiredBytes: 67108864,
+    derivation:
+      'max(input-docx+intermediate-pdf,intermediate-pdf+page-output)+bounded-overhead',
+    workspaceOverheadBytes: 33554432,
+    workspaceRequiredBytes: 838860800,
+  },
   canonicalArtifactBoundary: 'external-commit-only',
   renderOutputGrantsCanonicalAuthority: false,
 }
@@ -111,7 +125,7 @@ test('converts through one bounded private LibreOffice invocation', async () => 
       '/opt/ambit/runtime-pack/core-document-v5/bin/ambit-structural-python',
     )
     assert.deepEqual(invocation.arguments.slice(0, 7), [
-      '/opt/ambit/runtime-pack/core-document-v5/renderer/libreoffice-subreaper.py',
+      '/opt/ambit/runtime-pack/core-document-v5/renderer/process-group-subreaper.py',
       '/usr/bin/libreoffice',
       '--headless',
       '--nologo',
@@ -184,7 +198,45 @@ test('removes private staging when conversion output is noncanonical', async () 
   }
 })
 
-test('the installed-style symlink invokes the CLI instead of exiting dark', async () => {
+test('admits the exact PDF limit and rejects its first excess byte', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'ambit-document-wrapper-'))
+  const cache = await mkdtemp(join(tmpdir(), 'ambit-document-cache-'))
+  const policy = {
+    ...POLICY,
+    libreOffice: {
+      ...POLICY.libreOffice,
+      maximumPdfBytes: PDF.byteLength,
+    },
+  }
+  try {
+    const convert = (outputBytes) =>
+      convertDocxToPdf({
+        documentBytes: DOCX,
+        policy,
+        workspaceRoot: workspace,
+        cacheRoot: cache,
+        execute: async (options) => {
+          const output =
+            options.arguments[options.arguments.indexOf('--outdir') + 1]
+          await writeFile(join(output, 'document.pdf'), outputBytes)
+          return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }
+        },
+      })
+    const exact = await convert(PDF)
+    await exact.dispose()
+    await assert.rejects(
+      convert(Buffer.concat([PDF, Buffer.from('x')])),
+      /bounded immutable regular file/,
+    )
+    assert.deepEqual(await readdir(workspace), [])
+    assert.deepEqual(await readdir(cache), [])
+  } finally {
+    await rm(workspace, { recursive: true, force: true })
+    await rm(cache, { recursive: true, force: true })
+  }
+})
+
+test('the installed-style CLI fails closed without plaintext PTY diagnostics', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'ambit-document-launcher-'))
   try {
     const launcher = join(directory, 'ambit-render-document.mjs')
@@ -192,7 +244,9 @@ test('the installed-style symlink invokes the CLI instead of exiting dark', asyn
     await assert.rejects(
       execFile(process.execPath, [launcher], { encoding: 'utf8' }),
       (error) => {
-        assert.match(error.stderr, /Expected --framed-jsonl --nonce/)
+        assert.equal(error.code, 1)
+        assert.equal(error.stdout, '')
+        assert.equal(error.stderr, '')
         return true
       },
     )

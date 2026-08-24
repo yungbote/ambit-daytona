@@ -26,6 +26,13 @@ export class RenderTransportClosed extends Error {
   }
 }
 
+export class RenderControlAdmissionClosed extends Error {
+  constructor() {
+    super('Render control admission closed at the success commit point.')
+    this.name = 'RenderControlAdmissionClosed'
+  }
+}
+
 function sha256(bytes) {
   return `sha256:${createHash('sha256').update(bytes).digest('hex')}`
 }
@@ -97,7 +104,8 @@ function decodeCanonicalLine(lineBytes, maximumBytes = MAXIMUM_FRAME_LINE_BYTES)
   } catch (error) {
     throw new TypeError('Framed JSONL line is not JSON.', { cause: error })
   }
-  if (canonicalJson(value) !== text) {
+  const canonicalBytes = Buffer.from(canonicalJson(value), 'utf8')
+  if (!canonicalBytes.equals(lineBytes)) {
     throw new TypeError('Framed JSONL line is not canonical JSON.')
   }
   return value
@@ -295,6 +303,8 @@ export class RenderRequestCollector {
 }
 
 export class FramedJsonlLineReader {
+  #closed = false
+  #closedReason = null
   #iterator
   #pending = Buffer.alloc(0)
   #readable
@@ -313,6 +323,10 @@ export class FramedJsonlLineReader {
 
   async readLine(signal) {
     while (true) {
+      if (this.#closed) {
+        if (this.#closedReason) throw this.#closedReason
+        return null
+      }
       const newline = this.#pending.indexOf(0x0a)
       if (newline >= 0) {
         const line = Buffer.from(this.#pending.subarray(0, newline))
@@ -331,6 +345,10 @@ export class FramedJsonlLineReader {
       } finally {
         signal?.removeEventListener('abort', abort)
       }
+      if (this.#closed) {
+        if (this.#closedReason) throw this.#closedReason
+        return null
+      }
       if (next.done) {
         if (this.#pending.byteLength !== 0) {
           throw new TypeError('Framed JSONL input ended without a newline.')
@@ -348,7 +366,10 @@ export class FramedJsonlLineReader {
   }
 
   close(error) {
-    if (!this.#readable.destroyed) this.#readable.destroy(error)
+    if (this.#closed) return
+    this.#closed = true
+    this.#closedReason = error ?? null
+    if (!this.#readable.destroyed) this.#readable.destroy()
   }
 }
 

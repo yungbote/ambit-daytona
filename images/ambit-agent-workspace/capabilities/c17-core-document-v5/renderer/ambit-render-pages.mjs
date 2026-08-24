@@ -8,7 +8,7 @@ import {
 } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { isAbsolute, join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import {
   admitBackendComponentLineageEnvelope,
@@ -44,6 +44,11 @@ const ENGINE_LINEAGE_PATH = join(
 )
 const EXPECTED_NODE_VERSION = 'v24.19.0'
 const OUTPUT_MANIFEST_NAME = 'render-manifest.json'
+const INTERNAL_RENDER_REQUEST_NAME = 'render-request.json'
+const INTERNAL_PDF_NAME = 'converted/document.pdf'
+const INTERNAL_OUTPUT_NAME = 'rendered'
+const INTERNAL_RENDER_SCHEMA = 'ambit.runtime-pack-internal-page-render/v1'
+const MAXIMUM_INTERNAL_REQUEST_BYTES = 64 * 1024
 
 function sha256(bytes) {
   return `sha256:${createHash('sha256').update(bytes).digest('hex')}`
@@ -286,5 +291,75 @@ export async function renderPagesToDirectory({
     return manifestBytes
   } finally {
     await output.handle.close()
+  }
+}
+
+function exactInternalRenderRequest(value) {
+  if (
+    value === null ||
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype ||
+    Object.keys(value).sort().join('\n') !==
+      ['backendLineage', 'schema', 'sourceDocument'].sort().join('\n') ||
+    value.schema !== INTERNAL_RENDER_SCHEMA
+  ) {
+    throw new TypeError('Internal page-render request identity is invalid.')
+  }
+  return Object.freeze({
+    schema: value.schema,
+    backendLineage: admitBackendComponentLineageEnvelope(value.backendLineage),
+    sourceDocument: value.sourceDocument,
+  })
+}
+
+export async function runInternalPageRenderChild(cwd = process.cwd()) {
+  if (!isAbsolute(cwd) || (await realpath(cwd)) !== cwd) {
+    throw new TypeError('Internal page-render working root is invalid.')
+  }
+  const loaded = await loadRenderPolicy()
+  const requestBytes = await readRegularNoFollow(
+    join(cwd, INTERNAL_RENDER_REQUEST_NAME),
+    MAXIMUM_INTERNAL_REQUEST_BYTES,
+  )
+  const request = readCanonicalInput(
+    requestBytes,
+    exactInternalRenderRequest,
+    'Internal page-render request',
+  )
+  const pdfBytes = await readRegularNoFollow(
+    join(cwd, INTERNAL_PDF_NAME),
+    loaded.policy.libreOffice.maximumPdfBytes,
+  )
+  const manifestBytes = await renderPagesToDirectory({
+    pdfBytes,
+    outputPath: join(cwd, INTERNAL_OUTPUT_NAME),
+    backendLineage: request.backendLineage,
+    sourceDocument: request.sourceDocument,
+  })
+  return Object.freeze({
+    schema: INTERNAL_RENDER_SCHEMA,
+    outcome: 'passed',
+    manifestBytes: manifestBytes.byteLength,
+    manifestSha256: sha256(manifestBytes),
+  })
+}
+
+function invokedAsProgram() {
+  return process.argv[1] === fileURLToPath(import.meta.url)
+}
+
+if (invokedAsProgram()) {
+  const arguments_ = process.argv.slice(2)
+  if (arguments_.length !== 1 || arguments_[0] !== '--internal-render-child') {
+    process.exitCode = 64
+  } else {
+    runInternalPageRenderChild()
+      .then((receipt) => {
+        process.stdout.write(`${canonicalJson(receipt)}\n`)
+      })
+      .catch(() => {
+        process.exitCode = 1
+      })
   }
 }

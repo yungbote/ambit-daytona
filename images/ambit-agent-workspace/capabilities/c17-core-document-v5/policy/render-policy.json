@@ -35,6 +35,13 @@
     "maximumPdfBytes": 268435456,
     "maximumWallMilliseconds": 120000
   },
+  "execution": {
+    "maximumChildStderrBytes": 65536,
+    "maximumChildStdoutBytes": 16384,
+    "maximumCleanupMilliseconds": 10000,
+    "maximumPipelineWallMilliseconds": 180000,
+    "maximumTerminalWriteMilliseconds": 5000
+  },
   "pages": {
     "maximumCount": 512,
     "maximumBytesPerPage": 67108864,
@@ -62,6 +69,12 @@
     ],
     "canvasFactory": "ambit.pdfjs-canvas-factory/napi-rs@1",
     "executionState": "available"
+  },
+  "scratch": {
+    "cacheRequiredBytes": 67108864,
+    "derivation": "max(input-docx+intermediate-pdf,intermediate-pdf+page-output)+bounded-overhead",
+    "workspaceOverheadBytes": 33554432,
+    "workspaceRequiredBytes": 838860800
   },
   "canonicalArtifactBoundary": "external-commit-only",
   "renderOutputGrantsCanonicalAuthority": false
