@@ -3161,6 +3161,42 @@ class ProcessUniverseTest(unittest.TestCase):
                 else:
                     real_close(descriptor)
 
+    def test_reentrant_close_defers_preinvoke_active_cleanup_frame(self) -> None:
+        cleanup_code = MODULE.ResourceCustody._cleanup_registration_once.__code__
+        target = next(
+            instruction.offset
+            for instruction in dis.get_instructions(cleanup_code)
+            if instruction.argval == "_invoke_closer"
+        )
+        custody = MODULE.ResourceCustody(label="preinvoke active cleanup")
+        with mock.patch.object(MODULE.os, "open", return_value=40):
+            custody.open("ignored", os.O_RDONLY)
+        fired = [False]
+
+        def trace(frame: object, event: str, _argument: object):  # type: ignore[no-untyped-def]
+            if getattr(frame, "f_code") is cleanup_code:
+                setattr(frame, "f_trace_opcodes", True)
+                if (
+                    not fired[0]
+                    and event == "opcode"
+                    and getattr(frame, "f_lasti") == target
+                ):
+                    fired[0] = True
+                    custody.close()
+            return trace
+
+        previous = sys.gettrace()
+        try:
+            with mock.patch.object(MODULE.os, "close") as close:
+                sys.settrace(trace)
+                custody.close()
+        finally:
+            sys.settrace(previous)
+        self.assertTrue(fired[0])
+        close.assert_called_once_with(40)
+        self.assertEqual(custody._resources, [])
+        self.assertEqual(custody._state, "closed")
+
     def test_close_open_to_closing_and_final_settlement_are_resumable(self) -> None:
         source = MODULE_PATH.read_text(encoding="utf-8")
         close_ast = class_method_ast(source, "ResourceCustody", "close")
@@ -7649,6 +7685,43 @@ class WrapperBoundaryTest(unittest.TestCase):
                     pass
                 else:
                     real_close(descriptor)
+
+    def test_loader_reentrant_close_defers_preinvoke_active_cleanup(self) -> None:
+        descriptor_custody = self._descriptor_custody_type()
+        close_once_code = descriptor_custody._close_once.__code__
+        target = next(
+            instruction.offset
+            for instruction in dis.get_instructions(close_once_code)
+            if instruction.argval == "_invoke_closer"
+        )
+        custody = descriptor_custody("loader preinvoke active cleanup")
+        with mock.patch.object(os, "open", return_value=40):
+            custody.open("ignored", os.O_RDONLY)
+        fired = [False]
+
+        def trace(frame: object, event: str, _argument: object):  # type: ignore[no-untyped-def]
+            if getattr(frame, "f_code") is close_once_code:
+                setattr(frame, "f_trace_opcodes", True)
+                if (
+                    not fired[0]
+                    and event == "opcode"
+                    and getattr(frame, "f_lasti") == target
+                ):
+                    fired[0] = True
+                    custody.close()
+            return trace
+
+        previous = sys.gettrace()
+        try:
+            with mock.patch.object(os, "close") as close:
+                sys.settrace(trace)
+                custody.close()
+        finally:
+            sys.settrace(previous)
+        self.assertTrue(fired[0])
+        close.assert_called_once_with(40)
+        self.assertEqual(custody.descriptors, [])
+        self.assertEqual(custody.state, "closed")
 
     def test_loader_error_return_interruption_preserves_close_failure(self) -> None:
         descriptor_custody = self._descriptor_custody_type()

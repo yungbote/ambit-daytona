@@ -39,7 +39,7 @@ caller_gid=$(/usr/bin/id -g)
 script_source=$(/usr/bin/realpath -e -- "${BASH_SOURCE[0]}")
 script_dir=${script_source%/*}
 tool=${script_dir}/legacy_v3_drain.py
-tool_sha256=7279c1366195bda944c854192b8bb3c3f40478fbf419106cf017577323f58f33
+tool_sha256=1adefed37df72c6c5f6df83b532c0404f5a8a5283ffbe1668501f1eefe2e7e9c
 control_root=/run/ambit-c16b-legacy-v3-drain-1577287b8182
 
 read -r -d '' pinned_loader <<'PY' || true
@@ -494,8 +494,7 @@ class DescriptorCustody:
                     (
                         registration
                         for registration in group
-                        if registration.close_started
-                        and self._cleanup_is_active(registration)
+                        if self._cleanup_is_active(registration)
                     ),
                     next(
                         (
@@ -519,6 +518,8 @@ class DescriptorCustody:
                         )
                         self._record_cleanup_error(observed_error)
 
+                if self._cleanup_is_active(authority):
+                    continue
                 if authority.close_error is not None:
                     observed_error = self._publish_terminal_error(
                         authority,
@@ -527,8 +528,6 @@ class DescriptorCustody:
                     self._record_cleanup_error(observed_error)
                     continue
                 if authority.close_started:
-                    if self._cleanup_is_active(authority):
-                        continue
                     if not authority.close_finished:
                         observed_error = self._publish_terminal_error(
                             authority,

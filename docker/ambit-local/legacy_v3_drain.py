@@ -1576,8 +1576,7 @@ class ResourceCustody:
                     (
                         registration
                         for registration in group
-                        if registration.close_started
-                        and self._cleanup_is_active(registration)
+                        if self._cleanup_is_active(registration)
                     ),
                     next(
                         (
@@ -1604,6 +1603,8 @@ class ResourceCustody:
                             f"{self.label} alias error recording also failed: ",
                         )
 
+                if self._cleanup_is_active(authority):
+                    continue
                 if authority.close_error is not None:
                     observed_error = self._publish_terminal_error(
                         authority,
@@ -1615,8 +1616,6 @@ class ResourceCustody:
                     )
                     continue
                 if authority.close_started:
-                    if self._cleanup_is_active(authority):
-                        continue
                     if not authority.close_finished:
                         observed_error = self._publish_terminal_error(
                             authority,
