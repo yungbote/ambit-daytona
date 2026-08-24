@@ -4,23 +4,30 @@
 This is deliberately a remove-only compatibility boundary for the one live
 legacy-v3 runtime created on 2026-08-20.  It never starts Docker, adopts old
 storage as current authority, changes a cgroup, force-kills a process, or
-removes persistent data.  `verify-only` performs no writes.  `drain` and
+removes persistent data.  `verify-only` performs no application mutation;
+read-induced filesystem atime effects remain possible.  `drain` and
 `resume` require root, the current v5 global lease, a durable legacy-specific
 control record, pidfd process custody, and exact mount/socket postconditions.
 """
 
 from __future__ import annotations
 
+import _socket
 import argparse
+import collections
 import contextlib
 import ctypes
 import datetime as dt
 import errno
 import fcntl
+import functools
 import hashlib
+import itertools
 import json
 import os
+import operator
 import re
+import resource
 import select
 import signal
 import socket
@@ -29,9 +36,9 @@ import struct
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterator, Mapping, Protocol, Sequence
+from typing import Any, Callable, Iterator, Mapping, Protocol, Sequence, cast
 
 
 SCHEMA = "ambit.local-daytona-legacy-v3-drain-verification/v1"
@@ -40,6 +47,7 @@ STATE_SCHEMA = "ambit.local-daytona-legacy-v3-drain-state/v1"
 PROJECTION_SCHEMA = "ambit.local-daytona-legacy-v3-drain-terminal/v1"
 SOURCE_TOMBSTONE_SCHEMA = "ambit.local-daytona-legacy-v3-source-tombstone/v1"
 LEGACY_SCHEMA = "ambit.local-daytona-isolated-docker/v3"
+ACQUISITION_EMPTY = object()
 
 EXPECTED_STATE_ROOT = Path("/home/bote/m/.local/ambit-daytona-c16b/state")
 EXPECTED_RECEIPT_SHA256 = (
@@ -281,15 +289,34 @@ RUNTIME_NAME_RE = re.compile(r"^ambit-c16b-docker-[0-9a-f]{12}$")
 V5_RUNTIME_RE = re.compile(
     r"^ambit-c16b-docker-(?:api-|removing-)?[0-9a-f]{12}$"
 )
+V5_STORAGE_AUTHORITY_PREFIX = ".ambit-c16b-runner-storage"
 OPAQUE_MOUNT_ROOT_RE = re.compile(r"^[a-z][a-z0-9_-]*:\[[1-9][0-9]*\]$")
 MOUNT_DEVICE_RE = re.compile(r"^[0-9]+:[0-9]+$")
 MAX_JSON_BYTES = 2 * 1024 * 1024
+TERMINAL_TIMESTAMP_SENTINEL = "2000-01-01T00:00:00.000000+00:00"
 CGROUP_PARENT = Path("/sys/fs/cgroup")
 CGROUP_NAME_RE = re.compile(r"^ambit-c16b-docker-[0-9a-f]{12}$")
 LIBC = ctypes.CDLL(None, use_errno=True)
 RENAME_NOREPLACE = 1
 AT_EMPTY_PATH = 0x1000
 PIDFD_THREAD = os.O_EXCL
+TASK_NAMESPACE_ENTRIES = (
+    ("cgroup", "cgroup"),
+    ("ipc", "ipc"),
+    ("mnt", "mnt"),
+    ("net", "net"),
+    ("pid", "pid"),
+    ("pid_for_children", "pid"),
+    ("time", "time"),
+    ("time_for_children", "time"),
+    ("user", "user"),
+    ("uts", "uts"),
+)
+TASK_NAMESPACE_ENTRY_KINDS = dict(TASK_NAMESPACE_ENTRIES)
+NAMESPACE_KINDS = tuple(sorted(set(TASK_NAMESPACE_ENTRY_KINDS.values())))
+NAMESPACE_TOKEN_RE = re.compile(
+    r"(" + "|".join(NAMESPACE_KINDS) + r"):\[([1-9][0-9]*)\]"
+)
 NETLINK_SOCK_DIAG = 4
 SOCK_DIAG_BY_FAMILY = 20
 NLM_F_REQUEST = 0x1
@@ -331,11 +358,14 @@ def manual(condition: bool, message: str) -> None:
 
 
 def utc_now() -> str:
-    return dt.datetime.now(dt.timezone.utc).isoformat()
+    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="microseconds")
 
 
 def current_boot_id() -> str:
-    value = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
+    value = read_path_bytes(
+        Path("/proc/sys/kernel/random/boot_id"),
+        maximum=128,
+    ).decode("ascii", "strict").strip()
     require(re.fullmatch(r"[0-9a-f-]{36}", value) is not None, "boot identity is invalid")
     return value
 
@@ -386,8 +416,8 @@ def parse_json_bytes(raw: bytes, label: str) -> object:
 
 
 def read_regular(path: Path, *, maximum: int = MAX_JSON_BYTES) -> tuple[bytes, os.stat_result]:
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    try:
+    with ResourceCustody(label="regular file read") as custody:
+        descriptor = custody.open(path, os.O_RDONLY | os.O_NOFOLLOW)
         observed = os.fstat(descriptor)
         require(stat.S_ISREG(observed.st_mode), f"regular file type differs: {path}")
         require(observed.st_nlink == 1, f"regular file link count differs: {path}")
@@ -408,13 +438,11 @@ def read_regular(path: Path, *, maximum: int = MAX_JSON_BYTES) -> tuple[bytes, o
             f"regular file binding changed: {path}",
         )
         return b"".join(chunks), observed
-    finally:
-        os.close(descriptor)
 
 
 def hash_regular(path: Path, *, maximum: int) -> tuple[str, int, os.stat_result]:
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    try:
+    with ResourceCustody(label="regular file hash") as custody:
+        descriptor = custody.open(path, os.O_RDONLY | os.O_NOFOLLOW)
         observed = os.fstat(descriptor)
         require(
             stat.S_ISREG(observed.st_mode)
@@ -439,8 +467,6 @@ def hash_regular(path: Path, *, maximum: int) -> tuple[str, int, os.stat_result]
             f"hashed file binding changed: {path}",
         )
         return digest.hexdigest(), size, observed
-    finally:
-        os.close(descriptor)
 
 
 def exists_nofollow(path: Path) -> bool:
@@ -471,8 +497,10 @@ def directory_identity(
     expected_gid: int,
     expected_modes: set[int],
 ) -> dict[str, object]:
-    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
+    with ResourceCustody(label="directory identity") as custody:
+        descriptor = custody.open(
+            path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        )
         observed = os.fstat(descriptor)
         literal = os.stat(path, follow_symlinks=False)
         require(
@@ -487,8 +515,6 @@ def directory_identity(
             f"directory owner or mode differs: {path}",
         )
         return identity_document(path, observed)
-    finally:
-        os.close(descriptor)
 
 
 def regular_identity(
@@ -675,8 +701,10 @@ def parse_legacy_receipt(raw: bytes) -> dict[str, object]:
 
 
 def read_at(directory_fd: int, name: str, maximum: int = 2 * 1024 * 1024) -> bytes:
-    descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
-    try:
+    with ResourceCustody(label=f"process file read: {name}") as custody:
+        descriptor = custody.open(
+            name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd
+        )
         chunks: list[bytes] = []
         size = 0
         while True:
@@ -686,8 +714,6 @@ def read_at(directory_fd: int, name: str, maximum: int = 2 * 1024 * 1024) -> byt
             size += len(chunk)
             require(size <= maximum, f"process file is too large: {name}")
             chunks.append(chunk)
-    finally:
-        os.close(descriptor)
 
 
 def stat_identity(stat_bytes: bytes) -> tuple[int, int]:
@@ -701,9 +727,16 @@ def stat_identity(stat_bytes: bytes) -> tuple[int, int]:
     return int(fields[1]), int(fields[19])
 
 
-def namespace_identity(process_fd: int, name: str) -> dict[str, int]:
-    observed = os.stat(f"ns/{name}", dir_fd=process_fd)
-    return {"device": observed.st_dev, "inode": observed.st_ino}
+def namespace_identity(process_fd: int, entry: str) -> dict[str, object]:
+    kind = TASK_NAMESPACE_ENTRY_KINDS.get(entry)
+    require(kind is not None, "task namespace entry is invalid")
+    observed = os.stat(f"ns/{entry}", dir_fd=process_fd)
+    require(
+        os.readlink(f"ns/{entry}", dir_fd=process_fd)
+        == f"{kind}:[{observed.st_ino}]",
+        f"task namespace entry identity differs: {entry}",
+    )
+    return {"kind": kind, "device": observed.st_dev, "inode": observed.st_ino}
 
 
 def pidfd_exited(pidfd: int) -> bool:
@@ -723,7 +756,14 @@ def process_task_coordinates_once() -> tuple[tuple[int, int], ...]:
         try:
             task_ids = tuple(os.listdir(task_root))
         except (FileNotFoundError, ProcessLookupError):
-            continue
+            try:
+                os.stat(Path("/proc") / entry, follow_symlinks=False)
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+            raise ManualRecoveryRequired(
+                "live process thread-group task roster is unavailable: "
+                f"{thread_group_id}"
+            )
         except PermissionError as error:
             raise ManualRecoveryRequired(
                 f"process task roster is unreadable: {thread_group_id}"
@@ -906,6 +946,816 @@ def require_recorded_role_task_security(
     )
 
 
+class Closeable(Protocol):
+    def close(self) -> None: ...
+
+
+def add_error_note(
+    active_error: BaseException,
+    prefix: str,
+    detail: object | None = None,
+) -> None:
+    """Attach diagnostics without allowing annotation failure to mask a primary."""
+
+    try:
+        if detail is None:
+            note = prefix
+        else:
+            try:
+                rendered = str(detail)
+            except BaseException:
+                rendered = f"<unprintable {type(detail).__name__}>"
+            note = prefix + rendered
+        BaseException.add_note(active_error, note)
+    except BaseException:
+        # Supplemental diagnostics are never allowed to replace the active error.
+        pass
+
+
+def exact_descriptor(value: object) -> bool:
+    return type(value) is int and value >= 0
+
+
+@dataclass(eq=False)
+class ResourceRegistration:
+    kind: str
+    value: int | Closeable
+    published: bool = field(default=False, init=False)
+    close_started: bool = field(default=False, init=False)
+    close_finished: bool = field(default=False, init=False)
+    close_error: BaseException | None = field(default=None, init=False)
+
+
+@dataclass(eq=False)
+class PendingAcquisition:
+    kind: str
+    captured: list[object] = field(
+        default_factory=lambda: [ACQUISITION_EMPTY]
+    )
+    registration: ResourceRegistration | None = None
+
+
+class ResourceCustody:
+    """One-shot resource ownership with failure-total, reentrancy-safe cleanup."""
+
+    def __init__(self, *, label: str) -> None:
+        self.label = label
+        self._resources: list[ResourceRegistration] = []
+        self._state = "open"
+        self._cleanup_error: BaseException | None = None
+        self._pending_acquisition: PendingAcquisition | None = None
+
+    def _acknowledge_published_pending(self) -> None:
+        pending = self._pending_acquisition
+        if pending is None:
+            return
+        require(
+            not self._acquisition_is_active(pending),
+            f"{self.label} acquisition is still active",
+        )
+        registration = pending.registration
+        require(
+            registration is not None
+            and registration.published
+            and any(owned is registration for owned in self._resources),
+            f"{self.label} prior acquisition handoff is incomplete",
+        )
+        self._pending_acquisition = None
+
+    def _admit_pending_registration(self) -> None:
+        pending = self._pending_acquisition
+        if pending is None:
+            return
+        if pending.captured[0] is ACQUISITION_EMPTY:
+            self._pending_acquisition = None
+            return
+        resource_value = cast(int | Closeable, pending.captured[0])
+        registration = pending.registration
+        if registration is None:
+            try:
+                registration = ResourceRegistration(pending.kind, resource_value)
+            except BaseException:
+                registration = object.__new__(ResourceRegistration)
+                registration.kind = pending.kind
+                registration.value = resource_value
+                registration.published = False
+                registration.close_started = False
+                registration.close_finished = False
+                registration.close_error = None
+            pending.registration = registration
+        if not any(owned is registration for owned in self._resources):
+            candidate = list.copy(self._resources)
+            candidate.append(registration)
+            self._resources = candidate
+        registration.published = True
+        self._pending_acquisition = None
+
+    def _acquisition_is_active(self, pending: PendingAcquisition) -> bool:
+        frame = sys._getframe(1)
+        try:
+            while frame is not None:
+                if (
+                    frame.f_code is ResourceCustody._acquire.__code__
+                    and frame.f_locals.get("self") is self
+                    and frame.f_locals.get("pending") is pending
+                ):
+                    return True
+                frame = frame.f_back
+            return False
+        finally:
+            del frame
+
+    def open(self, *args: object, **kwargs: object) -> int:
+        return self._acquire(
+            "descriptor",
+            functools.partial(os.open, *args, **kwargs),  # type: ignore[arg-type]
+        )
+
+    def pidfd_open(self, pid: int, flags: int) -> int:
+        return self._acquire(
+            "descriptor",
+            functools.partial(os.pidfd_open, pid, flags),
+        )
+
+    def dup(self, descriptor: int) -> int:
+        return self._acquire("descriptor", functools.partial(os.dup, descriptor))
+
+    def socket(self, *args: object, **kwargs: object) -> _socket.socket:
+        require(
+            len(args) < 4 and "fileno" not in kwargs,
+            f"{self.label} raw socket adoption is forbidden",
+        )
+        return self._acquire(
+            "closeable",
+            functools.partial(_socket.socket, *args, **kwargs),  # type: ignore[arg-type]
+        )  # type: ignore[return-value]
+
+    @staticmethod
+    def _capture_producer_result(
+        captured: list[object],
+        producer: Callable[[], int | Closeable],
+    ) -> None:
+        # The C iterator stores the C producer's result into the preallocated
+        # slot before the interpreter can deliver an opcode-level interruption.
+        collections.deque(
+            map(
+                functools.partial(captured.__setitem__, 0),
+                itertools.starmap(producer, ((),)),
+            ),
+            maxlen=0,
+        )
+
+    @staticmethod
+    def _invoke_closer(
+        registration: ResourceRegistration,
+        closer: Callable[[], None],
+    ) -> None:
+        collections.deque(
+            map(
+                operator.call,
+                (
+                    functools.partial(
+                        setattr,
+                        registration,
+                        "close_started",
+                        True,
+                    ),
+                    closer,
+                ),
+            ),
+            maxlen=0,
+        )
+
+    def _acquire(
+        self,
+        kind: str,
+        producer: Callable[[], int | Closeable],
+    ) -> int | Closeable:
+        self._acknowledge_published_pending()
+        baseline = list.copy(self._resources)
+        pending = PendingAcquisition(kind)
+        self._pending_acquisition = pending
+        registration: ResourceRegistration | None = None
+        try:
+            self._capture_producer_result(pending.captured, producer)
+            require(
+                pending.captured[0] is not ACQUISITION_EMPTY,
+                f"{self.label} producer returned no resource",
+            )
+            resource_value = cast(int | Closeable, pending.captured[0])
+            registration = ResourceRegistration(kind, resource_value)
+            pending.registration = registration
+            self._publish_registration(registration, baseline)
+            return resource_value
+        except BaseException as error:
+            if pending.captured[0] is ACQUISITION_EMPTY:
+                if self._pending_acquisition is pending:
+                    self._pending_acquisition = None
+                raise
+            resource_value = cast(int | Closeable, pending.captured[0])
+            if registration is None:
+                try:
+                    registration = ResourceRegistration(kind, resource_value)
+                except BaseException as registration_error:
+                    add_error_note(
+                        error,
+                        f"{self.label} registration construction also failed: ",
+                        registration_error,
+                    )
+                    registration = object.__new__(ResourceRegistration)
+                    registration.kind = kind
+                    registration.value = resource_value
+                    registration.published = False
+                    registration.close_started = False
+                    registration.close_finished = False
+                    registration.close_error = None
+            pending.registration = registration
+            for _attempt in range(2):
+                try:
+                    self._restore_roster(baseline, registration, error)
+                    break
+                except BaseException as escaped_restore:
+                    add_error_note(
+                        error,
+                        f"{self.label} roster restoration escaped: ",
+                        escaped_restore,
+                    )
+            cleanup_error: BaseException | None = None
+            for _attempt in range(2):
+                try:
+                    cleanup_error = self._settle_registration_once(registration)
+                    break
+                except BaseException as escaped_cleanup:
+                    cleanup_error = escaped_cleanup
+                    add_error_note(
+                        error,
+                        f"{self.label} registration cleanup escaped: ",
+                        escaped_cleanup,
+                    )
+                    if registration.close_started:
+                        break
+            if cleanup_error is not None:
+                add_error_note(
+                    error,
+                    f"{self.label} registration cleanup also failed: ",
+                    cleanup_error,
+                )
+            if (
+                self._pending_acquisition is pending
+                and (registration.close_started or registration.close_finished)
+            ):
+                self._pending_acquisition = None
+            raise
+
+    def _publish_registration(
+        self,
+        registration: ResourceRegistration,
+        baseline: list[ResourceRegistration],
+    ) -> None:
+        require(
+            self._state == "open" and self._cleanup_error is None,
+            f"{self.label} registration is unavailable while custody is "
+            f"{self._state} or cleanup is ambiguous",
+        )
+        if registration.kind == "descriptor":
+            require(
+                exact_descriptor(registration.value),
+                f"{self.label} descriptor registration is invalid",
+            )
+        else:
+            require(
+                registration.kind == "closeable"
+                and not isinstance(registration.value, int),
+                f"{self.label} closeable registration is invalid",
+            )
+        candidate = list.copy(baseline)
+        candidate.append(registration)
+        self._resources = candidate
+        registration.published = True
+
+    def _restore_roster(
+        self,
+        baseline: list[ResourceRegistration],
+        registration: ResourceRegistration,
+        active_error: BaseException,
+    ) -> None:
+        first_error: BaseException | None = None
+        for _attempt in range(2):
+            try:
+                # Restore roster and publication state at one trace boundary.
+                self._resources = list.copy(baseline); registration.published = False
+                if first_error is not None:
+                    add_error_note(
+                        active_error,
+                        f"{self.label} roster restoration first failed: ",
+                        first_error,
+                    )
+                return
+            except BaseException as restore_error:
+                if first_error is None:
+                    first_error = restore_error
+                else:
+                    add_error_note(
+                        active_error,
+                        f"{self.label} roster restoration also failed: ",
+                        restore_error,
+                    )
+        if first_error is not None:
+            add_error_note(
+                active_error,
+                f"{self.label} roster restoration remained incomplete: ",
+                first_error,
+            )
+
+    @staticmethod
+    def _registration_matches(
+        registration: ResourceRegistration,
+        kind: str,
+        resource_value: int | Closeable,
+    ) -> bool:
+        return registration.kind == kind and (
+            registration.value == resource_value
+            if kind == "descriptor"
+            else registration.value is resource_value
+        )
+
+    def _cleanup_registration_once(
+        self,
+        registration: ResourceRegistration,
+    ) -> BaseException | None:
+        if registration.close_error is not None or registration.close_finished:
+            return registration.close_error
+        if registration.close_started:
+            return None
+        if registration.kind == "descriptor":
+            if not isinstance(registration.value, int):
+                invalid_error = DrainError(
+                    f"{self.label} cleanup descriptor is invalid"
+                )
+                return self._publish_terminal_error(registration, invalid_error)
+        elif isinstance(registration.value, int):
+            invalid_error = DrainError(
+                f"{self.label} cleanup closeable is invalid"
+            )
+            return self._publish_terminal_error(registration, invalid_error)
+        preinvoke_error: BaseException | None = None
+        while not registration.close_started:
+            try:
+                if registration.kind == "descriptor":
+                    closer = functools.partial(os.close, registration.value)
+                else:
+                    closer = functools.partial(registration.value.close)
+                self._invoke_closer(registration, closer)
+                registration.close_finished = True
+            except BaseException as cleanup_error:
+                if not registration.close_started:
+                    if preinvoke_error is None:
+                        preinvoke_error = cleanup_error
+                    else:
+                        add_error_note(
+                            preinvoke_error,
+                            f"{self.label} repeated pre-close interruption: ",
+                            cleanup_error,
+                        )
+                    continue
+                registration.close_error = cleanup_error; registration.close_finished = True
+                if preinvoke_error is not None:
+                    add_error_note(
+                        preinvoke_error,
+                        f"{self.label} cleanup also failed: ",
+                        cleanup_error,
+                    )
+                    registration.close_error = preinvoke_error
+                    return preinvoke_error
+                return registration.close_error
+        if preinvoke_error is not None:
+            registration.close_error = preinvoke_error
+        return registration.close_error
+
+    def _settle_registration_once(
+        self,
+        registration: ResourceRegistration,
+    ) -> BaseException | None:
+        first_error: BaseException | None = None
+        for _attempt in range(2):
+            try:
+                observed_error = self._cleanup_registration_once(registration)
+            except BaseException as escaped_error:
+                observed_error = escaped_error
+            if (
+                registration.close_started
+                and registration.close_error is None
+                and observed_error is not None
+                and isinstance(observed_error.__context__, BaseException)
+            ):
+                registration.close_error = observed_error.__context__
+                registration.close_finished = True
+                add_error_note(
+                    registration.close_error,
+                    f"{self.label} cleanup persistence also failed: ",
+                    observed_error,
+                )
+            if registration.close_started and registration.close_error is not None:
+                if observed_error is not None and observed_error is not registration.close_error:
+                    add_error_note(
+                        registration.close_error,
+                        f"{self.label} cleanup settlement also failed: ",
+                        observed_error,
+                    )
+                observed_error = registration.close_error
+            if first_error is None and observed_error is not None:
+                first_error = observed_error
+            elif observed_error is not None and observed_error is not first_error:
+                assert first_error is not None
+                add_error_note(
+                    first_error,
+                    f"{self.label} cleanup retry also failed: ",
+                    observed_error,
+                )
+            if registration.close_started or registration.close_finished:
+                return first_error
+        return first_error
+
+    def _cleanup_is_active(self, registration: ResourceRegistration) -> bool:
+        frame = sys._getframe(1)
+        try:
+            while frame is not None:
+                if (
+                    frame.f_code
+                    is ResourceCustody._cleanup_registration_once.__code__
+                    and frame.f_locals.get("self") is self
+                    and frame.f_locals.get("registration") is registration
+                ):
+                    return True
+                frame = frame.f_back
+            return False
+        finally:
+            del frame
+
+    def _publish_terminal_error(
+        self,
+        registration: ResourceRegistration,
+        error: BaseException,
+    ) -> BaseException:
+        if registration.close_error is None:
+            # A synthetic rejection never claims that a closer was invoked.
+            registration.close_error, registration.close_finished = error, True
+            return error
+        registration.close_finished = True
+        if registration.close_error is not error:
+            add_error_note(
+                registration.close_error,
+                f"{self.label} additional terminal error: ",
+                error,
+            )
+        return registration.close_error
+
+    def _record_cleanup_error(self, error: BaseException) -> None:
+        if self._cleanup_error is None:
+            self._cleanup_error = error
+            return
+        if self._cleanup_error is not error:
+            add_error_note(
+                self._cleanup_error,
+                f"{self.label} additional cleanup also failed: ",
+                error,
+            )
+
+    def _preserve_cleanup_error(
+        self,
+        error: BaseException,
+        note_prefix: str,
+    ) -> None:
+        try:
+            self._record_cleanup_error(error)
+        except BaseException as record_error:
+            if self._cleanup_error is None:
+                self._cleanup_error = error
+            add_error_note(error, note_prefix, record_error)
+
+    def _raise_cleanup_error(self, message: str) -> None:
+        if self._cleanup_error is not None:
+            raise DrainError(message) from self._cleanup_error
+
+    def close_descriptor(self, descriptor: int) -> None:
+        self.close_descriptors((descriptor,))
+
+    def close_descriptors(self, descriptors: tuple[int, ...]) -> None:
+        self._acknowledge_published_pending()
+        require(
+            type(descriptors) is tuple
+            and all(exact_descriptor(descriptor) for descriptor in descriptors)
+            and len(set(descriptors)) == len(descriptors),
+            f"{self.label} descriptor close roster is invalid",
+        )
+        registrations = tuple(
+            self._owned_registration("descriptor", descriptor)
+            for descriptor in descriptors
+        )
+        completed = False
+        try:
+            self._state = "closing"
+            for registration in registrations:
+                cleanup_error = self._settle_registration_once(registration)
+                if cleanup_error is not None:
+                    self._preserve_cleanup_error(
+                        cleanup_error,
+                        f"{self.label} cleanup error recording also failed: ",
+                    )
+            completed = True
+        finally:
+            if completed:
+                retired = {id(registration) for registration in registrations}
+                self._resources = [
+                    owned for owned in self._resources if id(owned) not in retired
+                ]
+                # Roster retirement precedes returning to an OPEN owner.
+                self._state = "open"
+            else:
+                self._state = "closing"
+        self._raise_cleanup_error(f"{self.label} descriptor close failed")
+
+    def _owned_registration(
+        self,
+        kind: str,
+        resource_value: int | Closeable,
+    ) -> ResourceRegistration:
+        require(
+            self._state == "open" and self._cleanup_error is None,
+            f"{self.label} resource mutation is unavailable while custody is "
+            f"{self._state} or cleanup is ambiguous",
+        )
+        matches = [
+            owned
+            for owned in self._resources
+            if self._registration_matches(owned, kind, resource_value)
+            and owned.published
+            and not owned.close_started
+        ]
+        require(
+            len(matches) == 1,
+            f"{self.label} resource is unowned or ambiguous",
+        )
+        return matches[0]
+
+    def close(self) -> None:
+        pending = self._pending_acquisition
+        require(
+            pending is None or not self._acquisition_is_active(pending),
+            f"{self.label} acquisition is still active",
+        )
+        self._admit_pending_registration()
+        if self._state == "closed" and not self._resources:
+            self._raise_cleanup_error(f"{self.label} cleanup failed")
+            return
+        completed = False
+        try:
+            self._state = "closing"
+            roster = list.copy(self._resources)
+            registrations: list[ResourceRegistration] = []
+            seen_tokens: set[int] = set()
+            for registration in reversed(roster):
+                token_identity = id(registration)
+                if token_identity in seen_tokens:
+                    continue
+                seen_tokens.add(token_identity)
+                registrations.append(registration)
+
+            invalid: list[tuple[ResourceRegistration, DrainError]] = []
+            groups: dict[tuple[str, int], list[ResourceRegistration]] = {}
+            for registration in registrations:
+                if registration.kind == "descriptor":
+                    if not exact_descriptor(registration.value):
+                        invalid.append(
+                            (
+                                registration,
+                                DrainError(
+                                    f"{self.label} cleanup descriptor is invalid"
+                                ),
+                            )
+                        )
+                        continue
+                    resource_identity = ("descriptor", int(registration.value))
+                elif registration.kind == "closeable":
+                    if isinstance(registration.value, int):
+                        invalid.append(
+                            (
+                                registration,
+                                DrainError(
+                                    f"{self.label} cleanup closeable is invalid"
+                                ),
+                            )
+                        )
+                        continue
+                    resource_identity = ("closeable", id(registration.value))
+                else:
+                    invalid.append(
+                        (
+                            registration,
+                            DrainError(
+                                f"{self.label} cleanup registration kind is invalid"
+                            ),
+                        )
+                    )
+                    continue
+                groups.setdefault(resource_identity, []).append(registration)
+
+            for registration, invalid_error in invalid:
+                observed_error = self._publish_terminal_error(
+                    registration,
+                    invalid_error,
+                )
+                self._preserve_cleanup_error(
+                    observed_error,
+                    f"{self.label} invalid error recording also failed: ",
+                )
+
+            unique: list[ResourceRegistration] = []
+            for group in groups.values():
+                authority = next(
+                    (
+                        registration
+                        for registration in group
+                        if self._cleanup_is_active(registration)
+                    ),
+                    next(
+                        (
+                            registration
+                            for registration in group
+                            if registration.close_started
+                        ),
+                        group[0],
+                    ),
+                )
+                if len(group) > 1:
+                    alias_error = DrainError(
+                        f"{self.label} cleanup roster aliases one resource"
+                    )
+                    for registration in group:
+                        if registration is authority:
+                            continue
+                        observed_error = self._publish_terminal_error(
+                            registration,
+                            alias_error,
+                        )
+                        self._preserve_cleanup_error(
+                            observed_error,
+                            f"{self.label} alias error recording also failed: ",
+                        )
+
+                if self._cleanup_is_active(authority):
+                    continue
+                if authority.close_error is not None:
+                    observed_error = self._publish_terminal_error(
+                        authority,
+                        authority.close_error,
+                    )
+                    self._preserve_cleanup_error(
+                        observed_error,
+                        f"{self.label} resumed error recording failed: ",
+                    )
+                    continue
+                if authority.close_started:
+                    if not authority.close_finished:
+                        observed_error = self._publish_terminal_error(
+                            authority,
+                            DrainError(
+                                f"{self.label} cleanup invocation is ambiguous"
+                            ),
+                        )
+                        self._preserve_cleanup_error(
+                            observed_error,
+                            f"{self.label} resumed error recording failed: ",
+                        )
+                    continue
+                if authority.close_finished:
+                    observed_error = self._publish_terminal_error(
+                        authority,
+                        DrainError(
+                            f"{self.label} cleanup completion is ambiguous"
+                        ),
+                    )
+                    self._preserve_cleanup_error(
+                        observed_error,
+                        f"{self.label} terminal error recording failed: ",
+                    )
+                    continue
+                unique.append(authority)
+            for registration in unique:
+                cleanup_error = self._settle_registration_once(registration)
+                if cleanup_error is not None:
+                    self._preserve_cleanup_error(
+                        cleanup_error,
+                        f"{self.label} cleanup error recording also failed: ",
+                    )
+            completed = True
+        finally:
+            if completed:
+                # An interrupted line leaves CLOSING resumable with the old roster.
+                self._resources = []; self._state = "closed"
+            else:
+                self._state = "closing"
+        self._raise_cleanup_error(f"{self.label} cleanup failed")
+
+    def __enter__(self) -> "ResourceCustody":
+        require(
+            self._state == "open" and self._cleanup_error is None,
+            f"{self.label} custody is not safely open",
+        )
+        return self
+
+    def __exit__(
+        self,
+        _exception_type: object,
+        active_error: BaseException | None,
+        _traceback: object,
+    ) -> None:
+        cleanup_error: BaseException | None = None
+        for _attempt in range(2):
+            try:
+                self.close()
+                break
+            except BaseException as observed_error:
+                if cleanup_error is None:
+                    cleanup_error = observed_error
+                else:
+                    add_error_note(
+                        cleanup_error,
+                        f"{self.label} cleanup retry also failed: ",
+                        observed_error,
+                    )
+        if self._cleanup_error is not None:
+            persisted = DrainError(f"{self.label} cleanup failed")
+            persisted.__cause__ = self._cleanup_error
+            if cleanup_error is not None:
+                add_error_note(
+                    persisted,
+                    f"{self.label} settlement also failed: ",
+                    cleanup_error,
+                )
+            cleanup_error = persisted
+        if cleanup_error is not None:
+            if active_error is None:
+                raise cleanup_error
+            add_error_note(
+                active_error,
+                f"{self.label} cleanup also failed: ",
+                cleanup_error,
+            )
+
+    def _close_after_error(
+        self,
+        active_error: BaseException,
+    ) -> BaseException | None:
+        cleanup_error: BaseException | None = None
+        for _attempt in range(2):
+            try:
+                self.close()
+                break
+            except BaseException as observed_error:
+                if cleanup_error is None:
+                    cleanup_error = observed_error
+                else:
+                    add_error_note(
+                        cleanup_error,
+                        f"{self.label} cleanup retry also failed: ",
+                        observed_error,
+                    )
+        if self._cleanup_error is not None:
+            persisted = DrainError(f"{self.label} cleanup failed")
+            persisted.__cause__ = self._cleanup_error
+            if cleanup_error is not None:
+                add_error_note(
+                    persisted,
+                    f"{self.label} settlement also failed: ",
+                    cleanup_error,
+                )
+            cleanup_error = persisted
+        if cleanup_error is not None:
+            add_error_note(
+                active_error,
+                f"{self.label} cleanup also failed: ",
+                cleanup_error,
+            )
+        return cleanup_error
+
+
+def read_path_bytes(path: Path, *, maximum: int) -> bytes:
+    require(maximum > 0, "path read capacity is invalid")
+    with ResourceCustody(label=f"bound path read {path}") as custody:
+        descriptor = custody.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        chunks: list[bytes] = []
+        size = 0
+        while size <= maximum:
+            chunk = os.read(descriptor, min(64 * 1024, maximum + 1 - size))
+            if not chunk:
+                break
+            size += len(chunk)
+            require(size <= maximum, f"bound path read is too large: {path}")
+            chunks.append(chunk)
+        return b"".join(chunks)
+
+
 @dataclass
 class CapturedTask:
     thread_group_id: int
@@ -915,10 +1765,6 @@ class CapturedTask:
     parent_pid: int
     start_ticks: int
     security_state: dict[str, object]
-
-    def close(self) -> None:
-        os.close(self.process_fd)
-        os.close(self.pidfd)
 
 
 def reprove_captured_task(
@@ -956,70 +1802,71 @@ def reprove_captured_task(
     )
 
 
-def capture_task(thread_group_id: int, task_id: int) -> CapturedTask | None:
+def capture_task(
+    custody: ResourceCustody,
+    thread_group_id: int,
+    task_id: int,
+) -> CapturedTask | None:
     require(
         thread_group_id > 0 and task_id > 0,
         "process task coordinate is invalid",
     )
     require(hasattr(os, "pidfd_open"), "thread pidfd custody is unavailable")
     try:
-        pidfd = os.pidfd_open(task_id, PIDFD_THREAD)
+        pidfd = custody.pidfd_open(task_id, PIDFD_THREAD)
     except OSError as error:
         if error.errno == errno.ESRCH:
             return None
         raise
+    if pidfd_exited(pidfd):
+        custody.close_descriptors((pidfd,))
+        return None
+    task_path = Path("/proc") / str(thread_group_id) / "task" / str(task_id)
     process_fd: int | None = None
-    keep = False
     try:
+        process_fd = custody.open(
+            task_path,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        )
+        observed = os.fstat(process_fd)
+        literal = os.stat(task_path, follow_symlinks=False)
+        status = parse_task_status(
+            read_at(process_fd, "status").decode("ascii", "strict")
+        )
+        parent_pid, start_ticks = stat_identity(read_at(process_fd, "stat"))
+    except (FileNotFoundError, ProcessLookupError):
         if pidfd_exited(pidfd):
+            descriptors = (
+                (process_fd, pidfd) if process_fd is not None else (pidfd,)
+            )
+            custody.close_descriptors(descriptors)
             return None
-        task_path = Path("/proc") / str(thread_group_id) / "task" / str(task_id)
-        try:
-            process_fd = os.open(
-                task_path,
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-            )
-            observed = os.fstat(process_fd)
-            literal = os.stat(task_path, follow_symlinks=False)
-            status = parse_task_status(
-                read_at(process_fd, "status").decode("ascii", "strict")
-            )
-            parent_pid, start_ticks = stat_identity(read_at(process_fd, "stat"))
-        except (FileNotFoundError, ProcessLookupError):
-            if pidfd_exited(pidfd):
-                return None
-            raise ManualRecoveryRequired(
-                f"live process task disappeared: {thread_group_id}/{task_id}"
-            )
-        except PermissionError as error:
-            raise ManualRecoveryRequired(
-                f"live process task is unreadable: {thread_group_id}/{task_id}"
-            ) from error
-        require(
-            status.thread_group_id == thread_group_id
-            and status.task_id == task_id
-            and (literal.st_dev, literal.st_ino)
-            == (observed.st_dev, observed.st_ino)
-            and not pidfd_exited(pidfd),
-            f"process task identity changed: {thread_group_id}/{task_id}",
+        raise ManualRecoveryRequired(
+            f"live process task disappeared: {thread_group_id}/{task_id}"
         )
-        captured = CapturedTask(
-            thread_group_id,
-            task_id,
-            pidfd,
-            process_fd,
-            parent_pid,
-            start_ticks,
-            status.security_state,
-        )
-        reprove_captured_task(captured)
-        keep = True
-        return captured
-    finally:
-        if process_fd is not None and not keep:
-            os.close(process_fd)
-        if not keep:
-            os.close(pidfd)
+    except PermissionError as error:
+        raise ManualRecoveryRequired(
+            f"live process task is unreadable: {thread_group_id}/{task_id}"
+        ) from error
+    require(
+        status.thread_group_id == thread_group_id
+        and status.task_id == task_id
+        and (literal.st_dev, literal.st_ino)
+        == (observed.st_dev, observed.st_ino)
+        and not pidfd_exited(pidfd),
+        f"process task identity changed: {thread_group_id}/{task_id}",
+    )
+    captured = CapturedTask(
+        thread_group_id,
+        task_id,
+        pidfd,
+        process_fd,
+        parent_pid,
+        start_ticks,
+        status.security_state,
+    )
+    reprove_captured_task(captured)
+    return captured
 
 
 @dataclass(frozen=True)
@@ -1028,29 +1875,32 @@ class CapturedProcess:
     observed_proc_inode: int
 
 
-def capture_process(candidate: Mapping[str, object]) -> CapturedProcess:
-    pid = plain_int(candidate.get("pid"), "candidate process pid", positive=True)
-    require(hasattr(os, "pidfd_open"), "pidfd custody is unavailable")
+def _capture_process_owned(
+    candidate: Mapping[str, object],
+    pid: int,
+    custody: ResourceCustody,
+) -> CapturedProcess:
     try:
-        pidfd = os.pidfd_open(pid, 0)
-    except OSError as error:
-        if error.errno == errno.ESRCH:
-            raise ProcessUnavailable(f"candidate process is absent: {pid}") from error
-        raise
-    process_fd: int | None = None
-    try:
+        try:
+            pidfd = custody.pidfd_open(pid, 0)
+        except OSError as error:
+            if error.errno == errno.ESRCH:
+                raise ProcessUnavailable(
+                    f"candidate process is absent: {pid}"
+                ) from error
+            raise
         require(not pidfd_exited(pidfd), f"candidate process exited: {pid}")
-        process_fd = os.open(
+        process_fd = custody.open(
             Path("/proc") / str(pid),
             os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
         )
         process_dir = os.fstat(process_fd)
         first_stat = read_at(process_fd, "stat")
         parent_pid, start_ticks = stat_identity(first_stat)
-        mount_namespace = namespace_identity(process_fd, "mnt")
-        network_namespace = namespace_identity(process_fd, "net")
-        pid_namespace = namespace_identity(process_fd, "pid")
-        user_namespace = namespace_identity(process_fd, "user")
+        task_namespaces = {
+            entry: namespace_identity(process_fd, entry)
+            for entry, _kind in TASK_NAMESPACE_ENTRIES
+        }
         executable_raw = os.readlink("exe", dir_fd=process_fd)
         require(Path(executable_raw).is_absolute(), f"candidate executable path is invalid: {pid}")
         executable_stat = os.stat("exe", dir_fd=process_fd)
@@ -1094,10 +1944,11 @@ def capture_process(candidate: Mapping[str, object]) -> CapturedProcess:
         second_stat = read_at(process_fd, "stat")
         require(
             stat_identity(second_stat) == (parent_pid, start_ticks)
-            and namespace_identity(process_fd, "mnt") == mount_namespace
-            and namespace_identity(process_fd, "net") == network_namespace
-            and namespace_identity(process_fd, "pid") == pid_namespace
-            and namespace_identity(process_fd, "user") == user_namespace
+            and {
+                entry: namespace_identity(process_fd, entry)
+                for entry, _kind in TASK_NAMESPACE_ENTRIES
+            }
+            == task_namespaces
             and parse_task_status(
                 read_at(process_fd, "status").decode("ascii", "strict")
             )
@@ -1135,7 +1986,7 @@ def capture_process(candidate: Mapping[str, object]) -> CapturedProcess:
                 Path(executable_raw).name == expected_name,
                 f"candidate executable name differs: {pid}",
             )
-        return CapturedProcess(
+        result = CapturedProcess(
             authority={
                 "pid": pid,
                 "parentPid": parent_pid,
@@ -1143,10 +1994,7 @@ def capture_process(candidate: Mapping[str, object]) -> CapturedProcess:
                 "executable": executable_raw,
                 "executableIdentity": executable_identity,
                 "argumentsSha256": arguments_sha,
-                "mountNamespace": mount_namespace,
-                "networkNamespace": network_namespace,
-                "pidNamespace": pid_namespace,
-                "userNamespace": user_namespace,
+                "taskNamespaces": task_namespaces,
                 "cgroup": cgroup_lines[0][3:],
                 "credentialProfile": credential_profile,
                 "credentialProfileSha256": credential_profile_sha256,
@@ -1155,11 +2003,25 @@ def capture_process(candidate: Mapping[str, object]) -> CapturedProcess:
             observed_proc_inode=process_dir.st_ino,
         )
     except FileNotFoundError as error:
-        raise ProcessUnavailable(f"candidate process disappeared: {pid}") from error
-    finally:
-        if process_fd is not None:
-            os.close(process_fd)
-        os.close(pidfd)
+        raise ProcessUnavailable(
+            f"candidate process disappeared: {pid}"
+        ) from error
+    return result
+
+
+def capture_process(candidate: Mapping[str, object]) -> CapturedProcess:
+    pid = plain_int(candidate.get("pid"), "candidate process pid", positive=True)
+    require(hasattr(os, "pidfd_open"), "pidfd custody is unavailable")
+    custody = ResourceCustody(label="captured process")
+    try:
+        with custody:
+            return _capture_process_owned(candidate, pid, custody)
+    except ProcessUnavailable as error:
+        if custody._cleanup_error is not None:
+            raise DrainError(
+                f"candidate process cleanup is ambiguous: {pid}"
+            ) from custody._cleanup_error
+        raise
 
 
 def validate_receipt_process(
@@ -1194,6 +2056,10 @@ class MountRecord:
     root: str
     target: str
     filesystem: str
+    mount_options: tuple[str, ...] = ()
+    optional_fields: tuple[str, ...] = ()
+    source: str = ""
+    super_options: tuple[str, ...] = ()
 
 
 def mount_records(raw: str) -> tuple[MountRecord, ...]:
@@ -1202,7 +2068,7 @@ def mount_records(raw: str) -> tuple[MountRecord, ...]:
         fields = line.split()
         require("-" in fields, "mountinfo separator is absent")
         separator = fields.index("-")
-        require(separator >= 6 and len(fields) > separator + 2, "mountinfo record is invalid")
+        require(separator >= 6 and len(fields) > separator + 3, "mountinfo record is invalid")
         require(
             fields[0].isdigit() and fields[1].isdigit(),
             "mountinfo identity is invalid",
@@ -1231,9 +2097,28 @@ def mount_records(raw: str) -> tuple[MountRecord, ...]:
                 canonical_root,
                 os.path.normpath(target),
                 filesystem,
+                tuple(fields[5].split(",")),
+                tuple(fields[6:separator]),
+                unescape_mount_field(fields[separator + 2]),
+                tuple(fields[separator + 3].split(",")),
             )
         )
     return tuple(sorted(result))
+
+
+def mount_record_document(record: MountRecord) -> dict[str, object]:
+    return {
+        "mountId": record.mount_id,
+        "parentId": record.parent_id,
+        "device": record.device,
+        "root": record.root,
+        "target": record.target,
+        "filesystem": record.filesystem,
+        "mountOptions": list(record.mount_options),
+        "optionalFields": list(record.optional_fields),
+        "source": record.source,
+        "superOptions": list(record.super_options),
+    }
 
 
 def path_at_or_below(candidate: str, root: str) -> bool:
@@ -1248,9 +2133,925 @@ def mount_root_at_or_below(candidate: str, root: str) -> bool:
     return candidate == root
 
 
-def source_anchors(raw: str, root: Path) -> tuple[tuple[str, str], ...]:
+@dataclass(frozen=True, order=True)
+class NamespaceIdentity:
+    kind: str
+    device: int
+    inode: int
+
+
+def namespace_fd_identity(
+    target: str,
+    observed: os.stat_result,
+    *,
+    label: str,
+) -> NamespaceIdentity | None:
+    match = NAMESPACE_TOKEN_RE.fullmatch(target)
+    if match is None:
+        return None
+    require(
+        stat.S_ISREG(observed.st_mode)
+        and observed.st_ino == int(match.group(2)),
+        f"{label} namespace FD identity differs",
+    )
+    return NamespaceIdentity(match.group(1), observed.st_dev, observed.st_ino)
+
+
+def current_task_namespace_identity(
+    task: CapturedTask,
+    entry: str,
+) -> NamespaceIdentity:
+    kind = TASK_NAMESPACE_ENTRY_KINDS.get(entry)
+    require(kind is not None, "task namespace entry is invalid")
+    observed = os.stat(f"ns/{entry}", dir_fd=task.process_fd)
+    identity = NamespaceIdentity(kind, observed.st_dev, observed.st_ino)
+    require(
+        os.readlink(f"ns/{entry}", dir_fd=task.process_fd)
+        == f"{kind}:[{identity.inode}]",
+        "process task namespace entry identity differs: "
+        f"{task.thread_group_id}/{task.task_id}/{entry}",
+    )
+    return identity
+
+
+def open_current_task_namespace(
+    custody: ResourceCustody,
+    task: CapturedTask,
+    entry: str,
+) -> tuple[NamespaceIdentity, int]:
+    kind = TASK_NAMESPACE_ENTRY_KINDS.get(entry)
+    require(kind is not None, "task namespace entry is invalid")
+    first_link = os.readlink(f"ns/{entry}", dir_fd=task.process_fd)
+    descriptor = custody.open(
+        f"ns/{entry}",
+        os.O_RDONLY | os.O_CLOEXEC,
+        dir_fd=task.process_fd,
+    )
+    observed = os.fstat(descriptor)
+    second_link = os.readlink(f"ns/{entry}", dir_fd=task.process_fd)
+    identity = NamespaceIdentity(kind, observed.st_dev, observed.st_ino)
+    require(
+        stat.S_ISREG(observed.st_mode)
+        and first_link == second_link == f"{kind}:[{identity.inode}]"
+        and current_task_namespace_identity(task, entry) == identity,
+        "process task namespace descriptor binding differs: "
+        f"{task.thread_group_id}/{task.task_id}/{entry}",
+    )
+    return identity, descriptor
+
+
+def require_current_task_namespace_identity(
+    task: CapturedTask,
+    entry: str,
+    expected: NamespaceIdentity,
+) -> None:
+    require(
+        current_task_namespace_identity(task, entry) == expected,
+        "process task namespace entry changed during census: "
+        f"{task.thread_group_id}/{task.task_id}/{entry}",
+    )
+
+
+@dataclass(frozen=True)
+class MountNamespaceView:
+    root_link: str
+    root_identity: tuple[int, int, int, int, int]
+    full_root: bool
+    records: tuple[MountRecord, ...]
+
+
+@dataclass(frozen=True)
+class MountNamespaceAuthority:
+    identity: NamespaceIdentity
+    root_identity: tuple[int, int, int, int, int]
+    records: tuple[MountRecord, ...]
+    views: tuple[MountNamespaceView, ...]
+
+
+@dataclass
+class TaskNamespaceCensus:
+    process_bound: frozenset[NamespaceIdentity]
+    namespace_fds: frozenset[NamespaceIdentity]
+    mounts: tuple[MountNamespaceAuthority, ...]
+    proof_sha256: str
+    proof: dict[str, object]
+    namespace_descriptors: tuple[int, ...] = field(
+        default=(),
+        repr=False,
+        compare=False,
+    )
+    preimage: dict[str, object] = field(
+        default_factory=dict,
+        repr=False,
+        compare=False,
+    )
+    task_namespaces: tuple[dict[str, object], ...] = field(
+        default=(),
+        repr=False,
+        compare=False,
+    )
+
+    def require_open(self) -> None:
+        task_count = self.proof.get("taskCount")
+        require(
+            isinstance(task_count, int) and not isinstance(task_count, bool),
+            "task namespace census task count differs",
+        )
+        reconstructed = task_namespace_census_preimage(
+            set(self.process_bound),
+            set(self.namespace_fds),
+            self.mounts,
+            task_count,
+            self.task_namespaces,
+        )
+        require(
+            canonical_json(reconstructed) == canonical_json(self.preimage)
+            and sha256_bytes(canonical_json(self.preimage)) == self.proof_sha256
+            and self.proof.get("proofSha256") == self.proof_sha256
+            and self.proof.get("processBoundNamespaceCount")
+            == len(self.process_bound)
+            and self.proof.get("namespaceFdCount") == len(self.namespace_fds)
+            and self.proof.get("mountNamespaceCount") == len(self.mounts)
+            and self.proof.get("taskCount") == self.preimage.get("taskCount")
+            and self.proof.get("taskNamespaceBindingCount")
+            == len(self.task_namespaces)
+            and self.proof.get("processlessMountNamespaces")
+            == "not_observable_and_not_admitted"
+            and self.proof.get("queuedScmRightsNamespaceFds")
+            == "not_observable_and_not_admitted",
+            "task namespace census digest or summary differs",
+        )
+        identities = tuple(sorted(self.process_bound))
+        require(
+            len(identities) == len(self.namespace_descriptors),
+            "task namespace census descriptor roster differs",
+        )
+        for identity, descriptor in zip(identities, self.namespace_descriptors):
+            try:
+                observed = os.fstat(descriptor)
+                target = os.readlink(f"/proc/self/fd/{descriptor}")
+            except OSError as error:
+                raise DrainError(
+                    "task namespace census descriptor is no longer held: "
+                    f"{identity.kind}:{identity.device}:{identity.inode}"
+                ) from error
+            require(
+                namespace_fd_identity(
+                    target,
+                    observed,
+                    label="task namespace census",
+                )
+                == identity,
+                "task namespace census descriptor identity changed: "
+                f"{identity.kind}:{identity.device}:{identity.inode}",
+            )
+
+
+
+def _namespace_identity_document(value: NamespaceIdentity) -> dict[str, object]:
+    return {"kind": value.kind, "device": value.device, "inode": value.inode}
+
+
+def _root_identity(observed: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        observed.st_dev,
+        observed.st_ino,
+        stat.S_IFMT(observed.st_mode),
+        observed.st_uid,
+        observed.st_gid,
+    )
+
+
+def _root_identity_document(
+    value: tuple[int, int, int, int, int],
+) -> dict[str, int]:
+    return dict(zip(("device", "inode", "type", "uid", "gid"), value))
+
+
+def _namespace_fd_records(
+    task: CapturedTask,
+    *,
+    excluded_fds: frozenset[int] = frozenset(),
+) -> tuple[dict[str, object], ...]:
+    rows: list[dict[str, object]] = []
+    with ResourceCustody(label="process task namespace FD roster") as custody:
+        descriptor = custody.open(
+            "fd",
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=task.process_fd,
+        )
+        for name in tuple(sorted(os.listdir(descriptor), key=int)):
+            if int(name) in excluded_fds:
+                continue
+            try:
+                target = os.readlink(name, dir_fd=descriptor)
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+            try:
+                observed = os.stat(name, dir_fd=descriptor)
+                stable = os.stat(name, dir_fd=descriptor)
+            except (FileNotFoundError, ProcessLookupError) as error:
+                if pidfd_exited(task.pidfd):
+                    raise ProcessUnavailable(
+                        f"process task exited during namespace FD census: {task.task_id}"
+                    ) from error
+                raise ManualRecoveryRequired(
+                    "process task namespace FD changed during census: "
+                    f"{task.thread_group_id}/{task.task_id}/{name}"
+                ) from error
+            require(
+                (stable.st_dev, stable.st_ino, stat.S_IFMT(stable.st_mode))
+                == (
+                    observed.st_dev,
+                    observed.st_ino,
+                    stat.S_IFMT(observed.st_mode),
+                ),
+                "process task FD identity changed during namespace census: "
+                f"{task.thread_group_id}/{task.task_id}/{name}",
+            )
+            identity = namespace_fd_identity(
+                target,
+                observed,
+                label=(
+                    "process task "
+                    f"{task.thread_group_id}/{task.task_id}/{name}"
+                ),
+            )
+            if identity is None:
+                continue
+            rows.append(
+                {
+                    "fd": int(name),
+                    "kind": identity.kind,
+                    "device": identity.device,
+                    "inode": identity.inode,
+                    "target": target,
+                }
+            )
+    return tuple(sorted(rows, key=lambda row: int(row["fd"])))
+
+
+def require_root_mount_binding(
+    observed: os.stat_result,
+    mount_id: int,
+    record: MountRecord,
+    *,
+    label: str,
+) -> None:
+    require(
+        record.device
+        == f"{os.major(observed.st_dev)}:{os.minor(observed.st_dev)}"
+        and record.mount_id == mount_id
+        and stat.S_ISDIR(observed.st_mode),
+        f"{label} root mount identity differs",
+    )
+
+
+def is_proven_full_root_view(root_link: str, root_record: MountRecord) -> bool:
+    return root_link == "/" and root_record.root == "/"
+
+
+def _task_mount_view(task: CapturedTask) -> MountNamespaceView:
+    with ResourceCustody(label="process task mount view") as custody:
+        try:
+            first_link = os.readlink("root", dir_fd=task.process_fd)
+            first_stat = os.stat("root", dir_fd=task.process_fd)
+            root_fd = custody.open(
+                "root",
+                os.O_PATH | os.O_DIRECTORY,
+                dir_fd=task.process_fd,
+            )
+        except (FileNotFoundError, ProcessLookupError) as error:
+            raise ManualRecoveryRequired(
+                "process task root view is absent: "
+                f"{task.thread_group_id}/{task.task_id}"
+            ) from error
+        bound = os.fstat(root_fd)
+        root_mount_id = fd_mount_id(root_fd)
+        raw = read_at(task.process_fd, "mountinfo", maximum=16 * 1024 * 1024)
+        records = mount_records(raw.decode("utf-8", "strict"))
+        second_link = os.readlink("root", dir_fd=task.process_fd)
+        second_stat = os.stat("root", dir_fd=task.process_fd)
+    require(
+        Path(first_link).is_absolute()
+        and not first_link.endswith(" (deleted)")
+        and first_link == second_link
+        and _root_identity(first_stat)
+        == _root_identity(bound)
+        == _root_identity(second_stat),
+        "process task root view changed during census: "
+        f"{task.thread_group_id}/{task.task_id}",
+    )
+    root_records = tuple(record for record in records if record.target == "/")
+    require(
+        len(root_records) == 1,
+        "process task root mount is absent or ambiguous: "
+        f"{task.thread_group_id}/{task.task_id}",
+    )
+    root_record = root_records[0]
+    require_root_mount_binding(
+        first_stat,
+        root_mount_id,
+        root_record,
+        label=f"process task {task.thread_group_id}/{task.task_id}",
+    )
+    return MountNamespaceView(
+        os.path.normpath(first_link),
+        _root_identity(first_stat),
+        is_proven_full_root_view(os.path.normpath(first_link), root_record),
+        records,
+    )
+
+
+def _projected_target(root_link: str, target: str) -> str:
+    require(
+        Path(root_link).is_absolute() and Path(target).is_absolute(),
+        "mount projection path is not absolute",
+    )
+    relative = Path(target).relative_to("/")
+    return os.path.normpath(str(Path(root_link) / relative))
+
+
+def _record_source_target(
+    canonical: MountRecord,
+    projected: MountRecord,
+) -> str:
+    if not Path(canonical.root).is_absolute() or not Path(projected.root).is_absolute():
+        require(
+            canonical.root == projected.root,
+            "restricted opaque mount projection source root differs",
+        )
+        return os.path.normpath(canonical.target)
+    require(
+        path_at_or_below(projected.root, canonical.root),
+        "restricted mount projection source root differs",
+    )
+    relative = Path(projected.root).relative_to(canonical.root)
+    return os.path.normpath(str(Path(canonical.target) / relative))
+
+
+def require_mount_view_projection(
+    canonical: tuple[MountRecord, ...],
+    view: MountNamespaceView,
+) -> None:
+    by_id = {record.mount_id: record for record in canonical}
+    require(
+        len(by_id) == len(canonical),
+        "canonical mount roster reuses a mount ID",
+    )
+    require(
+        len({record.mount_id for record in view.records}) == len(view.records),
+        "restricted mount projection reuses a mount ID",
+    )
+    for projected in view.records:
+        admitted = by_id.get(projected.mount_id)
+        require(
+            admitted is not None
+            and (
+                projected.parent_id,
+                projected.device,
+                projected.filesystem,
+                projected.mount_options,
+                projected.optional_fields,
+                projected.source,
+                projected.super_options,
+            )
+            == (
+                admitted.parent_id,
+                admitted.device,
+                admitted.filesystem,
+                admitted.mount_options,
+                admitted.optional_fields,
+                admitted.source,
+                admitted.super_options,
+            )
+            and _projected_target(view.root_link, projected.target)
+            == _record_source_target(admitted, projected),
+            "restricted mount view is not a projection of its canonical roster",
+        )
+
+
+def build_mount_namespace_authority(
+    identity: NamespaceIdentity,
+    views: Sequence[MountNamespaceView],
+) -> MountNamespaceAuthority:
+    unique = {
+        canonical_json(
+            {
+                "rootLink": view.root_link,
+                "rootIdentity": _root_identity_document(view.root_identity),
+                "fullRoot": view.full_root,
+                "records": [mount_record_document(record) for record in view.records],
+            }
+        ): view
+        for view in views
+    }
+    stable_views = tuple(unique[key] for key in sorted(unique))
+    full = tuple(view for view in stable_views if view.full_root)
+    manual(
+        full,
+        "mount namespace has no proven full-root representative: "
+        f"{identity.device}:{identity.inode}",
+    )
+    canonical = full[0]
+    require(
+        len({record.mount_id for record in canonical.records})
+        == len(canonical.records),
+        "canonical mount roster reuses a mount ID",
+    )
+    for view in full[1:]:
+        manual(
+            view.records == canonical.records
+            and view.root_identity == canonical.root_identity,
+            "full-root mount namespace representatives diverge: "
+            f"{identity.device}:{identity.inode}",
+        )
+    for view in stable_views:
+        if not view.full_root:
+            require_mount_view_projection(canonical.records, view)
+    return MountNamespaceAuthority(
+        identity,
+        canonical.root_identity,
+        canonical.records,
+        stable_views,
+    )
+
+
+def _mount_authority_document(
+    value: MountNamespaceAuthority,
+) -> dict[str, object]:
+    return {
+        "identity": _namespace_identity_document(value.identity),
+        "canonicalRootIdentity": _root_identity_document(value.root_identity),
+        "canonicalRecords": [mount_record_document(record) for record in value.records],
+        "views": [
+            {
+                "rootLink": view.root_link,
+                "rootIdentity": _root_identity_document(view.root_identity),
+                "fullRoot": view.full_root,
+                "recordCount": len(view.records),
+                "recordsSha256": sha256_bytes(
+                    canonical_json(
+                        [mount_record_document(record) for record in view.records]
+                    )
+                ),
+            }
+            for view in value.views
+        ],
+    }
+
+
+def require_mounted_namespace_representatives(
+    mounts: Sequence[MountNamespaceAuthority],
+    process_bound: set[NamespaceIdentity],
+) -> set[NamespaceIdentity]:
+    mounted_namespace_pins: set[NamespaceIdentity] = set()
+    for authority in mounts:
+        for record in authority.records:
+            if record.filesystem != "nsfs":
+                continue
+            match = NAMESPACE_TOKEN_RE.fullmatch(record.root)
+            require(match is not None, "mounted nsfs source identity is invalid")
+            assert match is not None
+            major, minor = (int(value) for value in record.device.split(":", 1))
+            mounted_namespace_pins.add(
+                NamespaceIdentity(
+                    match.group(1),
+                    os.makedev(major, minor),
+                    int(match.group(2)),
+                )
+            )
+    processless_pins = mounted_namespace_pins - process_bound
+    manual(
+        not processless_pins,
+        "a mounted namespace has no live representative: "
+        + ",".join(
+            f"{value.kind}:{value.device}:[{value.inode}]"
+            for value in sorted(processless_pins)
+        ),
+    )
+    return mounted_namespace_pins
+
+
+def task_namespace_census_preimage(
+    process_bound: set[NamespaceIdentity],
+    namespace_fds: set[NamespaceIdentity],
+    mounts: Sequence[MountNamespaceAuthority],
+    task_count: int,
+    task_namespaces: tuple[Mapping[str, object], ...] = (),
+) -> dict[str, object]:
+    require(
+        type(task_namespaces) is tuple,
+        "task namespace binding roster is not exact",
+    )
+    normalized_task_namespaces: list[dict[str, object]] = []
+    coordinates: set[tuple[int, int]] = set()
+    bound_process_namespaces: set[NamespaceIdentity] = set()
+    for index, value in enumerate(task_namespaces):
+        row = exact_keys(
+            value,
+            {"threadGroupId", "taskId", "namespaces"},
+            f"task namespace binding {index}",
+        )
+        thread_group_id = plain_int(
+            row["threadGroupId"],
+            f"task namespace binding TGID {index}",
+            positive=True,
+        )
+        task_id = plain_int(
+            row["taskId"],
+            f"task namespace binding TID {index}",
+            positive=True,
+        )
+        coordinate = (thread_group_id, task_id)
+        require(
+            coordinate not in coordinates,
+            "task namespace binding coordinate is duplicated",
+        )
+        coordinates.add(coordinate)
+        namespaces = row["namespaces"]
+        require(
+            isinstance(namespaces, dict)
+            and set(namespaces) == set(TASK_NAMESPACE_ENTRY_KINDS),
+            f"task namespace binding entry roster differs: {index}",
+        )
+        assert isinstance(namespaces, dict)
+        normalized_namespaces: dict[str, object] = {}
+        for entry, kind in TASK_NAMESPACE_ENTRIES:
+            identity = exact_keys(
+                namespaces[entry],
+                {"kind", "device", "inode"},
+                f"task namespace binding {index}/{entry}",
+            )
+            require(
+                identity["kind"] == kind,
+                f"task namespace binding kind differs: {index}/{entry}",
+            )
+            normalized_namespaces[entry] = {
+                "kind": kind,
+                "device": plain_int(
+                    identity["device"],
+                    f"task namespace binding device {index}/{entry}",
+                ),
+                "inode": plain_int(
+                    identity["inode"],
+                    f"task namespace binding inode {index}/{entry}",
+                    positive=True,
+                ),
+            }
+            bound_process_namespaces.add(
+                NamespaceIdentity(
+                    kind,
+                    int(normalized_namespaces[entry]["device"]),
+                    int(normalized_namespaces[entry]["inode"]),
+                )
+            )
+        normalized_task_namespaces.append(
+            {
+                "threadGroupId": thread_group_id,
+                "taskId": task_id,
+                "namespaces": normalized_namespaces,
+            }
+        )
+    require(
+        len(normalized_task_namespaces) == task_count,
+        "task namespace binding count differs",
+    )
+    require(
+        bound_process_namespaces == process_bound,
+        "task namespace bindings differ from the process-bound namespace roster",
+    )
+    normalized_task_namespaces.sort(
+        key=lambda value: (int(value["threadGroupId"]), int(value["taskId"]))
+    )
+    mounted_namespace_pins = require_mounted_namespace_representatives(
+        mounts,
+        process_bound,
+    )
+    return {
+        "processBoundNamespaces": [
+            _namespace_identity_document(value) for value in sorted(process_bound)
+        ],
+        "namespaceFds": [
+            _namespace_identity_document(value) for value in sorted(namespace_fds)
+        ],
+        "mountNamespaces": [
+            _mount_authority_document(value) for value in mounts
+        ],
+        "mountedNamespacePins": [
+            _namespace_identity_document(value)
+            for value in sorted(mounted_namespace_pins)
+        ],
+        "processlessMountNamespaces": "not_observable_and_not_admitted",
+        "queuedScmRightsNamespaceFds": "not_observable_and_not_admitted",
+        "taskCount": task_count,
+        "taskNamespaces": normalized_task_namespaces,
+    }
+
+
+def require_task_namespace_census_fd_budget(
+    task_count: int,
+    *,
+    externally_held: int = 0,
+) -> dict[str, int]:
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    open_count = len(os.listdir("/proc/self/fd"))
+    baseline_reserve = 128
+    per_task_reserve = 2 + len(TASK_NAMESPACE_ENTRIES)
+    transient_reserve = 2
+    required = (
+        task_count * per_task_reserve
+        + externally_held
+        + baseline_reserve
+        + transient_reserve
+    )
+    manual(
+        open_count >= externally_held
+        and open_count - externally_held <= baseline_reserve
+        and (soft == resource.RLIM_INFINITY or soft >= required),
+        "task namespace census file-descriptor limit is insufficient: "
+        f"required={required},open={open_count},soft={soft},hard={hard}",
+    )
+    return {
+        "taskCount": task_count,
+        "baselineDescriptorReserve": baseline_reserve,
+        "perTaskDescriptorReserve": per_task_reserve,
+        "transientDescriptorReserve": transient_reserve,
+        "externallyHeldDescriptorCount": externally_held,
+        "requiredDescriptorLimit": required,
+        "softDescriptorLimit": soft,
+        "hardDescriptorLimit": hard,
+    }
+
+
+def require_single_threaded_drain_coordinates(
+    coordinates: Sequence[tuple[int, int]],
+) -> None:
+    self_tasks = tuple(
+        task_id
+        for thread_group_id, task_id in coordinates
+        if thread_group_id == os.getpid()
+    )
+    require(
+        self_tasks == (os.getpid(),),
+        "drain task roster is not single-threaded for FD exclusion",
+    )
+
+
+def admit_held_namespace_descriptor(
+    custody: ResourceCustody,
+    held: dict[NamespaceIdentity, int],
+    identity: NamespaceIdentity,
+    descriptor: int,
+) -> bool:
+    existing = held.get(identity)
+    if existing is None:
+        held[identity] = descriptor
+        return True
+    stable = os.fstat(existing)
+    observed = os.fstat(descriptor)
+    require(
+        (stable.st_dev, stable.st_ino, stat.S_IFMT(stable.st_mode))
+        == (
+            observed.st_dev,
+            observed.st_ino,
+            stat.S_IFMT(observed.st_mode),
+        ),
+        "process-bound namespace descriptor identity diverges",
+    )
+    custody.close_descriptor(descriptor)
+    return False
+
+
+def _held_task_namespace_observations(
+    *,
+    external_self_excluded_fds: frozenset[int] = frozenset(),
+    destination_custody: ResourceCustody,
+) -> tuple[
+    set[NamespaceIdentity],
+    set[NamespaceIdentity],
+    dict[NamespaceIdentity, list[MountNamespaceView]],
+    int,
+    tuple[int, ...],
+    tuple[dict[str, object], ...],
+]:
+    process_bound: set[NamespaceIdentity] = set()
+    namespace_fds: set[NamespaceIdentity] = set()
+    mount_views: dict[NamespaceIdentity, list[MountNamespaceView]] = {}
+    held_namespaces: dict[NamespaceIdentity, int] = {}
+    task_namespace_bindings: list[dict[str, object]] = []
+    proofs: list[
+        tuple[
+            CapturedTask,
+            dict[str, NamespaceIdentity],
+            MountNamespaceView,
+            tuple[dict[str, object], ...],
+        ]
+    ] = []
+    with ResourceCustody(label="namespace observation") as custody:
+        coordinates = process_task_coordinates_once()
+        require_single_threaded_drain_coordinates(coordinates)
+        fd_budget = require_task_namespace_census_fd_budget(
+            len(coordinates),
+            externally_held=len(external_self_excluded_fds),
+        )
+        for thread_group_id, task_id in coordinates:
+            task = capture_task(custody, thread_group_id, task_id)
+            if task is None:
+                continue
+            namespaces: dict[str, NamespaceIdentity] = {}
+            for entry, _kind in TASK_NAMESPACE_ENTRIES:
+                identity, namespace_fd = open_current_task_namespace(
+                    destination_custody,
+                    task,
+                    entry,
+                )
+                retained = admit_held_namespace_descriptor(
+                    destination_custody,
+                    held_namespaces,
+                    identity,
+                    namespace_fd,
+                )
+                require(
+                    retained == (held_namespaces[identity] == namespace_fd),
+                    "namespace descriptor retention outcome differs",
+                )
+                namespaces[entry] = identity
+                process_bound.add(identity)
+            task_namespace_bindings.append(
+                {
+                    "threadGroupId": thread_group_id,
+                    "taskId": task_id,
+                    "namespaces": {
+                        entry: _namespace_identity_document(identity)
+                        for entry, identity in namespaces.items()
+                    },
+                }
+            )
+            view = _task_mount_view(task)
+            mount_views.setdefault(namespaces["mnt"], []).append(view)
+            excluded = (
+                frozenset(held_namespaces.values()) | external_self_excluded_fds
+                if thread_group_id == os.getpid()
+                else frozenset()
+            )
+            namespace_fd_rows = _namespace_fd_records(
+                task,
+                excluded_fds=excluded,
+            )
+            for row in namespace_fd_rows:
+                namespace_fds.add(
+                    NamespaceIdentity(
+                        str(row["kind"]),
+                        int(row["device"]),
+                        int(row["inode"]),
+                    )
+                )
+            proofs.append((task, namespaces, view, namespace_fd_rows))
+        for task, namespaces, view, namespace_fd_rows in proofs:
+            for entry, identity in namespaces.items():
+                require_current_task_namespace_identity(task, entry, identity)
+            manual(
+                _task_mount_view(task) == view,
+                "process task root or mount view changed before census commit: "
+                f"{task.thread_group_id}/{task.task_id}",
+            )
+            manual(
+                _namespace_fd_records(
+                    task,
+                    excluded_fds=(
+                        frozenset(held_namespaces.values())
+                        | external_self_excluded_fds
+                        if task.thread_group_id == os.getpid()
+                        else frozenset()
+                    ),
+                )
+                == namespace_fd_rows,
+                "process task namespace FD roster changed before census commit: "
+                f"{task.thread_group_id}/{task.task_id}",
+            )
+            reprove_captured_task(task)
+        for identity, descriptor in held_namespaces.items():
+            observed = os.fstat(descriptor)
+            require(
+                stat.S_ISREG(observed.st_mode)
+                and (observed.st_dev, observed.st_ino)
+                == (identity.device, identity.inode),
+                "held namespace descriptor identity changed before census commit: "
+                f"{identity.kind}:{identity.device}:{identity.inode}",
+            )
+        descriptors = tuple(
+            held_namespaces[identity] for identity in sorted(held_namespaces)
+        )
+        result = (
+            process_bound,
+            namespace_fds,
+            mount_views,
+            int(fd_budget["taskCount"]),
+            descriptors,
+            tuple(task_namespace_bindings),
+        )
+        return result
+
+
+def _task_namespace_census_from_observations(
+    process_bound: set[NamespaceIdentity],
+    namespace_fds: set[NamespaceIdentity],
+    mount_views: dict[NamespaceIdentity, list[MountNamespaceView]],
+    task_count: int,
+    namespace_descriptors: tuple[int, ...],
+    task_namespaces: tuple[dict[str, object], ...],
+) -> TaskNamespaceCensus:
+    manual(process_bound, "no process-bound namespace was observable")
+    detached = namespace_fds - process_bound
+    manual(
+        not detached,
+        "a detached or processless namespace FD is not observable: "
+        + ",".join(
+            f"{value.kind}:{value.device}:{value.inode}" for value in sorted(detached)
+        ),
+    )
+    mounts = tuple(
+        build_mount_namespace_authority(identity, mount_views[identity])
+        for identity in sorted(mount_views)
+    )
+    proof = task_namespace_census_preimage(
+        process_bound,
+        namespace_fds,
+        mounts,
+        task_count,
+        task_namespaces,
+    )
+    digest = sha256_bytes(canonical_json(proof))
+    return TaskNamespaceCensus(
+        frozenset(process_bound),
+        frozenset(namespace_fds),
+        mounts,
+        digest,
+        {
+            "processBoundNamespaceCount": len(process_bound),
+            "namespaceFdCount": len(namespace_fds),
+            "mountNamespaceCount": len(mounts),
+            "proofSha256": digest,
+            "processlessMountNamespaces": "not_observable_and_not_admitted",
+            "queuedScmRightsNamespaceFds": "not_observable_and_not_admitted",
+            "taskCount": task_count,
+            "taskNamespaceBindingCount": len(task_namespaces),
+        },
+        namespace_descriptors,
+        proof,
+        task_namespaces,
+    )
+
+
+def task_namespace_census_once(
+    custody: ResourceCustody,
+    *,
+    external_self_excluded_fds: frozenset[int] = frozenset(),
+) -> TaskNamespaceCensus:
+    observations = _held_task_namespace_observations(
+        external_self_excluded_fds=external_self_excluded_fds,
+        destination_custody=custody,
+    )
+    return _task_namespace_census_from_observations(*observations)
+
+
+def stable_task_namespace_census(
+    custody: ResourceCustody,
+) -> TaskNamespaceCensus:
+    with ResourceCustody(label="first task namespace census") as first_custody:
+        first = task_namespace_census_once(first_custody)
+        first.require_open()
+        second = task_namespace_census_once(
+            custody,
+            external_self_excluded_fds=frozenset(first.namespace_descriptors),
+        )
+        first.require_open()
+        second.require_open()
+        require(
+            first.proof_sha256 == second.proof_sha256,
+            "task namespace census changed across proof passes",
+        )
+        return second
+
+
+def classify_namespace_fd(
+    identity: NamespaceIdentity,
+    *,
+    process_bound: frozenset[NamespaceIdentity],
+    owned: frozenset[NamespaceIdentity],
+) -> str:
+    if identity not in process_bound:
+        return "detached"
+    return "owned" if identity in owned else "ambient_process_bound"
+
+
+def source_anchors_from_records(
+    records: Sequence[MountRecord],
+    root: Path,
+) -> tuple[tuple[str, str], ...]:
     anchors: set[tuple[str, str]] = set()
-    for record in mount_records(raw):
+    for record in records:
         target = Path(record.target)
         if root == target or target in root.parents:
             relative = root.relative_to(target)
@@ -1265,14 +3066,14 @@ def source_anchors(raw: str, root: Path) -> tuple[tuple[str, str], ...]:
     return tuple(sorted(anchors))
 
 
-def mount_reference_records(
-    raw: str,
+def mount_reference_records_from_records(
+    records: Sequence[MountRecord],
     root: Path,
     anchors: tuple[tuple[str, str], ...],
     extra_targets: tuple[str, ...] = (),
 ) -> tuple[MountRecord, ...]:
     result: list[MountRecord] = []
-    for record in mount_records(raw):
+    for record in records:
         target_reference = path_at_or_below(record.target, str(root))
         source_reference = any(
             record.device == device and mount_root_at_or_below(record.root, source_root)
@@ -1283,107 +3084,117 @@ def mount_reference_records(
     return tuple(sorted(result))
 
 
-def mount_references(
-    raw: str,
+def _global_mount_roster_from_census(
     root: Path,
-    anchors: tuple[tuple[str, str], ...],
+    anchors: tuple[tuple[str, str], ...] | None = None,
     extra_targets: tuple[str, ...] = (),
-) -> tuple[str, ...]:
-    return tuple(
+    namespace_census: TaskNamespaceCensus | None = None,
+) -> tuple[
+    tuple[tuple[str, str], ...],
+    tuple[tuple[str, tuple[MountRecord, ...]], ...],
+]:
+    require(namespace_census is not None, "task namespace census is absent")
+    assert namespace_census is not None
+    census = namespace_census
+    census.require_open()
+    observed_self = os.stat("/proc/self/ns/mnt")
+    own_identity = NamespaceIdentity("mnt", observed_self.st_dev, observed_self.st_ino)
+    own = next(
+        (value for value in census.mounts if value.identity == own_identity),
+        None,
+    )
+    require(own is not None, "drain mount namespace is absent from its census")
+    assert own is not None
+    actual_anchors = (
+        source_anchors_from_records(own.records, root)
+        if anchors is None
+        else anchors
+    )
+    require(actual_anchors, f"mount source anchors are absent: {root}")
+    namespaces = tuple(
         sorted(
-            record.target
-            for record in mount_reference_records(
-                raw, root, anchors, extra_targets
+            (
+                f"{value.identity.device}:{value.identity.inode}",
+                mount_reference_records_from_records(
+                    value.records,
+                    root,
+                    actual_anchors,
+                    extra_targets,
+                ),
             )
+            for value in census.mounts
         )
     )
+    require(namespaces, "no process task mount namespace was visible")
+    census.require_open()
+    return actual_anchors, namespaces
 
 
 def global_mount_roster_once(
     root: Path,
     anchors: tuple[tuple[str, str], ...] | None = None,
     extra_targets: tuple[str, ...] = (),
+    namespace_census: TaskNamespaceCensus | None = None,
 ) -> tuple[
     tuple[tuple[str, str], ...],
     tuple[tuple[str, tuple[MountRecord, ...]], ...],
 ]:
-    own_raw = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
-    actual_anchors = source_anchors(own_raw, root) if anchors is None else anchors
-    require(actual_anchors, f"mount source anchors are absent: {root}")
-    seen: dict[str, tuple[MountRecord, ...]] = {}
-    for thread_group_id, task_id in process_task_coordinates_once():
-        task = capture_task(thread_group_id, task_id)
-        if task is None:
-            continue
-        try:
-            before = namespace_identity(task.process_fd, "mnt")
-            raw = read_at(
-                task.process_fd,
-                "mountinfo",
-                maximum=16 * 1024 * 1024,
-            ).decode("utf-8", "strict")
-            after = namespace_identity(task.process_fd, "mnt")
-            require(
-                before == after and not pidfd_exited(task.pidfd),
-                "mount namespace changed during proof: "
-                f"{thread_group_id}/{task_id}",
-            )
-            namespace = f"{before['device']}:{before['inode']}"
-            targets = mount_reference_records(
-                raw,
-                root,
-                actual_anchors,
-                extra_targets,
-            )
-            if namespace in seen:
-                manual(
-                    seen[namespace] == targets,
-                    "mount namespace visibility differs across representatives: "
-                    + namespace,
-                )
-            else:
-                seen[namespace] = targets
-        finally:
-            task.close()
-    require(seen, "no process task mount namespace was visible")
-    return actual_anchors, tuple(sorted(seen.items()))
+    if namespace_census is not None:
+        return _global_mount_roster_from_census(
+            root,
+            anchors,
+            extra_targets,
+            namespace_census,
+        )
+    with ResourceCustody(label="global mount census") as custody:
+        census = stable_task_namespace_census(custody)
+        return _global_mount_roster_from_census(
+            root,
+            anchors,
+            extra_targets,
+            census,
+        )
 
 
 def stable_global_mount_roster(
     root: Path,
     anchors: tuple[tuple[str, str], ...] | None = None,
     extra_targets: tuple[str, ...] = (),
+    namespace_census: TaskNamespaceCensus | None = None,
 ) -> dict[str, object]:
-    first = global_mount_roster_once(root, anchors, extra_targets)
-    second = global_mount_roster_once(root, anchors, extra_targets)
-    require(first == second, f"global mount roster changed: {root}")
-    actual_anchors, namespaces = second
-    occurrences = tuple(
-        sorted(
-            (namespace, record)
-            for namespace, records in namespaces
-            for record in records
+    with ResourceCustody(label="owned global mount census") as custody:
+        if namespace_census is None:
+            census = stable_task_namespace_census(custody)
+        else:
+            census = namespace_census
+        actual_anchors, namespaces = _global_mount_roster_from_census(
+            root,
+            anchors,
+            extra_targets,
+            census,
         )
-    )
-    return {
-        "root": str(root),
-        "sourceAnchors": [
-            {"device": device, "root": source_root}
-            for device, source_root in actual_anchors
-        ],
-        "occurrences": [
-            {
-                "mountNamespace": namespace,
-                "mountId": record.mount_id,
-                "parentId": record.parent_id,
-                "device": record.device,
-                "root": record.root,
-                "target": record.target,
-                "filesystem": record.filesystem,
-            }
-            for namespace, record in occurrences
-        ],
-    }
+        occurrences = tuple(
+            sorted(
+                (namespace, record)
+                for namespace, records in namespaces
+                for record in records
+            )
+        )
+        return {
+            "root": str(root),
+            "namespaceCensusSha256": census.proof_sha256,
+            "sourceAnchors": [
+                {"device": device, "root": source_root}
+                for device, source_root in actual_anchors
+            ],
+            "occurrences": [
+                {
+                    "mountNamespace": namespace,
+                    **mount_record_document(record),
+                }
+                for namespace, record in occurrences
+            ],
+        }
 
 
 def socket_identity(path: Path, *, expected_uid: int, expected_gid: int | None = None) -> dict[str, object]:
@@ -1397,7 +3208,10 @@ def socket_identity(path: Path, *, expected_uid: int, expected_gid: int | None =
 
 def proc_unix_records() -> tuple[dict[str, object], ...]:
     rows: list[dict[str, object]] = []
-    raw = Path("/proc/net/unix").read_text(encoding="ascii")
+    raw = read_path_bytes(
+        Path("/proc/net/unix"),
+        maximum=16 * 1024 * 1024,
+    ).decode("ascii", "strict")
     lines = raw.splitlines()
     require(lines and lines[0].startswith("Num"), "Unix socket table header differs")
     for line in lines[1:]:
@@ -1542,8 +3356,10 @@ def unix_diag_records_once() -> tuple[dict[str, object], ...]:
         0xFFFFFFFF,
         0xFFFFFFFF,
     )
-    diagnostic = socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, NETLINK_SOCK_DIAG)
-    try:
+    with ResourceCustody(label="Unix diagnostic socket") as custody:
+        diagnostic = custody.socket(
+            socket.AF_NETLINK, socket.SOCK_RAW, NETLINK_SOCK_DIAG
+        )
         diagnostic.settimeout(5.0)
         diagnostic.bind((0, 0))
         port_id = int(diagnostic.getsockname()[0])
@@ -1577,8 +3393,6 @@ def unix_diag_records_once() -> tuple[dict[str, object], ...]:
                 expected_port_id=port_id,
             )
             rows.extend(parsed)
-    finally:
-        diagnostic.close()
     require(
         len({int(row["inode"]) for row in rows}) == len(rows),
         "Unix diagnostic socket inode roster is ambiguous",
@@ -1635,12 +3449,12 @@ def related_unix_socket_inodes(
 def socket_inode_owners(inodes: set[int]) -> dict[int, tuple[int, ...]]:
     owners: dict[int, set[int]] = {inode: set() for inode in inodes}
     for thread_group_id, task_id in process_task_coordinates_once():
-        task = capture_task(thread_group_id, task_id)
-        if task is None:
-            continue
-        try:
+        with ResourceCustody(label="process task socket owner") as task_custody:
+            task = capture_task(task_custody, thread_group_id, task_id)
+            if task is None:
+                continue
             try:
-                fd_root = os.open(
+                fd_root = task_custody.open(
                     "fd",
                     os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
                     dir_fd=task.process_fd,
@@ -1657,52 +3471,47 @@ def socket_inode_owners(inodes: set[int]) -> dict[int, tuple[int, ...]]:
                     "process task FD table is unreadable: "
                     f"{thread_group_id}/{task_id}"
                 ) from error
-            try:
-                for name in tuple(os.listdir(fd_root)):
-                    try:
-                        observed = os.stat(name, dir_fd=fd_root)
-                        target = os.readlink(name, dir_fd=fd_root)
-                    except (FileNotFoundError, ProcessLookupError):
-                        continue
-                    except PermissionError as error:
-                        raise ManualRecoveryRequired(
-                            "process task socket FD is unreadable: "
-                            f"{thread_group_id}/{task_id}/{name}"
-                        ) from error
-                    match = re.fullmatch(r"socket:\[([1-9][0-9]*)\]", target)
-                    if match is not None and int(match.group(1)) in owners:
-                        owners[int(match.group(1))].add(thread_group_id)
-                    try:
-                        stable = os.stat(name, dir_fd=fd_root)
-                    except (FileNotFoundError, ProcessLookupError):
-                        if pidfd_exited(task.pidfd):
-                            break
-                        raise ManualRecoveryRequired(
-                            "process task socket FD changed: "
-                            f"{thread_group_id}/{task_id}/{name}"
-                        )
-                    require(
-                        (
-                            stable.st_dev,
-                            stable.st_ino,
-                            stat.S_IFMT(stable.st_mode),
-                        )
-                        == (
-                            observed.st_dev,
-                            observed.st_ino,
-                            stat.S_IFMT(observed.st_mode),
-                        ),
+            for name in tuple(os.listdir(fd_root)):
+                try:
+                    observed = os.stat(name, dir_fd=fd_root)
+                    target = os.readlink(name, dir_fd=fd_root)
+                except (FileNotFoundError, ProcessLookupError):
+                    continue
+                except PermissionError as error:
+                    raise ManualRecoveryRequired(
+                        "process task socket FD is unreadable: "
+                        f"{thread_group_id}/{task_id}/{name}"
+                    ) from error
+                match = re.fullmatch(r"socket:\[([1-9][0-9]*)\]", target)
+                if match is not None and int(match.group(1)) in owners:
+                    owners[int(match.group(1))].add(thread_group_id)
+                try:
+                    stable = os.stat(name, dir_fd=fd_root)
+                except (FileNotFoundError, ProcessLookupError):
+                    if pidfd_exited(task.pidfd):
+                        break
+                    raise ManualRecoveryRequired(
                         "process task socket FD changed: "
-                        f"{thread_group_id}/{task_id}/{name}",
+                        f"{thread_group_id}/{task_id}/{name}"
                     )
-            finally:
-                os.close(fd_root)
+                require(
+                    (
+                        stable.st_dev,
+                        stable.st_ino,
+                        stat.S_IFMT(stable.st_mode),
+                    )
+                    == (
+                        observed.st_dev,
+                        observed.st_ino,
+                        stat.S_IFMT(observed.st_mode),
+                    ),
+                    "process task socket FD changed: "
+                    f"{thread_group_id}/{task_id}/{name}",
+                )
             require(
                 not pidfd_exited(task.pidfd),
                 f"process task exited during socket ownership proof: {task_id}",
             )
-        finally:
-            task.close()
     return {inode: tuple(sorted(values)) for inode, values in owners.items()}
 
 
@@ -1710,7 +3519,10 @@ def tcp_registry_snapshot(registry_pid: int) -> dict[str, object]:
     matches: list[dict[str, object]] = []
     port_hex = f"{36000:04X}"
     for table in (Path("/proc/net/tcp"), Path("/proc/net/tcp6")):
-        lines = table.read_text(encoding="ascii").splitlines()
+        lines = read_path_bytes(
+            table,
+            maximum=16 * 1024 * 1024,
+        ).decode("ascii", "strict").splitlines()
         require(lines and "local_address" in lines[0], "TCP socket table header differs")
         for line in lines[1:]:
             fields = line.split()
@@ -1747,7 +3559,10 @@ def tcp_registry_snapshot(registry_pid: int) -> dict[str, object]:
 def require_registry_listener_absent() -> None:
     port_hex = f"{36000:04X}"
     for table in (Path("/proc/net/tcp"), Path("/proc/net/tcp6")):
-        for line in table.read_text(encoding="ascii").splitlines()[1:]:
+        for line in read_path_bytes(
+            table,
+            maximum=16 * 1024 * 1024,
+        ).decode("ascii", "strict").splitlines()[1:]:
             fields = line.split()
             if len(fields) >= 4 and fields[1].split(":", 1)[1] == port_hex:
                 raise ManualRecoveryRequired("legacy registry listener remained after dockerd")
@@ -1856,20 +3671,18 @@ def post_revocation_socket_snapshot(control: Mapping[str, object]) -> dict[str, 
 
     def once() -> dict[str, object]:
         manual(not exists_nofollow(DOCKER_SOCKET), "Docker API pathname reappeared")
-        parent_fd, root_fd = runtime_root_descriptors(
-            control,
-            require_root_owned=True,
-        )
-        try:
+        with ResourceCustody(label="post-revocation runtime root") as custody:
+            parent_fd, root_fd = runtime_root_descriptors(
+                custody,
+                control,
+                require_root_owned=True,
+            )
             try:
                 os.stat("docker.sock", dir_fd=root_fd, follow_symlinks=False)
             except FileNotFoundError:
                 pass
             else:
                 raise ManualRecoveryRequired("bound Docker API pathname reappeared")
-        finally:
-            os.close(root_fd)
-            os.close(parent_fd)
         rows = [
             row
             for row in proc_unix_records()
@@ -1937,7 +3750,9 @@ def child_pids(parent_pid: int) -> tuple[int, ...]:
             continue
         try:
             raw = Path("/proc") / entry / "stat"
-            observed_parent, _ = stat_identity(raw.read_bytes())
+            observed_parent, _ = stat_identity(
+                read_path_bytes(raw, maximum=64 * 1024)
+            )
         except (FileNotFoundError, ProcessLookupError, PermissionError, DrainError):
             continue
         if observed_parent == parent_pid:
@@ -1952,7 +3767,10 @@ def related_shim_pids() -> tuple[int, ...]:
         if not entry.isdigit():
             continue
         try:
-            raw = (Path("/proc") / entry / "cmdline").read_bytes()
+            raw = read_path_bytes(
+                Path("/proc") / entry / "cmdline",
+                maximum=4 * 1024 * 1024,
+            )
         except (FileNotFoundError, ProcessLookupError, PermissionError):
             continue
         values = raw.rstrip(b"\0").split(b"\0") if raw else []
@@ -2022,10 +3840,6 @@ class ProcessReferenceObservation:
     pidfd: int
     process_fd: int
 
-    def close(self) -> None:
-        os.close(self.process_fd)
-        os.close(self.pidfd)
-
 
 def _structured_argument_relations(raw: bytes) -> set[str]:
     values = raw.rstrip(b"\0").split(b"\0") if raw else []
@@ -2061,35 +3875,45 @@ def _structured_argument_relations(raw: bytes) -> set[str]:
 
 
 def process_reference_scan(
+    destination_custody: ResourceCustody,
     thread_group_id: int,
     task_id: int | None = None,
     *,
     runtime_inodes: set[tuple[int, int]],
     socket_inodes: set[int],
-    private_namespace_tokens: set[str],
-    admitted_namespace_tokens: set[str],
+    private_namespace_identities: frozenset[NamespaceIdentity],
+    observable_namespace_identities: frozenset[NamespaceIdentity],
+    owned_relation_namespace_identities: frozenset[NamespaceIdentity],
+    proof_owned_namespace_fds: frozenset[int],
 ) -> ProcessReferenceObservation | None:
     actual_task_id = thread_group_id if task_id is None else task_id
-    task = capture_task(thread_group_id, actual_task_id)
-    if task is None:
-        return None
-    keep = False
-    try:
+    with ResourceCustody(label="process reference observation") as task_custody:
+        task = capture_task(task_custody, thread_group_id, actual_task_id)
+        if task is None:
+            return None
         try:
             first_parent = task.parent_pid
             first_start = task.start_ticks
             raw_arguments = read_at(task.process_fd, "cmdline")
             cgroup = read_at(task.process_fd, "cgroup").decode("ascii", "strict")
             relations = _structured_argument_relations(raw_arguments)
+            namespace_fds: list[dict[str, object]] = []
+            captured_namespace_identities = {
+                entry: current_task_namespace_identity(task, entry)
+                for entry, _kind in TASK_NAMESPACE_ENTRIES
+            }
             namespaces = {
-                name: namespace_identity(task.process_fd, name)
-                for name in ("mnt", "net", "pid", "user")
+                entry: {
+                    "kind": identity.kind,
+                    "device": identity.device,
+                    "inode": identity.inode,
+                }
+                for entry, identity in captured_namespace_identities.items()
             }
-            namespace_tokens = {
-                f"{name}:[{identity['inode']}]"
-                for name, identity in namespaces.items()
+            process_bound_namespace_identities = {
+                identity for identity in captured_namespace_identities.values()
             }
-            if namespace_tokens & private_namespace_tokens:
+            if process_bound_namespace_identities & private_namespace_identities:
                 relations.add("privateRuntimeNamespace")
             for label, name in (("cwd", "cwd"), ("root", "root"), ("exe", "exe")):
                 try:
@@ -2115,7 +3939,7 @@ def process_reference_scan(
                 if (observed.st_dev, observed.st_ino) in runtime_inodes:
                     relations.add(f"{label}Inode")
             try:
-                fd_directory = os.open(
+                fd_directory = task_custody.open(
                     "fd",
                     os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
                     dir_fd=task.process_fd,
@@ -2147,6 +3971,32 @@ def process_reference_scan(
                                 "live process task FD edge is unreadable: "
                                 f"{thread_group_id}/{actual_task_id}"
                             ) from error
+                        if (
+                            thread_group_id == os.getpid()
+                            and int(fd_name) in proof_owned_namespace_fds
+                        ):
+                            try:
+                                stable = os.stat(fd_name, dir_fd=fd_directory)
+                            except (FileNotFoundError, ProcessLookupError) as error:
+                                raise ManualRecoveryRequired(
+                                    "proof-owned namespace FD changed during scan: "
+                                    f"{fd_name}"
+                                ) from error
+                            require(
+                                (
+                                    stable.st_dev,
+                                    stable.st_ino,
+                                    stat.S_IFMT(stable.st_mode),
+                                )
+                                == (
+                                    observed.st_dev,
+                                    observed.st_ino,
+                                    stat.S_IFMT(observed.st_mode),
+                                ),
+                                "proof-owned namespace FD identity changed during scan: "
+                                f"{fd_name}",
+                            )
+                            continue
                         if (observed.st_dev, observed.st_ino) in runtime_inodes:
                             relations.add("runtimeFdInode")
                         normalized = target.removesuffix(" (deleted)")
@@ -2162,14 +4012,33 @@ def process_reference_scan(
                             and int(socket_match.group(1)) in socket_inodes
                         ):
                             relations.add("runtimeSocketFd")
-                        if target in private_namespace_tokens:
-                            relations.add("runtimeNamespaceFd")
-                        if (
-                            re.fullmatch(r"(?:mnt|net|pid|user):\[[1-9][0-9]*\]", target)
-                            is not None
-                            and target not in admitted_namespace_tokens
-                        ):
-                            relations.add("unclassifiedNamespaceFd")
+                        namespace_identity_value = namespace_fd_identity(
+                            target,
+                            observed,
+                            label=(
+                                "process task "
+                                f"{thread_group_id}/{actual_task_id}/{fd_name}"
+                            ),
+                        )
+                        if namespace_identity_value is not None:
+                            classification = classify_namespace_fd(
+                                namespace_identity_value,
+                                process_bound=observable_namespace_identities,
+                                owned=owned_relation_namespace_identities,
+                            )
+                            namespace_fds.append(
+                                {
+                                    "fd": int(fd_name),
+                                    "kind": namespace_identity_value.kind,
+                                    "device": namespace_identity_value.device,
+                                    "inode": namespace_identity_value.inode,
+                                    "classification": classification,
+                                }
+                            )
+                            if classification == "owned":
+                                relations.add("runtimeNamespaceFd")
+                            elif classification == "detached":
+                                relations.add("detachedNamespaceFd")
                         try:
                             stable = os.stat(fd_name, dir_fd=fd_directory)
                         except (FileNotFoundError, ProcessLookupError):
@@ -2186,7 +4055,7 @@ def process_reference_scan(
                             f"{thread_group_id}/{actual_task_id}",
                         )
                 finally:
-                    os.close(fd_directory)
+                    task_custody.close_descriptor(fd_directory)
             try:
                 maps = read_at(task.process_fd, "maps", maximum=16 * 1024 * 1024)
             except (FileNotFoundError, ProcessLookupError):
@@ -2202,6 +4071,8 @@ def process_reference_scan(
             }
             if EXPECTED_CONTAINER_ID in cgroup_components:
                 relations.add("containerCgroup")
+            for entry, identity in captured_namespace_identities.items():
+                require_current_task_namespace_identity(task, entry, identity)
             reprove_captured_task(task)
             row = {
                 "pid": thread_group_id,
@@ -2210,27 +4081,72 @@ def process_reference_scan(
                 "startTimeTicks": first_start,
                 "securityState": task.security_state,
                 "namespaces": namespaces,
+                "namespaceFds": sorted(
+                    namespace_fds,
+                    key=lambda value: (
+                        str(value["kind"]),
+                        int(value["device"]),
+                        int(value["inode"]),
+                        int(value["fd"]),
+                    ),
+                ),
                 "relations": sorted(relations),
             }
-            keep = True
-            return ProcessReferenceObservation(
+            result = ProcessReferenceObservation(
                 row,
-                task.pidfd,
-                task.process_fd,
+                destination_custody.dup(task.pidfd),
+                destination_custody.dup(task.process_fd),
             )
+            return result
         except (FileNotFoundError, ProcessLookupError):
             if pidfd_exited(task.pidfd):
                 return None
             raise
-    finally:
-        if not keep:
-            task.close()
+
+
+def recorded_process_namespace_identities(
+    process: Mapping[str, object],
+) -> frozenset[NamespaceIdentity]:
+    value = process.get("taskNamespaces")
+    require(
+        isinstance(value, dict)
+        and set(value) == set(TASK_NAMESPACE_ENTRY_KINDS),
+        "recorded process namespace entry roster differs",
+    )
+    assert isinstance(value, dict)
+    result: set[NamespaceIdentity] = set()
+    for entry, expected_kind in TASK_NAMESPACE_ENTRIES:
+        row = exact_keys(
+            value[entry],
+            {"kind", "device", "inode"},
+            f"recorded process namespace entry {entry}",
+        )
+        require(
+            row["kind"] == expected_kind,
+            f"recorded process namespace entry kind differs: {entry}",
+        )
+        result.add(
+            NamespaceIdentity(
+                expected_kind,
+                plain_int(
+                    row["device"],
+                    f"recorded process namespace entry device {entry}",
+                ),
+                plain_int(
+                    row["inode"],
+                    f"recorded process namespace entry inode {entry}",
+                    positive=True,
+                ),
+            )
+        )
+    return frozenset(result)
 
 
 def _related_process_universe_once(
     processes: Mapping[str, Mapping[str, object]],
     runtime: Mapping[str, object],
     sockets: Mapping[str, object],
+    namespace_census: TaskNamespaceCensus,
     *,
     allowed_roles: set[str],
 ) -> dict[str, object]:
@@ -2242,32 +4158,43 @@ def _related_process_universe_once(
     socket_inodes = {
         int(item["inode"]) for item in sockets["unixRecords"]
     } | {int(inode) for inode in sockets.get("relatedUnixInodes", [])}
-    own_namespace_tokens = {
-        f"{name}:[{os.stat(f'/proc/self/ns/{name}').st_ino}]"
-        for name in ("mnt", "net", "pid", "user")
-    }
-    recorded_namespace_tokens = {
-        f"{name}:[{int(value[field]['inode'])}]"
-        for value in processes.values()
-        for name, field in (
-            ("mnt", "mountNamespace"),
-            ("net", "networkNamespace"),
-            ("pid", "pidNamespace"),
-            ("user", "userNamespace"),
+    owned_namespace_identities = frozenset().union(
+        *(recorded_process_namespace_identities(value) for value in processes.values())
+    )
+    own_namespace_identities: set[NamespaceIdentity] = set()
+    for entry, kind in TASK_NAMESPACE_ENTRIES:
+        observed = os.stat(f"/proc/self/ns/{entry}")
+        require(
+            os.readlink(f"/proc/self/ns/{entry}")
+            == f"{kind}:[{observed.st_ino}]",
+            f"drain task namespace entry identity differs: {entry}",
         )
-    }
-    private_namespace_tokens = recorded_namespace_tokens - own_namespace_tokens
-    admitted_namespace_tokens = recorded_namespace_tokens | own_namespace_tokens
+        own_namespace_identities.add(
+            NamespaceIdentity(kind, observed.st_dev, observed.st_ino)
+        )
+    private_namespace_identities = (
+        owned_namespace_identities - frozenset(own_namespace_identities)
+    )
     observations: list[ProcessReferenceObservation] = []
-    try:
-        for thread_group_id, task_id in process_task_coordinates_once():
+    with ResourceCustody(label="process reference observation roster") as custody:
+        coordinates = process_task_coordinates_once()
+        require_single_threaded_drain_coordinates(coordinates)
+        proof_owned_namespace_fds = frozenset(
+            namespace_census.namespace_descriptors
+        )
+        for thread_group_id, task_id in coordinates:
             observation = process_reference_scan(
+                custody,
                 thread_group_id,
                 task_id,
                 runtime_inodes=runtime_inodes,
                 socket_inodes=socket_inodes,
-                private_namespace_tokens=private_namespace_tokens,
-                admitted_namespace_tokens=admitted_namespace_tokens,
+                private_namespace_identities=private_namespace_identities,
+                observable_namespace_identities=namespace_census.process_bound,
+                owned_relation_namespace_identities=frozenset(
+                    private_namespace_identities
+                ),
+                proof_owned_namespace_fds=proof_owned_namespace_fds,
             )
             if observation is not None:
                 observations.append(observation)
@@ -2278,6 +4205,27 @@ def _related_process_universe_once(
         require(
             len(rows) == len(observations),
             "process task census contains a duplicate coordinate",
+        )
+        observed_task_namespaces = tuple(
+            sorted(
+                (
+                    {
+                        "threadGroupId": int(row["pid"]),
+                        "taskId": int(row["taskId"]),
+                        "namespaces": row["namespaces"],
+                    }
+                    for row in rows.values()
+                ),
+                key=lambda value: (
+                    int(value["threadGroupId"]),
+                    int(value["taskId"]),
+                ),
+            )
+        )
+        require(
+            canonical_json(observed_task_namespaces)
+            == canonical_json(namespace_census.task_namespaces),
+            "task namespace bindings changed after the stable namespace census",
         )
         known_by_tgid = {
             int(value["pid"]): role for role, value in processes.items()
@@ -2296,6 +4244,10 @@ def _related_process_universe_once(
                 == (recorded["parentPid"], recorded["startTimeTicks"]),
                 f"recorded legacy process PID was reused: {role}",
             )
+            manual(
+                row["namespaces"] == recorded["taskNamespaces"],
+                f"recorded legacy process namespace authority changed: {role}",
+            )
         for (thread_group_id, task_id), row in rows.items():
             role = known_by_tgid.get(thread_group_id)
             if role is None:
@@ -2307,23 +4259,93 @@ def _related_process_universe_once(
                 thread_group_id=thread_group_id,
                 task_id=task_id,
             )
+        complete_owned_namespaces = set(owned_namespace_identities)
+        for (thread_group_id, _task_id), row in rows.items():
+            if thread_group_id not in known_by_tgid:
+                continue
+            complete_owned_namespaces.update(
+                NamespaceIdentity(
+                    str(identity["kind"]),
+                    int(identity["device"]),
+                    int(identity["inode"]),
+                )
+                for identity in row["namespaces"].values()
+            )
+        private_namespace_identities = frozenset(
+            complete_owned_namespaces - own_namespace_identities
+        )
+        for row in rows.values():
+            relations = set(row["relations"])
+            current_identities = {
+                NamespaceIdentity(
+                    str(identity["kind"]),
+                    int(identity["device"]),
+                    int(identity["inode"]),
+                )
+                for identity in row["namespaces"].values()
+            }
+            if current_identities & private_namespace_identities:
+                relations.add("privateRuntimeNamespace")
+            for item in row["namespaceFds"]:
+                identity = NamespaceIdentity(
+                    str(item["kind"]),
+                    int(item["device"]),
+                    int(item["inode"]),
+                )
+                classification = classify_namespace_fd(
+                    identity,
+                    process_bound=namespace_census.process_bound,
+                    owned=private_namespace_identities,
+                )
+                item["classification"] = classification
+                if classification == "owned":
+                    relations.add("runtimeNamespaceFd")
+                elif classification == "detached":
+                    relations.add("detachedNamespaceFd")
+            row["relations"] = sorted(relations)
         related = {
             coordinate
             for coordinate, row in rows.items()
             if row["relations"] or coordinate[0] in known_by_tgid
         }
-        unclassified_namespaces = sorted(
+        detached_namespaces = sorted(
             coordinate
             for coordinate, row in rows.items()
-            if "unclassifiedNamespaceFd" in row["relations"]
+            if "detachedNamespaceFd" in row["relations"]
         )
         manual(
-            not unclassified_namespaces,
-            "an unclassified task-held namespace can hide a mount occurrence: "
+            not detached_namespaces,
+            "a detached task-held namespace is not observable: "
             + ",".join(
                 f"{thread_group_id}/{task_id}"
-                for thread_group_id, task_id in unclassified_namespaces
+                for thread_group_id, task_id in detached_namespaces
             ),
+        )
+        observed_process_bound_namespaces = frozenset(
+            NamespaceIdentity(
+                str(identity["kind"]),
+                int(identity["device"]),
+                int(identity["inode"]),
+            )
+            for row in rows.values()
+            for identity in row["namespaces"].values()
+        )
+        require(
+            observed_process_bound_namespaces == namespace_census.process_bound,
+            "process-bound namespace roster changed after the stable namespace census",
+        )
+        observed_namespace_fds = frozenset(
+            NamespaceIdentity(
+                str(item["kind"]),
+                int(item["device"]),
+                int(item["inode"]),
+            )
+            for row in rows.values()
+            for item in row["namespaceFds"]
+        )
+        require(
+            observed_namespace_fds == namespace_census.namespace_fds,
+            "namespace FD roster changed after the stable namespace census",
         )
         changed = True
         while changed:
@@ -2373,12 +4395,17 @@ def _related_process_universe_once(
             )
         for thread_group_id, task_id in sorted(related):
             repeated = process_reference_scan(
+                custody,
                 thread_group_id,
                 task_id,
                 runtime_inodes=runtime_inodes,
                 socket_inodes=socket_inodes,
-                private_namespace_tokens=private_namespace_tokens,
-                admitted_namespace_tokens=admitted_namespace_tokens,
+                private_namespace_identities=private_namespace_identities,
+                observable_namespace_identities=namespace_census.process_bound,
+                owned_relation_namespace_identities=frozenset(
+                    private_namespace_identities
+                ),
+                proof_owned_namespace_fds=proof_owned_namespace_fds,
             )
             manual(
                 repeated is not None,
@@ -2386,23 +4413,40 @@ def _related_process_universe_once(
                 f"{thread_group_id}/{task_id}",
             )
             assert repeated is not None
-            try:
-                require(
-                    repeated.row == rows[(thread_group_id, task_id)],
-                    "related process task edge roster changed before census commit: "
-                    f"{thread_group_id}/{task_id}",
-                )
-            finally:
-                repeated.close()
+            require(
+                repeated.row == rows[(thread_group_id, task_id)],
+                "related process task edge roster changed before census commit: "
+                f"{thread_group_id}/{task_id}",
+            )
+            custody.close_descriptor(repeated.process_fd)
+            custody.close_descriptor(repeated.pidfd)
         proof = [rows[coordinate] for coordinate in sorted(related)]
+        namespace_fd_proof = [
+            _namespace_identity_document(value)
+            for value in sorted(observed_namespace_fds)
+        ]
+        process_bound_namespace_proof = [
+            _namespace_identity_document(value)
+            for value in sorted(observed_process_bound_namespaces)
+        ]
+        proof_digest = sha256_bytes(
+            canonical_json(
+                {
+                    "related": proof,
+                    "namespaceCensusSha256": namespace_census.proof_sha256,
+                    "processBoundNamespaces": process_bound_namespace_proof,
+                    "namespaceFds": namespace_fd_proof,
+                }
+            )
+        )
         return {
             "allowedRoles": sorted(allowed_roles),
             "related": proof,
-            "proofSha256": sha256_bytes(canonical_json(proof)),
+            "proofSha256": proof_digest,
+            "namespaceCensusSha256": namespace_census.proof_sha256,
+            "processBoundNamespaces": process_bound_namespace_proof,
+            "namespaceFds": namespace_fd_proof,
         }
-    finally:
-        for observation in observations:
-            observation.close()
 
 
 def related_process_universe(
@@ -2411,21 +4455,31 @@ def related_process_universe(
     sockets: Mapping[str, object],
     *,
     allowed_roles: set[str],
+    namespace_census: TaskNamespaceCensus | None = None,
 ) -> dict[str, object]:
-    first = _related_process_universe_once(
-        processes,
-        runtime,
-        sockets,
-        allowed_roles=allowed_roles,
-    )
-    second = _related_process_universe_once(
-        processes,
-        runtime,
-        sockets,
-        allowed_roles=allowed_roles,
-    )
-    require(first == second, "related process universe changed across proof passes")
-    return second
+    with ResourceCustody(label="owned related-process census") as custody:
+        if namespace_census is None:
+            census = stable_task_namespace_census(custody)
+        else:
+            census = namespace_census
+        census.require_open()
+        first = _related_process_universe_once(
+            processes,
+            runtime,
+            sockets,
+            census,
+            allowed_roles=allowed_roles,
+        )
+        second = _related_process_universe_once(
+            processes,
+            runtime,
+            sockets,
+            census,
+            allowed_roles=allowed_roles,
+        )
+        require(first == second, "related process universe changed across proof passes")
+        census.require_open()
+        return second
 
 
 def runtime_tree_snapshot() -> dict[str, object]:
@@ -2438,26 +4492,25 @@ def runtime_tree_snapshot() -> dict[str, object]:
         "docker.pid",
         "docker.sock",
     }
-    root_fd = os.open(
-        EXPECTED_RUNTIME_ROOT,
-        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-    )
     rows: list[dict[str, object]] = []
 
     def scan(directory_fd: int, base: Path) -> None:
         for name in tuple(sorted(os.listdir(directory_fd))):
             path = base / name
             relative = str(path.relative_to(EXPECTED_RUNTIME_ROOT))
-            proof = _verify_runtime_entry_no_follow(
-                directory_fd,
-                name,
-                relative,
-                expected=None,
-                marker_identity=None,
-                forbid_docker_socket=False,
-                label=f"legacy runtime snapshot entry {relative}",
-            )
-            try:
+            with ResourceCustody(
+                label=f"legacy runtime snapshot proof {relative}"
+            ) as proof_custody:
+                proof = _verify_runtime_entry_no_follow(
+                    proof_custody,
+                    directory_fd,
+                    name,
+                    relative,
+                    expected=None,
+                    marker_identity=None,
+                    forbid_docker_socket=False,
+                    label=f"legacy runtime snapshot entry {relative}",
+                )
                 row = identity_document(path, proof.observed)
                 if not stat.S_ISDIR(proof.observed.st_mode):
                     row["size"] = proof.observed.st_size
@@ -2469,20 +4522,23 @@ def runtime_tree_snapshot() -> dict[str, object]:
                 rows.append(row)
                 if not stat.S_ISDIR(proof.observed.st_mode):
                     continue
-                child_fd = _open_bound_runtime_directory(
-                    directory_fd,
-                    name,
-                    proof,
-                    label=f"legacy runtime snapshot entry {relative}",
-                )
-                try:
+                with ResourceCustody(
+                    label=f"legacy runtime snapshot directory {relative}"
+                ) as child_custody:
+                    child_fd = _open_bound_runtime_directory(
+                        child_custody,
+                        directory_fd,
+                        name,
+                        proof,
+                        label=f"legacy runtime snapshot entry {relative}",
+                    )
                     scan(child_fd, path)
-                finally:
-                    os.close(child_fd)
-            finally:
-                proof.close()
 
-    try:
+    with ResourceCustody(label="legacy runtime snapshot root") as root_custody:
+        root_fd = root_custody.open(
+            EXPECTED_RUNTIME_ROOT,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        )
         root = os.fstat(root_fd)
         require(
             (root.st_dev, root.st_ino, root.st_uid, root.st_gid, stat.S_IMODE(root.st_mode))
@@ -2492,8 +4548,6 @@ def runtime_tree_snapshot() -> dict[str, object]:
         top_level = tuple(sorted(os.listdir(root_fd)))
         manual(set(top_level) <= allowed_top_level, "legacy runtime root contains a foreign entry")
         scan(root_fd, EXPECTED_RUNTIME_ROOT)
-    finally:
-        os.close(root_fd)
     return {
         "rootIdentity": identity_document(EXPECTED_RUNTIME_ROOT, root),
         "topLevel": list(top_level),
@@ -2501,16 +4555,99 @@ def runtime_tree_snapshot() -> dict[str, object]:
     }
 
 
-def registry_inventory() -> dict[str, object]:
-    repositories = REGISTRY_STORAGE / "repositories"
-    blobs = REGISTRY_STORAGE / "blobs/sha256"
+def bound_regular_tree(
+    root: Path,
+    *,
+    maximum_depth: int,
+    maximum_entries: int,
+) -> tuple[Path, ...]:
+    require(
+        maximum_depth > 0 and maximum_entries > 0,
+        "bound tree capacity is invalid",
+    )
+    result: list[Path] = []
+    observed_entries = 0
+
+    def scan(directory_fd: int, relative: tuple[str, ...], depth: int) -> None:
+        nonlocal observed_entries
+        names = tuple(sorted(os.listdir(directory_fd)))
+        observed_entries += len(names)
+        require(
+            observed_entries <= maximum_entries,
+            f"bound tree entry capacity is exceeded: {root}",
+        )
+        for name in names:
+            observed = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            parts = (*relative, name)
+            if stat.S_ISREG(observed.st_mode):
+                result.append(root.joinpath(*parts))
+                continue
+            if not stat.S_ISDIR(observed.st_mode):
+                continue
+            require(depth < maximum_depth, f"bound tree is too deep: {root}")
+            with ResourceCustody(
+                label=f"bound tree directory {root.joinpath(*parts)}"
+            ) as custody:
+                child_fd = custody.open(
+                    name,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=directory_fd,
+                )
+                bound = os.fstat(child_fd)
+                literal = os.stat(
+                    name,
+                    dir_fd=directory_fd,
+                    follow_symlinks=False,
+                )
+                require(
+                    stat.S_ISDIR(bound.st_mode)
+                    and (bound.st_dev, bound.st_ino)
+                    == (observed.st_dev, observed.st_ino)
+                    == (literal.st_dev, literal.st_ino),
+                    f"bound tree directory changed: {root.joinpath(*parts)}",
+                )
+                scan(child_fd, parts, depth + 1)
+
+    with ResourceCustody(label=f"bound tree root {root}") as custody:
+        root_fd = custody.open(
+            root,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        )
+        observed = os.fstat(root_fd)
+        literal = os.stat(root, follow_symlinks=False)
+        require(
+            stat.S_ISDIR(observed.st_mode)
+            and (observed.st_dev, observed.st_ino)
+            == (literal.st_dev, literal.st_ino),
+            f"bound tree root changed: {root}",
+        )
+        scan(root_fd, (), 0)
+    return tuple(result)
+
+
+def registry_inventory(
+    registry_storage: Path = REGISTRY_STORAGE,
+) -> dict[str, object]:
+    repositories = registry_storage / "repositories"
+    blobs = registry_storage / "blobs/sha256"
     directory_identity(repositories, expected_uid=0, expected_gid=0, expected_modes={0o755})
     directory_identity(blobs, expected_uid=0, expected_gid=0, expected_modes={0o755})
     revisions: dict[str, set[str]] = {}
-    for link in sorted(repositories.glob("**/_manifests/revisions/sha256/*/link")):
+    repository_files = bound_regular_tree(
+        repositories,
+        maximum_depth=64,
+        maximum_entries=2_000_000,
+    )
+    for link in repository_files:
         relative = link.relative_to(repositories)
         parts = relative.parts
-        marker = parts.index("_manifests")
+        if len(parts) < 6 or parts[-5:-2] != (
+            "_manifests",
+            "revisions",
+            "sha256",
+        ) or parts[-1] != "link":
+            continue
+        marker = len(parts) - 5
         repository = "/".join(parts[:marker])
         digest = parts[marker + 3]
         require(SHA256_RE.fullmatch(digest) is not None, "registry revision digest is invalid")
@@ -2525,7 +4662,15 @@ def registry_inventory() -> dict[str, object]:
     for repository, required in EXPECTED_REGISTRY_MANIFESTS.items():
         manual(required <= revisions.get(repository, set()), f"required registry manifest is absent: {repository}")
     blob_rows: list[dict[str, object]] = []
-    for data in sorted(blobs.glob("*/*/data")):
+    blob_files = bound_regular_tree(
+        blobs,
+        maximum_depth=3,
+        maximum_entries=2_000_000,
+    )
+    for data in blob_files:
+        relative = data.relative_to(blobs)
+        if len(relative.parts) != 3 or relative.parts[-1] != "data":
+            continue
         digest = data.parent.name
         require(SHA256_RE.fullmatch(digest) is not None, "registry blob path is invalid")
         actual, size, observed = hash_regular(data, maximum=2 * 1024**3)
@@ -2563,9 +4708,7 @@ def require_v5_absent(
         if V5_RUNTIME_RE.fullmatch(name) is not None:
             foreign.append(str(Path("/run") / name))
     for name in os.listdir("/home"):
-        if name == ".ambit-c16b-runner-storage" or name.startswith(
-            ".ambit-c16b-runner-storage-claim"
-        ):
+        if name.startswith(V5_STORAGE_AUTHORITY_PREFIX):
             foreign.append(str(Path("/home") / name))
     for name in os.listdir(CGROUP_PARENT):
         if CGROUP_NAME_RE.fullmatch(name) is not None:
@@ -2592,12 +4735,11 @@ def require_v5_absent(
 
 
 def global_runtime_lease_busy() -> bool:
-    parent_fd = os.open(
-        GLOBAL_LEASE_PATH.parent,
-        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-    )
-    descriptor: int | None = None
-    try:
+    with ResourceCustody(label="global runtime lease observation") as custody:
+        parent_fd = custody.open(
+            GLOBAL_LEASE_PATH.parent,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        )
         parent = os.fstat(parent_fd)
         require(
             stat.S_ISDIR(parent.st_mode)
@@ -2607,7 +4749,7 @@ def global_runtime_lease_busy() -> bool:
             "global lease parent authority differs",
         )
         try:
-            descriptor = os.open(
+            descriptor = custody.open(
                 GLOBAL_LEASE_PATH.name,
                 os.O_RDWR | os.O_NOFOLLOW,
                 dir_fd=parent_fd,
@@ -2636,10 +4778,6 @@ def global_runtime_lease_busy() -> bool:
             return True
         fcntl.flock(descriptor, fcntl.LOCK_UN)
         return False
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        os.close(parent_fd)
 
 
 def pidfile_identity(
@@ -2661,10 +4799,22 @@ def pidfile_identity(
     return identity
 
 
-def netns_baseline() -> dict[str, object]:
+def _netns_baseline_from_census(
+    census: TaskNamespaceCensus,
+) -> dict[str, object]:
+    census.require_open()
     target = str(TASK_NETNS_TARGET)
-    records = mount_records(Path("/proc/self/mountinfo").read_text(encoding="utf-8"))
-    matches = [record for record in records if record.target == target]
+    observed_self = os.stat("/proc/self/ns/mnt")
+    self_identity = NamespaceIdentity(
+        "mnt", observed_self.st_dev, observed_self.st_ino
+    )
+    own = next(
+        (value for value in census.mounts if value.identity == self_identity),
+        None,
+    )
+    require(own is not None, "drain mount namespace is absent from its census")
+    assert own is not None
+    matches = [record for record in own.records if record.target == target]
     require(len(matches) == 1 and matches[0].filesystem == "nsfs", "legacy task netns mount differs")
     source = {"device": matches[0].device, "root": matches[0].root}
     require(
@@ -2677,6 +4827,7 @@ def netns_baseline() -> dict[str, object]:
         TASK_NETNS_TARGET,
         source_anchor,
         (target, ambient_target),
+        census,
     )
     occurrences = list(source_roster["occurrences"])
     require(
@@ -2698,12 +4849,24 @@ def netns_baseline() -> dict[str, object]:
         and len({str(item["mountNamespace"]) for item in occurrences}) == 1,
         "legacy task netns source has a foreign target",
     )
-    return {
+    result = {
         "sourceAnchor": source,
         "ownedTarget": target,
         "ambientTargets": [ambient_target],
         "occurrences": occurrences,
     }
+    census.require_open()
+    return result
+
+
+def netns_baseline(
+    namespace_census: TaskNamespaceCensus | None = None,
+) -> dict[str, object]:
+    if namespace_census is not None:
+        return _netns_baseline_from_census(namespace_census)
+    with ResourceCustody(label="legacy netns baseline") as custody:
+        census = stable_task_namespace_census(custody)
+        return _netns_baseline_from_census(census)
 
 
 def require_mount_targets_within(
@@ -2723,6 +4886,129 @@ def require_mount_targets_within(
         )
     )
     manual(not foreign, f"{label} source has a foreign target: " + ",".join(foreign))
+
+
+def _finish_authority_with_namespace_census(
+    *,
+    caller_uid: int,
+    caller_gid: int,
+    allow_global_lease: bool,
+    state_identity: dict[str, object],
+    evidence_identity: dict[str, object],
+    config_identity: dict[str, object],
+    receipt_identity: dict[str, object],
+    receipt_raw: bytes,
+    docker_config: dict[str, object],
+    containerd_config: dict[str, object],
+    docker_pidfile: dict[str, object],
+    containerd_pidfile: dict[str, object],
+    runtime_tree: dict[str, object],
+    process_graph: dict[str, object],
+    process_observations: dict[str, object],
+    sockets: dict[str, object],
+    namespace_census: TaskNamespaceCensus,
+) -> tuple[dict[str, object], dict[str, object]]:
+    namespace_census.require_open()
+    processes = process_graph["processes"]
+    assert isinstance(processes, dict)
+    process_graph["relatedUniverse"] = related_process_universe(
+        processes,
+        runtime_tree,
+        sockets,
+        allowed_roles=set(processes),
+        namespace_census=namespace_census,
+    )
+    runtime_mounts = stable_global_mount_roster(
+        EXPECTED_RUNTIME_ROOT,
+        namespace_census=namespace_census,
+    )
+    data_mounts = stable_global_mount_roster(
+        EXPECTED_STATE_ROOT / "outer-docker",
+        namespace_census=namespace_census,
+    )
+    registry_mounts = stable_global_mount_roster(
+        EXPECTED_STATE_ROOT / "registry",
+        namespace_census=namespace_census,
+    )
+    netns = netns_baseline(namespace_census)
+    require_mount_targets_within(
+        runtime_mounts,
+        allowed_roots=(EXPECTED_RUNTIME_ROOT,),
+        label="legacy runtime",
+    )
+    require_mount_targets_within(
+        data_mounts,
+        allowed_roots=(EXPECTED_STATE_ROOT / "outer-docker",),
+        label="legacy outer Docker",
+    )
+    require_mount_targets_within(
+        registry_mounts,
+        allowed_roots=(EXPECTED_STATE_ROOT / "registry", EXPECTED_OVERLAY_TARGET),
+        label="legacy registry",
+    )
+    manual(
+        any(
+            item["target"] == str(EXPECTED_OVERLAY_TARGET)
+            for item in data_mounts["occurrences"]
+        ),
+        "legacy registry overlay mount is absent",
+    )
+    manual(bool(registry_mounts["occurrences"]), "legacy registry bind mount is absent")
+    persistent = {
+        str(path): directory_identity(
+            path,
+            expected_uid=0 if path.name == "outer-docker" else caller_uid,
+            expected_gid=0 if path.name == "outer-docker" else caller_gid,
+            expected_modes={0o710} if path.name == "outer-docker" else {0o700},
+        )
+        for path in PERSISTENT_ROOTS
+    }
+    v5 = require_v5_absent(allow_global_lease=allow_global_lease)
+    registry = registry_inventory()
+    namespace_census.require_open()
+    authority = {
+        "bootId": current_boot_id(),
+        "stateRootIdentity": state_identity,
+        "evidenceRootIdentity": evidence_identity,
+        "configRootIdentity": config_identity,
+        "legacySource": EXPECTED_LEGACY_SOURCE,
+        "legacyReceipt": receipt_identity,
+        "legacyReceiptBytes": receipt_raw.decode("utf-8", "strict"),
+        "runtime": runtime_tree,
+        "configs": {
+            "docker": docker_config,
+            "containerd": containerd_config,
+            "dockerPidfile": docker_pidfile,
+            "containerdPidfile": containerd_pidfile,
+        },
+        "processGraph": process_graph,
+        "namespaceCensus": namespace_census.proof,
+        "sockets": sockets,
+        "mounts": {
+            "runtime": runtime_mounts,
+            "outerDocker": data_mounts,
+            "registry": registry_mounts,
+            "networkNamespace": netns,
+        },
+        "persistentRoots": persistent,
+        "registryInventory": registry,
+        "currentV5": v5,
+        "mutationPolicy": {
+            "cgroup": "forbidden_shared_66_process_observation",
+            "forceKill": "forbidden",
+            "persistentDataDeletion": "forbidden",
+            "automaticShimOrTaskSignal": "forbidden",
+            "nonNsfsUnmount": "forbidden",
+        },
+    }
+    observations = {
+        "legacyProcInodes": process_observations,
+        "namespaceCensusPreimage": namespace_census.preimage,
+        "processlessMountNamespaces": "not_observable_and_not_admitted",
+        "queuedScmRightsNamespaceFds": "not_observable_and_not_admitted",
+    }
+    namespace_census.require_open()
+    return authority, observations
 
 
 def collect_authority(
@@ -2785,88 +5071,27 @@ def collect_authority(
     )
     process_graph, process_observations = capture_process_graph(parsed)
     sockets = runtime_socket_snapshot(960217, 964683)
-    processes = process_graph["processes"]
-    assert isinstance(processes, dict)
-    process_graph["relatedUniverse"] = related_process_universe(
-        processes,
-        runtime_tree,
-        sockets,
-        allowed_roles=set(processes),
-    )
-    runtime_mounts = stable_global_mount_roster(EXPECTED_RUNTIME_ROOT)
-    data_mounts = stable_global_mount_roster(EXPECTED_STATE_ROOT / "outer-docker")
-    registry_mounts = stable_global_mount_roster(EXPECTED_STATE_ROOT / "registry")
-    netns = netns_baseline()
-    require_mount_targets_within(
-        runtime_mounts,
-        allowed_roots=(EXPECTED_RUNTIME_ROOT,),
-        label="legacy runtime",
-    )
-    require_mount_targets_within(
-        data_mounts,
-        allowed_roots=(EXPECTED_STATE_ROOT / "outer-docker",),
-        label="legacy outer Docker",
-    )
-    require_mount_targets_within(
-        registry_mounts,
-        allowed_roots=(EXPECTED_STATE_ROOT / "registry", EXPECTED_OVERLAY_TARGET),
-        label="legacy registry",
-    )
-    manual(
-        any(item["target"] == str(EXPECTED_OVERLAY_TARGET) for item in data_mounts["occurrences"]),
-        "legacy registry overlay mount is absent",
-    )
-    manual(bool(registry_mounts["occurrences"]), "legacy registry bind mount is absent")
-    persistent = {
-        str(path): directory_identity(
-            path,
-            expected_uid=0 if path.name == "outer-docker" else caller_uid,
-            expected_gid=0 if path.name == "outer-docker" else caller_gid,
-            expected_modes={0o710} if path.name == "outer-docker" else {0o700},
+    with ResourceCustody(label="authority namespace census") as custody:
+        namespace_census = stable_task_namespace_census(custody)
+        return _finish_authority_with_namespace_census(
+            caller_uid=caller_uid,
+            caller_gid=caller_gid,
+            allow_global_lease=allow_global_lease,
+            state_identity=state_identity,
+            evidence_identity=evidence_identity,
+            config_identity=config_identity,
+            receipt_identity=receipt_identity,
+            receipt_raw=receipt_raw,
+            docker_config=docker_config,
+            containerd_config=containerd_config,
+            docker_pidfile=docker_pidfile,
+            containerd_pidfile=containerd_pidfile,
+            runtime_tree=runtime_tree,
+            process_graph=process_graph,
+            process_observations=process_observations,
+            sockets=sockets,
+            namespace_census=namespace_census,
         )
-        for path in PERSISTENT_ROOTS
-    }
-    v5 = require_v5_absent(allow_global_lease=allow_global_lease)
-    registry = registry_inventory()
-    authority = {
-        "bootId": current_boot_id(),
-        "stateRootIdentity": state_identity,
-        "evidenceRootIdentity": evidence_identity,
-        "configRootIdentity": config_identity,
-        "legacySource": EXPECTED_LEGACY_SOURCE,
-        "legacyReceipt": receipt_identity,
-        "legacyReceiptBytes": receipt_raw.decode("utf-8", "strict"),
-        "runtime": runtime_tree,
-        "configs": {
-            "docker": docker_config,
-            "containerd": containerd_config,
-            "dockerPidfile": docker_pidfile,
-            "containerdPidfile": containerd_pidfile,
-        },
-        "processGraph": process_graph,
-        "sockets": sockets,
-        "mounts": {
-            "runtime": runtime_mounts,
-            "outerDocker": data_mounts,
-            "registry": registry_mounts,
-            "networkNamespace": netns,
-        },
-        "persistentRoots": persistent,
-        "registryInventory": registry,
-        "currentV5": v5,
-        "mutationPolicy": {
-            "cgroup": "forbidden_shared_66_process_observation",
-            "forceKill": "forbidden",
-            "persistentDataDeletion": "forbidden",
-            "automaticShimOrTaskSignal": "forbidden",
-            "nonNsfsUnmount": "forbidden",
-        },
-    }
-    observations = {
-        "legacyProcInodes": process_observations,
-        "processlessMountNamespaces": "not_observable_and_not_claimed",
-    }
-    return authority, observations
 
 
 def collect_verification(
@@ -2896,55 +5121,37 @@ def collect_verification(
     }
 
 
-class RuntimeLease:
-    def __init__(self, descriptor: int) -> None:
-        self.descriptor = descriptor
-
-    @classmethod
-    def acquire(cls) -> "RuntimeLease":
-        parent = os.stat(GLOBAL_LEASE_PATH.parent, follow_symlinks=False)
-        require(
-            stat.S_ISDIR(parent.st_mode)
-            and parent.st_uid == 0
-            and parent.st_gid == 0
-            and stat.S_IMODE(parent.st_mode) & 0o022 == 0,
-            "global lease parent authority differs",
-        )
-        descriptor = os.open(
-            GLOBAL_LEASE_PATH,
-            os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
-            0o600,
-        )
-        try:
-            observed = os.fstat(descriptor)
-            literal = os.stat(GLOBAL_LEASE_PATH, follow_symlinks=False)
-            require(
-                stat.S_ISREG(observed.st_mode)
-                and observed.st_uid == 0
-                and observed.st_gid == 0
-                and stat.S_IMODE(observed.st_mode) == 0o600
-                and observed.st_nlink == 1
-                and (observed.st_dev, observed.st_ino)
-                == (literal.st_dev, literal.st_ino),
-                "global lease identity differs",
-            )
-            try:
-                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as error:
-                raise ManualRecoveryRequired("global runtime lifecycle lease is busy") from error
-            return cls(descriptor)
-        except BaseException:
-            os.close(descriptor)
-            raise
-
-    def close(self) -> None:
-        os.close(self.descriptor)
-
-    def __enter__(self) -> "RuntimeLease":
-        return self
-
-    def __exit__(self, *_: object) -> None:
-        self.close()
+def acquire_runtime_lease(custody: ResourceCustody) -> int:
+    parent = os.stat(GLOBAL_LEASE_PATH.parent, follow_symlinks=False)
+    require(
+        stat.S_ISDIR(parent.st_mode)
+        and parent.st_uid == 0
+        and parent.st_gid == 0
+        and stat.S_IMODE(parent.st_mode) & 0o022 == 0,
+        "global lease parent authority differs",
+    )
+    descriptor = custody.open(
+        GLOBAL_LEASE_PATH,
+        os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+        0o600,
+    )
+    observed = os.fstat(descriptor)
+    literal = os.stat(GLOBAL_LEASE_PATH, follow_symlinks=False)
+    require(
+        stat.S_ISREG(observed.st_mode)
+        and observed.st_uid == 0
+        and observed.st_gid == 0
+        and stat.S_IMODE(observed.st_mode) == 0o600
+        and observed.st_nlink == 1
+        and (observed.st_dev, observed.st_ino)
+        == (literal.st_dev, literal.st_ino),
+        "global lease identity differs",
+    )
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as error:
+        raise ManualRecoveryRequired("global runtime lifecycle lease is busy") from error
+    return descriptor
 
 
 def atomic_write_at(
@@ -2958,7 +5165,7 @@ def atomic_write_at(
 ) -> str:
     require(re.fullmatch(r"[A-Za-z0-9._-]+", name) is not None, "atomic filename is invalid")
     encoded = canonical_json(value)
-    require(len(encoded) <= MAX_JSON_BYTES, "atomic document is too large")
+    require_document_capacity(value, label="atomic document")
     pending = f".{name}.pending"
     try:
         pending_stat = os.stat(pending, dir_fd=directory_fd, follow_symlinks=False)
@@ -2975,32 +5182,32 @@ def atomic_write_at(
         )
         os.unlink(pending, dir_fd=directory_fd)
         os.fsync(directory_fd)
-    descriptor = os.open(
-        pending,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-        mode,
-        dir_fd=directory_fd,
-    )
-    try:
+    with ResourceCustody(label=f"atomic document {name}") as custody:
+        descriptor = custody.open(
+            pending,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            mode,
+            dir_fd=directory_fd,
+        )
         offset = 0
         while offset < len(encoded):
             offset += os.write(descriptor, encoded[offset:])
         os.fchmod(descriptor, mode)
         os.fchown(descriptor, uid, gid)
         os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
     os.replace(pending, name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
     os.fsync(directory_fd)
     return sha256_bytes(encoded)
 
 
 def read_json_at(directory_fd: int, name: str, label: str) -> dict[str, Any] | None:
-    try:
-        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
-    except FileNotFoundError:
-        return None
-    try:
+    with ResourceCustody(label=f"JSON document {name}") as custody:
+        try:
+            descriptor = custody.open(
+                name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd
+            )
+        except FileNotFoundError:
+            return None
         observed = os.fstat(descriptor)
         require(
             stat.S_ISREG(observed.st_mode)
@@ -3022,8 +5229,6 @@ def read_json_at(directory_fd: int, name: str, label: str) -> dict[str, Any] | N
             chunks.append(chunk)
         raw = b"".join(chunks)
         require(len(raw) == observed.st_size, f"{label} read length differs")
-    finally:
-        os.close(descriptor)
     value = parse_json_bytes(raw, label)
     require(isinstance(value, dict), f"{label} is not an object")
     assert isinstance(value, dict)
@@ -3058,39 +5263,35 @@ def _validate_control_root_descriptor(parent_fd: int, descriptor: int, name: str
     )
 
 
-def open_run_parent() -> int:
-    parent_fd = os.open("/run", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        parent = os.fstat(parent_fd)
-        require(
-            stat.S_ISDIR(parent.st_mode)
-            and parent.st_uid == 0
-            and parent.st_gid == 0
-            and stat.S_IMODE(parent.st_mode) & 0o022 == 0,
-            "legacy drain control parent differs",
-        )
-        return parent_fd
-    except BaseException:
-        os.close(parent_fd)
-        raise
+def open_run_parent(custody: ResourceCustody) -> int:
+    parent_fd = custody.open(
+        "/run", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    )
+    parent = os.fstat(parent_fd)
+    require(
+        stat.S_ISDIR(parent.st_mode)
+        and parent.st_uid == 0
+        and parent.st_gid == 0
+        and stat.S_IMODE(parent.st_mode) & 0o022 == 0,
+        "legacy drain control parent differs",
+    )
+    return parent_fd
 
 
-def open_control_root() -> int:
-    parent_fd = open_run_parent()
+def open_control_root(custody: ResourceCustody) -> int:
+    parent_fd = open_run_parent(custody)
     try:
-        descriptor = os.open(
+        descriptor = custody.open(
             CONTROL_ROOT.name,
             os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
             dir_fd=parent_fd,
         )
-        _validate_control_root_descriptor(parent_fd, descriptor, CONTROL_ROOT.name)
-        return descriptor
     except BaseException:
-        if "descriptor" in locals():
-            os.close(descriptor)
+        custody.close_descriptor(parent_fd)
         raise
-    finally:
-        os.close(parent_fd)
+    _validate_control_root_descriptor(parent_fd, descriptor, CONTROL_ROOT.name)
+    custody.close_descriptor(parent_fd)
+    return descriptor
 
 
 def snapshot_source(control_fd: int) -> str:
@@ -3120,21 +5321,19 @@ def snapshot_source(control_fd: int) -> str:
             )
             os.unlink(pending, dir_fd=control_fd)
             os.fsync(control_fd)
-        descriptor = os.open(
-            pending,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-            0o400,
-            dir_fd=control_fd,
-        )
-        try:
+        with ResourceCustody(label="legacy drain source snapshot") as custody:
+            descriptor = custody.open(
+                pending,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o400,
+                dir_fd=control_fd,
+            )
             offset = 0
             while offset < len(raw):
                 offset += os.write(descriptor, raw[offset:])
             os.fchmod(descriptor, 0o400)
             os.fchown(descriptor, 0, 0)
             os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
         os.replace(
             pending,
             SNAPSHOT_NAME,
@@ -3148,15 +5347,15 @@ def snapshot_source(control_fd: int) -> str:
 
 
 def _reduce_pending_control_capsule(parent_fd: int) -> None:
-    try:
-        descriptor = os.open(
-            CONTROL_PENDING_NAME,
-            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-            dir_fd=parent_fd,
-        )
-    except FileNotFoundError:
-        return
-    try:
+    with ResourceCustody(label="pending control capsule") as custody:
+        try:
+            descriptor = custody.open(
+                CONTROL_PENDING_NAME,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=parent_fd,
+            )
+        except FileNotFoundError:
+            return
         _validate_control_root_descriptor(parent_fd, descriptor, CONTROL_PENDING_NAME)
         for name in tuple(sorted(os.listdir(descriptor))):
             observed = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
@@ -3170,8 +5369,12 @@ def _reduce_pending_control_capsule(parent_fd: int) -> None:
                 and observed.st_size <= 4 * 1024 * 1024,
                 "legacy drain pending capsule entry differs",
             )
-            leaf_fd = os.open(name, os.O_PATH | os.O_NOFOLLOW, dir_fd=descriptor)
-            try:
+            with ResourceCustody(
+                label=f"pending control capsule entry {name}"
+            ) as leaf_custody:
+                leaf_fd = leaf_custody.open(
+                    name, os.O_PATH | os.O_NOFOLLOW, dir_fd=descriptor
+                )
                 bound = os.fstat(leaf_fd)
                 require(
                     (bound.st_dev, bound.st_ino)
@@ -3180,83 +5383,74 @@ def _reduce_pending_control_capsule(parent_fd: int) -> None:
                 )
                 os.unlink(name, dir_fd=descriptor)
                 os.fsync(descriptor)
-            finally:
-                os.close(leaf_fd)
         require(not os.listdir(descriptor), "legacy drain pending capsule did not empty")
         os.rmdir(CONTROL_PENDING_NAME, dir_fd=parent_fd)
         os.fsync(parent_fd)
-    finally:
-        os.close(descriptor)
 
 
 def publish_control_capsule(
+    custody: ResourceCustody,
     control: Mapping[str, object],
     state: Mapping[str, object],
 ) -> int:
-    parent_fd = open_run_parent()
-    descriptor: int | None = None
-    published = False
+    parent_fd = open_run_parent(custody)
     try:
-        try:
-            existing = os.open(
-                CONTROL_ROOT.name,
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                dir_fd=parent_fd,
-            )
-        except FileNotFoundError:
-            existing = None
-        if existing is not None:
-            _validate_control_root_descriptor(parent_fd, existing, CONTROL_ROOT.name)
-            return existing
-        _reduce_pending_control_capsule(parent_fd)
-        os.mkdir(CONTROL_PENDING_NAME, 0o700, dir_fd=parent_fd)
-        os.fsync(parent_fd)
-        descriptor = os.open(
-            CONTROL_PENDING_NAME,
+        existing = custody.open(
+            CONTROL_ROOT.name,
             os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
             dir_fd=parent_fd,
         )
-        _validate_control_root_descriptor(parent_fd, descriptor, CONTROL_PENDING_NAME)
-        source_digest = snapshot_source(descriptor)
-        require(
-            source_digest == control["sourceSha256"],
-            "legacy drain staged source digest differs",
+    except FileNotFoundError:
+        existing = None
+    if existing is not None:
+        _validate_control_root_descriptor(parent_fd, existing, CONTROL_ROOT.name)
+        custody.close_descriptor(parent_fd)
+        return existing
+    _reduce_pending_control_capsule(parent_fd)
+    os.mkdir(CONTROL_PENDING_NAME, 0o700, dir_fd=parent_fd)
+    os.fsync(parent_fd)
+    descriptor = custody.open(
+        CONTROL_PENDING_NAME,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        dir_fd=parent_fd,
+    )
+    _validate_control_root_descriptor(parent_fd, descriptor, CONTROL_PENDING_NAME)
+    source_digest = snapshot_source(descriptor)
+    require(
+        source_digest == control["sourceSha256"],
+        "legacy drain staged source digest differs",
+    )
+    atomic_write_at(descriptor, CONTROL_NAME, control)
+    atomic_write_at(descriptor, STATE_NAME, state)
+    require(
+        set(os.listdir(descriptor)) == {SNAPSHOT_NAME, CONTROL_NAME, STATE_NAME},
+        "legacy drain staged capsule is incomplete",
+    )
+    os.fsync(descriptor)
+    try:
+        rename_noreplace_at(
+            parent_fd,
+            CONTROL_PENDING_NAME,
+            parent_fd,
+            CONTROL_ROOT.name,
         )
-        atomic_write_at(descriptor, CONTROL_NAME, control)
-        atomic_write_at(descriptor, STATE_NAME, state)
-        require(
-            set(os.listdir(descriptor)) == {SNAPSHOT_NAME, CONTROL_NAME, STATE_NAME},
-            "legacy drain staged capsule is incomplete",
+    except OSError as error:
+        if error.errno != errno.EEXIST:
+            raise
+        custody.close_descriptor(descriptor)
+        _reduce_pending_control_capsule(parent_fd)
+        existing = custody.open(
+            CONTROL_ROOT.name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=parent_fd,
         )
-        os.fsync(descriptor)
-        try:
-            rename_noreplace_at(
-                parent_fd,
-                CONTROL_PENDING_NAME,
-                parent_fd,
-                CONTROL_ROOT.name,
-            )
-        except OSError as error:
-            if error.errno != errno.EEXIST:
-                raise
-            os.close(descriptor)
-            descriptor = None
-            _reduce_pending_control_capsule(parent_fd)
-            existing = os.open(
-                CONTROL_ROOT.name,
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                dir_fd=parent_fd,
-            )
-            _validate_control_root_descriptor(parent_fd, existing, CONTROL_ROOT.name)
-            return existing
-        os.fsync(parent_fd)
-        _validate_control_root_descriptor(parent_fd, descriptor, CONTROL_ROOT.name)
-        published = True
-        return descriptor
-    finally:
-        if descriptor is not None and not published:
-            os.close(descriptor)
-        os.close(parent_fd)
+        _validate_control_root_descriptor(parent_fd, existing, CONTROL_ROOT.name)
+        custody.close_descriptor(parent_fd)
+        return existing
+    os.fsync(parent_fd)
+    _validate_control_root_descriptor(parent_fd, descriptor, CONTROL_ROOT.name)
+    custody.close_descriptor(parent_fd)
+    return descriptor
 
 
 def validate_control(value: object) -> dict[str, Any]:
@@ -3360,6 +5554,7 @@ class ControlAuthority:
     @classmethod
     def create(
         cls,
+        custody: ResourceCustody,
         verification: Mapping[str, object],
         *,
         expected_verification_sha256: str,
@@ -3376,42 +5571,39 @@ class ControlAuthority:
         assert isinstance(raw, bytes)
         source_digest = sha256_bytes(raw)
         try:
-            existing_descriptor = open_control_root()
+            existing_descriptor = open_control_root(custody)
         except FileNotFoundError:
             existing_descriptor = None
         if existing_descriptor is not None:
-            try:
-                snapshot = read_at(
-                    existing_descriptor,
-                    SNAPSHOT_NAME,
-                    maximum=4 * 1024 * 1024,
-                )
-                control_raw = read_json_at(
-                    existing_descriptor,
-                    CONTROL_NAME,
-                    "legacy drain control",
-                )
-                require(control_raw is not None, "legacy drain control is absent")
-                control = validate_control(control_raw)
-                require(
-                    snapshot == raw
-                    and control["sourceSha256"] == source_digest
-                    and control["verificationSha256"] == expected_verification_sha256
-                    and control["authority"] == verification["authority"],
-                    "existing legacy drain control differs",
-                )
-                control_digest = sha256_bytes(canonical_json(control))
-                state_raw = read_json_at(
-                    existing_descriptor,
-                    STATE_NAME,
-                    "legacy drain state",
-                )
-                require(state_raw is not None, "legacy drain state is absent")
-                state = validate_state(state_raw, control_digest)
-                return cls(existing_descriptor, control, state)
-            except BaseException:
-                os.close(existing_descriptor)
-                raise
+            snapshot = read_at(
+                existing_descriptor,
+                SNAPSHOT_NAME,
+                maximum=4 * 1024 * 1024,
+            )
+            control_raw = read_json_at(
+                existing_descriptor,
+                CONTROL_NAME,
+                "legacy drain control",
+            )
+            require(control_raw is not None, "legacy drain control is absent")
+            control = validate_control(control_raw)
+            require(
+                snapshot == raw
+                and control["sourceSha256"] == source_digest
+                and control["verificationSha256"] == expected_verification_sha256
+                and control["authority"] == verification["authority"],
+                "existing legacy drain control differs",
+            )
+            control_digest = sha256_bytes(canonical_json(control))
+            state_raw = read_json_at(
+                existing_descriptor,
+                STATE_NAME,
+                "legacy drain state",
+            )
+            require(state_raw is not None, "legacy drain state is absent")
+            state = validate_state(state_raw, control_digest)
+            require_terminal_projection_capacity(control, state)
+            return cls(existing_descriptor, control, state)
         control_candidate = {
             "schema": CONTROL_SCHEMA,
             "observedAt": utc_now(),
@@ -3432,64 +5624,61 @@ class ControlAuthority:
             "phase": "stopping_intent_final",
             "netnsMarkerIdentity": None,
         }
-        descriptor = publish_control_capsule(control_candidate, state_candidate)
-        try:
-            snapshot = read_at(descriptor, SNAPSHOT_NAME, maximum=4 * 1024 * 1024)
-            require(snapshot == raw, "legacy drain published source snapshot differs")
-            existing_raw = read_json_at(descriptor, CONTROL_NAME, "legacy drain control")
-            require(existing_raw is not None, "legacy drain published control is absent")
-            control = validate_control(existing_raw)
-            require(
-                control["verificationSha256"] == expected_verification_sha256
-                and control["sourceSha256"] == source_digest
-                and control == control_candidate,
-                "existing legacy drain control differs",
-            )
-            control_digest = sha256_bytes(canonical_json(control))
-            state_raw = read_json_at(descriptor, STATE_NAME, "legacy drain state")
-            require(state_raw is not None, "legacy drain published state is absent")
-            state = validate_state(state_raw, control_digest)
-            require(state == state_candidate, "existing legacy drain initial state differs")
-            return cls(descriptor, control, state)
-        except BaseException:
-            os.close(descriptor)
-            raise
+        require_terminal_projection_capacity(control_candidate, state_candidate)
+        descriptor = publish_control_capsule(
+            custody,
+            control_candidate,
+            state_candidate,
+        )
+        snapshot = read_at(descriptor, SNAPSHOT_NAME, maximum=4 * 1024 * 1024)
+        require(snapshot == raw, "legacy drain published source snapshot differs")
+        existing_raw = read_json_at(descriptor, CONTROL_NAME, "legacy drain control")
+        require(existing_raw is not None, "legacy drain published control is absent")
+        control = validate_control(existing_raw)
+        require(
+            control["verificationSha256"] == expected_verification_sha256
+            and control["sourceSha256"] == source_digest
+            and control == control_candidate,
+            "existing legacy drain control differs",
+        )
+        control_digest = sha256_bytes(canonical_json(control))
+        state_raw = read_json_at(descriptor, STATE_NAME, "legacy drain state")
+        require(state_raw is not None, "legacy drain published state is absent")
+        state = validate_state(state_raw, control_digest)
+        require(state == state_candidate, "existing legacy drain initial state differs")
+        require_terminal_projection_capacity(control, state)
+        return cls(descriptor, control, state)
 
     @classmethod
-    def open(cls) -> "ControlAuthority":
+    def open(cls, custody: ResourceCustody) -> "ControlAuthority":
         held = globals().get("__legacy_control_root_fd__")
+        held_owner = globals().get("__legacy_control_root_owner__")
         require(
-            isinstance(held, int) and held >= 0,
+            exact_descriptor(held),
             "resume did not retain the in-sudo control-root descriptor",
         )
+        require(
+            callable(getattr(held_owner, "close", None)),
+            "resume did not retain the in-sudo control-root owner",
+        )
         assert isinstance(held, int)
-        descriptor = os.dup(held)
-        try:
-            snapshot = read_at(descriptor, SNAPSHOT_NAME, maximum=4 * 1024 * 1024)
-            control_raw = read_json_at(descriptor, CONTROL_NAME, "legacy drain control")
-            require(control_raw is not None, "legacy drain control is absent")
-            control = validate_control(control_raw)
-            require(
-                sha256_bytes(snapshot) == control["sourceSha256"],
-                "legacy drain source snapshot digest differs",
-            )
-            control_digest = sha256_bytes(canonical_json(control))
-            state_raw = read_json_at(descriptor, STATE_NAME, "legacy drain state")
-            require(state_raw is not None, "legacy drain state is absent")
-            state = validate_state(state_raw, control_digest)
-            return cls(descriptor, control, state)
-        except BaseException:
-            os.close(descriptor)
-            raise
-
-    def close(self) -> None:
-        os.close(self.descriptor)
-
-    def __enter__(self) -> "ControlAuthority":
-        return self
-
-    def __exit__(self, *_: object) -> None:
-        self.close()
+        descriptor = custody.dup(held)
+        held_owner.close()
+        globals()["__legacy_control_root_owner__"] = None
+        snapshot = read_at(descriptor, SNAPSHOT_NAME, maximum=4 * 1024 * 1024)
+        control_raw = read_json_at(descriptor, CONTROL_NAME, "legacy drain control")
+        require(control_raw is not None, "legacy drain control is absent")
+        control = validate_control(control_raw)
+        require(
+            sha256_bytes(snapshot) == control["sourceSha256"],
+            "legacy drain source snapshot digest differs",
+        )
+        control_digest = sha256_bytes(canonical_json(control))
+        state_raw = read_json_at(descriptor, STATE_NAME, "legacy drain state")
+        require(state_raw is not None, "legacy drain state is absent")
+        state = validate_state(state_raw, control_digest)
+        require_terminal_projection_capacity(control, state)
+        return cls(descriptor, control, state)
 
     @property
     def phase(self) -> str:
@@ -3587,7 +5776,7 @@ def hold_related_process_cutoff(
         allowed_roles=allowed_roles,
     )
     held: list[tuple[CapturedTask, Mapping[str, object]]] = []
-    try:
+    with ResourceCustody(label="held related-process cutoff") as custody:
         for row in proof["related"]:
             thread_group_id = int(row["pid"])
             task_id = int(row["taskId"])
@@ -3597,7 +5786,7 @@ def hold_related_process_cutoff(
                 "recorded task security proof is invalid: "
                 f"{thread_group_id}/{task_id}",
             )
-            task = capture_task(thread_group_id, task_id)
+            task = capture_task(custody, thread_group_id, task_id)
             manual(
                 task is not None,
                 "recorded legacy task left the action cutoff: "
@@ -3635,8 +5824,8 @@ def hold_related_process_cutoff(
                 task,
                 expected_security_state=row["securityState"],
             )
-        yield proof
-        if revalidate_after:
+
+        def require_post_action_reproof() -> None:
             for task, row in held:
                 reprove_captured_task(
                     task,
@@ -3661,9 +5850,22 @@ def hold_related_process_cutoff(
                     task,
                     expected_security_state=row["securityState"],
                 )
-    finally:
-        for task, _row in held:
-            task.close()
+
+        try:
+            yield proof
+        except BaseException as action_error:
+            if revalidate_after:
+                try:
+                    require_post_action_reproof()
+                except BaseException as reproof_error:
+                    add_error_note(
+                        action_error,
+                        "post-action related-process reproof also failed: ",
+                        reproof_error,
+                    )
+            raise
+        if revalidate_after:
+            require_post_action_reproof()
 
 
 def exact_process_status(recorded: Mapping[str, object]) -> str:
@@ -3701,13 +5903,13 @@ def signal_exact_process(recorded: Mapping[str, object], timeout_seconds: float 
     pid = int(recorded["pid"])
     if not process_exists(pid):
         return
-    try:
-        pidfd = os.pidfd_open(pid, 0)
-    except OSError as error:
-        if error.errno == errno.ESRCH:
-            return
-        raise
-    try:
+    with ResourceCustody(label=f"signal pidfd {pid}") as custody:
+        try:
+            pidfd = custody.pidfd_open(pid, 0)
+        except OSError as error:
+            if error.errno == errno.ESRCH:
+                return
+            raise
         if pidfd_exited(pidfd):
             return
         try:
@@ -3725,8 +5927,6 @@ def signal_exact_process(recorded: Mapping[str, object], timeout_seconds: float 
             bool(poller.poll(int(timeout_seconds * 1000))),
             f"recorded process did not exit after SIGTERM: {pid}",
         )
-    finally:
-        os.close(pidfd)
 
 
 def wait_for_roles_absent(
@@ -3752,6 +5952,7 @@ def wait_for_roles_absent(
 
 
 def runtime_root_descriptors(
+    custody: ResourceCustody,
     control: Mapping[str, object],
     *,
     require_root_owned: bool | None,
@@ -3759,46 +5960,42 @@ def runtime_root_descriptors(
     authority = control["authority"]
     assert isinstance(authority, dict)
     expected = authority["runtime"]["rootIdentity"]
-    parent_fd = os.open("/tmp", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    root_fd: int | None = None
-    try:
-        root_fd = os.open(
-            EXPECTED_RUNTIME_ROOT.name,
-            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-            dir_fd=parent_fd,
-        )
-        observed = os.fstat(root_fd)
-        literal = os.stat(
-            EXPECTED_RUNTIME_ROOT.name,
-            dir_fd=parent_fd,
-            follow_symlinks=False,
-        )
-        admitted_owners = (
-            {(0, 0)}
-            if require_root_owned is True
-            else {(int(expected["uid"]), int(expected["gid"]))}
-            if require_root_owned is False
-            else {(int(expected["uid"]), int(expected["gid"])), (0, 0)}
-        )
-        require(
-            stat.S_ISDIR(observed.st_mode)
-            and (observed.st_dev, observed.st_ino)
-            == (expected["device"], expected["inode"])
-            and (literal.st_dev, literal.st_ino)
-            == (observed.st_dev, observed.st_ino)
-            and (observed.st_uid, observed.st_gid) in admitted_owners
-            and stat.S_IMODE(observed.st_mode) == 0o700,
-            "legacy runtime root custody differs",
-        )
-        return parent_fd, root_fd
-    except BaseException:
-        if root_fd is not None:
-            os.close(root_fd)
-        os.close(parent_fd)
-        raise
+    parent_fd = custody.open(
+        "/tmp", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    )
+    root_fd = custody.open(
+        EXPECTED_RUNTIME_ROOT.name,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        dir_fd=parent_fd,
+    )
+    observed = os.fstat(root_fd)
+    literal = os.stat(
+        EXPECTED_RUNTIME_ROOT.name,
+        dir_fd=parent_fd,
+        follow_symlinks=False,
+    )
+    admitted_owners = (
+        {(0, 0)}
+        if require_root_owned is True
+        else {(int(expected["uid"]), int(expected["gid"]))}
+        if require_root_owned is False
+        else {(int(expected["uid"]), int(expected["gid"])), (0, 0)}
+    )
+    require(
+        stat.S_ISDIR(observed.st_mode)
+        and (observed.st_dev, observed.st_ino)
+        == (expected["device"], expected["inode"])
+        and (literal.st_dev, literal.st_ino)
+        == (observed.st_dev, observed.st_ino)
+        and (observed.st_uid, observed.st_gid) in admitted_owners
+        and stat.S_IMODE(observed.st_mode) == 0o700,
+        "legacy runtime root custody differs",
+    )
+    return parent_fd, root_fd
 
 
 def _recorded_directory_pair(
+    custody: ResourceCustody,
     control: Mapping[str, object],
     *,
     child_name: str,
@@ -3809,54 +6006,49 @@ def _recorded_directory_pair(
     state_expected = authority["stateRootIdentity"]
     child_expected = authority[authority_key]
     assert isinstance(state_expected, dict) and isinstance(child_expected, dict)
-    state_fd = os.open(
+    state_fd = custody.open(
         EXPECTED_STATE_ROOT,
         os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
     )
-    child_fd: int | None = None
-    try:
-        state_observed = os.fstat(state_fd)
-        state_literal = os.stat(EXPECTED_STATE_ROOT, follow_symlinks=False)
-        require(
-            stat.S_ISDIR(state_observed.st_mode)
-            and (state_observed.st_dev, state_observed.st_ino)
-            == (state_expected["device"], state_expected["inode"])
-            == (state_literal.st_dev, state_literal.st_ino),
-            "legacy state root binding differs",
-        )
-        child_fd = os.open(
-            child_name,
-            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-            dir_fd=state_fd,
-        )
-        child_observed = os.fstat(child_fd)
-        child_literal = os.stat(
-            child_name,
-            dir_fd=state_fd,
-            follow_symlinks=False,
-        )
-        require(
-            stat.S_ISDIR(child_observed.st_mode)
-            and (child_observed.st_dev, child_observed.st_ino)
-            == (child_expected["device"], child_expected["inode"])
-            == (child_literal.st_dev, child_literal.st_ino)
-            and (child_observed.st_uid, child_observed.st_gid)
-            == (child_expected["uid"], child_expected["gid"])
-            and stat.S_IMODE(child_observed.st_mode) == child_expected["mode"],
-            f"legacy {child_name} directory binding differs",
-        )
-        return state_fd, child_fd
-    except BaseException:
-        if child_fd is not None:
-            os.close(child_fd)
-        os.close(state_fd)
-        raise
+    state_observed = os.fstat(state_fd)
+    state_literal = os.stat(EXPECTED_STATE_ROOT, follow_symlinks=False)
+    require(
+        stat.S_ISDIR(state_observed.st_mode)
+        and (state_observed.st_dev, state_observed.st_ino)
+        == (state_expected["device"], state_expected["inode"])
+        == (state_literal.st_dev, state_literal.st_ino),
+        "legacy state root binding differs",
+    )
+    child_fd = custody.open(
+        child_name,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        dir_fd=state_fd,
+    )
+    child_observed = os.fstat(child_fd)
+    child_literal = os.stat(
+        child_name,
+        dir_fd=state_fd,
+        follow_symlinks=False,
+    )
+    require(
+        stat.S_ISDIR(child_observed.st_mode)
+        and (child_observed.st_dev, child_observed.st_ino)
+        == (child_expected["device"], child_expected["inode"])
+        == (child_literal.st_dev, child_literal.st_ino)
+        and (child_observed.st_uid, child_observed.st_gid)
+        == (child_expected["uid"], child_expected["gid"])
+        and stat.S_IMODE(child_observed.st_mode) == child_expected["mode"],
+        f"legacy {child_name} directory binding differs",
+    )
+    return state_fd, child_fd
 
 
 def recorded_evidence_descriptors(
+    custody: ResourceCustody,
     control: Mapping[str, object],
 ) -> tuple[int, int]:
     return _recorded_directory_pair(
+        custody,
         control,
         child_name="evidence",
         authority_key="evidenceRootIdentity",
@@ -3864,9 +6056,11 @@ def recorded_evidence_descriptors(
 
 
 def recorded_config_descriptors(
+    custody: ResourceCustody,
     control: Mapping[str, object],
 ) -> tuple[int, int]:
     return _recorded_directory_pair(
+        custody,
         control,
         child_name="config",
         authority_key="configRootIdentity",
@@ -3909,14 +6103,130 @@ def require_recorded_entry(
     )
 
 
+def require_recorded_persistent_root_bindings(
+    control: Mapping[str, object],
+    state_fd: int,
+    roots: Mapping[str, int],
+) -> None:
+    authority = control["authority"]
+    assert isinstance(authority, dict)
+    state_expected = authority["stateRootIdentity"]
+    expected_roots = authority["persistentRoots"]
+    require(
+        isinstance(state_expected, dict)
+        and isinstance(expected_roots, dict)
+        and set(expected_roots) == {str(path) for path in PERSISTENT_ROOTS}
+        and set(roots) == set(expected_roots),
+        "recorded persistent-root roster differs",
+    )
+    state_observed = os.fstat(state_fd)
+    state_literal = os.stat(EXPECTED_STATE_ROOT, follow_symlinks=False)
+    require_recorded_entry(
+        state_observed,
+        state_expected,
+        label="persistent-root state",
+    )
+    require(
+        stat.S_ISDIR(state_observed.st_mode)
+        and (state_observed.st_dev, state_observed.st_ino)
+        == (state_expected["device"], state_expected["inode"])
+        == (state_literal.st_dev, state_literal.st_ino),
+        "persistent-root state binding differs",
+    )
+    for path in PERSISTENT_ROOTS:
+        expected = expected_roots[str(path)]
+        require(
+            isinstance(expected, dict) and path.parent == EXPECTED_STATE_ROOT,
+            f"recorded persistent-root authority is invalid: {path}",
+        )
+        descriptor = roots[str(path)]
+        observed = os.fstat(descriptor)
+        literal = os.stat(
+            path.name,
+            dir_fd=state_fd,
+            follow_symlinks=False,
+        )
+        require_recorded_entry(
+            observed,
+            expected,
+            label=f"recorded persistent root {path}",
+        )
+        require(
+            stat.S_ISDIR(observed.st_mode)
+            and (literal.st_dev, literal.st_ino)
+            == (observed.st_dev, observed.st_ino),
+            f"recorded persistent-root name binding differs: {path}",
+        )
+
+
+@dataclass
+class RecordedPersistentRoots:
+    state_fd: int
+    rows: tuple[tuple[str, int], ...]
+
+
+def recorded_persistent_root_descriptors(
+    custody: ResourceCustody,
+    control: Mapping[str, object],
+) -> RecordedPersistentRoots:
+    state_fd = custody.open(
+        EXPECTED_STATE_ROOT,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+    )
+    rows: list[tuple[str, int]] = []
+    for path in PERSISTENT_ROOTS:
+        descriptor = custody.open(
+            path.name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=state_fd,
+        )
+        rows.append((str(path), descriptor))
+    result_rows = tuple(rows)
+    roots = dict(result_rows)
+    require_recorded_persistent_root_bindings(control, state_fd, roots)
+    return RecordedPersistentRoots(state_fd, result_rows)
+
+
+@contextlib.contextmanager
+def hold_recorded_persistent_roots(
+    control: Mapping[str, object],
+) -> Iterator[dict[str, int]]:
+    with ResourceCustody(label="held recorded persistent roots") as custody:
+        owner = recorded_persistent_root_descriptors(custody, control)
+        roots = dict(owner.rows)
+        try:
+            yield roots
+        except BaseException as action_error:
+            try:
+                require_recorded_persistent_root_bindings(
+                    control,
+                    owner.state_fd,
+                    roots,
+                )
+            except BaseException as reproof_error:
+                add_error_note(
+                    action_error,
+                    "post-action persistent-root reproof also failed: ",
+                    reproof_error,
+                )
+            raise
+        require_recorded_persistent_root_bindings(control, owner.state_fd, roots)
+
+
+def bound_registry_storage(roots: Mapping[str, int]) -> Path:
+    descriptor = roots.get(str(EXPECTED_STATE_ROOT / "registry"))
+    require(
+        isinstance(descriptor, int) and descriptor >= 0,
+        "held registry persistent root is absent",
+    )
+    return Path(f"/proc/self/fd/{descriptor}/docker/registry/v2")
+
+
 @dataclass
 class RuntimeEntryProof:
     descriptor: int
     observed: os.stat_result
     link_target: str | None
-
-    def close(self) -> None:
-        os.close(self.descriptor)
 
 
 def _require_runtime_entry_contract(
@@ -4001,6 +6311,7 @@ def _reprove_runtime_entry_name(
 
 
 def _verify_runtime_entry_no_follow(
+    custody: ResourceCustody,
     directory_fd: int,
     name: str,
     relative: str,
@@ -4011,53 +6322,48 @@ def _verify_runtime_entry_no_follow(
     label: str,
 ) -> RuntimeEntryProof:
     observed = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-    descriptor = os.open(
+    descriptor = custody.open(
         name,
         os.O_PATH | os.O_NOFOLLOW,
         dir_fd=directory_fd,
     )
-    keep = False
-    try:
-        link_target = (
-            os.readlink(name, dir_fd=directory_fd)
-            if stat.S_ISLNK(observed.st_mode)
-            else None
-        )
-        _require_runtime_entry_contract(relative, observed, link_target)
-        proof = RuntimeEntryProof(descriptor, observed, link_target)
-        _reprove_runtime_entry_name(
-            directory_fd,
-            name,
-            proof,
-            label=label,
-        )
-        if forbid_docker_socket and relative == "docker.sock":
-            raise ManualRecoveryRequired("legacy Docker API socket reappeared")
-        if marker_identity is not None and relative == TASK_NETNS_RELATIVE:
-            _require_task_netns_marker(observed, marker_identity)
-        elif expected is not None:
-            require_recorded_entry(observed, expected, label=label)
-            if link_target is not None:
-                require(
-                    expected.get("linkTarget") == link_target
-                    and expected.get("linkTargetSha256")
-                    == EXPECTED_CONTAINERD_WORK_TARGET_SHA256,
-                    f"{label} recorded link authority differs",
-                )
-            else:
-                require(
-                    "linkTarget" not in expected
-                    and "linkTargetSha256" not in expected,
-                    f"{label} invents link authority",
-                )
-        keep = True
-        return proof
-    finally:
-        if not keep:
-            os.close(descriptor)
+    link_target = (
+        os.readlink(name, dir_fd=directory_fd)
+        if stat.S_ISLNK(observed.st_mode)
+        else None
+    )
+    _require_runtime_entry_contract(relative, observed, link_target)
+    proof = RuntimeEntryProof(descriptor, observed, link_target)
+    _reprove_runtime_entry_name(
+        directory_fd,
+        name,
+        proof,
+        label=label,
+    )
+    if forbid_docker_socket and relative == "docker.sock":
+        raise ManualRecoveryRequired("legacy Docker API socket reappeared")
+    if marker_identity is not None and relative == TASK_NETNS_RELATIVE:
+        _require_task_netns_marker(observed, marker_identity)
+    elif expected is not None:
+        require_recorded_entry(observed, expected, label=label)
+        if link_target is not None:
+            require(
+                expected.get("linkTarget") == link_target
+                and expected.get("linkTargetSha256")
+                == EXPECTED_CONTAINERD_WORK_TARGET_SHA256,
+                f"{label} recorded link authority differs",
+            )
+        else:
+            require(
+                "linkTarget" not in expected
+                and "linkTargetSha256" not in expected,
+                f"{label} invents link authority",
+            )
+    return proof
 
 
 def _open_bound_runtime_directory(
+    custody: ResourceCustody,
     parent_fd: int,
     name: str,
     proof: RuntimeEntryProof,
@@ -4065,28 +6371,24 @@ def _open_bound_runtime_directory(
     label: str,
 ) -> int:
     require(stat.S_ISDIR(proof.observed.st_mode), f"{label} is not a directory")
-    descriptor = os.open(
+    descriptor = custody.open(
         name,
         os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
         dir_fd=parent_fd,
     )
-    try:
-        observed = os.fstat(descriptor)
-        literal = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-        require(
-            (observed.st_dev, observed.st_ino, stat.S_IFMT(observed.st_mode))
-            == (
-                proof.observed.st_dev,
-                proof.observed.st_ino,
-                stat.S_IFMT(proof.observed.st_mode),
-            )
-            == (literal.st_dev, literal.st_ino, stat.S_IFMT(literal.st_mode)),
-            f"{label} directory binding differs",
+    observed = os.fstat(descriptor)
+    literal = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    require(
+        (observed.st_dev, observed.st_ino, stat.S_IFMT(observed.st_mode))
+        == (
+            proof.observed.st_dev,
+            proof.observed.st_ino,
+            stat.S_IFMT(proof.observed.st_mode),
         )
-        return descriptor
-    except BaseException:
-        os.close(descriptor)
-        raise
+        == (literal.st_dev, literal.st_ino, stat.S_IFMT(literal.st_mode)),
+        f"{label} directory binding differs",
+    )
+    return descriptor
 
 
 def transfer_runtime_custody(control: Mapping[str, object]) -> None:
@@ -4098,8 +6400,12 @@ def transfer_runtime_custody(control: Mapping[str, object]) -> None:
 
 
 def _transfer_runtime_custody(control: Mapping[str, object]) -> None:
-    parent_fd, root_fd = runtime_root_descriptors(control, require_root_owned=None)
-    try:
+    with ResourceCustody(label="runtime custody transfer") as custody:
+        parent_fd, root_fd = runtime_root_descriptors(
+            custody,
+            control,
+            require_root_owned=None,
+        )
         os.fchown(root_fd, 0, 0)
         os.fchmod(root_fd, 0o700)
         os.fsync(root_fd)
@@ -4117,9 +6423,6 @@ def _transfer_runtime_custody(control: Mapping[str, object]) -> None:
             "legacy runtime root changed during custody transfer",
         )
         os.fsync(parent_fd)
-    finally:
-        os.close(root_fd)
-        os.close(parent_fd)
 
 
 def remove_bound_socket(control: Mapping[str, object]) -> None:
@@ -4143,11 +6446,16 @@ def _remove_bound_socket(control: Mapping[str, object]) -> None:
     socket_present = exists_nofollow(DOCKER_SOCKET)
     if socket_present:
         runtime_socket_snapshot(int(process_authority(control, "dockerd")["pid"]))
-    parent_fd, root_fd = runtime_root_descriptors(control, require_root_owned=True)
-    leaf_fd: int | None = None
-    try:
+    with ResourceCustody(label="Docker API revocation") as custody:
+        parent_fd, root_fd = runtime_root_descriptors(
+            custody,
+            control,
+            require_root_owned=True,
+        )
         try:
-            leaf_fd = os.open("docker.sock", os.O_PATH | os.O_NOFOLLOW, dir_fd=root_fd)
+            leaf_fd = custody.open(
+                "docker.sock", os.O_PATH | os.O_NOFOLLOW, dir_fd=root_fd
+            )
         except FileNotFoundError:
             leaf_fd = None
         if leaf_fd is None:
@@ -4169,11 +6477,6 @@ def _remove_bound_socket(control: Mapping[str, object]) -> None:
             )
             os.unlink("docker.sock", dir_fd=root_fd)
             os.fsync(root_fd)
-    finally:
-        if leaf_fd is not None:
-            os.close(leaf_fd)
-        os.close(root_fd)
-        os.close(parent_fd)
     post_revocation_socket_snapshot(control)
 
 
@@ -4215,9 +6518,10 @@ def fd_umount(descriptor: int) -> None:
 
 
 def fd_mount_id(descriptor: int) -> int:
-    raw = Path(f"/proc/self/fdinfo/{descriptor}").read_text(
-        encoding="ascii"
-    )
+    raw = read_path_bytes(
+        Path(f"/proc/self/fdinfo/{descriptor}"),
+        maximum=64 * 1024,
+    ).decode("ascii", "strict")
     values = [
         line.split(":", 1)[1].strip()
         for line in raw.splitlines()
@@ -4263,18 +6567,15 @@ def settle_task_netns(control: Mapping[str, object]) -> dict[str, object]:
         item for item in observed["occurrences"] if item["target"] == owned
     ]
     rows = _runtime_tree_rows(control)
-    root_parent_fd, root_fd = runtime_root_descriptors(
-        control,
-        require_root_owned=True,
-    )
-    exec_fd: int | None = None
-    netns_fd: int | None = None
-    target_fd: int | None = None
-    exec_proof: RuntimeEntryProof | None = None
-    netns_proof: RuntimeEntryProof | None = None
     marker_identity: dict[str, object] | None = None
-    try:
+    with ResourceCustody(label="legacy task netns transition") as custody:
+        root_parent_fd, root_fd = runtime_root_descriptors(
+            custody,
+            control,
+            require_root_owned=True,
+        )
         exec_proof = _verify_runtime_entry_no_follow(
+            custody,
             root_fd,
             "docker-exec",
             "docker-exec",
@@ -4284,12 +6585,14 @@ def settle_task_netns(control: Mapping[str, object]) -> dict[str, object]:
             label="legacy runtime entry docker-exec",
         )
         exec_fd = _open_bound_runtime_directory(
+            custody,
             root_fd,
             "docker-exec",
             exec_proof,
             label="legacy runtime entry docker-exec",
         )
         netns_proof = _verify_runtime_entry_no_follow(
+            custody,
             exec_fd,
             "netns",
             "docker-exec/netns",
@@ -4299,12 +6602,13 @@ def settle_task_netns(control: Mapping[str, object]) -> dict[str, object]:
             label="legacy runtime entry docker-exec/netns",
         )
         netns_fd = _open_bound_runtime_directory(
+            custody,
             exec_fd,
             "netns",
             netns_proof,
             label="legacy runtime entry docker-exec/netns",
         )
-        target_fd = os.open(
+        target_fd = custody.open(
             "default",
             os.O_PATH | os.O_NOFOLLOW,
             dir_fd=netns_fd,
@@ -4347,47 +6651,36 @@ def settle_task_netns(control: Mapping[str, object]) -> dict[str, object]:
                 "legacy netns roster changed before fd-backed unmount",
             )
             fd_umount(target_fd)
-            os.close(target_fd)
-            target_fd = None
+            custody.close_descriptor(target_fd)
         else:
             manual(
                 observed["occurrences"] == expected_ambient,
                 "legacy netns absent replay roster differs",
             )
-        marker_fd = os.open(
+        marker_fd = custody.open(
             "default",
             os.O_RDONLY | os.O_NOFOLLOW,
             dir_fd=netns_fd,
         )
-        try:
-            marker = os.fstat(marker_fd)
-            marker_literal = os.stat(
-                "default", dir_fd=netns_fd, follow_symlinks=False
-            )
-            require(
-                stat.S_ISREG(marker.st_mode)
-                and marker.st_uid == 0
-                and marker.st_gid == 0
-                and stat.S_IMODE(marker.st_mode) == TASK_NETNS_MARKER_MODE
-                and marker.st_nlink == 1
-                and marker.st_size == 0
-                and (marker_literal.st_dev, marker_literal.st_ino)
-                == (marker.st_dev, marker.st_ino),
-                "legacy task nsfs did not reveal its exact root-owned empty marker",
-            )
-            marker_identity = identity_document(TASK_NETNS_TARGET, marker)
-            marker_identity.pop("path")
-            marker_identity["size"] = marker.st_size
-        finally:
-            os.close(marker_fd)
+        marker = os.fstat(marker_fd)
+        marker_literal = os.stat(
+            "default", dir_fd=netns_fd, follow_symlinks=False
+        )
+        require(
+            stat.S_ISREG(marker.st_mode)
+            and marker.st_uid == 0
+            and marker.st_gid == 0
+            and stat.S_IMODE(marker.st_mode) == TASK_NETNS_MARKER_MODE
+            and marker.st_nlink == 1
+            and marker.st_size == 0
+            and (marker_literal.st_dev, marker_literal.st_ino)
+            == (marker.st_dev, marker.st_ino),
+            "legacy task nsfs did not reveal its exact root-owned empty marker",
+        )
+        marker_identity = identity_document(TASK_NETNS_TARGET, marker)
+        marker_identity.pop("path")
+        marker_identity["size"] = marker.st_size
         os.fsync(netns_fd)
-    finally:
-        for descriptor in (target_fd, netns_fd, exec_fd, root_fd, root_parent_fd):
-            if descriptor is not None:
-                os.close(descriptor)
-        for proof in (netns_proof, exec_proof):
-            if proof is not None:
-                proof.close()
     final = stable_global_mount_roster(
         TASK_NETNS_TARGET,
         anchor,
@@ -4436,16 +6729,19 @@ def _scan_runtime_directory(
             relative in expected_rows,
             f"legacy runtime preflight found a foreign entry: {relative}",
         )
-        proof = _verify_runtime_entry_no_follow(
-            directory_fd,
-            name,
-            relative,
-            expected=expected_rows[relative],
-            marker_identity=marker_identity,
-            forbid_docker_socket=True,
-            label=f"legacy runtime entry {relative}",
-        )
-        try:
+        with ResourceCustody(
+            label=f"runtime preflight proof {relative}"
+        ) as proof_custody:
+            proof = _verify_runtime_entry_no_follow(
+                proof_custody,
+                directory_fd,
+                name,
+                relative,
+                expected=expected_rows[relative],
+                marker_identity=marker_identity,
+                forbid_docker_socket=True,
+                label=f"legacy runtime entry {relative}",
+            )
             row = {
                 "path": relative,
                 "device": proof.observed.st_dev,
@@ -4465,13 +6761,16 @@ def _scan_runtime_directory(
             result.append(row)
             if not stat.S_ISDIR(proof.observed.st_mode):
                 continue
-            child_fd = _open_bound_runtime_directory(
-                directory_fd,
-                name,
-                proof,
-                label=f"legacy runtime entry {relative}",
-            )
-            try:
+            with ResourceCustody(
+                label=f"runtime preflight directory {relative}"
+            ) as child_custody:
+                child_fd = _open_bound_runtime_directory(
+                    child_custody,
+                    directory_fd,
+                    name,
+                    proof,
+                    label=f"legacy runtime entry {relative}",
+                )
                 result.extend(
                     _scan_runtime_directory(
                         child_fd,
@@ -4480,10 +6779,6 @@ def _scan_runtime_directory(
                         marker_identity=marker_identity,
                     )
                 )
-            finally:
-                os.close(child_fd)
-        finally:
-            proof.close()
     return result
 
 
@@ -4498,11 +6793,12 @@ def runtime_reduction_preflight(
         EXPECTED_RUNTIME_ROOT,
         use_recorded_anchors=False,
     )
-    parent_fd, root_fd = runtime_root_descriptors(
-        control,
-        require_root_owned=True,
-    )
-    try:
+    with ResourceCustody(label="runtime reduction preflight root") as custody:
+        parent_fd, root_fd = runtime_root_descriptors(
+            custody,
+            control,
+            require_root_owned=True,
+        )
         rows = _runtime_tree_rows(control)
         first = _scan_runtime_directory(
             root_fd,
@@ -4515,17 +6811,16 @@ def runtime_reduction_preflight(
             marker_identity=marker_identity,
         )
         require(first == second, "legacy runtime tree changed across preflight passes")
-    finally:
-        os.close(root_fd)
-        os.close(parent_fd)
 
     authority = control["authority"]
     assert isinstance(authority, dict)
     expected_pidfile = authority["configs"]["containerdPidfile"]
-    state_fd, config_fd = recorded_config_descriptors(control)
-    try:
+    with ResourceCustody(
+        label="runtime reduction pidfile preflight"
+    ) as custody:
+        state_fd, config_fd = recorded_config_descriptors(custody, control)
         try:
-            pidfile_fd = os.open(
+            pidfile_fd = custody.open(
                 CONTAINERD_PIDFILE.name,
                 os.O_RDONLY | os.O_NOFOLLOW,
                 dir_fd=config_fd,
@@ -4533,40 +6828,34 @@ def runtime_reduction_preflight(
         except FileNotFoundError:
             pidfile = None
         else:
-            try:
-                observed = os.fstat(pidfile_fd)
-                literal = os.stat(
-                    CONTAINERD_PIDFILE.name,
-                    dir_fd=config_fd,
-                    follow_symlinks=False,
-                )
-                require_recorded_entry(
-                    observed,
-                    expected_pidfile,
-                    label="legacy containerd pidfile",
-                )
-                raw = b""
-                while len(raw) <= 64:
-                    chunk = os.read(pidfile_fd, 65 - len(raw))
-                    if not chunk:
-                        break
-                    raw += chunk
-                require(
-                    raw.decode("ascii", "strict").strip()
-                    == str(expected_pidfile["expectedPid"])
-                    and sha256_bytes(raw) == expected_pidfile["sha256"]
-                    and (literal.st_dev, literal.st_ino)
-                    == (observed.st_dev, observed.st_ino),
-                    "legacy containerd pidfile bytes or binding differ",
-                )
-                pidfile = identity_document(CONTAINERD_PIDFILE, observed)
-                pidfile["sha256"] = sha256_bytes(raw)
-                pidfile["size"] = len(raw)
-            finally:
-                os.close(pidfile_fd)
-    finally:
-        os.close(config_fd)
-        os.close(state_fd)
+            observed = os.fstat(pidfile_fd)
+            literal = os.stat(
+                CONTAINERD_PIDFILE.name,
+                dir_fd=config_fd,
+                follow_symlinks=False,
+            )
+            require_recorded_entry(
+                observed,
+                expected_pidfile,
+                label="legacy containerd pidfile",
+            )
+            raw = b""
+            while len(raw) <= 64:
+                chunk = os.read(pidfile_fd, 65 - len(raw))
+                if not chunk:
+                    break
+                raw += chunk
+            require(
+                raw.decode("ascii", "strict").strip()
+                == str(expected_pidfile["expectedPid"])
+                and sha256_bytes(raw) == expected_pidfile["sha256"]
+                and (literal.st_dev, literal.st_ino)
+                == (observed.st_dev, observed.st_ino),
+                "legacy containerd pidfile bytes or binding differ",
+            )
+            pidfile = identity_document(CONTAINERD_PIDFILE, observed)
+            pidfile["sha256"] = sha256_bytes(raw)
+            pidfile["size"] = len(raw)
     manual(pidfile is not None, "legacy containerd pidfile disappeared")
     return {"runtime": second, "pidfile": pidfile}
 
@@ -4575,11 +6864,12 @@ def require_containerd_pidfile_exact(control: Mapping[str, object]) -> None:
     authority = control["authority"]
     assert isinstance(authority, dict)
     expected = authority["configs"]["containerdPidfile"]
-    state_fd, config_fd = recorded_config_descriptors(control)
-    leaf_fd: int | None = None
-    try:
+    with ResourceCustody(
+        label="containerd pidfile terminal reproof"
+    ) as custody:
+        state_fd, config_fd = recorded_config_descriptors(custody, control)
         try:
-            leaf_fd = os.open(
+            leaf_fd = custody.open(
                 CONTAINERD_PIDFILE.name,
                 os.O_RDONLY | os.O_NOFOLLOW,
                 dir_fd=config_fd,
@@ -4605,11 +6895,6 @@ def require_containerd_pidfile_exact(control: Mapping[str, object]) -> None:
             == (observed.st_dev, observed.st_ino),
             "legacy containerd pidfile changed during terminal reproof",
         )
-    finally:
-        if leaf_fd is not None:
-            os.close(leaf_fd)
-        os.close(config_fd)
-        os.close(state_fd)
 
 
 def _reduce_runtime_directory(
@@ -4625,24 +6910,30 @@ def _reduce_runtime_directory(
             relative in expected_rows,
             f"legacy runtime reducer found a foreign entry: {relative}",
         )
-        proof = _verify_runtime_entry_no_follow(
-            directory_fd,
-            name,
-            relative,
-            expected=expected_rows[relative],
-            marker_identity=marker_identity,
-            forbid_docker_socket=True,
-            label=f"legacy runtime entry {relative}",
-        )
-        try:
+        with ResourceCustody(
+            label=f"runtime reduction proof {relative}"
+        ) as proof_custody:
+            proof = _verify_runtime_entry_no_follow(
+                proof_custody,
+                directory_fd,
+                name,
+                relative,
+                expected=expected_rows[relative],
+                marker_identity=marker_identity,
+                forbid_docker_socket=True,
+                label=f"legacy runtime entry {relative}",
+            )
             if stat.S_ISDIR(proof.observed.st_mode):
-                child_fd = _open_bound_runtime_directory(
-                    directory_fd,
-                    name,
-                    proof,
-                    label=f"legacy runtime entry {relative}",
-                )
-                try:
+                with ResourceCustody(
+                    label=f"runtime reduction directory {relative}"
+                ) as child_custody:
+                    child_fd = _open_bound_runtime_directory(
+                        child_custody,
+                        directory_fd,
+                        name,
+                        proof,
+                        label=f"legacy runtime entry {relative}",
+                    )
                     _reduce_runtime_directory(
                         child_fd,
                         expected_rows,
@@ -4661,8 +6952,6 @@ def _reduce_runtime_directory(
                         label=f"legacy runtime entry {relative}",
                     )
                     os.rmdir(name, dir_fd=directory_fd)
-                finally:
-                    os.close(child_fd)
             else:
                 _reprove_runtime_entry_name(
                     directory_fd,
@@ -4671,8 +6960,6 @@ def _reduce_runtime_directory(
                     label=f"legacy runtime entry {relative}",
                 )
                 os.unlink(name, dir_fd=directory_fd)
-        finally:
-            proof.close()
         os.fsync(directory_fd)
 
 
@@ -4687,11 +6974,12 @@ def reduce_runtime_tree(
         EXPECTED_RUNTIME_ROOT,
         use_recorded_anchors=False,
     )
-    parent_fd, root_fd = runtime_root_descriptors(
-        control,
-        require_root_owned=True,
-    )
-    try:
+    with ResourceCustody(label="runtime tree reduction") as custody:
+        parent_fd, root_fd = runtime_root_descriptors(
+            custody,
+            control,
+            require_root_owned=True,
+        )
         _reduce_runtime_directory(
             root_fd,
             _runtime_tree_rows(control),
@@ -4707,21 +6995,21 @@ def reduce_runtime_tree(
         )
         os.fsync(root_fd)
         os.fsync(parent_fd)
-    finally:
-        os.close(root_fd)
-        os.close(parent_fd)
 
 
 def remove_empty_runtime_root(control: Mapping[str, object]) -> None:
     require_related_process_cutoff(control, allowed_roles=set())
-    try:
-        parent_fd, root_fd = runtime_root_descriptors(
-            control,
-            require_root_owned=True,
-        )
-    except FileNotFoundError:
-        parent_fd = os.open("/tmp", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    with ResourceCustody(label="empty runtime root removal") as custody:
         try:
+            parent_fd, root_fd = runtime_root_descriptors(
+                custody,
+                control,
+                require_root_owned=True,
+            )
+        except FileNotFoundError:
+            parent_fd = custody.open(
+                "/tmp", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            )
             for _ in range(2):
                 try:
                     os.stat(
@@ -4733,10 +7021,7 @@ def remove_empty_runtime_root(control: Mapping[str, object]) -> None:
                     continue
                 raise DrainError("legacy runtime root absence is unstable")
             os.fsync(parent_fd)
-        finally:
-            os.close(parent_fd)
-        return
-    try:
+            return
         require(not os.listdir(root_fd), "legacy runtime empty marker is not empty")
         literal = os.stat(
             EXPECTED_RUNTIME_ROOT.name,
@@ -4753,12 +7038,10 @@ def remove_empty_runtime_root(control: Mapping[str, object]) -> None:
         )
         os.rmdir(EXPECTED_RUNTIME_ROOT.name, dir_fd=parent_fd)
         os.fsync(parent_fd)
-    finally:
-        os.close(root_fd)
-        os.close(parent_fd)
 
 
 def _read_regular_at(
+    custody: ResourceCustody,
     directory_fd: int,
     name: str,
     *,
@@ -4768,60 +7051,56 @@ def _read_regular_at(
     allowed_links: frozenset[int] = frozenset({1}),
 ) -> tuple[int, os.stat_result, bytes] | None:
     try:
-        descriptor = os.open(
+        descriptor = custody.open(
             name,
             flags | os.O_NOFOLLOW,
             dir_fd=directory_fd,
         )
     except FileNotFoundError:
         return None
-    try:
-        observed = os.fstat(descriptor)
-        require(
-            stat.S_ISREG(observed.st_mode)
-            and observed.st_nlink in allowed_links
-            and 0 <= minimum <= observed.st_size <= maximum,
-            f"bound regular file identity differs: {name}",
+    observed = os.fstat(descriptor)
+    require(
+        stat.S_ISREG(observed.st_mode)
+        and observed.st_nlink in allowed_links
+        and 0 <= minimum <= observed.st_size <= maximum,
+        f"bound regular file identity differs: {name}",
+    )
+    raw = b""
+    while len(raw) <= maximum:
+        chunk = os.read(descriptor, min(64 * 1024, maximum + 1 - len(raw)))
+        if not chunk:
+            break
+        raw += chunk
+    require(
+        len(raw) == observed.st_size and len(raw) <= maximum,
+        f"bound regular file read differs: {name}",
+    )
+    literal = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    after = os.fstat(descriptor)
+    require(
+        (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_uid,
+            after.st_gid,
+            stat.S_IMODE(after.st_mode),
+            after.st_nlink,
         )
-        raw = b""
-        while len(raw) <= maximum:
-            chunk = os.read(descriptor, min(64 * 1024, maximum + 1 - len(raw)))
-            if not chunk:
-                break
-            raw += chunk
-        require(
-            len(raw) == observed.st_size and len(raw) <= maximum,
-            f"bound regular file read differs: {name}",
+        == (
+            observed.st_dev,
+            observed.st_ino,
+            observed.st_size,
+            observed.st_uid,
+            observed.st_gid,
+            stat.S_IMODE(observed.st_mode),
+            observed.st_nlink,
         )
-        literal = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-        after = os.fstat(descriptor)
-        require(
-            (
-                after.st_dev,
-                after.st_ino,
-                after.st_size,
-                after.st_uid,
-                after.st_gid,
-                stat.S_IMODE(after.st_mode),
-                after.st_nlink,
-            )
-            == (
-                observed.st_dev,
-                observed.st_ino,
-                observed.st_size,
-                observed.st_uid,
-                observed.st_gid,
-                stat.S_IMODE(observed.st_mode),
-                observed.st_nlink,
-            )
-            and (literal.st_dev, literal.st_ino)
-            == (observed.st_dev, observed.st_ino),
-            f"bound regular file changed while reading: {name}",
-        )
-        return descriptor, observed, raw
-    except BaseException:
-        os.close(descriptor)
-        raise
+        and (literal.st_dev, literal.st_ino)
+        == (observed.st_dev, observed.st_ino),
+        f"bound regular file changed while reading: {name}",
+    )
+    return descriptor, observed, raw
 
 
 def settle_linked_publication_replay(directory_fd: int) -> None:
@@ -4967,21 +7246,21 @@ def legacy_receipt_state(
     authority = control["authority"]
     assert isinstance(authority, dict)
     expected = authority["legacyReceipt"]
-    state_fd, evidence_fd = recorded_evidence_descriptors(control)
-    live: tuple[int, os.stat_result, bytes] | None = None
-    archive: tuple[int, os.stat_result, bytes] | None = None
-    try:
+    with ResourceCustody(label="legacy receipt state") as custody:
+        state_fd, evidence_fd = recorded_evidence_descriptors(custody, control)
         # A linked entry may be visible after response loss but not yet durable.
         # Rebinding this recorded parent, fsyncing it, and only then rereading
         # makes every archived replay complete the publication before advance.
         settle_linked_publication_replay(evidence_fd)
         live = _read_regular_at(
+            custody,
             evidence_fd,
             RECEIPT_PATH.name,
             maximum=MAX_JSON_BYTES,
             minimum=0,
         )
         archive = _read_regular_at(
+            custody,
             evidence_fd,
             ARCHIVE_RECEIPT_PATH.name,
             maximum=MAX_JSON_BYTES,
@@ -5000,12 +7279,6 @@ def legacy_receipt_state(
             "legacy live receipt path contains a foreign entry",
         )
         return disposition, live[2]
-    finally:
-        for value in (live, archive):
-            if value is not None:
-                os.close(value[0])
-        os.close(evidence_fd)
-        os.close(state_fd)
 
 
 def transfer_receipt_custody(control: Mapping[str, object]) -> None:
@@ -5013,10 +7286,10 @@ def transfer_receipt_custody(control: Mapping[str, object]) -> None:
     authority = control["authority"]
     assert isinstance(authority, dict)
     expected = authority["legacyReceipt"]
-    state_fd, evidence_fd = recorded_evidence_descriptors(control)
-    value: tuple[int, os.stat_result, bytes] | None = None
-    try:
+    with ResourceCustody(label="legacy receipt custody transfer") as custody:
+        state_fd, evidence_fd = recorded_evidence_descriptors(custody, control)
         value = _read_regular_at(
+            custody,
             evidence_fd,
             RECEIPT_PATH.name,
             maximum=MAX_JSON_BYTES,
@@ -5050,11 +7323,6 @@ def transfer_receipt_custody(control: Mapping[str, object]) -> None:
             "legacy receipt changed during custody transfer",
         )
         os.fsync(evidence_fd)
-    finally:
-        if value is not None:
-            os.close(value[0])
-        os.close(evidence_fd)
-        os.close(state_fd)
 
 
 def _write_all(descriptor: int, raw: bytes) -> None:
@@ -5066,48 +7334,45 @@ def _write_all(descriptor: int, raw: bytes) -> None:
 
 
 def _create_root_tmpfile(
+    custody: ResourceCustody,
     evidence_fd: int,
     raw: bytes,
     *,
     expected_sha256: str,
 ) -> int:
     require(hasattr(os, "O_TMPFILE"), "unnamed archive publication is unavailable")
-    descriptor = os.open(
+    descriptor = custody.open(
         ".",
         os.O_TMPFILE | os.O_RDWR,
         0o400,
         dir_fd=evidence_fd,
     )
-    try:
-        os.fchown(descriptor, 0, 0)
-        os.fchmod(descriptor, 0o400)
-        _write_all(descriptor, raw)
-        os.fsync(descriptor)
-        os.lseek(descriptor, 0, os.SEEK_SET)
-        observed = os.fstat(descriptor)
-        verified = b""
-        while len(verified) <= MAX_JSON_BYTES:
-            chunk = os.read(
-                descriptor,
-                min(64 * 1024, MAX_JSON_BYTES + 1 - len(verified)),
-            )
-            if not chunk:
-                break
-            verified += chunk
-        require(
-            stat.S_ISREG(observed.st_mode)
-            and observed.st_uid == 0
-            and observed.st_gid == 0
-            and stat.S_IMODE(observed.st_mode) == 0o400
-            and observed.st_nlink == 0
-            and verified == raw
-            and sha256_bytes(verified) == expected_sha256,
-            "unnamed root publication identity differs",
+    os.fchown(descriptor, 0, 0)
+    os.fchmod(descriptor, 0o400)
+    _write_all(descriptor, raw)
+    os.fsync(descriptor)
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    observed = os.fstat(descriptor)
+    verified = b""
+    while len(verified) <= MAX_JSON_BYTES:
+        chunk = os.read(
+            descriptor,
+            min(64 * 1024, MAX_JSON_BYTES + 1 - len(verified)),
         )
-        return descriptor
-    except BaseException:
-        os.close(descriptor)
-        raise
+        if not chunk:
+            break
+        verified += chunk
+    require(
+        stat.S_ISREG(observed.st_mode)
+        and observed.st_uid == 0
+        and observed.st_gid == 0
+        and stat.S_IMODE(observed.st_mode) == 0o400
+        and observed.st_nlink == 0
+        and verified == raw
+        and sha256_bytes(verified) == expected_sha256,
+        "unnamed root publication identity differs",
+    )
+    return descriptor
 
 
 def link_tmpfile_noreplace_at(
@@ -5130,6 +7395,7 @@ def link_tmpfile_noreplace_at(
 
 
 def open_or_publish_prepared_archive(
+    custody: ResourceCustody,
     control: Mapping[str, object],
     evidence_fd: int,
 ) -> int:
@@ -5140,92 +7406,85 @@ def open_or_publish_prepared_archive(
     # Complete a prior linkat response-loss cutpoint before trusting the name.
     settle_linked_publication_replay(evidence_fd)
     existing = _read_regular_at(
+        custody,
         evidence_fd,
         PREPARED_ARCHIVE_PATH.name,
         maximum=MAX_JSON_BYTES,
     )
     if existing is not None:
         descriptor, observed, prepared = existing
-        try:
-            _require_legacy_receipt(
-                observed,
-                prepared,
-                expected,
-                terminal=True,
-            )
-            return descriptor
-        except BaseException:
-            os.close(descriptor)
-            raise
+        _require_legacy_receipt(
+            observed,
+            prepared,
+            expected,
+            terminal=True,
+        )
+        return descriptor
     temporary_fd = _create_root_tmpfile(
+        custody,
         evidence_fd,
         raw,
         expected_sha256=EXPECTED_RECEIPT_SHA256,
     )
-    try:
-        link_tmpfile_noreplace_at(
-            temporary_fd,
-            evidence_fd,
-            PREPARED_ARCHIVE_PATH.name,
-        )
-        settle_linked_publication_replay(evidence_fd)
-        prepared = _read_regular_at(
-            evidence_fd,
-            PREPARED_ARCHIVE_PATH.name,
-            maximum=MAX_JSON_BYTES,
-        )
-        require(prepared is not None, "prepared legacy archive disappeared")
-        try:
-            _require_legacy_receipt(
-                prepared[1],
-                prepared[2],
-                expected,
-                terminal=True,
-            )
-            current = os.fstat(temporary_fd)
-            require(
-                (prepared[1].st_dev, prepared[1].st_ino)
-                == (current.st_dev, current.st_ino),
-                "prepared legacy archive inode differs",
-            )
-        finally:
-            os.close(prepared[0])
-        return temporary_fd
-    except BaseException:
-        os.close(temporary_fd)
-        raise
+    link_tmpfile_noreplace_at(
+        temporary_fd,
+        evidence_fd,
+        PREPARED_ARCHIVE_PATH.name,
+    )
+    settle_linked_publication_replay(evidence_fd)
+    prepared = _read_regular_at(
+        custody,
+        evidence_fd,
+        PREPARED_ARCHIVE_PATH.name,
+        maximum=MAX_JSON_BYTES,
+    )
+    require(prepared is not None, "prepared legacy archive disappeared")
+    _require_legacy_receipt(
+        prepared[1],
+        prepared[2],
+        expected,
+        terminal=True,
+    )
+    current = os.fstat(temporary_fd)
+    require(
+        (prepared[1].st_dev, prepared[1].st_ino)
+        == (current.st_dev, current.st_ino),
+        "prepared legacy archive inode differs",
+    )
+    custody.close_descriptor(prepared[0])
+    return temporary_fd
 
 
 def _live_path_has_exact_legacy_bytes(evidence_fd: int) -> bool:
-    value = _read_regular_at(
-        evidence_fd,
-        RECEIPT_PATH.name,
-        maximum=MAX_JSON_BYTES,
-        minimum=0,
-    )
-    if value is None:
-        return False
-    try:
+    with ResourceCustody(label="live legacy receipt observation") as custody:
+        value = _read_regular_at(
+            custody,
+            evidence_fd,
+            RECEIPT_PATH.name,
+            maximum=MAX_JSON_BYTES,
+            minimum=0,
+        )
+        if value is None:
+            return False
         return sha256_bytes(value[2]) == EXPECTED_RECEIPT_SHA256
-    finally:
-        os.close(value[0])
 
 
 def complete_receipt_tombstone(
     control: Mapping[str, object],
     evidence_fd: int,
 ) -> None:
-    value = _read_regular_at(
-        evidence_fd,
-        RECEIPT_PATH.name,
-        maximum=MAX_JSON_BYTES,
-        minimum=0,
-        flags=os.O_RDWR,
-    )
-    if value is None:
-        return
-    descriptor, observed, raw = value
-    try:
+    with ResourceCustody(label="legacy receipt tombstone") as custody:
+        value = _read_regular_at(
+            custody,
+            evidence_fd,
+            RECEIPT_PATH.name,
+            maximum=MAX_JSON_BYTES,
+            minimum=0,
+            flags=os.O_RDWR,
+        )
+        if value is None:
+            return
+        descriptor, observed, raw = value
         disposition = _live_receipt_disposition(observed, raw, control)
         if disposition == "foreign":
             manual(
@@ -5280,27 +7539,26 @@ def complete_receipt_tombstone(
             == int(control["authority"]["legacyReceipt"]["mode"]),
             "legacy receipt tombstone bytes or cleanup identity differ",
         )
-    finally:
-        os.close(descriptor)
-    manual(
-        not _live_path_has_exact_legacy_bytes(evidence_fd),
-        "exact legacy receipt bytes reappeared at the live path",
-    )
+    require_exact_live_receipt_tombstone(evidence_fd, control)
 
 
-def terminal_projection_value(control: ControlAuthority) -> dict[str, object]:
-    require(control.phase == "archive_intent_final", "terminal projection phase differs")
+def terminal_projection_value_for(
+    control: Mapping[str, object],
+    *,
+    observed_at: str,
+    boot_id: str,
+) -> dict[str, object]:
     return {
         "schema": PROJECTION_SCHEMA,
         "outcome": "drained",
-        "observedAt": control.state["observedAt"],
-        "bootId": control.state["bootId"],
+        "observedAt": observed_at,
+        "bootId": boot_id,
         "stateRoot": str(EXPECTED_STATE_ROOT),
         "legacyReceiptSha256": EXPECTED_RECEIPT_SHA256,
         "legacyReceiptArchive": str(ARCHIVE_RECEIPT_PATH),
-        "controlSha256": control.control_digest,
-        "sourceSha256": control.control["sourceSha256"],
-        "control": control.control,
+        "controlSha256": sha256_bytes(canonical_json(control)),
+        "sourceSha256": control["sourceSha256"],
+        "control": control,
         "persistentDataPreserved": [str(path) for path in PERSISTENT_ROOTS],
         "legacyRuntimeRemoved": True,
         "cgroupMutationPerformed": False,
@@ -5308,14 +7566,54 @@ def terminal_projection_value(control: ControlAuthority) -> dict[str, object]:
     }
 
 
+def require_document_capacity(value: Mapping[str, object], *, label: str) -> int:
+    size = len(canonical_json(value))
+    require(0 < size <= MAX_JSON_BYTES, f"{label} is too large")
+    return size
+
+
+def require_terminal_projection_capacity(
+    control: Mapping[str, object],
+    state: Mapping[str, object],
+) -> int:
+    observed_at = (
+        str(state["observedAt"])
+        if state["phase"] == "archive_intent_final"
+        else TERMINAL_TIMESTAMP_SENTINEL
+    )
+    projection = terminal_projection_value_for(
+        control,
+        observed_at=observed_at,
+        boot_id=str(state["bootId"]),
+    )
+    return require_document_capacity(
+        projection,
+        label="legacy terminal projection",
+    )
+
+
+def terminal_projection_value(control: ControlAuthority) -> dict[str, object]:
+    require(control.phase == "archive_intent_final", "terminal projection phase differs")
+    value = terminal_projection_value_for(
+        control.control,
+        observed_at=str(control.state["observedAt"]),
+        boot_id=str(control.state["bootId"]),
+    )
+    require_document_capacity(value, label="legacy terminal projection")
+    return value
+
+
 def read_projection(control: ControlAuthority) -> dict[str, object]:
     expected = terminal_projection_value(control)
     encoded = canonical_json(expected)
-    state_fd, evidence_fd = recorded_evidence_descriptors(control.control)
-    value: tuple[int, os.stat_result, bytes] | None = None
-    try:
+    with ResourceCustody(label="terminal projection read") as custody:
+        state_fd, evidence_fd = recorded_evidence_descriptors(
+            custody,
+            control.control,
+        )
         settle_linked_publication_replay(evidence_fd)
         value = _read_regular_at(
+            custody,
             evidence_fd,
             PROJECTION_PATH.name,
             maximum=MAX_JSON_BYTES,
@@ -5330,26 +7628,24 @@ def read_projection(control: ControlAuthority) -> dict[str, object]:
             "legacy terminal projection differs",
         )
         return expected
-    finally:
-        if value is not None:
-            os.close(value[0])
-        os.close(evidence_fd)
-        os.close(state_fd)
 
 
 def read_terminal_projection_without_control(
     evidence_fd: int,
 ) -> dict[str, object]:
-    settle_linked_publication_replay(evidence_fd)
-    stored = _read_regular_at(
-        evidence_fd,
-        PROJECTION_PATH.name,
-        maximum=MAX_JSON_BYTES,
-    )
-    require(stored is not None, "legacy terminal projection is absent")
-    assert stored is not None
-    descriptor, identity, raw = stored
-    try:
+    with ResourceCustody(
+        label="terminal projection read without control"
+    ) as custody:
+        settle_linked_publication_replay(evidence_fd)
+        stored = _read_regular_at(
+            custody,
+            evidence_fd,
+            PROJECTION_PATH.name,
+            maximum=MAX_JSON_BYTES,
+        )
+        require(stored is not None, "legacy terminal projection is absent")
+        assert stored is not None
+        descriptor, identity, raw = stored
         require(
             identity.st_uid == 0
             and identity.st_gid == 0
@@ -5357,8 +7653,6 @@ def read_terminal_projection_without_control(
             and identity.st_nlink == 1,
             "legacy terminal projection identity differs",
         )
-    finally:
-        os.close(descriptor)
     value = exact_keys(
         parse_json_bytes(raw, "legacy terminal projection"),
         {
@@ -5432,38 +7726,44 @@ def complete_terminal_tombstone_without_control(
     evidence_fd: int,
     projection: Mapping[str, object],
 ) -> None:
-    value = _read_regular_at(
-        evidence_fd,
-        RECEIPT_PATH.name,
-        maximum=MAX_JSON_BYTES,
-        minimum=0,
-        flags=os.O_RDWR,
-    )
-    if value is None:
-        return
-    descriptor, observed, raw = value
-    tombstone = receipt_tombstone_bytes_for_control_digest(
-        str(projection["controlSha256"])
-    )
-    try:
-        admitted_owner = (
-            observed.st_uid,
-            observed.st_gid,
-            stat.S_IMODE(observed.st_mode),
-        ) in {
-            (1000, 1000, 0o600),
-            (0, 0, 0o600),
-            (0, 0, 0o400),
-            (1000, 1000, 0o400),
-        }
+    with ResourceCustody(
+        label="boot-independent receipt tombstone"
+    ) as custody:
+        value = _read_regular_at(
+            custody,
+            evidence_fd,
+            RECEIPT_PATH.name,
+            maximum=MAX_JSON_BYTES,
+            minimum=0,
+            flags=os.O_RDWR,
+        )
+        if value is None:
+            return
+        descriptor, observed, raw = value
+        tombstone = receipt_tombstone_bytes_for_control_digest(
+            str(projection["controlSha256"])
+        )
+        stored_control = projection.get("control")
+        require(
+            isinstance(stored_control, Mapping),
+            "legacy recovery control authority is absent",
+        )
+        assert isinstance(stored_control, Mapping)
+        authority = stored_control.get("authority")
+        require(
+            isinstance(authority, Mapping),
+            "legacy recovery receipt authority is absent",
+        )
+        assert isinstance(authority, Mapping)
+        expected_receipt = authority.get("legacyReceipt")
+        require(
+            isinstance(expected_receipt, Mapping),
+            "legacy recovery receipt identity is absent",
+        )
+        assert isinstance(expected_receipt, Mapping)
+        disposition = _live_receipt_disposition(observed, raw, stored_control)
         manual(
-            stat.S_ISREG(observed.st_mode)
-            and observed.st_nlink == 1
-            and admitted_owner
-            and (
-                sha256_bytes(raw) == EXPECTED_RECEIPT_SHA256
-                or tombstone.startswith(raw)
-            ),
+            disposition in {"legacy", "tombstone", "tombstone_prefix"},
             "legacy recovery live receipt is foreign",
         )
         if raw != tombstone:
@@ -5471,15 +7771,87 @@ def complete_terminal_tombstone_without_control(
             os.lseek(descriptor, 0, os.SEEK_SET)
             _write_all(descriptor, tombstone)
             os.fsync(descriptor)
-        os.fchown(descriptor, 1000, 1000)
-        os.fchmod(descriptor, 0o600)
+        os.fchown(
+            descriptor,
+            int(expected_receipt["uid"]),
+            int(expected_receipt["gid"]),
+        )
+        os.fchmod(descriptor, int(expected_receipt["mode"]))
         os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-    manual(
-        not _live_path_has_exact_legacy_bytes(evidence_fd),
-        "exact legacy receipt remained after recovery tombstone",
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        final_raw = b""
+        while len(final_raw) <= len(tombstone):
+            chunk = os.read(descriptor, len(tombstone) + 1 - len(final_raw))
+            if not chunk:
+                break
+            final_raw += chunk
+        final_stat = os.fstat(descriptor)
+        literal = os.stat(
+            RECEIPT_PATH.name,
+            dir_fd=evidence_fd,
+            follow_symlinks=False,
+        )
+        require(
+            final_raw == tombstone
+            and stat.S_ISREG(final_stat.st_mode)
+            and final_stat.st_nlink == 1
+            and final_stat.st_size == len(tombstone)
+            and (final_stat.st_dev, final_stat.st_ino)
+            == (literal.st_dev, literal.st_ino)
+            == (expected_receipt["device"], expected_receipt["inode"])
+            and (final_stat.st_uid, final_stat.st_gid)
+            == (expected_receipt["uid"], expected_receipt["gid"])
+            and stat.S_IMODE(final_stat.st_mode) == expected_receipt["mode"],
+            "legacy recovery receipt tombstone binding differs",
+        )
+    require_exact_live_receipt_tombstone(
+        evidence_fd,
+        stored_control,
     )
+
+
+def require_exact_live_receipt_tombstone(
+    evidence_fd: int,
+    control: Mapping[str, object],
+) -> None:
+    authority = control.get("authority")
+    require(
+        isinstance(authority, Mapping),
+        "legacy recovery receipt authority is absent",
+    )
+    assert isinstance(authority, Mapping)
+    expected = authority.get("legacyReceipt")
+    require(
+        isinstance(expected, Mapping),
+        "legacy recovery receipt identity is absent",
+    )
+    assert isinstance(expected, Mapping)
+    tombstone = receipt_tombstone_bytes(control)
+    with ResourceCustody(
+        label="boot-independent receipt tombstone reproof"
+    ) as custody:
+        value = _read_regular_at(
+            custody,
+            evidence_fd,
+            RECEIPT_PATH.name,
+            maximum=MAX_JSON_BYTES,
+            minimum=0,
+        )
+        manual(value is not None, "legacy recovery receipt tombstone disappeared")
+        assert value is not None
+        observed, raw = value[1], value[2]
+        require(
+            stat.S_ISREG(observed.st_mode)
+            and observed.st_nlink == 1
+            and observed.st_size == len(tombstone)
+            and (observed.st_dev, observed.st_ino)
+            == (expected["device"], expected["inode"])
+            and (observed.st_uid, observed.st_gid)
+            == (expected["uid"], expected["gid"])
+            and stat.S_IMODE(observed.st_mode) == expected["mode"]
+            and raw == tombstone,
+            "legacy recovery receipt tombstone reproof differs",
+        )
 
 
 def require_recovery_state_binding(state_fd: int, evidence_fd: int) -> None:
@@ -5500,6 +7872,54 @@ def require_recovery_state_binding(state_fd: int, evidence_fd: int) -> None:
     )
 
 
+def recover_prepared_archive_from_live(
+    control: Mapping[str, object],
+    evidence_fd: int,
+    custody: ResourceCustody,
+) -> tuple[int, os.stat_result, bytes]:
+    authority = control["authority"]
+    assert isinstance(authority, dict)
+    expected = authority["legacyReceipt"]
+    live = _read_regular_at(
+        custody,
+        evidence_fd,
+        RECEIPT_PATH.name,
+        maximum=MAX_JSON_BYTES,
+    )
+    manual(live is not None, "prepared archive and exact live receipt are both absent")
+    assert live is not None
+    _require_legacy_receipt(
+        live[1],
+        live[2],
+        expected,
+        terminal=False,
+    )
+    recorded = recorded_legacy_receipt_bytes(control)
+    temporary = _create_root_tmpfile(
+        custody,
+        evidence_fd,
+        recorded,
+        expected_sha256=EXPECTED_RECEIPT_SHA256,
+    )
+    link_tmpfile_noreplace_at(
+        temporary,
+        evidence_fd,
+        PREPARED_ARCHIVE_PATH.name,
+    )
+    settle_linked_publication_replay(evidence_fd)
+    custody.close_descriptor(temporary)
+    custody.close_descriptor(live[0])
+    prepared = _read_regular_at(
+        custody,
+        evidence_fd,
+        PREPARED_ARCHIVE_PATH.name,
+        maximum=MAX_JSON_BYTES,
+    )
+    require(prepared is not None, "prepared legacy archive disappeared")
+    assert prepared is not None
+    return prepared
+
+
 def recover_terminal_archive_without_control() -> dict[str, object]:
     manual(
         not exists_nofollow(CONTROL_ROOT),
@@ -5515,18 +7935,18 @@ def recover_terminal_archive_without_control() -> dict[str, object]:
         "legacy runtime root remains during boot-independent recovery",
     )
     require_registry_listener_absent()
-    state_fd = os.open(
-        EXPECTED_STATE_ROOT,
-        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-    )
-    evidence_fd = os.open(
-        "evidence",
-        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-        dir_fd=state_fd,
-    )
-    prepared_fd: int | None = None
-    final_fd: int | None = None
-    try:
+    with ResourceCustody(
+        label="boot-independent archive recovery"
+    ) as custody:
+        state_fd = custody.open(
+            EXPECTED_STATE_ROOT,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        )
+        evidence_fd = custody.open(
+            "evidence",
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=state_fd,
+        )
         state = os.fstat(state_fd)
         evidence = os.fstat(evidence_fd)
         require_recovery_state_binding(state_fd, evidence_fd)
@@ -5576,99 +7996,59 @@ def recover_terminal_archive_without_control() -> dict[str, object]:
             ),
             "legacy recovery state or evidence root differs",
         )
-        config_fd = os.open(
+        config_fd = custody.open(
             "config",
             os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
             dir_fd=state_fd,
         )
-        try:
-            config = os.fstat(config_fd)
-            expected_config = authority["configRootIdentity"]
-            require(
-                (
-                    config.st_dev,
-                    config.st_ino,
-                    config.st_uid,
-                    config.st_gid,
-                    stat.S_IMODE(config.st_mode),
-                )
-                == (
-                    expected_config["device"],
-                    expected_config["inode"],
-                    expected_config["uid"],
-                    expected_config["gid"],
-                    expected_config["mode"],
-                ),
-                "legacy recovery config root differs",
-            )
-            expected_pidfile = authority["configs"]["containerdPidfile"]
-            pidfile_value = _read_regular_at(
-                config_fd,
-                CONTAINERD_PIDFILE.name,
-                maximum=64,
-            )
-            require(pidfile_value is not None, "legacy recovery pidfile is absent")
-            assert pidfile_value is not None
-            try:
-                require_recorded_entry(
-                    pidfile_value[1],
-                    expected_pidfile,
-                    label="legacy recovery containerd pidfile",
-                )
-                require(
-                    pidfile_value[2].decode("ascii", "strict").strip()
-                    == str(expected_pidfile["expectedPid"])
-                    and sha256_bytes(pidfile_value[2])
-                    == expected_pidfile["sha256"],
-                    "legacy recovery pidfile bytes differ",
-                )
-            finally:
-                os.close(pidfile_value[0])
-        finally:
-            os.close(config_fd)
-        for path, expected in authority["persistentRoots"].items():
-            expected_path = Path(path)
-            require(
-                expected_path.parent == EXPECTED_STATE_ROOT,
-                "legacy recovery persistent root path differs",
-            )
-            persistent_fd = os.open(
-                expected_path.name,
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                dir_fd=state_fd,
-            )
-            try:
-                observed = os.fstat(persistent_fd)
-                literal = os.stat(
-                    expected_path.name,
-                    dir_fd=state_fd,
-                    follow_symlinks=False,
-                )
-                require(
-                    (
-                        observed.st_dev,
-                        observed.st_ino,
-                        observed.st_uid,
-                        observed.st_gid,
-                        stat.S_IMODE(observed.st_mode),
-                    )
-                    == (
-                        expected["device"],
-                        expected["inode"],
-                        expected["uid"],
-                        expected["gid"],
-                        expected["mode"],
-                    )
-                    and (literal.st_dev, literal.st_ino)
-                    == (observed.st_dev, observed.st_ino),
-                    f"legacy recovery persistent root differs: {path}",
-                )
-            finally:
-                os.close(persistent_fd)
+        config = os.fstat(config_fd)
+        expected_config = authority["configRootIdentity"]
         require(
-            registry_inventory() == authority["registryInventory"],
-            "legacy recovery registry inventory differs",
+            (
+                config.st_dev,
+                config.st_ino,
+                config.st_uid,
+                config.st_gid,
+                stat.S_IMODE(config.st_mode),
+            )
+            == (
+                expected_config["device"],
+                expected_config["inode"],
+                expected_config["uid"],
+                expected_config["gid"],
+                expected_config["mode"],
+            ),
+            "legacy recovery config root differs",
         )
+        expected_pidfile = authority["configs"]["containerdPidfile"]
+        pidfile_value = _read_regular_at(
+            custody,
+            config_fd,
+            CONTAINERD_PIDFILE.name,
+            maximum=64,
+        )
+        require(pidfile_value is not None, "legacy recovery pidfile is absent")
+        assert pidfile_value is not None
+        require_recorded_entry(
+            pidfile_value[1],
+            expected_pidfile,
+            label="legacy recovery containerd pidfile",
+        )
+        require(
+            pidfile_value[2].decode("ascii", "strict").strip()
+            == str(expected_pidfile["expectedPid"])
+            and sha256_bytes(pidfile_value[2])
+            == expected_pidfile["sha256"],
+            "legacy recovery pidfile bytes differ",
+        )
+        custody.close_descriptor(pidfile_value[0])
+        custody.close_descriptor(config_fd)
+        persistent_owner = recorded_persistent_root_descriptors(
+            custody,
+            stored_control,
+        )
+        persistent_roots = dict(persistent_owner.rows)
+        registry_inventory_matches(stored_control, persistent_roots)
         for key, root in (
             ("runtime", EXPECTED_RUNTIME_ROOT),
             ("outerDocker", EXPECTED_STATE_ROOT / "outer-docker"),
@@ -5684,6 +8064,7 @@ def recover_terminal_archive_without_control() -> dict[str, object]:
                 f"legacy recovery mount remains: {key}",
             )
         final = _read_regular_at(
+            custody,
             evidence_fd,
             ARCHIVE_RECEIPT_PATH.name,
             maximum=MAX_JSON_BYTES,
@@ -5703,46 +8084,25 @@ def recover_terminal_archive_without_control() -> dict[str, object]:
                 not _live_path_has_exact_legacy_bytes(evidence_fd),
                 "live and terminal legacy receipt bytes coexist",
             )
+            require_recorded_persistent_root_bindings(
+                stored_control,
+                persistent_owner.state_fd,
+                persistent_roots,
+            )
+            registry_inventory_matches(stored_control, persistent_roots)
             return projection
         prepared = _read_regular_at(
+            custody,
             evidence_fd,
             PREPARED_ARCHIVE_PATH.name,
             maximum=MAX_JSON_BYTES,
         )
         if prepared is None:
             require_recovery_state_binding(state_fd, evidence_fd)
-            live = _read_regular_at(
+            prepared = recover_prepared_archive_from_live(
+                stored_control,
                 evidence_fd,
-                RECEIPT_PATH.name,
-                maximum=MAX_JSON_BYTES,
-            )
-            manual(
-                live is not None
-                and sha256_bytes(live[2]) == EXPECTED_RECEIPT_SHA256,
-                "prepared archive and exact live receipt are both absent",
-            )
-            assert live is not None
-            try:
-                temporary = _create_root_tmpfile(
-                    evidence_fd,
-                    live[2],
-                    expected_sha256=EXPECTED_RECEIPT_SHA256,
-                )
-                try:
-                    link_tmpfile_noreplace_at(
-                        temporary,
-                        evidence_fd,
-                        PREPARED_ARCHIVE_PATH.name,
-                    )
-                    settle_linked_publication_replay(evidence_fd)
-                finally:
-                    os.close(temporary)
-            finally:
-                os.close(live[0])
-            prepared = _read_regular_at(
-                evidence_fd,
-                PREPARED_ARCHIVE_PATH.name,
-                maximum=MAX_JSON_BYTES,
+                custody,
             )
         require(prepared is not None, "prepared legacy archive disappeared")
         prepared_fd, prepared_stat, prepared_raw = prepared
@@ -5764,6 +8124,7 @@ def recover_terminal_archive_without_control() -> dict[str, object]:
         )
         settle_linked_publication_replay(evidence_fd)
         final = _read_regular_at(
+            custody,
             evidence_fd,
             ARCHIVE_RECEIPT_PATH.name,
             maximum=MAX_JSON_BYTES,
@@ -5781,26 +8142,27 @@ def recover_terminal_archive_without_control() -> dict[str, object]:
             and sha256_bytes(final_raw) == EXPECTED_RECEIPT_SHA256,
             "terminal legacy archive recovery binding differs",
         )
+        require_recorded_persistent_root_bindings(
+            stored_control,
+            persistent_owner.state_fd,
+            persistent_roots,
+        )
+        registry_inventory_matches(stored_control, persistent_roots)
         return projection
-    finally:
-        if final_fd is not None:
-            os.close(final_fd)
-        if prepared_fd is not None:
-            os.close(prepared_fd)
-        os.close(evidence_fd)
-        os.close(state_fd)
 
 
 def write_projection(control: ControlAuthority) -> dict[str, object]:
     value = terminal_projection_value(control)
     encoded = canonical_json(value)
-    state_fd, evidence_fd = recorded_evidence_descriptors(control.control)
-    temporary_fd: int | None = None
-    final_fd: int | None = None
-    try:
+    with ResourceCustody(label="terminal projection publication") as custody:
+        state_fd, evidence_fd = recorded_evidence_descriptors(
+            custody,
+            control.control,
+        )
         # This also completes an already-visible projection link after a crash.
         settle_linked_publication_replay(evidence_fd)
         final = _read_regular_at(
+            custody,
             evidence_fd,
             PROJECTION_PATH.name,
             maximum=MAX_JSON_BYTES,
@@ -5816,6 +8178,7 @@ def write_projection(control: ControlAuthority) -> dict[str, object]:
             )
             return value
         temporary_fd = _create_root_tmpfile(
+            custody,
             evidence_fd,
             encoded,
             expected_sha256=sha256_bytes(encoded),
@@ -5831,6 +8194,7 @@ def write_projection(control: ControlAuthority) -> dict[str, object]:
                 raise
         settle_linked_publication_replay(evidence_fd)
         final = _read_regular_at(
+            custody,
             evidence_fd,
             PROJECTION_PATH.name,
             maximum=MAX_JSON_BYTES,
@@ -5848,18 +8212,32 @@ def write_projection(control: ControlAuthority) -> dict[str, object]:
             "legacy terminal projection publication differs",
         )
         return value
-    finally:
-        if final_fd is not None:
-            os.close(final_fd)
-        if temporary_fd is not None:
-            os.close(temporary_fd)
-        os.close(evidence_fd)
-        os.close(state_fd)
 
 
 
 
 def archive_receipt(control: ControlAuthority) -> dict[str, object]:
+    with hold_recorded_persistent_roots(control.control) as persistent_roots:
+        registry_inventory_matches(control.control, persistent_roots)
+        try:
+            result = _archive_receipt_with_persistent_roots(control)
+        except BaseException as action_error:
+            try:
+                registry_inventory_matches(control.control, persistent_roots)
+            except BaseException as reproof_error:
+                add_error_note(
+                    action_error,
+                    "post-action registry inventory reproof also failed: ",
+                    reproof_error,
+                )
+            raise
+        registry_inventory_matches(control.control, persistent_roots)
+        return result
+
+
+def _archive_receipt_with_persistent_roots(
+    control: ControlAuthority,
+) -> dict[str, object]:
     require(control.phase == "archive_intent_final", "legacy archive intent is absent")
     receipt_state, _ = legacy_receipt_state(control.control)
     if receipt_state == "archived":
@@ -5869,33 +8247,35 @@ def archive_receipt(control: ControlAuthority) -> dict[str, object]:
     authority = control.control["authority"]
     assert isinstance(authority, dict)
     expected = authority["legacyReceipt"]
-    state_fd, evidence_fd = recorded_evidence_descriptors(control.control)
-    temporary_fd: int | None = None
-    archived_fd: int | None = None
-    try:
+    with ResourceCustody(
+        label="legacy receipt archive publication"
+    ) as custody:
+        state_fd, evidence_fd = recorded_evidence_descriptors(
+            custody,
+            control.control,
+        )
         settle_linked_publication_replay(evidence_fd)
         existing = _read_regular_at(
+            custody,
             evidence_fd,
             ARCHIVE_RECEIPT_PATH.name,
             maximum=MAX_JSON_BYTES,
             allowed_links=frozenset({1, 2}),
         )
         if existing is not None:
-            try:
-                _require_legacy_receipt(
-                    existing[1],
-                    existing[2],
-                    expected,
-                    terminal=True,
-                )
-            finally:
-                os.close(existing[0])
+            _require_legacy_receipt(
+                existing[1],
+                existing[2],
+                expected,
+                terminal=True,
+            )
             manual(
                 not _live_path_has_exact_legacy_bytes(evidence_fd),
                 "live and archived legacy receipts coexist",
             )
             return terminal
         temporary_fd = open_or_publish_prepared_archive(
+            custody,
             control.control,
             evidence_fd,
         )
@@ -5918,6 +8298,7 @@ def archive_receipt(control: ControlAuthority) -> dict[str, object]:
             ) from error
         settle_linked_publication_replay(evidence_fd)
         archived = _read_regular_at(
+            custody,
             evidence_fd,
             ARCHIVE_RECEIPT_PATH.name,
             maximum=MAX_JSON_BYTES,
@@ -5938,22 +8319,23 @@ def archive_receipt(control: ControlAuthority) -> dict[str, object]:
             "legacy receipt archive inode differs from its unnamed source",
         )
         return terminal
-    finally:
-        if archived_fd is not None:
-            os.close(archived_fd)
-        if temporary_fd is not None:
-            os.close(temporary_fd)
-        os.close(evidence_fd)
-        os.close(state_fd)
 
 
 
 
-def registry_inventory_matches(control: Mapping[str, object]) -> None:
+def registry_inventory_matches(
+    control: Mapping[str, object],
+    persistent_roots: Mapping[str, int] | None = None,
+) -> None:
     authority = control["authority"]
     assert isinstance(authority, dict)
     require(
-        registry_inventory() == authority["registryInventory"],
+        registry_inventory(
+            bound_registry_storage(persistent_roots)
+            if persistent_roots is not None
+            else REGISTRY_STORAGE
+        )
+        == authority["registryInventory"],
         "registry custody changed during legacy drain",
     )
 
@@ -6189,7 +8571,8 @@ def operation_drain(
         SHA256_RE.fullmatch(expected_verification_sha256) is not None,
         "expected verification digest is invalid",
     )
-    with RuntimeLease.acquire():
+    with ResourceCustody(label="runtime lease") as lease_custody:
+        acquire_runtime_lease(lease_custody)
         verification = collect_verification(
             caller_uid, caller_gid, allow_global_lease=True
         )
@@ -6197,21 +8580,25 @@ def operation_drain(
             verification["verificationSha256"] == expected_verification_sha256,
             "legacy verification changed before drain",
         )
-        with ControlAuthority.create(
-            verification,
-            expected_verification_sha256=expected_verification_sha256,
-        ) as control:
+        with ResourceCustody(label="control authority") as control_custody:
+            control = ControlAuthority.create(
+                control_custody,
+                verification,
+                expected_verification_sha256=expected_verification_sha256,
+            )
             return run_reducer(control)
 
 
 def operation_resume(caller_uid: int, caller_gid: int) -> dict[str, object]:
     require_root(caller_uid, caller_gid)
-    with RuntimeLease.acquire():
+    with ResourceCustody(label="runtime lease") as lease_custody:
+        acquire_runtime_lease(lease_custody)
         held = globals().get("__legacy_control_root_fd__")
         if not isinstance(held, int):
             return recover_terminal_archive_without_control()
         require_v5_absent(allow_global_lease=True, allow_legacy_absent=True)
-        with ControlAuthority.open() as control:
+        with ResourceCustody(label="control authority") as control_custody:
+            control = ControlAuthority.open(control_custody)
             return run_reducer(control)
 
 

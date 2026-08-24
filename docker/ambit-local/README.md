@@ -198,8 +198,11 @@ already-connected request is in flight; stop-time API quiescence remains an
 explicit live acceptance observation under the single-user local-host model.
 
 Pre-v5 `/run` daemon state has no root control or supervisor snapshot and is
-therefore never guessed or auto-adopted by this source. This packet is the
-first authorized live candidate; if an operator has independently run an older
+therefore never guessed or auto-adopted by this source. This packet is a source
+candidate for a later read-only live gate, not live authorization by itself.
+The composed v5 supervisor must first pass its separate failure-total descriptor
+cleanup review, and this legacy candidate must pass exact-source review, before
+any live `verify-only` is allowed. If an operator has independently run an older
 v4 prototype, they must stop it with that exact frozen source (or perform an
 explicit root-admin purge) before using the v5 launcher. Persistent v2 storage
 has the separate authenticated `--legacy-v2` remove-only path described above.
@@ -276,7 +279,9 @@ drain /home/bote/m/.local/ambit-daytona-c16b/state VERIFICATION_SHA256
 resume /home/bote/m/.local/ambit-daytona-c16b/state
 ```
 
-`verify-only` writes nothing and authorizes no mutation. It performs two
+`verify-only` performs no application mutation and authorizes none. Ordinary
+filesystem atime effects from reads remain possible and carry no transition
+authority. The verifier performs two
 stable root-level passes over the exact receipt/config/runtime identities,
 pidfd-stabilized daemon/wrapper/shim/task graph and every visible
 `/proc/<tgid>/task/<tid>` Linux task (including non-leader threads with
@@ -304,13 +309,97 @@ security state, every task in a recorded role's TGID must equal that role's
 sealed profile in both complete universe passes, and the same state is read
 again through each held `PIDFD_THREAD` task descriptor before and after every
 non-signal action cutoff.
-Any unreadable namespace, foreign client/process/source target, substituted
-path, unknown runtime entry, changed registry blob, residual v5 cgroup, or
-coexisting v5 authority is a manual blocker. The legacy tool observes but
-never mutates a cgroup. A residual matching v5 cgroup therefore requires a
-separate v5-owned, exact-empty reconciliation before this drain; teaching the
-legacy reducer to adopt it would cross the authority boundary and is
-deliberately not a fallback.
+
+Task namespace and mount discovery use one shared stable census rather than
+separate recorded-process, drain-process, and per-root allowlists. A typed
+namespace FD is ambient observation authority—not a legacy relation—only when
+its exact device/inode is also a current or for-children namespace entry of a
+captured live task.
+The privileged verifier must remain single-threaded so proof-owned FD numbers
+cannot alias an unshared sibling FD table. Before capture it freezes one task
+coordinate roster and fails closed unless `RLIMIT_NOFILE` has a source-bounded
+twelve-descriptor-per-task budget (one thread pidfd, one bound task procfd, and
+all ten observable task namespace entries across the eight canonical Linux
+namespace kinds: cgroup, IPC, mount, network, PID, time, user, and UTS), plus
+explicit baseline, prior-pass, and two-descriptor root/fdinfo-or-mountinfo
+transient reserves. `pid_for_children` and `time_for_children` are bound as
+PID/time aliases and may differ from the current PID/time entries; their exact
+per-task assignments participate in both census-pass digests and held reproof.
+It retains every task pidfd/proc descriptor through the pass commit and one
+typed nsfs descriptor per unique process-bound namespace through all shared FD and
+mount consumers. Those proof-created namespace FDs are excluded only from the
+verifier's own exactly single-threaded FD table, are re-proved at each borrowed
+consumer boundary, and close on every success or failure path. Transient open
+FD counts are preflight telemetry, not durable authority, so holding the global
+lease cannot change an otherwise identical verification digest.
+Every application descriptor or closeable returned by this source's explicit
+opening primitives enters its lifetime-matching lexical custody in the same
+helper that performs the acquisition. A preallocated guard slot receives each
+raw C producer result through one C-driven capture pipeline before Python
+bytecode resumes, so an interruption between the producer return and an
+ordinary local-variable store cannot make the result unreachable. Socket
+construction uses the base C socket type and rejects `fileno` adoption, so a
+caller-owned descriptor cannot silently enter a second owner. Descriptor-producing
+helpers receive that custody before opening anything and return only borrowed
+views that are already registered; there is no raw-return/adoption interval,
+unowned release state, or custody-to-custody transfer mechanism. Each syscall
+result is a fresh generation even when Linux reuses an older numeric FD. The
+owner snapshots its roster before acquisition and publishes the generation by
+copy-and-swap; failed publication restores that exact baseline and settles the
+fresh generation, so no append/pop rollback ledger or stale numeric alias
+exists. Each generation separately records whether its closer was entered and
+whether it returned. Cleanup enters `OPEN -> CLOSING -> CLOSED`, rejects and
+settles new acquisitions while closing, lets an interrupted or reentrant
+`CLOSING` traversal resume through the same one-shot generations, persists the
+first cleanup error across retries, groups the complete roster before invoking
+any closer, gives a possibly started generation authority over every numeric or
+object alias, publishes closer entry and invokes the C closer in one C-consumed
+action sequence, attempts each remaining distinct authority once, and
+never retries an ambiguous failed numeric close that the kernel may already
+have consumed. The
+custody context receives the exact immediate body exception, and supplemental
+notes are rendered and attached inside one best-effort base-exception boundary,
+so neither a
+caller's already-handled exception nor hostile note behavior can hide a normal
+cleanup failure or replace the primary error. Any close ambiguity fails the
+transition closed before further mutation.
+Each recorded role uses that same complete ten-entry namespace map. Process-bound
+sharing or an FD match in any canonical kind therefore creates the same legacy
+relation as mount/network/PID/user sharing; there is no four-kind ownership
+subset beside the complete census.
+For each mount namespace, one representative whose `/proc/<tid>/root` link is
+exactly `/`, whose held root descriptor `mnt_id` equals the mountinfo `/`
+record, and whose descriptor device/type binds that record's `/` source root
+supplies the canonical complete mount roster. A chroot at the root of a nested
+filesystem is therefore still restricted authority even when its visible
+mountinfo source root happens to be `/`. Other
+representatives may be chroot-restricted views, but every record in each view
+must map by mount ID, source root, and its held root path to a canonical record.
+Canonical presence survives a restricted view that cannot see it; a restricted
+view never establishes absence. This deletes the former recorded-or-self-only
+namespace admission rule and the incorrect requirement that every chroot view
+return identical mount targets.
+
+A detached namespace FD, an nsfs-mounted namespace without a live
+representative, a mount namespace with no proven full-root view, an
+unexplainable projection, or any unreadable/churning census remains a manual
+blocker. A `/proc/<tgid>` entry whose task roster becomes unavailable while
+the group is still visible also blocks; surviving non-leaders after leader
+exit are never silently treated as absence. Namespace FDs queued only in
+`SCM_RIGHTS` messages and other
+processless namespace references are not observable through `/proc` task FD
+tables and are explicitly not admitted. The tool does not turn their absence
+from a stable sample into proof that none exist.
+
+Any foreign client/process/source target, substituted path, unknown runtime
+entry, changed registry blob, residual v5 cgroup, or coexisting v5 authority
+is likewise a manual blocker. The legacy tool observes but never mutates a
+cgroup. A residual matching v5 cgroup therefore requires a separate v5-owned,
+exact-empty reconciliation before this drain; teaching the legacy reducer to
+adopt it would cross the authority boundary and is deliberately not a fallback.
+The exclusion barrier also reserves the complete v5 storage namespace under
+`/home`: the authority root, `.pending-claim`, and every `.claim.<sha>` state
+all block even when the authority directory has not yet been published.
 
 The pidfd/edge, socket, and mount rosters are deterministic stable-sample
 proofs, not a claim that Linux freezes every root-capable actor between two
@@ -318,6 +407,9 @@ syscalls. The reducer retains admitted pidfds for every thread in each
 admitted role's thread group, repeats full edge proofs
 immediately before and after non-signal actions, closes the caller's path
 ingress through root custody, and fails closed on post-action drift. A
+post-action reproof is attempted even when the action itself raises after a
+partial mutation; the action error stays primary and any reproof or cleanup
+failure is attached as secondary evidence. A
 concurrent privileged actor could still create and release a transient edge
 inside that interval; excluding that requires cgroup freeze or a broader host
 quiescence authority, both deliberately outside this no-cgroup compatibility
@@ -327,7 +419,14 @@ is running; static tests do not turn this concurrency assumption into a proof.
 `drain` recomputes that proof under the same boot-global lease used by v5 and
 requires the caller-supplied verification digest. Its sanitized in-sudo loader
 reads, hashes, compiles, and executes one exact source byte buffer; that same
-buffer becomes its root-custodied snapshot. Source, control, and initial state
+buffer becomes its root-custodied snapshot. The loader's `/run` and boot-ID
+descriptors use independent nested scopes. Its retained control-root owner is
+passed into the pinned reducer, which first duplicates the descriptor into its
+own lexical custody and then settles the loader owner; the operation's control
+and global-lease custodies likewise exit before `main` can print success. A
+final close failure therefore blocks before any successful result becomes
+observable instead of producing success text with a failing wrapper status.
+Source, control, and initial state
 are built in one fixed root-owned staging capsule, file- and directory-fsynced,
 then published together with `RENAME_NOREPLACE` and `/run` fsync. The final
 capsule is therefore absent or complete, never a visible sequential prefix,
@@ -378,12 +477,25 @@ the original state, evidence, config, persistent-root, process, mount, pidfile,
 and registry bindings; this lets reboot recovery reject a substituted
 caller-owned state tree. The immutable control retains the exact original
 receipt bytes.
+The state root and all three recorded persistent-root descriptors remain held
+through the terminal handoff. Registry inventory traverses the held registry
+descriptor with a bounded no-follow, descriptor-relative tree walker rather
+than implicit pathname glob iterators, and every literal persistent child
+name/inode is re-proved before
+and after projection, tombstone, and archive work, including exceptional exits.
+Before the control capsule is published—and again whenever an existing capsule
+is opened—the reducer and pinned resume loader construct the complete future
+projection and prove its canonical bytes fit the common 2 MiB document bound.
+Nonterminal states reserve the exact fixed-width generated UTC timestamp;
+terminal replay measures the stored terminal timestamp. A control that fits
+while its embedded projection does not therefore blocks before any runtime
+mutation, rather than failing after destruction.
 The reducer constructs the archive in a second root-owned unnamed file, links
 and fsyncs it first at the fixed hidden `*.prepared` recovery coordinate,
 descriptor-rewrites the old live inode to a deterministic non-legacy
 tombstone (including partial-tombstone replay), returns that tombstone to the
 ordinary caller-owned mode-0600 projection identity accepted by v5 cleanup,
-proves that the live path no longer has the legacy digest, and hard-links the
+positively re-proves that exact tombstone inode and bytes, and hard-links the
 held prepared inode to
 `outer-docker-receipt.legacy-v3-c7b6f7f5f77ae556.json`. That no-replace link is
 the final authority mutation, followed only by evidence-directory fsync and
@@ -398,7 +510,15 @@ projection and prepared links, including boot replay. If a reboot clears the
 pinned repository bytes,
 revalidates the root-owned projection plus prepared original bytes and the
 absent legacy runtime/PIDs, completes the caller-owned tombstone if necessary,
-and performs the same final no-replace link. With a live capsule, `resume` uses
+and performs the same final no-replace link. Boot-independent tombstone replay
+must prove the live file is the recorded receipt inode before it may create or
+link the prepared archive; prepared bytes come from immutable control, not
+from a digest-only pathname. It then reuses the ordinary live-receipt
+disposition contract, binds the held and
+literal live file to the control's exact recorded device/inode before and after
+mutation, and then reopens a second exact type/link/size/owner/mode/tombstone
+observation before archive publication; copied bytes on a substituted inode
+never authorize root mutation. With a live capsule, `resume` uses
 the loader-held control-root FD and executes the already-read snapshot bytes
 in-process, never an admitted pathname. A timeout or foreign state stops for an
 explicit manual route; the default tool has no force path.
