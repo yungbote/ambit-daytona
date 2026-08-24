@@ -22,7 +22,10 @@ from render_command import (  # noqa: E402
 )
 
 GOLDENS = json.loads(
-    (PROTOCOL_ROOT / "render-command-goldens.v1.json").read_text(encoding="utf-8")
+    (PROTOCOL_ROOT / "render-command-goldens.v2.json").read_text(encoding="utf-8")
+)
+GOLDEN_BUNDLE_SHA256 = (
+    "0f01d768960d115f0d5f7b8dcddd1a26842754694a383cdf905c36c4d818ebaa"
 )
 
 
@@ -39,6 +42,9 @@ class RenderCommandTests(unittest.TestCase):
         return json.loads(GOLDENS["request"])
 
     def test_round_trips_exact_request_and_success_result(self) -> None:
+        bundle_bytes = (PROTOCOL_ROOT / "render-command-goldens.v2.json").read_bytes()
+        self.assertEqual(GOLDENS["contract"], "ambit.c18-specialist-render-command-goldens/v2")
+        self.assertEqual(hashlib.sha256(bundle_bytes).hexdigest(), GOLDEN_BUNDLE_SHA256)
         request = self.request()
         request_bytes = canonical_bytes(request)
         self.assertEqual(parse_request_bytes(request_bytes), request)
@@ -61,7 +67,7 @@ class RenderCommandTests(unittest.TestCase):
                     "check": check,
                     "outcome": "passed",
                     "evidence": {
-                        "path": f"outputs/c18-render/test/evidence/{index:03d}-{check}.json",
+                        "path": f"outputs/render/evidence/{index:03d}-{check}.json",
                         "mediaType": "application/vnd.ambit.c18-specialist-render-check-evidence+json",
                         "byteLength": len(evidence),
                         "digest": "sha256:" + hashlib.sha256(evidence).hexdigest(),
@@ -125,6 +131,41 @@ class RenderCommandTests(unittest.TestCase):
             create_request(body)
         with self.assertRaisesRegex(RenderCommandError, "exact canonical"):
             parse_request_bytes(b" " + canonical_bytes(self.request()))
+
+    def test_admits_only_exact_conformance_or_job_bound_product_roots(self) -> None:
+        body = {
+            key: value
+            for key, value in self.request().items()
+            if key not in {"contract", "digest", "operation"}
+        }
+        body["jobRoot"] = (
+            "/workspace/.ambit/render-jobs/"
+            "018f6f56-7b2c-7d20-8a1f-abcdef123457"
+        )
+        with self.assertRaisesRegex(RenderCommandError, "exact artifact render job"):
+            create_request(body)
+
+        body = {
+            key: value
+            for key, value in self.request().items()
+            if key not in {"contract", "digest", "operation"}
+        }
+        body["jobRoot"] = "/ambit"
+        with self.assertRaisesRegex(RenderCommandError, "conformance authority"):
+            create_request(body)
+
+        body["jobRef"] = "ambit://artifact-render-jobs/conformance-golden-spreadsheet"
+        body["runtime"] = {
+            **body["runtime"],
+            "profileRevision": pin(
+                "ambit.workspace-runtime/c18-specialist-conformance@1", 15
+            ),
+        }
+        self.assertEqual(create_request(body)["jobRoot"], "/ambit")
+
+        body["requestPath"] = body["source"]["path"]
+        with self.assertRaisesRegex(RenderCommandError, "overlap"):
+            create_request(body)
 
     def test_failure_cannot_publish_a_preview_or_unrequested_check(self) -> None:
         request = self.request()

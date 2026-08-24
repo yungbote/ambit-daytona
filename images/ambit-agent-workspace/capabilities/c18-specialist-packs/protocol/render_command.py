@@ -11,8 +11,8 @@ from typing import Any
 from public_preview import MEDIA_TYPE as PREVIEW_MEDIA_TYPE
 
 
-REQUEST_CONTRACT = "ambit.c18-specialist-render-command-request/v1"
-RESULT_CONTRACT = "ambit.c18-specialist-render-command-result/v1"
+REQUEST_CONTRACT = "ambit.c18-specialist-render-command-request/v2"
+RESULT_CONTRACT = "ambit.c18-specialist-render-command-result/v2"
 EVIDENCE_CONTRACT = "ambit.c18-specialist-render-check-evidence/v1"
 EVIDENCE_MEDIA_TYPE = "application/vnd.ambit.c18-specialist-render-check-evidence+json"
 MAXIMUM_COMMAND_BYTES = 2 * 1024 * 1024
@@ -27,6 +27,21 @@ MEDIA_TYPE = re.compile(
     r"^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$"
 )
 SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
+PRODUCT_JOB_ROOT = re.compile(
+    r"^/workspace/\.ambit/render-jobs/(?P<job_id>"
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-"
+    r"[89ab][0-9a-f]{3}-[0-9a-f]{12})$"
+)
+PRODUCT_JOB_REF = re.compile(
+    r"^ambit://artifact-render-jobs/(?P<job_id>"
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-"
+    r"[89ab][0-9a-f]{3}-[0-9a-f]{12})$"
+)
+CONFORMANCE_JOB_REF = re.compile(
+    r"^ambit://artifact-render-jobs/conformance-"
+    r"[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$"
+)
+CONFORMANCE_PROFILE_REF = "ambit.workspace-runtime/c18-specialist-conformance@1"
 ISO_INSTANT = re.compile(
     r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$"
 )
@@ -140,6 +155,45 @@ def _safe_path(value: object, zone: str, name: str) -> str:
     ):
         raise RenderCommandError(f"{name} escapes the {zone} semantic zone")
     return value
+
+
+def _is_beneath(path: str, root: str) -> bool:
+    return path.startswith(root + "/") and len(path) > len(root) + 1
+
+
+def _job_root(value: object) -> str:
+    if value == "/ambit":
+        return value
+    if not isinstance(value, str) or not PRODUCT_JOB_ROOT.fullmatch(value):
+        raise RenderCommandError("request job root is not policy-admitted")
+    return value
+
+
+def _require_job_root_authority(
+    job_root: str,
+    job_ref: str,
+    profile_ref: str,
+) -> None:
+    if job_root == "/ambit":
+        if (
+            CONFORMANCE_JOB_REF.fullmatch(job_ref) is None
+            or profile_ref != CONFORMANCE_PROFILE_REF
+        ):
+            raise RenderCommandError(
+                "the /ambit semantic root is reserved for exact conformance authority"
+            )
+        return
+    root_match = PRODUCT_JOB_ROOT.fullmatch(job_root)
+    ref_match = PRODUCT_JOB_REF.fullmatch(job_ref)
+    if (
+        root_match is None
+        or ref_match is None
+        or root_match.group("job_id") != ref_match.group("job_id")
+        or profile_ref == CONFORMANCE_PROFILE_REF
+    ):
+        raise RenderCommandError(
+            "product semantic root does not bind the exact artifact render job"
+        )
 
 
 def _iso_instant(value: object, name: str) -> str:
@@ -329,8 +383,10 @@ def create_request(value: object) -> dict[str, Any]:
             "deadlineAt",
             "facet",
             "jobRef",
+            "jobRoot",
             "output",
             "packRequiredChecks",
+            "requestPath",
             "renderer",
             "runtime",
             "source",
@@ -342,17 +398,34 @@ def create_request(value: object) -> dict[str, Any]:
         raise RenderCommandError("request facet is invalid")
     source = _parse_source(record["source"])
     output = _parse_output(record["output"])
-    if source["path"] in {output["previewPath"], output["resultPath"]}:
-        raise RenderCommandError("source and output paths overlap")
+    request_path = _safe_path(
+        record["requestPath"], "inputs", "render request path"
+    )
+    if source["path"] in {
+        request_path,
+        output["previewPath"],
+        output["resultPath"],
+    }:
+        raise RenderCommandError("request, source, and output paths overlap")
+    job_ref = _operational_ref(record["jobRef"], "request job ref")
+    job_root = _job_root(record["jobRoot"])
+    runtime = _parse_runtime(record["runtime"])
+    _require_job_root_authority(
+        job_root,
+        job_ref,
+        runtime["profileRevision"]["ref"],
+    )
     return _seal(
         REQUEST_CONTRACT,
         {
             "operation": "render_validate",
-            "jobRef": _operational_ref(record["jobRef"], "request job ref"),
+            "jobRef": job_ref,
+            "jobRoot": job_root,
+            "requestPath": request_path,
             "facet": facet,
             "source": source,
             "renderer": _parse_renderer(record["renderer"], facet),
-            "runtime": _parse_runtime(record["runtime"]),
+            "runtime": runtime,
             "packRequiredChecks": _labeled_checks(
                 record["packRequiredChecks"], "request pack checks"
             ),
@@ -371,9 +444,11 @@ def parse_request(value: object) -> dict[str, Any]:
             "digest",
             "facet",
             "jobRef",
+            "jobRoot",
             "operation",
             "output",
             "packRequiredChecks",
+            "requestPath",
             "renderer",
             "runtime",
             "source",
@@ -389,8 +464,10 @@ def parse_request(value: object) -> dict[str, Any]:
                 "deadlineAt",
                 "facet",
                 "jobRef",
+                "jobRoot",
                 "output",
                 "packRequiredChecks",
+                "requestPath",
                 "renderer",
                 "runtime",
                 "source",
@@ -511,6 +588,7 @@ def create_result(request_value: object, value: object) -> dict[str, Any]:
     paths = [item["evidence"]["path"] for item in checks if item["evidence"] is not None]
     if (
         len(paths) != len(set(paths))
+        or any(not _is_beneath(path, request["output"]["jobOutputRoot"]) for path in paths)
         or request["source"]["path"] in paths
         or request["output"]["previewPath"] in paths
         or request["output"]["resultPath"] in paths
@@ -519,7 +597,11 @@ def create_result(request_value: object, value: object) -> dict[str, Any]:
     return _seal(
         RESULT_CONTRACT,
         {
-            "request": {"jobRef": request["jobRef"], "digest": request["digest"]},
+            "request": {
+                "jobRef": request["jobRef"],
+                "jobRoot": request["jobRoot"],
+                "digest": request["digest"],
+            },
             "outcome": outcome,
             "execution": execution,
             "preview": preview,
@@ -538,8 +620,14 @@ def parse_result(request_value: object, value: object) -> dict[str, Any]:
     )
     if record["contract"] != RESULT_CONTRACT:
         raise RenderCommandError("result contract identity is invalid")
-    identity = _exact_record(record["request"], {"digest", "jobRef"}, "result request identity")
-    if identity != {"jobRef": request["jobRef"], "digest": request["digest"]}:
+    identity = _exact_record(
+        record["request"], {"digest", "jobRef", "jobRoot"}, "result request identity"
+    )
+    if identity != {
+        "jobRef": request["jobRef"],
+        "jobRoot": request["jobRoot"],
+        "digest": request["digest"],
+    }:
         raise RenderCommandError("result request identity differs")
     parsed = create_result(
         request,
@@ -576,7 +664,17 @@ def create_check_evidence(
         raise RenderCommandError("evidence facts are not sorted, unique, and bounded")
     normalized_artifacts = [_parse_evidence(item) for item in artifacts]
     artifact_paths = [item["path"] for item in normalized_artifacts]
-    if artifact_paths != sorted(set(artifact_paths)) or len(artifact_paths) > 64:
+    if (
+        artifact_paths != sorted(set(artifact_paths))
+        or len(artifact_paths) > 64
+        or (
+            "output" in request
+            and any(
+                not _is_beneath(path, request["output"]["jobOutputRoot"])
+                for path in artifact_paths
+            )
+        )
+    ):
         raise RenderCommandError("evidence artifacts are not sorted, unique, and bounded")
     body = {
         "contract": EVIDENCE_CONTRACT,

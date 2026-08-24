@@ -16,7 +16,7 @@ from render_policy import POLICY_MATRIX, require_request_policy  # noqa: E402
 class RenderPolicyTests(unittest.TestCase):
     def request(self) -> dict[str, object]:
         goldens = json.loads(
-            (PROTOCOL_ROOT / "render-command-goldens.v1.json").read_text(
+            (PROTOCOL_ROOT / "render-command-goldens.v2.json").read_text(
                 encoding="utf-8"
             )
         )

@@ -44,7 +44,19 @@
       "yarn"
     ]
   },
-  "schema": "ambit.c18-runtime-policy/v1",
+  "schema": "ambit.c18-runtime-policy/v2",
+  "semanticJobRoots": {
+    "callerPathSelection": "forbidden",
+    "conformance": {
+      "profileRef": "ambit.workspace-runtime/c18-specialist-conformance@1",
+      "root": "/ambit"
+    },
+    "product": {
+      "jobRefPattern": "ambit://artifact-render-jobs/<lowercase-uuid>",
+      "matchingJobIdRequired": true,
+      "rootPattern": "/workspace/.ambit/render-jobs/<lowercase-uuid>"
+    }
+  },
   "secrets": {
     "secretShapedEnvironmentForbidden": true,
     "workspacePlaintextPersistenceForbidden": true

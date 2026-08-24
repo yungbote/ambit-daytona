@@ -99,12 +99,22 @@ python3 -B certification/pack_bundle.py \
   --verify
 ```
 
-Runtime conformance mounts one empty task root at `/ambit`, writes ordinary
-conformance evidence beneath `/ambit/conformance`, and exercises the actual
-render command through `/ambit/inputs` and `/ambit/outputs`. The container must
-run with network disabled, all capabilities dropped, no-new-privileges,
-read-only rootfs, bounded PID/memory/CPU resources, private tmpfs scratch, and
-the exact rootless browser seccomp profile for `web-browser`.
+The host selects exactly one semantic job root and binds it into the canonical
+request, invocation, result, and receipt identity. Pack conformance exclusively
+uses `/ambit` with the exact conformance profile. Product execution exclusively
+uses `/workspace/.ambit/render-jobs/<exact-job-id>`, where the lowercase UUID
+must also be the artifact-render job reference suffix. Callers cannot submit a
+free-form path. Request, source, output, cancellation, retry, and reconciliation
+all retain that same root; every component and semantic zone must be a real
+directory rather than a symlink or substituted inode.
+
+Both conformance lanes exercise the actual render command through their own
+`inputs` and `outputs` zones. The ordinary pack lane mounts one empty `/ambit`
+root. The product-path lane mounts an ordinary Daytona workspace at
+`/workspace` and creates the exact job-owned subtree beneath it. Containers run
+with network disabled, all capabilities dropped, no-new-privileges, read-only
+rootfs, bounded PID/memory/CPU resources, private tmpfs scratch, and the exact
+rootless browser seccomp profile for `web-browser`.
 
 Reproducible image export must set BuildKit's predefined
 `SOURCE_DATE_EPOCH=0` build argument and use an OCI or Docker output with

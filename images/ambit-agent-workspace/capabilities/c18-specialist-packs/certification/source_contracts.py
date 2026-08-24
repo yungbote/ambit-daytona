@@ -464,7 +464,7 @@ def verify_source(root: Path, *, verify_hashes: bool = True) -> dict[str, object
         _require(item["requires"] == expected["requires"], "pack-set requires mismatch")
 
     runtime_policy = _load_json(root / "policy/runtime-policy.json")
-    _require(runtime_policy.get("schema") == "ambit.c18-runtime-policy/v1", "runtime policy schema is invalid")
+    _require(runtime_policy.get("schema") == "ambit.c18-runtime-policy/v2", "runtime policy schema is invalid")
     _require(
         runtime_policy["identity"]
         == {
@@ -479,6 +479,22 @@ def verify_source(root: Path, *, verify_hashes: bool = True) -> dict[str, object
     _require(runtime_policy["runtimeInstallers"]["disposition"] == "absent", "runtime installer policy is invalid")
     _require(runtime_policy["process"]["linuxCapabilities"] == [], "runtime capability policy is invalid")
     _require(runtime_policy["process"]["noNewPrivileges"] is True, "runtime no-new-privileges policy is invalid")
+    _require(
+        runtime_policy.get("semanticJobRoots")
+        == {
+            "callerPathSelection": "forbidden",
+            "conformance": {
+                "profileRef": "ambit.workspace-runtime/c18-specialist-conformance@1",
+                "root": "/ambit",
+            },
+            "product": {
+                "jobRefPattern": "ambit://artifact-render-jobs/<lowercase-uuid>",
+                "matchingJobIdRequired": True,
+                "rootPattern": "/workspace/.ambit/render-jobs/<lowercase-uuid>",
+            },
+        },
+        "semantic job-root policy is invalid",
+    )
     supply_policy = _load_json(root / "policy/supply-chain-policy.json")
     _require(supply_policy.get("schema") == "ambit.c18-supply-chain-policy/v1", "supply-chain policy schema is invalid")
     _require(all(value == 0 for key, value in supply_policy["vulnerabilities"].items() if key.startswith("maximum")), "vulnerability thresholds are not strict")

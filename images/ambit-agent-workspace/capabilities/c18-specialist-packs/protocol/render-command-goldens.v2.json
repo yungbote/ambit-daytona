@@ -1,0 +1,86 @@
+{
+  "contract": "ambit.c18-specialist-render-command-goldens/v2",
+  "requestDigest": "sha256:c1d6e84259597477d4a0c5d7c96529a84456411a6adebfe7ed283be8cd8d6cd7",
+  "successDigest": "sha256:6bc38b8eb40a98a9e55e00674517450da2de21f7f4dd107b3846ea12032e33ae",
+  "failureDigest": "sha256:0186d4902eb8767f67f062106351dbe5f8269fb0d9a908d9da7b8ebe124ea339",
+  "request": "{\"contract\":\"ambit.c18-specialist-render-command-request/v2\",\"deadlineAt\":\"2026-08-24T00:05:00.000Z\",\"digest\":\"sha256:e9449de84d8873ae83b73eaeaa688d542887110a25f4d871d6984d5c70367ad7\",\"facet\":\"spreadsheet\",\"jobRef\":\"ambit://artifact-render-jobs/018f6f56-7b2c-7d20-8a1f-abcdef123456\",\"jobRoot\":\"/workspace/.ambit/render-jobs/018f6f56-7b2c-7d20-8a1f-abcdef123456\",\"operation\":\"render_validate\",\"output\":{\"jobOutputRoot\":\"outputs/render\",\"maximumAggregateImagePixels\":33554432,\"maximumImagePixels\":8388608,\"maximumPreviewBytes\":8388608,\"previewMediaType\":\"application/vnd.ambit.c18-specialist-artifact-preview+json\",\"previewPath\":\"outputs/render/preview.json\",\"resultPath\":\"outputs/render/result.json\"},\"packRequiredChecks\":[{\"check\":\"spreadsheet.accessibility_structure\",\"label\":\"Spreadsheet accessibility structure checked\"},{\"check\":\"spreadsheet.chart_table_pivot_integrity\",\"label\":\"Charts, tables, and pivots checked\"},{\"check\":\"spreadsheet.formula_reference_name_integrity\",\"label\":\"Formulas, references, and names checked\"},{\"check\":\"spreadsheet.recalculation_current\",\"label\":\"Spreadsheet recalculation checked\"},{\"check\":\"spreadsheet.sheet_render_complete\",\"label\":\"Spreadsheet views rendered\"},{\"check\":\"spreadsheet.style_integrity\",\"label\":\"Spreadsheet styles checked\"}],\"renderer\":{\"executablePath\":\"/opt/ambit/runtime-pack/office-authoring/bin/ambit-specialist-render\",\"renderMode\":\"workbook_sheet_raster_and_structure\",\"rendererRef\":\"ambit.renderer/spreadsheet-workbook-v1@1\",\"representation\":\"spreadsheet_sheet_set\",\"validationPolicyRef\":\"ambit.validation-policy/spreadsheet-workbook-v1@1\"},\"requestPath\":\"inputs/request.json\",\"runtime\":{\"packRevisions\":[{\"digest\":\"sha256:0000000000000000000000000000000000000000000000000000000000000003\",\"ref\":\"ambit.runtime-pack/test-baseline-core@1\"},{\"digest\":\"sha256:0000000000000000000000000000000000000000000000000000000000000004\",\"ref\":\"ambit.runtime-pack/test-data-research@1\"},{\"digest\":\"sha256:0000000000000000000000000000000000000000000000000000000000000005\",\"ref\":\"ambit.runtime-pack/test-office-authoring@1\"}],\"profileRevision\":{\"digest\":\"sha256:0000000000000000000000000000000000000000000000000000000000000002\",\"ref\":\"ambit.workspace-runtime/test-c18-golden@1\"},\"workspaceExecutionManifest\":{\"digest\":\"sha256:0000000000000000000000000000000000000000000000000000000000000001\",\"ref\":\"workspace-execution-manifest:sha256:1111111111111111111111111111111111111111111111111111111111111111\"}},\"source\":{\"byteLength\":25,\"digest\":\"sha256:df68d1d60e0bb3549243031d40bd261c14c7cfc6a894e4330bc06cd83b8175f8\",\"mediaType\":\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\",\"path\":\"inputs/source.xlsx\",\"ref\":\"ambit://artifact-revisions/golden-spreadsheet\",\"schemaUri\":null}}",
+  "success": "{\"checks\":[{\"check\":\"spreadsheet.accessibility_structure\",\"evidence\":{\"byteLength\":696,\"digest\":\"sha256:6afa72371113f9d21404d7c2098da76384cd6de2b1ec7696e214eac5ce201a56\",\"mediaType\":\"application/vnd.ambit.c18-specialist-render-check-evidence+json\",\"path\":\"outputs/render/evidence-01.json\"},\"outcome\":\"passed\"},{\"check\":\"spreadsheet.chart_table_pivot_integrity\",\"evidence\":{\"byteLength\":700,\"digest\":\"sha256:7bf1e5ff13207d514e16626b5c4ee4c1e50fa57022297de2c7b77b5d21379760\",\"mediaType\":\"application/vnd.ambit.c18-specialist-render-check-evidence+json\",\"path\":\"outputs/render/evidence-02.json\"},\"outcome\":\"passed\"},{\"check\":\"spreadsheet.formula_reference_name_integrity\",\"evidence\":{\"byteLength\":705,\"digest\":\"sha256:d6fa4eee13569e5c0f98af537904794001eb9a2a4af1f2eeb08e936516cb6355\",\"mediaType\":\"application/vnd.ambit.c18-specialist-render-check-evidence+json\",\"path\":\"outputs/render/evidence-03.json\"},\"outcome\":\"passed\"},{\"check\":\"spreadsheet.recalculation_current\",\"evidence\":{\"byteLength\":694,\"digest\":\"sha256:9c91baf0b28269deb5f2f616f75683d773fb0f0be741effeeff1c4d8b9ddbad1\",\"mediaType\":\"application/vnd.ambit.c18-specialist-render-check-evidence+json\",\"path\":\"outputs/render/evidence-04.json\"},\"outcome\":\"passed\"},{\"check\":\"spreadsheet.sheet_render_complete\",\"evidence\":{\"byteLength\":694,\"digest\":\"sha256:dd4af29480601fa5ecad853d0def6d1aa3248580a33738f3a7a30b9ee94b4745\",\"mediaType\":\"application/vnd.ambit.c18-specialist-render-check-evidence+json\",\"path\":\"outputs/render/evidence-05.json\"},\"outcome\":\"passed\"},{\"check\":\"spreadsheet.style_integrity\",\"evidence\":{\"byteLength\":688,\"digest\":\"sha256:964b0e830f372f3e0ec8a6756294457e76811e92611f54573cc5725c52fa4881\",\"mediaType\":\"application/vnd.ambit.c18-specialist-render-check-evidence+json\",\"path\":\"outputs/render/evidence-06.json\"},\"outcome\":\"passed\"}],\"contract\":\"ambit.c18-specialist-render-command-result/v2\",\"digest\":\"sha256:72ece1dc713aa28cde15ffb35dfe5770f04234083713b7b6c5a8545b60bd7e3a\",\"execution\":{\"completedAt\":\"2026-08-24T00:00:02.000Z\",\"executorRevision\":{\"digest\":\"sha256:0000000000000000000000000000000000000000000000000000000000000005\",\"ref\":\"ambit://specialist-render-executors/office-authoring@1\"},\"startedAt\":\"2026-08-24T00:00:01.000Z\"},\"failure\":null,\"outcome\":\"succeeded\",\"preview\":{\"byteLength\":1246,\"bytesDigest\":\"sha256:bd8ece4e2cc6cacc15ebd63f77fb2c47f82940550e5091da1862017ecbc20d32\",\"envelopeDigest\":\"sha256:de05c0cebdf725a26ed26ad53d90f2ed302a71eeba7dfeed8947ad373990e971\",\"mediaType\":\"application/vnd.ambit.c18-specialist-artifact-preview+json\",\"path\":\"outputs/render/preview.json\"},\"request\":{\"digest\":\"sha256:e9449de84d8873ae83b73eaeaa688d542887110a25f4d871d6984d5c70367ad7\",\"jobRef\":\"ambit://artifact-render-jobs/018f6f56-7b2c-7d20-8a1f-abcdef123456\",\"jobRoot\":\"/workspace/.ambit/render-jobs/018f6f56-7b2c-7d20-8a1f-abcdef123456\"}}",
+  "failure": "{\"checks\":[{\"check\":\"spreadsheet.accessibility_structure\",\"evidence\":{\"byteLength\":696,\"digest\":\"sha256:08e30fa7bc4880c2912532eead5c2daa0ad1125701581810146a47cf0b05f1c9\",\"mediaType\":\"application/vnd.ambit.c18-specialist-render-check-evidence+json\",\"path\":\"outputs/render/evidence-99.json\"},\"outcome\":\"failed\"}],\"contract\":\"ambit.c18-specialist-render-command-result/v2\",\"digest\":\"sha256:c4985f48035ef37ec6049d30587252efc21c10ca12b5538f1962edd626135442\",\"execution\":{\"completedAt\":\"2026-08-24T00:00:02.000Z\",\"executorRevision\":{\"digest\":\"sha256:0000000000000000000000000000000000000000000000000000000000000005\",\"ref\":\"ambit://specialist-render-executors/office-authoring@1\"},\"startedAt\":\"2026-08-24T00:00:01.000Z\"},\"failure\":{\"code\":\"formula_validation_failed\",\"message\":\"The formula validation check failed.\"},\"outcome\":\"failed\",\"preview\":null,\"request\":{\"digest\":\"sha256:e9449de84d8873ae83b73eaeaa688d542887110a25f4d871d6984d5c70367ad7\",\"jobRef\":\"ambit://artifact-render-jobs/018f6f56-7b2c-7d20-8a1f-abcdef123456\",\"jobRoot\":\"/workspace/.ambit/render-jobs/018f6f56-7b2c-7d20-8a1f-abcdef123456\"}}",
+  "evidence": [
+    {
+      "descriptor": {
+        "path": "outputs/render/evidence-01.json",
+        "mediaType": "application/vnd.ambit.c18-specialist-render-check-evidence+json",
+        "byteLength": 696,
+        "digest": "sha256:6afa72371113f9d21404d7c2098da76384cd6de2b1ec7696e214eac5ce201a56"
+      },
+      "body": "{\"artifacts\":[],\"check\":\"spreadsheet.accessibility_structure\",\"contract\":\"ambit.c18-specialist-render-check-evidence/v1\",\"digest\":\"sha256:fa575dcdb68c1473e042cf37d1babd2313abf7d6deb3bd982b14b7cd5b3eb995\",\"executorRevision\":{\"digest\":\"sha256:0000000000000000000000000000000000000000000000000000000000000005\",\"ref\":\"ambit://specialist-render-executors/office-authoring@1\"},\"facts\":[{\"key\":\"fixture\",\"value\":\"golden\"}],\"outcome\":\"passed\",\"request\":{\"digest\":\"sha256:e9449de84d8873ae83b73eaeaa688d542887110a25f4d871d6984d5c70367ad7\",\"jobRef\":\"ambit://artifact-render-jobs/018f6f56-7b2c-7d20-8a1f-abcdef123456\",\"sourceDigest\":\"sha256:df68d1d60e0bb3549243031d40bd261c14c7cfc6a894e4330bc06cd83b8175f8\"}}"
+    },
+    {
+      "descriptor": {
+        "path": "outputs/render/evidence-02.json",
+        "mediaType": "application/vnd.ambit.c18-specialist-render-check-evidence+json",
+        "byteLength": 700,
+        "digest": "sha256:7bf1e5ff13207d514e16626b5c4ee4c1e50fa57022297de2c7b77b5d21379760"
+      },
+      "body": "{\"artifacts\":[],\"check\":\"spreadsheet.chart_table_pivot_integrity\",\"contract\":\"ambit.c18-specialist-render-check-evidence/v1\",\"digest\":\"sha256:dda335f8ebd2b7c43e3e68487054933623f8779ef0034c40aa0de5d9e7323c9c\",\"executorRevision\":{\"digest\":\"sha256:0000000000000000000000000000000000000000000000000000000000000005\",\"ref\":\"ambit://specialist-render-executors/office-authoring@1\"},\"facts\":[{\"key\":\"fixture\",\"value\":\"golden\"}],\"outcome\":\"passed\",\"request\":{\"digest\":\"sha256:e9449de84d8873ae83b73eaeaa688d542887110a25f4d871d6984d5c70367ad7\",\"jobRef\":\"ambit://artifact-render-jobs/018f6f56-7b2c-7d20-8a1f-abcdef123456\",\"sourceDigest\":\"sha256:df68d1d60e0bb3549243031d40bd261c14c7cfc6a894e4330bc06cd83b8175f8\"}}"
+    },
+    {
+      "descriptor": {
+        "path": "outputs/render/evidence-03.json",
+        "mediaType": "application/vnd.ambit.c18-specialist-render-check-evidence+json",
+        "byteLength": 705,
+        "digest": "sha256:d6fa4eee13569e5c0f98af537904794001eb9a2a4af1f2eeb08e936516cb6355"
+      },
+      "body": "{\"artifacts\":[],\"check\":\"spreadsheet.formula_reference_name_integrity\",\"contract\":\"ambit.c18-specialist-render-check-evidence/v1\",\"digest\":\"sha256:6d36be3888c29c0f6d0e13e9acbb242449a4036a53b3b66bb92151a27c78350f\",\"executorRevision\":{\"digest\":\"sha256:0000000000000000000000000000000000000000000000000000000000000005\",\"ref\":\"ambit://specialist-render-executors/office-authoring@1\"},\"facts\":[{\"key\":\"fixture\",\"value\":\"golden\"}],\"outcome\":\"passed\",\"request\":{\"digest\":\"sha256:e9449de84d8873ae83b73eaeaa688d542887110a25f4d871d6984d5c70367ad7\",\"jobRef\":\"ambit://artifact-render-jobs/018f6f56-7b2c-7d20-8a1f-abcdef123456\",\"sourceDigest\":\"sha256:df68d1d60e0bb3549243031d40bd261c14c7cfc6a894e4330bc06cd83b8175f8\"}}"
+    },
+    {
+      "descriptor": {
+        "path": "outputs/render/evidence-04.json",
+        "mediaType": "application/vnd.ambit.c18-specialist-render-check-evidence+json",
+        "byteLength": 694,
+        "digest": "sha256:9c91baf0b28269deb5f2f616f75683d773fb0f0be741effeeff1c4d8b9ddbad1"
+      },
+      "body": "{\"artifacts\":[],\"check\":\"spreadsheet.recalculation_current\",\"contract\":\"ambit.c18-specialist-render-check-evidence/v1\",\"digest\":\"sha256:cfe2f087463e4e62ae7d155e0ce8574ecb44e5cf57b9bd77b590c08067048004\",\"executorRevision\":{\"digest\":\"sha256:0000000000000000000000000000000000000000000000000000000000000005\",\"ref\":\"ambit://specialist-render-executors/office-authoring@1\"},\"facts\":[{\"key\":\"fixture\",\"value\":\"golden\"}],\"outcome\":\"passed\",\"request\":{\"digest\":\"sha256:e9449de84d8873ae83b73eaeaa688d542887110a25f4d871d6984d5c70367ad7\",\"jobRef\":\"ambit://artifact-render-jobs/018f6f56-7b2c-7d20-8a1f-abcdef123456\",\"sourceDigest\":\"sha256:df68d1d60e0bb3549243031d40bd261c14c7cfc6a894e4330bc06cd83b8175f8\"}}"
+    },
+    {
+      "descriptor": {
+        "path": "outputs/render/evidence-05.json",
+        "mediaType": "application/vnd.ambit.c18-specialist-render-check-evidence+json",
+        "byteLength": 694,
+        "digest": "sha256:dd4af29480601fa5ecad853d0def6d1aa3248580a33738f3a7a30b9ee94b4745"
+      },
+      "body": "{\"artifacts\":[],\"check\":\"spreadsheet.sheet_render_complete\",\"contract\":\"ambit.c18-specialist-render-check-evidence/v1\",\"digest\":\"sha256:11563025ece3afa1cf1ec432fb2d7367e922d077781142cb0c4f7a9e0ce43244\",\"executorRevision\":{\"digest\":\"sha256:0000000000000000000000000000000000000000000000000000000000000005\",\"ref\":\"ambit://specialist-render-executors/office-authoring@1\"},\"facts\":[{\"key\":\"fixture\",\"value\":\"golden\"}],\"outcome\":\"passed\",\"request\":{\"digest\":\"sha256:e9449de84d8873ae83b73eaeaa688d542887110a25f4d871d6984d5c70367ad7\",\"jobRef\":\"ambit://artifact-render-jobs/018f6f56-7b2c-7d20-8a1f-abcdef123456\",\"sourceDigest\":\"sha256:df68d1d60e0bb3549243031d40bd261c14c7cfc6a894e4330bc06cd83b8175f8\"}}"
+    },
+    {
+      "descriptor": {
+        "path": "outputs/render/evidence-06.json",
+        "mediaType": "application/vnd.ambit.c18-specialist-render-check-evidence+json",
+        "byteLength": 688,
+        "digest": "sha256:964b0e830f372f3e0ec8a6756294457e76811e92611f54573cc5725c52fa4881"
+      },
+      "body": "{\"artifacts\":[],\"check\":\"spreadsheet.style_integrity\",\"contract\":\"ambit.c18-specialist-render-check-evidence/v1\",\"digest\":\"sha256:a4a7c8dbac3f9d957dbd5497dd6d9b2e5ceb5f3aad21030b948ca54ce168350a\",\"executorRevision\":{\"digest\":\"sha256:0000000000000000000000000000000000000000000000000000000000000005\",\"ref\":\"ambit://specialist-render-executors/office-authoring@1\"},\"facts\":[{\"key\":\"fixture\",\"value\":\"golden\"}],\"outcome\":\"passed\",\"request\":{\"digest\":\"sha256:e9449de84d8873ae83b73eaeaa688d542887110a25f4d871d6984d5c70367ad7\",\"jobRef\":\"ambit://artifact-render-jobs/018f6f56-7b2c-7d20-8a1f-abcdef123456\",\"sourceDigest\":\"sha256:df68d1d60e0bb3549243031d40bd261c14c7cfc6a894e4330bc06cd83b8175f8\"}}"
+    }
+  ],
+  "failureEvidence": {
+    "descriptor": {
+      "path": "outputs/render/evidence-99.json",
+      "mediaType": "application/vnd.ambit.c18-specialist-render-check-evidence+json",
+      "byteLength": 696,
+      "digest": "sha256:08e30fa7bc4880c2912532eead5c2daa0ad1125701581810146a47cf0b05f1c9"
+    },
+    "body": "{\"artifacts\":[],\"check\":\"spreadsheet.accessibility_structure\",\"contract\":\"ambit.c18-specialist-render-check-evidence/v1\",\"digest\":\"sha256:e8ec5b1f1cee9cea284ca9092fe72319ef046322185e877c4b9ad42cec60a2b6\",\"executorRevision\":{\"digest\":\"sha256:0000000000000000000000000000000000000000000000000000000000000005\",\"ref\":\"ambit://specialist-render-executors/office-authoring@1\"},\"facts\":[{\"key\":\"fixture\",\"value\":\"golden\"}],\"outcome\":\"failed\",\"request\":{\"digest\":\"sha256:e9449de84d8873ae83b73eaeaa688d542887110a25f4d871d6984d5c70367ad7\",\"jobRef\":\"ambit://artifact-render-jobs/018f6f56-7b2c-7d20-8a1f-abcdef123456\",\"sourceDigest\":\"sha256:df68d1d60e0bb3549243031d40bd261c14c7cfc6a894e4330bc06cd83b8175f8\"}}"
+  },
+  "invocation": {
+    "executable": "/opt/ambit/runtime-pack/office-authoring/bin/ambit-specialist-render",
+    "arguments": [
+      "--request",
+      "/workspace/.ambit/render-jobs/018f6f56-7b2c-7d20-8a1f-abcdef123456/inputs/request.json",
+      "--result",
+      "/workspace/.ambit/render-jobs/018f6f56-7b2c-7d20-8a1f-abcdef123456/outputs/render/result.json"
+    ],
+    "stdin": "closed",
+    "network": "denied",
+    "deadlineAt": "2026-08-24T00:05:00.000Z"
+  }
+}

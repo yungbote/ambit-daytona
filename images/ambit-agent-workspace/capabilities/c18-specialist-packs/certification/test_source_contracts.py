@@ -158,6 +158,20 @@ class SourceContractTests(unittest.TestCase):
             ):
                 verify_source(root, verify_hashes=False)
 
+    def test_rejects_semantic_job_root_policy_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "source"
+            shutil.copytree(SOURCE_ROOT, root)
+            policy_path = root / "policy/runtime-policy.json"
+            policy = json.loads(policy_path.read_text(encoding="utf-8"))
+            policy["semanticJobRoots"]["callerPathSelection"] = "allowed"
+            policy_path.write_text(json.dumps(policy), encoding="utf-8")
+            with self.assertRaisesRegex(
+                SourceContractError,
+                "semantic job-root policy",
+            ):
+                verify_source(root, verify_hashes=False)
+
 
 if __name__ == "__main__":
     unittest.main()

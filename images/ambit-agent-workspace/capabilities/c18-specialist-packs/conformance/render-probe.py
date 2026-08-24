@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -16,7 +17,9 @@ sys.path.insert(0, str(PACK_ROOT / "protocol"))
 
 from public_preview import parse_preview_bytes  # noqa: E402
 from render_command import (  # noqa: E402
+    CONFORMANCE_PROFILE_REF,
     PREVIEW_MEDIA_TYPE,
+    PRODUCT_JOB_ROOT,
     canonical_bytes,
     create_request,
     parse_check_evidence_bytes,
@@ -26,7 +29,59 @@ from render_command import (  # noqa: E402
 from render_policy import POLICY_MATRIX  # noqa: E402
 
 
-AMBIT_ROOT = Path("/ambit")
+CONFORMANCE_ROOT = Path("/ambit")
+PRODUCT_CONFORMANCE_PROFILE_REF = (
+    "ambit.workspace-runtime/c18-specialist-product-path-conformance@1"
+)
+
+
+def semantic_job_identity(value: str, slug: str) -> tuple[Path, str, str]:
+    if value == str(CONFORMANCE_ROOT):
+        return (
+            CONFORMANCE_ROOT,
+            f"ambit://artifact-render-jobs/conformance-{slug}",
+            CONFORMANCE_PROFILE_REF,
+        )
+    match = PRODUCT_JOB_ROOT.fullmatch(value)
+    if match is None:
+        raise ValueError("render probe job root is not policy-admitted")
+    return (
+        Path(value),
+        f"ambit://artifact-render-jobs/{match.group('job_id')}",
+        PRODUCT_CONFORMANCE_PROFILE_REF,
+    )
+
+
+def require_real_directory(
+    path: Path,
+    *,
+    create_beneath: Path | None = None,
+) -> None:
+    if not path.is_absolute():
+        raise ValueError("render probe directory is not absolute")
+    if create_beneath is not None:
+        try:
+            path.relative_to(create_beneath)
+        except ValueError as error:
+            raise ValueError("render probe directory escapes its creation anchor") from error
+    current = Path("/")
+    for part in path.parts[1:]:
+        current /= part
+        try:
+            metadata = current.lstat()
+        except FileNotFoundError:
+            if create_beneath is None or current == create_beneath:
+                raise ValueError("render probe directory anchor is absent")
+            try:
+                current.relative_to(create_beneath)
+            except ValueError as error:
+                raise ValueError(
+                    "render probe attempted to create outside its job root"
+                ) from error
+            os.mkdir(current, mode=0o700)
+            metadata = current.lstat()
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            raise ValueError("render probe job root contains an alias")
 
 
 def sha256_file(path: Path) -> str:
@@ -56,23 +111,39 @@ def probe(args: argparse.Namespace) -> dict[str, object]:
     source = args.source.resolve(strict=True)
     policy = exact_policy(args.facet, args.media_type)
     slug = args.name
-    input_root = AMBIT_ROOT / "inputs" / "c18-render-probe" / slug
-    output_root = AMBIT_ROOT / "outputs" / "c18-render-probe" / slug
-    input_root.mkdir(parents=True, mode=0o700)
-    output_root.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    job_root, job_ref, profile_ref = semantic_job_identity(args.job_root, slug)
+    if job_root == CONFORMANCE_ROOT:
+        require_real_directory(job_root)
+    else:
+        workspace_root = Path("/workspace")
+        require_real_directory(workspace_root)
+        require_real_directory(job_root, create_beneath=workspace_root)
+    if job_root == CONFORMANCE_ROOT:
+        input_root = job_root / "inputs" / "c18-render-probe" / slug
+        output_root = job_root / "outputs" / "c18-render-probe" / slug
+    else:
+        input_root = job_root / "inputs"
+        output_root = job_root / "outputs" / "render"
+    require_real_directory(input_root, create_beneath=job_root)
+    require_real_directory(output_root.parent, create_beneath=job_root)
     admitted_source = input_root / f"source{source.suffix}"
     with source.open("rb") as reader, admitted_source.open("xb") as writer:
         shutil.copyfileobj(reader, writer, 1024 * 1024)
         writer.flush()
         os.fsync(writer.fileno())
     admitted_source.chmod(0o400)
-    source_relative = admitted_source.relative_to(AMBIT_ROOT).as_posix()
-    job_output_root = output_root.relative_to(AMBIT_ROOT).as_posix()
+    source_relative = admitted_source.relative_to(job_root).as_posix()
+    job_output_root = output_root.relative_to(job_root).as_posix()
+    request_relative = (input_root / "request.json").relative_to(
+        job_root
+    ).as_posix()
     pack_ref = str(policy["executorPackRevisionRef"])
     pack_lock = PACK_ROOT / "pack.lock.json"
     request = create_request(
         {
-            "jobRef": f"ambit://artifact-render-jobs/conformance-{slug}",
+            "jobRef": job_ref,
+            "jobRoot": str(job_root),
+            "requestPath": request_relative,
             "facet": args.facet,
             "source": {
                 "path": source_relative,
@@ -98,7 +169,7 @@ def probe(args: argparse.Namespace) -> dict[str, object]:
                     "sha256:" + "2" * 64,
                 ),
                 "profileRevision": pin(
-                    "ambit.workspace-runtime/c18-specialist-conformance@1",
+                    profile_ref,
                     "sha256:" + "3" * 64,
                 ),
                 "packRevisions": [pin(pack_ref, sha256_file(pack_lock))],
@@ -127,18 +198,18 @@ def probe(args: argparse.Namespace) -> dict[str, object]:
             "--request",
             str(request_path),
             "--result",
-            str(AMBIT_ROOT / request["output"]["resultPath"]),
+            str(job_root / request["output"]["resultPath"]),
         ],
         stdin=subprocess.DEVNULL,
         check=False,
     )
-    result_path = AMBIT_ROOT / request["output"]["resultPath"]
+    result_path = job_root / request["output"]["resultPath"]
     if completed.returncode != 0 or not result_path.is_file():
         raise RuntimeError(f"specialist render probe failed with {completed.returncode}")
     result = parse_result_bytes(request, result_path.read_bytes())
     if result["outcome"] != "succeeded" or result["preview"] is None:
         raise RuntimeError("specialist render probe did not succeed")
-    preview_path = AMBIT_ROOT / result["preview"]["path"]
+    preview_path = job_root / result["preview"]["path"]
     preview_bytes = preview_path.read_bytes()
     if sha256_bytes(preview_bytes) != result["preview"]["bytesDigest"]:
         raise RuntimeError("specialist render preview bytes differ")
@@ -149,7 +220,7 @@ def probe(args: argparse.Namespace) -> dict[str, object]:
         descriptor = check["evidence"]
         if descriptor is None:
             raise RuntimeError("successful specialist check has no evidence")
-        evidence_path = AMBIT_ROOT / descriptor["path"]
+        evidence_path = job_root / descriptor["path"]
         evidence_bytes = evidence_path.read_bytes()
         if (
             len(evidence_bytes) != descriptor["byteLength"]
@@ -164,15 +235,17 @@ def probe(args: argparse.Namespace) -> dict[str, object]:
             if artifact["path"] in artifact_paths:
                 raise RuntimeError("specialist evidence artifact path is duplicated")
             artifact_paths.add(artifact["path"])
-            artifact_path = AMBIT_ROOT / artifact["path"]
+            artifact_path = job_root / artifact["path"]
             if (
                 artifact_path.stat().st_size != artifact["byteLength"]
                 or sha256_file(artifact_path) != artifact["digest"]
             ):
                 raise RuntimeError("specialist evidence artifact bytes differ")
     return {
-        "schema": "ambit.c18-specialist-render-runtime-probe/v1",
+        "schema": "ambit.c18-specialist-render-runtime-probe/v2",
         "name": slug,
+        "jobRef": job_ref,
+        "jobRoot": str(job_root),
         "facet": args.facet,
         "mediaType": args.media_type,
         "requestDigest": request["digest"],
@@ -191,6 +264,7 @@ def main() -> int:
     parser.add_argument("--media-type", required=True)
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument("--receipt", required=True, type=Path)
+    parser.add_argument("--job-root", default=str(CONFORMANCE_ROOT))
     args = parser.parse_args()
     try:
         receipt = probe(args)
