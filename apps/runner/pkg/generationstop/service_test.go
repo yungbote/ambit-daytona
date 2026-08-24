@@ -186,6 +186,51 @@ func TestRequireCurrentReceiptReprovesFullAuthorityAndFreshProviderState(t *test
 	})
 }
 
+func TestValidateBindingIsPureAndDoesNotRequireCurrentProviderState(t *testing.T) {
+	t.Parallel()
+	request := validStopRequest()
+	containers := newFakeContainer(request)
+	objects := newFakeObjectStore()
+	service := mustService(t, containers, objects)
+	receipt, err := service.StopOnce(context.Background(), request)
+	if err != nil {
+		t.Fatalf("seed receipt failed: %v", err)
+	}
+	authority := authorityFromReceipt(receipt)
+	inspectCalls := containers.inspectCalls
+	if err := ValidateBinding(request.Source, request.Owner, authority); err != nil {
+		t.Fatalf("valid pure binding failed: %v", err)
+	}
+	if err := ValidateSource(request.Source); err != nil {
+		t.Fatalf("valid source failed: %v", err)
+	}
+	if err := ValidateOwner(request.Owner); err != nil {
+		t.Fatalf("valid owner failed: %v", err)
+	}
+	if err := ValidateStopAuthority(authority); err != nil {
+		t.Fatalf("valid stop authority failed: %v", err)
+	}
+	if containers.inspectCalls != inspectCalls || containers.stopCalls != 1 {
+		t.Fatal("pure binding validation performed provider I/O")
+	}
+
+	invalidSource := request.Source
+	invalidSource.ProviderResourceID = " contains-space"
+	if err := ValidateBinding(invalidSource, request.Owner, authority); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("invalid source was accepted: %v", err)
+	}
+	invalidOwner := request.Owner
+	invalidOwner.WorkingCopyID = "not-a-uuid"
+	if err := ValidateBinding(request.Source, invalidOwner, authority); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("invalid owner was accepted: %v", err)
+	}
+	invalidAuthority := authority
+	invalidAuthority.ReceiptDigest = "sha256:" + strings.Repeat("f", 64)
+	if err := ValidateBinding(request.Source, request.Owner, invalidAuthority); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("invalid authority was accepted: %v", err)
+	}
+}
+
 func TestReceiptWireHasOnlyFrozenNestedKeys(t *testing.T) {
 	t.Parallel()
 	request := validStopRequest()
@@ -215,6 +260,77 @@ func TestReceiptWireHasOnlyFrozenNestedKeys(t *testing.T) {
 	}
 	if _, flattened := wire["operationId"]; flattened {
 		t.Fatalf("receipt request was flattened: %s", data)
+	}
+}
+
+func TestDecodeExactJSONAcceptsWireOrderAndWhitespaceButRejectsSchemaAmbiguity(t *testing.T) {
+	t.Parallel()
+	request := validStopRequest()
+	original, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	var unordered map[string]any
+	if err := json.Unmarshal(original, &unordered); err != nil {
+		t.Fatalf("decode request fixture: %v", err)
+	}
+	reordered, err := json.MarshalIndent(unordered, "", "  ")
+	if err != nil {
+		t.Fatalf("indent reordered request: %v", err)
+	}
+	var decoded StopRequest
+	if err := DecodeExactJSON(reordered, &decoded); err != nil || !stopRequestsEqual(decoded, request) {
+		t.Fatalf("wire-irrelevant order/whitespace was rejected: %#v, %v", decoded, err)
+	}
+
+	tests := map[string][]byte{
+		"nested-duplicate": []byte(strings.Replace(
+			string(original),
+			`"providerResourceId":"sandbox-1"`,
+			`"providerResourceId":"sandbox-1","providerResourceId":"replacement"`,
+			1,
+		)),
+		"missing-required-zero": []byte(strings.Replace(string(original), `,"restartCount":0`, "", 1)),
+		"case-alias":            []byte(strings.Replace(string(original), `"restartCount":0`, `"RestartCount":0`, 1)),
+		"explicit-null-variant": []byte(strings.Replace(
+			string(original),
+			`"purpose":{"kind":"working_copy_capture"}`,
+			`"purpose":{"kind":"working_copy_capture","rendererProcessIdentity":null}`,
+			1,
+		)),
+		"unknown":  []byte(strings.Replace(string(original), `"purpose":`, `"unknown":1,"purpose":`, 1)),
+		"trailing": append(append([]byte(nil), original...), []byte(` {}`)...),
+		"unpaired-high-surrogate": []byte(strings.Replace(
+			string(original), "sandbox-1", `sandbox-\ud800`, 1,
+		)),
+		"unpaired-low-surrogate": []byte(strings.Replace(
+			string(original), "sandbox-1", `sandbox-\udc00`, 1,
+		)),
+		"high-followed-by-non-low": []byte(strings.Replace(
+			string(original), "sandbox-1", `sandbox-\ud800\u0041`, 1,
+		)),
+	}
+	invalidUTF8 := append([]byte(nil), original...)
+	markerIndex := strings.Index(string(invalidUTF8), "sandbox-1")
+	invalidUTF8[markerIndex] = 0xff
+	tests["invalid-utf8"] = invalidUTF8
+	for name, data := range tests {
+		name, data := name, data
+		t.Run(name, func(t *testing.T) {
+			var target StopRequest
+			if err := DecodeExactJSON(data, &target); err == nil {
+				t.Fatalf("ambiguous exact JSON was accepted: %s", data)
+			}
+		})
+	}
+
+	validPair := []byte(strings.Replace(string(original), "sandbox-1", `sandbox-\ud83d\ude80`, 1))
+	var pairDecoded StopRequest
+	if err := DecodeExactJSON(validPair, &pairDecoded); err != nil {
+		t.Fatalf("valid surrogate pair was rejected: %v", err)
+	}
+	if pairDecoded.Source.ProviderResourceID != "sandbox-🚀" {
+		t.Fatalf("valid surrogate pair decoded incorrectly: %q", pairDecoded.Source.ProviderResourceID)
 	}
 }
 
@@ -577,6 +693,71 @@ func TestDurableRecordsRejectNestedDuplicateKeysAndInvalidUTF8(t *testing.T) {
 			t.Fatalf("invalid UTF-8 claim was accepted: %v", err)
 		}
 	})
+
+	t.Run("missing-zero-valued-required-receipt-field", func(t *testing.T) {
+		objects := newFakeObjectStore()
+		service := mustService(t, newFakeContainer(request), objects)
+		if _, err := service.StopOnce(context.Background(), request); err != nil {
+			t.Fatalf("seed receipt failed: %v", err)
+		}
+		receiptKey, _ := objects.keyWithSuffix("/receipt.json")
+		data := strings.Replace(string(objects.getRaw(receiptKey)), `,"exitCode":0`, "", 1)
+		objects.setRaw(receiptKey, []byte(data))
+		if _, err := service.Observe(context.Background(), request); !errors.Is(err, ErrConflict) {
+			t.Fatalf("missing required zero receipt field was accepted: %v", err)
+		}
+	})
+
+	t.Run("case-insensitive-receipt-alias", func(t *testing.T) {
+		objects := newFakeObjectStore()
+		service := mustService(t, newFakeContainer(request), objects)
+		if _, err := service.StopOnce(context.Background(), request); err != nil {
+			t.Fatalf("seed receipt failed: %v", err)
+		}
+		receiptKey, _ := objects.keyWithSuffix("/receipt.json")
+		data := strings.Replace(string(objects.getRaw(receiptKey)), `"exitCode":0`, `"ExitCode":0`, 1)
+		objects.setRaw(receiptKey, []byte(data))
+		if _, err := service.Observe(context.Background(), request); !errors.Is(err, ErrConflict) {
+			t.Fatalf("case-insensitive receipt alias was accepted: %v", err)
+		}
+	})
+
+	t.Run("explicit-null-omitted-purpose-field", func(t *testing.T) {
+		objects := newFakeObjectStore()
+		containers := newFakeContainer(request)
+		containers.inspectErrors = []error{errors.New("leave claim partial")}
+		service := mustService(t, containers, objects)
+		if _, err := service.StopOnce(context.Background(), request); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("seed partial claim failed: %v", err)
+		}
+		claimKey, _ := objects.keyWithSuffix("/claim.json")
+		data := strings.Replace(
+			string(objects.getRaw(claimKey)),
+			`"purpose":{"kind":"working_copy_capture"}`,
+			`"purpose":{"kind":"working_copy_capture","rendererProcessIdentity":null}`,
+			1,
+		)
+		objects.setRaw(claimKey, []byte(data))
+		if _, err := service.Observe(context.Background(), request); !errors.Is(err, ErrConflict) {
+			t.Fatalf("explicit null optional purpose field was accepted: %v", err)
+		}
+	})
+
+	t.Run("missing-required-claim-number", func(t *testing.T) {
+		objects := newFakeObjectStore()
+		containers := newFakeContainer(request)
+		containers.inspectErrors = []error{errors.New("leave claim partial")}
+		service := mustService(t, containers, objects)
+		if _, err := service.StopOnce(context.Background(), request); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("seed partial claim failed: %v", err)
+		}
+		claimKey, _ := objects.keyWithSuffix("/claim.json")
+		data := strings.Replace(string(objects.getRaw(claimKey)), `,"restartCount":0`, "", 1)
+		objects.setRaw(claimKey, []byte(data))
+		if _, err := service.Observe(context.Background(), request); !errors.Is(err, ErrConflict) {
+			t.Fatalf("missing required claim number was accepted: %v", err)
+		}
+	})
 }
 
 func TestCrossServiceConcurrentReceiptPublicationConvergesToWinner(t *testing.T) {
@@ -629,6 +810,145 @@ func TestCrossServiceConcurrentReceiptPublicationConvergesToWinner(t *testing.T)
 	}
 	if containers.stopCalls != 0 {
 		t.Fatalf("already-terminal cross-service publication issued stop: %d", containers.stopCalls)
+	}
+}
+
+func TestCrossServiceRunningCallsMayDuplicateTransportButConvergeOneLogicalTransition(t *testing.T) {
+	t.Parallel()
+	request := validStopRequest()
+	objects := newFakeObjectStore()
+	containers := newFakeContainer(request)
+	first := mustService(t, containers, objects)
+	second := mustService(t, containers, objects)
+	first.now = func() time.Time { return mustTime("2026-08-24T00:02:00Z") }
+	second.now = func() time.Time { return mustTime("2026-08-24T00:03:00Z") }
+
+	var stopsArrived sync.WaitGroup
+	stopsArrived.Add(2)
+	releaseStops := make(chan struct{})
+	containers.beforeStop = func(target ExactStopTarget) {
+		if target != exactTarget(request) {
+			panic(fmt.Sprintf("replacement stop target: %#v", target))
+		}
+		stopsArrived.Done()
+		<-releaseStops
+	}
+	var receiptsArrived sync.WaitGroup
+	receiptsArrived.Add(2)
+	releaseReceipts := make(chan struct{})
+	objects.beforeCreate = func(key string) {
+		if !strings.HasSuffix(key, "/receipt.json") {
+			return
+		}
+		receiptsArrived.Done()
+		<-releaseReceipts
+	}
+
+	type result struct {
+		receipt Receipt
+		err     error
+	}
+	results := make(chan result, 2)
+	for _, service := range []*Service{first, second} {
+		service := service
+		go func() {
+			receipt, err := service.StopOnce(context.Background(), request)
+			results <- result{receipt: receipt, err: err}
+		}()
+	}
+	stopsArrived.Wait()
+	close(releaseStops)
+	receiptsArrived.Wait()
+	close(releaseReceipts)
+	firstResult := <-results
+	secondResult := <-results
+	if firstResult.err != nil || secondResult.err != nil {
+		t.Fatalf("concurrent running stops failed: %v / %v", firstResult.err, secondResult.err)
+	}
+	if !receiptsEqual(firstResult.receipt, secondResult.receipt) {
+		t.Fatalf("concurrent running stops did not converge:\n%#v\n%#v", firstResult.receipt, secondResult.receipt)
+	}
+	if containers.stopCalls < 1 || containers.stopCalls > 2 {
+		t.Fatalf("exact transport calls were not bounded to 1-2: %d", containers.stopCalls)
+	}
+	for _, target := range containers.stopTargets {
+		if target != exactTarget(request) {
+			t.Fatalf("concurrent call adopted a replacement target: %#v", target)
+		}
+	}
+	if objects.countSuffix("/claim.json") != 1 || objects.countSuffix("/receipt.json") != 1 {
+		t.Fatalf("logical operation did not retain one claim/receipt: %#v", objects.objects)
+	}
+
+	inspectBefore := containers.inspectCalls
+	replay, err := mustService(t, containers, objects).StopOnce(context.Background(), request)
+	if err != nil || !receiptsEqual(replay, firstResult.receipt) {
+		t.Fatalf("durable exact replay diverged: %#v, %v", replay, err)
+	}
+	if containers.inspectCalls != inspectBefore {
+		t.Fatal("complete replay re-entered provider transport")
+	}
+}
+
+func TestConditionalReceiptRejectsDivergentTerminalFacts(t *testing.T) {
+	t.Parallel()
+	request := validStopRequest()
+	objects := newFakeObjectStore()
+	firstContainer := newFakeContainer(request)
+	firstContainer.makeExited()
+	secondContainer := newFakeContainer(request)
+	secondContainer.makeExited()
+	secondContainer.observation.Generation.ExitCode = 137
+	secondContainer.observation.Generation.OOMKilled = true
+	first := mustService(t, firstContainer, objects)
+	second := mustService(t, secondContainer, objects)
+	first.now = func() time.Time { return mustTime("2026-08-24T00:02:00Z") }
+	second.now = func() time.Time { return mustTime("2026-08-24T00:03:00Z") }
+
+	var arrived sync.WaitGroup
+	arrived.Add(2)
+	release := make(chan struct{})
+	objects.beforeCreate = func(key string) {
+		if !strings.HasSuffix(key, "/receipt.json") {
+			return
+		}
+		arrived.Done()
+		<-release
+	}
+	type result struct {
+		receipt Receipt
+		err     error
+	}
+	results := make(chan result, 2)
+	go func() {
+		receipt, err := first.StopOnce(context.Background(), request)
+		results <- result{receipt: receipt, err: err}
+	}()
+	go func() {
+		receipt, err := second.StopOnce(context.Background(), request)
+		results <- result{receipt: receipt, err: err}
+	}()
+	arrived.Wait()
+	close(release)
+	left := <-results
+	right := <-results
+	successes := 0
+	conflicts := 0
+	for _, result := range []result{left, right} {
+		switch {
+		case result.err == nil:
+			successes++
+		case errors.Is(result.err, ErrConflict):
+			conflicts++
+		default:
+			t.Fatalf("unexpected divergent-terminal result: %v", result.err)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("divergent terminal facts did not select one winner and reject one loser: %#v / %#v", left, right)
+	}
+	if objects.countSuffix("/receipt.json") != 1 {
+		t.Fatalf("divergent facts published more than one receipt: %#v", objects.objects)
 	}
 }
 
@@ -933,6 +1253,12 @@ func receiptsEqual(left, right Receipt) bool {
 	return leftErr == nil && rightErr == nil && string(leftBytes) == string(rightBytes)
 }
 
+func stopRequestsEqual(left, right StopRequest) bool {
+	leftBytes, leftErr := canonicalJSON(left)
+	rightBytes, rightErr := canonicalJSON(right)
+	return leftErr == nil && rightErr == nil && string(leftBytes) == string(rightBytes)
+}
+
 func mustService(t *testing.T, containers ContainerClient, objects ObjectStore) *Service {
 	t.Helper()
 	service, err := NewService(containers, objects)
@@ -961,6 +1287,7 @@ type fakeContainer struct {
 	stopErr       error
 	beforeInspect func(call int) error
 	afterStop     func(*CurrentGenerationObservation)
+	beforeStop    func(ExactStopTarget)
 }
 
 func newFakeContainer(request StopRequest) *fakeContainer {
@@ -1001,6 +1328,9 @@ func (fake *fakeContainer) InspectGeneration(
 }
 
 func (fake *fakeContainer) StopGeneration(_ context.Context, target ExactStopTarget) error {
+	if fake.beforeStop != nil {
+		fake.beforeStop(target)
+	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	fake.stopCalls++
@@ -1123,4 +1453,16 @@ func (fake *fakeObjectStore) getRaw(key string) []byte {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	return append([]byte(nil), fake.objects[key]...)
+}
+
+func (fake *fakeObjectStore) countSuffix(suffix string) int {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	count := 0
+	for key := range fake.objects {
+		if strings.HasSuffix(key, suffix) {
+			count++
+		}
+	}
+	return count
 }
