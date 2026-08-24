@@ -21,6 +21,14 @@ class FreezeSourceIdentityTests(unittest.TestCase):
         script = self.source / "verify.sh"
         script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         script.chmod(0o755)
+        self.alternate_path = (
+            "images/ambit-agent-workspace/capabilities/c17-core-document-v5"
+        )
+        self.alternate = self.repo / self.alternate_path
+        self.alternate.mkdir(parents=True)
+        (self.alternate / "Dockerfile").write_text(
+            "FROM scratch\n", encoding="utf-8"
+        )
         self._git("init", "-b", "main")
         self._git("config", "user.name", "Ambit Test")
         self._git("config", "user.email", "test@ambit.invalid")
@@ -49,6 +57,35 @@ class FreezeSourceIdentityTests(unittest.TestCase):
             verify_context(self.source, context, receipt["identitySha256"])["revision"],
             receipt["revision"],
         )
+
+    def test_freezes_an_explicit_sibling_pack_without_changing_default_authority(self) -> None:
+        context = self.root / "alternate-identity"
+        receipt = freeze(
+            self.repo,
+            "HEAD",
+            context,
+            self.alternate_path,
+        )
+        self.assertEqual(receipt["path"], self.alternate_path)
+        self.assertEqual(
+            verify_context(
+                self.alternate,
+                context,
+                receipt["identitySha256"],
+            )["path"],
+            self.alternate_path,
+        )
+
+    def test_rejects_ambiguous_or_traversing_source_paths(self) -> None:
+        for source_path in ("", "/absolute", "a//b", "a/../b", "a/./b"):
+            with self.subTest(source_path=source_path):
+                with self.assertRaises(SourceIdentityError):
+                    freeze(
+                        self.repo,
+                        "HEAD",
+                        self.root / ("bad-" + str(len(source_path))),
+                        source_path,
+                    )
 
     def test_rejects_forged_revision_tree_epoch_context_and_external_digest(self) -> None:
         fields = [
