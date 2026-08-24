@@ -1,7 +1,7 @@
 {
   "schema": "ambit.runtime-interface-lock/v1",
   "state": "candidate-ready",
-  "digest": "sha256:5eaa610c60f2d34b652521a1ef28da073be1cdcde4e220df50c592d1cb262aee",
+  "digest": "sha256:8e15fc377bb2f4c98bef1bff0b2c3e7b6be6e97cb0ada1570a69770d29279ce4",
   "contract": {
     "arguments": [
       "--framed-jsonl",
@@ -175,7 +175,7 @@
       "protocolSources": {
         "Dockerfile": "sha256:1deaada5c7c6232ac58421400d30b6bfefa8169c6dad79c6c1dd5d24405b0177",
         "certification/audit_offline_inputs.py": "sha256:fa3a8ffb13201dba092d9dbeab5cad52f86a0775e50b91c2a5499141e4848192",
-        "certification/runtime_pty_conformance.py": "sha256:8e696b8df258cb1a0996395046055576a8da505a5c7af98d0aba23e8a19bdacc",
+        "certification/runtime_pty_conformance.py": "sha256:bf591d8fe55c50a612886a3dcd5cbb4765a9bea1a027f61806a3ff528ace8dab",
         "certification/verify_render_output.mjs": "sha256:c3c9e0ea4469f48fb6cfb8f129ea18a769d851f68ec7ca2e2e06e34aff6d4814",
         "certification/verify_signed_debian_snapshot.py": "sha256:c9b36f28f14b639709f840836c8c5c36af3bd8935f9464e1ed44ccfb8a671899",
         "certification/verify_source_contracts.py": "sha256:8fb5859c71fb935469cc1f427f1b06f157cd3e385463ea681f93fc2807b7bc79",
@@ -184,7 +184,7 @@
         "renderer/ambit-render-document.mjs": "sha256:d1b83560d5a4d7745ada579953d27031e5951674cfceb8df1d1728565da22b56",
         "renderer/ambit-render-pages.mjs": "sha256:5e888d07416c9fd8e65643df3fc0329df3bc3ac1fb3c6296cca1b5bf18a7fc8a",
         "renderer/docx-package-admission.mjs": "sha256:4e44b9c281b6ee95cf819abfd08fc14c9545ce1bc434648ca2baa0bdbf47063a",
-        "renderer/framed-jsonl-protocol.mjs": "sha256:9301e7c387a93d58d078c8a0b9832248ad3b4395502b5505771f568a2e907f30",
+        "renderer/framed-jsonl-protocol.mjs": "sha256:366c4141e9b73805460c3db96f57ca55f8a58a5d07b2e8c5051d152a77cce17d",
         "renderer/pdfjs-page-renderer.mjs": "sha256:484bfb981a89e81109ae1c0d13ac767c8afba5c9982a996975ae59f2d14c14d3",
         "renderer/process-group-execution.mjs": "sha256:e3fca9cfbb69f2e3001e1aa9e59f8da2742f0b315cb295c7c92d92eb1b3e6d53",
         "renderer/process-group-subreaper.py": "sha256:511c31746eb3c4359ed388d40cf7c5296c627360b6c8f912773e186692b5967c",

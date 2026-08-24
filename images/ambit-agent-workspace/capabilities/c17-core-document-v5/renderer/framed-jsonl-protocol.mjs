@@ -342,6 +342,12 @@ export class FramedJsonlLineReader {
       let next
       try {
         next = await this.#iterator.next()
+      } catch (error) {
+        if (this.#closed) {
+          if (this.#closedReason) throw this.#closedReason
+          return null
+        }
+        throw error
       } finally {
         signal?.removeEventListener('abort', abort)
       }
