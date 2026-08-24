@@ -43,6 +43,8 @@ type Config struct {
 	WorkingCopyCaptureLineageRef       string        `envconfig:"AMBIT_WORKING_COPY_CAPTURE_LINEAGE_REF"`
 	WorkingCopyCaptureProtocolDigest   string        `envconfig:"AMBIT_WORKING_COPY_CAPTURE_PROTOCOL_DIGEST"`
 	WorkingCopyCaptureHelperDigest     string        `envconfig:"AMBIT_WORKING_COPY_CAPTURE_HELPER_DIGEST"`
+	SpecialistRenderPolicyPath         string        `envconfig:"AMBIT_SPECIALIST_RENDER_POLICY_PATH"`
+	SpecialistRenderMaximumConcurrent  int           `envconfig:"AMBIT_SPECIALIST_RENDER_MAXIMUM_CONCURRENT" default:"1" validate:"min=1,max=64"`
 	ResourceLimitsDisabled             bool          `envconfig:"RESOURCE_LIMITS_DISABLED"`
 	DaemonStartTimeoutSec              int           `envconfig:"DAEMON_START_TIMEOUT_SEC"`
 	SandboxStartTimeoutSec             int           `envconfig:"SANDBOX_START_TIMEOUT_SEC"`

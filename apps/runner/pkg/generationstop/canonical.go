@@ -62,6 +62,29 @@ func canonicalJSON(value any) ([]byte, error) {
 	return canonicalizeRawJSON(raw)
 }
 
+// CanonicalJSON exposes the repository's cross-language canonical JSON
+// encoding to adjacent provider-authority protocols. Keeping one encoder
+// prevents stopped-generation and specialist-render receipts from drifting.
+func CanonicalJSON(value any) ([]byte, error) {
+	return canonicalJSON(value)
+}
+
+// DecodeCanonicalJSON decodes an exact declared schema and additionally
+// requires the wire bytes themselves to be the canonical encoding.
+func DecodeCanonicalJSON(data []byte, target any) error {
+	if err := DecodeExactJSON(data, target); err != nil {
+		return err
+	}
+	expected, err := canonicalJSON(target)
+	if err != nil {
+		return fmt.Errorf("re-encode canonical JSON contract: %w", err)
+	}
+	if !bytes.Equal(data, expected) {
+		return fmt.Errorf("JSON wire bytes are not canonical")
+	}
+	return nil
+}
+
 func canonicalizeRawJSON(raw []byte) ([]byte, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()

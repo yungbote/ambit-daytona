@@ -171,6 +171,18 @@ class SourceContractTests(unittest.TestCase):
                 "semantic job-root policy",
             ):
                 verify_source(root, verify_hashes=False)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "source"
+            shutil.copytree(SOURCE_ROOT, root)
+            policy_path = root / "policy/runtime-policy.json"
+            policy = json.loads(policy_path.read_text(encoding="utf-8"))
+            policy["semanticJobRoots"]["product"]["filesystemAuthority"] = "workspace"
+            policy_path.write_text(json.dumps(policy), encoding="utf-8")
+            with self.assertRaisesRegex(
+                SourceContractError,
+                "semantic job-root policy",
+            ):
+                verify_source(root, verify_hashes=False)
 
     def test_rejects_render_control_syscall_policy_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -183,6 +195,34 @@ class SourceContractTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 SourceContractError,
                 "render-control syscall policy",
+            ):
+                verify_source(root, verify_hashes=False)
+
+    def test_rejects_framed_interface_or_executor_substitution(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "source"
+            shutil.copytree(SOURCE_ROOT, root)
+            interface_path = root / "protocol/specialist-render-interface.lock.json"
+            interface = json.loads(interface_path.read_text(encoding="utf-8"))
+            interface["contract"]["authority"]["productFilesystemPathAuthority"] = (
+                "workspace"
+            )
+            interface_path.write_text(json.dumps(interface), encoding="utf-8")
+            with self.assertRaisesRegex(
+                SourceContractError,
+                "framed interface identity",
+            ):
+                verify_source(root, verify_hashes=False)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "source"
+            shutil.copytree(SOURCE_ROOT, root)
+            executor_path = root / "data-research/executor.lock.json"
+            executor = json.loads(executor_path.read_text(encoding="utf-8"))
+            executor["transport"]["digest"] = "sha256:" + "0" * 64
+            executor_path.write_text(json.dumps(executor), encoding="utf-8")
+            with self.assertRaisesRegex(
+                SourceContractError,
+                "executor lock identity",
             ):
                 verify_source(root, verify_hashes=False)
 

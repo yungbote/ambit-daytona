@@ -29,6 +29,8 @@ import (
 	"github.com/daytonaio/runner/pkg/runner/v2/healthcheck"
 	"github.com/daytonaio/runner/pkg/runner/v2/poller"
 	"github.com/daytonaio/runner/pkg/services"
+	"github.com/daytonaio/runner/pkg/specialistrender"
+	"github.com/daytonaio/runner/pkg/specialistrenderdocker"
 	"github.com/daytonaio/runner/pkg/sshgateway"
 	"github.com/daytonaio/runner/pkg/storage"
 	"github.com/daytonaio/runner/pkg/telemetry/filters"
@@ -282,17 +284,27 @@ func run() int {
 	// remains available; the capture routes then fail closed as unavailable.
 	var workingCopyCaptures *workingcopy.Service
 	var generationStops *generationstop.Service
+	var generationObserver *generationstop.Observer
+	generationAdapter, generationAdapterErr := generationstopdocker.New(cli)
+	if generationAdapterErr != nil {
+		logger.Warn("Provider generation observation is unavailable", "error", generationAdapterErr)
+	} else {
+		generationObserver, generationAdapterErr = generationstop.NewObserver(generationAdapter)
+		if generationAdapterErr != nil {
+			logger.Warn("Provider generation observation is unavailable", "error", generationAdapterErr)
+			generationObserver = nil
+		}
+	}
 	privateObjects, privateObjectsErr := storage.GetPrivateObjectStorageClient()
 	if privateObjectsErr != nil {
 		logger.Warn("Stopped-generation and working-copy custody are unavailable", "error", privateObjectsErr)
 	} else {
-		generationAdapter, adapterErr := generationstopdocker.New(cli)
-		if adapterErr != nil {
-			logger.Warn("Stopped-generation custody is unavailable", "error", adapterErr)
+		if generationAdapter == nil {
+			logger.Warn("Stopped-generation custody is unavailable", "error", generationAdapterErr)
 		} else {
-			generationStops, adapterErr = generationstop.NewService(generationAdapter, privateObjects)
-			if adapterErr != nil {
-				logger.Warn("Stopped-generation custody is unavailable", "error", adapterErr)
+			generationStops, generationAdapterErr = generationstop.NewService(generationAdapter, privateObjects)
+			if generationAdapterErr != nil {
+				logger.Warn("Stopped-generation custody is unavailable", "error", generationAdapterErr)
 				generationStops = nil
 			}
 		}
@@ -318,6 +330,40 @@ func run() int {
 		}
 	}
 
+	var specialistRenders *specialistrender.Service
+	if cfg.SpecialistRenderPolicyPath == "" {
+		logger.Info("Specialist rendering is disabled - set AMBIT_SPECIALIST_RENDER_POLICY_PATH to enable")
+	} else if generationObserver == nil {
+		logger.Warn("Specialist rendering is unavailable because provider generation observation is unavailable")
+	} else if privateObjectsErr != nil {
+		logger.Warn("Specialist rendering is unavailable because durable private custody is unavailable", "error", privateObjectsErr)
+	} else {
+		streamObjects, streamObjectsOK := privateObjects.(storage.PrivateObjectStreamStorageClient)
+		policyRegistry, policyErr := specialistrender.LoadPolicyRegistry(cfg.SpecialistRenderPolicyPath)
+		provider, providerErr := specialistrenderdocker.New(cli)
+		if !streamObjectsOK {
+			logger.Warn("Specialist rendering is unavailable because streaming private custody is not configured")
+		} else if policyErr != nil {
+			logger.Warn("Specialist rendering is unavailable", "error", policyErr)
+		} else if providerErr != nil {
+			logger.Warn("Specialist rendering is unavailable", "error", providerErr)
+		} else if reconcileErr := provider.ReconcileOrphans(ctx); reconcileErr != nil {
+			logger.Warn("Specialist rendering is unavailable because orphan reconciliation failed", "error", reconcileErr)
+		} else {
+			specialistRenders, providerErr = specialistrender.NewServiceWithConcurrency(
+				provider,
+				generationObserver,
+				policyRegistry,
+				streamObjects,
+				cfg.SpecialistRenderMaximumConcurrent,
+			)
+			if providerErr != nil {
+				logger.Warn("Specialist rendering is unavailable", "error", providerErr)
+				specialistRenders = nil
+			}
+		}
+	}
+
 	_, err = runner.GetInstance(&runner.RunnerInstanceConfig{
 		Logger:              logger,
 		BackupInfoCache:     backupInfoCache,
@@ -330,6 +376,7 @@ func run() int {
 		SSHGatewayService:   sshGatewayService,
 		WorkingCopyCaptures: workingCopyCaptures,
 		GenerationStops:     generationStops,
+		SpecialistRenders:   specialistRenders,
 	})
 	if err != nil {
 		logger.Error("Failed to initialize runner instance", "error", err)

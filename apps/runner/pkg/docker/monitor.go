@@ -144,6 +144,9 @@ func (dm *DockerMonitor) monitorEvents() error {
 func (dm *DockerMonitor) handleContainerEvent(event events.Message) {
 	containerID := event.Actor.ID
 	action := event.Action
+	if !IsSandboxContainer(event.Actor.Attributes) {
+		return
+	}
 
 	switch action {
 	case "start":
@@ -395,7 +398,7 @@ func (dm *DockerMonitor) reconcileSourceGuards(forceRefresh bool) {
 
 	// Ensure a guard for every running sandbox.
 	for _, c := range containers {
-		if c.State != "running" || len(c.ID) < 12 {
+		if c.State != "running" || len(c.ID) < 12 || !IsSandboxContainer(c.Labels) {
 			continue
 		}
 		shortID := c.ID[:12]

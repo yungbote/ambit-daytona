@@ -137,7 +137,11 @@ def _media_type(value: object, name: str) -> str:
 
 
 def _safe_path(value: object, zone: str, name: str) -> str:
-    if not isinstance(value, str) or len(value) > 512 or value.startswith("/"):
+    if (
+        not isinstance(value, str)
+        or len(value.encode("utf-8")) > 128
+        or value.startswith("/")
+    ):
         raise RenderCommandError(f"{name} is not a relative path")
     if "\\" in value or ":" in value or "//" in value:
         raise RenderCommandError(f"{name} contains an unsafe separator")

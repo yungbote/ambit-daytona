@@ -157,6 +157,27 @@ type GenerationObservation struct {
 	ObservedAt string             `json:"observedAt" validate:"required"`
 }
 
+// ProviderGenerationObservationRequest is the provider-owned form of current
+// generation discovery. Unlike GenerationObservationRequest it contains no
+// operation-local WorkingCopyID, so document rendering and future provider
+// effects do not have to invent an unrelated business identifier.
+type ProviderGenerationObservationRequest struct {
+	Source Source        `json:"source" validate:"required"`
+	Owner  ProviderOwner `json:"owner" validate:"required"`
+	Fence  Fence         `json:"fence" validate:"required"`
+}
+
+// ProviderGenerationObservation binds the complete provider-observable owner,
+// fence, immutable container epoch, and closed runtime state.
+type ProviderGenerationObservation struct {
+	Source     Source             `json:"source" validate:"required"`
+	Owner      ProviderOwner      `json:"owner" validate:"required"`
+	Fence      Fence              `json:"fence" validate:"required"`
+	Generation ExpectedGeneration `json:"generation" validate:"required"`
+	State      string             `json:"state" validate:"required"`
+	ObservedAt string             `json:"observedAt" validate:"required"`
+}
+
 // RuntimeState is the narrow state surface needed to distinguish an exact
 // exited generation from running, paused, restarting, dead, or ambiguous
 // provider states.

@@ -1,0 +1,348 @@
+{
+  "contract": {
+    "arguments": [
+      "--framed-jsonl",
+      "--nonce",
+      "LOWERCASE_128_BIT_HEX"
+    ],
+    "authority": {
+      "canonicalResultCommit": "host-only-after-exact-response_end-helper-exit-and-provider-quiescence",
+      "conformanceFileMode": "/ambit-only",
+      "preexistingAgentFiles": "ignored-never-read-never-written",
+      "privateRootIsolation": "provider-owned-mount-and-process-namespace-with-no-agent-processes",
+      "processAuthority": "exact-helper-and-bounded-descendants-only",
+      "productFilesystemPathAuthority": "none",
+      "productRequestAndSource": "provider-stream-only"
+    },
+    "execution": {
+      "cancellationExitCode": 130,
+      "cancellationFrame": "exact-nonce-bound-cancel-races-helper-terminal-selection",
+      "failureExitCodes": [
+        1,
+        124
+      ],
+      "hardTransportFailure": "outcome_unknown-unless-provider-quiescence-and-reconciliation-prove-terminal",
+      "helperPrivateRootCleanup": "completed-before-terminal-frame",
+      "helperTerminalSelection": "cancel-or-terminal-selected-exactly-once",
+      "providerReceipt": "ambit.runtime-provider-specialist-render-receipt/v1",
+      "providerQuiescenceReceipt": "ambit.runtime-provider-quiescence-receipt/v1",
+      "successExitCode": 0
+    },
+    "frameSchema": "ambit.runtime-interface/specialist-render-jsonl@1",
+    "frames": {
+      "cancel": [
+        "kind",
+        "nonce",
+        "schema"
+      ],
+      "cancelled": [
+        "executorRevision",
+        "exitCode",
+        "kind",
+        "nonce",
+        "outcome",
+        "privateRootCleanup",
+        "processIdentity",
+        "schema",
+        "terminalSelection"
+      ],
+      "file_chunk": [
+        "base64",
+        "bytes",
+        "chunkIndex",
+        "kind",
+        "nonce",
+        "ordinal",
+        "schema",
+        "sha256"
+      ],
+      "file_start": [
+        "byteLength",
+        "chunkBytes",
+        "chunkCount",
+        "kind",
+        "mediaType",
+        "nonce",
+        "ordinal",
+        "path",
+        "role",
+        "schema",
+        "sha256"
+      ],
+      "ready": [
+        "cancellationExitCode",
+        "chunkBytes",
+        "executable",
+        "executorRevision",
+        "interface",
+        "kind",
+        "nonce",
+        "processIdentity",
+        "schema"
+      ],
+      "request_chunk": [
+        "base64",
+        "bytes",
+        "index",
+        "kind",
+        "nonce",
+        "schema",
+        "sha256"
+      ],
+      "request_end": [
+        "kind",
+        "nonce",
+        "requestBytes",
+        "requestChunkCount",
+        "requestSha256",
+        "schema",
+        "sourceBytes",
+        "sourceChunkCount",
+        "sourceSha256"
+      ],
+      "request_start": [
+        "chunkBytes",
+        "kind",
+        "nonce",
+        "requestBytes",
+        "requestChunkCount",
+        "requestSha256",
+        "schema",
+        "sourceBytes",
+        "sourceChunkCount",
+        "sourceSha256"
+      ],
+      "response_end": [
+        "executorRevision",
+        "exitCode",
+        "fileCount",
+        "frameCount",
+        "kind",
+        "nonce",
+        "outcome",
+        "privateRootCleanup",
+        "processIdentity",
+        "request",
+        "resultDigest",
+        "schema",
+        "streamSha256",
+        "terminalSelection",
+        "totalBytes"
+      ],
+      "response_start": [
+        "executorRevision",
+        "exitCode",
+        "fileCount",
+        "kind",
+        "nonce",
+        "outcome",
+        "request",
+        "resultDigest",
+        "schema",
+        "totalBytes"
+      ],
+      "source_chunk": [
+        "base64",
+        "bytes",
+        "index",
+        "kind",
+        "nonce",
+        "schema",
+        "sha256"
+      ]
+    },
+    "input": {
+      "chunkBytes": 49152,
+      "maximumRequestBytes": 2097152,
+      "maximumSourceBytes": 536870912,
+      "order": "ready;request_start;request_chunk*;source_chunk*;request_end",
+      "request": "exact-canonical-command-v2-bytes",
+      "source": "exact-request-bound-bytes"
+    },
+    "interfaceRef": "ambit.runtime-interface/specialist-render@1",
+    "roleRef": "ambit.runtime-component/specialist-renderer@1",
+    "output": {
+      "chunkBytes": 49152,
+      "maximumFiles": 128,
+      "maximumPathBytes": 128,
+      "maximumTotalBytes": 536870912,
+      "order": "response_start;result-first;preview-if-present;evidence-in-result-order;artifacts-by-path;response_end",
+      "partialOrExtraFrames": "discard-entire-response",
+      "roster": [
+        "result",
+        "preview",
+        "evidence",
+        "artifact"
+      ]
+    },
+    "provider": {
+      "api": {
+        "contentType": "application/vnd.ambit.runtime-provider-specialist-render+jsonl;version=1",
+        "execute": "POST /sandboxes/:sandboxId/specialist-renders",
+        "observe": "POST /sandboxes/:sandboxId/specialist-renders/observe",
+        "observeCurrentGeneration": "POST /sandboxes/:sandboxId/generation/observe-current"
+      },
+      "authority": {
+        "currentness": "exact-parent-generation-before-launch-and-after-child-quiescence",
+        "durableIdempotency": "immutable-operation-claim-output-objects-and-receipt-by-operationId-plus-requestFingerprint",
+        "filesystem": "runner-host-private-custody-only",
+        "policy": "exact-caller-pin-selects-equal-runner-owned-canonical-policy",
+        "workspacePtyOrExec": "forbidden"
+      },
+      "frameSchema": "ambit.runtime-provider-specialist-render-jsonl@1",
+      "frames": {
+        "file_chunk": [
+          "base64",
+          "bytes",
+          "index",
+          "kind",
+          "operationId",
+          "ordinal",
+          "schema",
+          "sha256"
+        ],
+        "provider_request_end": [
+          "frameCount",
+          "kind",
+          "operationId",
+          "requestBytes",
+          "requestChunkCount",
+          "requestSha256",
+          "schema",
+          "sourceBytes",
+          "sourceChunkCount",
+          "sourceSha256",
+          "streamSha256"
+        ],
+        "provider_request_start": [
+          "chunkBytes",
+          "kind",
+          "request",
+          "schema"
+        ],
+        "provider_response_end": [
+          "fileCount",
+          "frameCount",
+          "kind",
+          "operationId",
+          "receiptDigest",
+          "schema",
+          "streamSha256",
+          "totalBytes"
+        ],
+        "provider_response_start": [
+          "chunkBytes",
+          "kind",
+          "receipt",
+          "schema"
+        ],
+        "request_chunk": [
+          "base64",
+          "bytes",
+          "index",
+          "kind",
+          "operationId",
+          "schema",
+          "sha256"
+        ],
+        "source_chunk": [
+          "base64",
+          "bytes",
+          "index",
+          "kind",
+          "operationId",
+          "schema",
+          "sha256"
+        ]
+      },
+      "input": {
+        "order": "provider_request_start;request_chunk*;source_chunk*;provider_request_end",
+        "requestFields": [
+          "artifactRenderJobRef",
+          "executable",
+          "executor",
+          "expectedParentGeneration",
+          "fence",
+          "image",
+          "interface",
+          "operationId",
+          "owner",
+          "providerPolicy",
+          "requestBytes",
+          "requestChunkCount",
+          "requestFingerprint",
+          "requestSha256",
+          "schema",
+          "source",
+          "sourceBytes",
+          "sourceChunkCount",
+          "sourceSha256"
+        ],
+        "streamAggregate": "sha256-of-exact-canonical-lines-with-LF-before-end",
+        "strictlyPositivePayloads": true
+      },
+      "output": {
+        "maximumCanonicalReceiptBytes": 65536,
+        "order": "provider_response_start;file_chunk*;provider_response_end",
+        "receiptInResponseStart": "full-metadata-no-payload-or-raw-helper-frames",
+        "streamAggregate": "sha256-of-exact-canonical-lines-with-LF-before-end"
+      },
+      "policy": {
+        "digest": "sha256-of-canonical-ambit.runtime-provider-specialist-render-policy/v1-payload",
+        "requiredFacts": [
+          "image",
+          "interface",
+          "executor",
+          "executable",
+          "processExecutablePath",
+          "processExecutableDigest",
+          "environmentDigest",
+          "seccompDigest",
+          "pidsLimit",
+          "memoryBytes",
+          "nanoCpus",
+          "workspaceSize",
+          "scratchSize",
+          "shmSize"
+        ]
+      },
+      "receipt": {
+        "digest": "sha256-of-canonical-full-receipt-with-empty-receiptDigest",
+        "schema": "ambit.runtime-provider-specialist-render-receipt/v1",
+        "terminalTuples": [
+          "response_end/succeeded/0",
+          "response_end/failed/1",
+          "response_end/timed_out/124",
+          "cancelled/cancelled/130"
+        ],
+        "time": "strict-UTC-millisecond-started<=launch<=quiescence<=completed"
+      }
+    },
+    "runtime": {
+      "network": "none",
+      "pathAuthority": "none",
+      "privateRoots": {
+        "home": "/workspace",
+        "scratch": "/tmp/ambit-task"
+      },
+      "processNamespace": "provider-owned-no-agent-processes",
+      "rootFilesystem": "read-only"
+    },
+    "schema": "ambit.runtime-interface-contract/v1",
+    "transport": {
+      "chunkBytes": 49152,
+      "encoding": "canonical-jsonl-with-canonical-base64-payloads",
+      "inputEcho": "forbidden",
+      "maximumLineBytes": 70000,
+      "medium": "raw-noecho-pty",
+      "plaintextHelperStderr": "forbidden",
+      "providerLaunch": "stty raw -echo -onlcr && exec exact-helper --framed-jsonl --nonce exact-nonce",
+      "readyFrame": "required-before-request",
+      "stdinClosure": "request_end-frame-not-eof",
+      "stdoutClosure": "terminal-frame-then-helper-exit"
+    }
+  },
+  "digest": "sha256:253ea86e0d8f6593a5fa4a25c10db1971052539227cfac83207df9b34c11eff3",
+  "schema": "ambit.runtime-interface-lock/v1",
+  "state": "candidate-ready"
+}

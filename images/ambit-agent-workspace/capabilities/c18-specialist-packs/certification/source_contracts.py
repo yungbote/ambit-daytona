@@ -407,21 +407,146 @@ def _verify_dockerfile(root: Path, pack_id: str, expected: dict[str, object]) ->
         )
 
 
+def _framed_interface_pin(root: Path) -> dict[str, str]:
+    path = root / "protocol/specialist-render-interface.lock.json"
+    lock = _load_json(path)
+    _require(
+        isinstance(lock, dict)
+        and set(lock) == {"contract", "digest", "schema", "state"}
+        and lock["schema"] == "ambit.runtime-interface-lock/v1"
+        and lock["state"] == "candidate-ready"
+        and isinstance(lock["contract"], dict),
+        "specialist framed interface lock is invalid",
+    )
+    contract = lock["contract"]
+    digest = "sha256:" + hashlib.sha256(
+        json.dumps(contract, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    _require(
+        lock["digest"] == digest
+        and contract.get("schema") == "ambit.runtime-interface-contract/v1"
+        and contract.get("interfaceRef")
+        == "ambit.runtime-interface/specialist-render@1"
+        and contract.get("roleRef")
+        == "ambit.runtime-component/specialist-renderer@1"
+        and contract.get("frameSchema")
+        == "ambit.runtime-interface/specialist-render-jsonl@1"
+        and contract.get("arguments")
+        == ["--framed-jsonl", "--nonce", "LOWERCASE_128_BIT_HEX"],
+        "specialist framed interface identity differs",
+    )
+    _require(
+        contract.get("transport")
+        == {
+            "chunkBytes": 49_152,
+            "encoding": "canonical-jsonl-with-canonical-base64-payloads",
+            "inputEcho": "forbidden",
+            "maximumLineBytes": 70_000,
+            "medium": "raw-noecho-pty",
+            "plaintextHelperStderr": "forbidden",
+            "providerLaunch": "stty raw -echo -onlcr && exec exact-helper --framed-jsonl --nonce exact-nonce",
+            "readyFrame": "required-before-request",
+            "stdinClosure": "request_end-frame-not-eof",
+            "stdoutClosure": "terminal-frame-then-helper-exit",
+        },
+        "specialist framed transport policy differs",
+    )
+    authority = contract.get("authority")
+    execution = contract.get("execution")
+    _require(
+        isinstance(authority, dict)
+        and authority.get("productFilesystemPathAuthority") == "none"
+        and authority.get("productRequestAndSource") == "provider-stream-only"
+        and authority.get("preexistingAgentFiles") == "ignored-never-read-never-written"
+        and authority.get("conformanceFileMode") == "/ambit-only"
+        and authority.get("privateRootIsolation")
+        == "provider-owned-mount-and-process-namespace-with-no-agent-processes"
+        and authority.get("processAuthority")
+        == "exact-helper-and-bounded-descendants-only"
+        and isinstance(execution, dict)
+        and execution.get("providerReceipt")
+        == "ambit.runtime-provider-specialist-render-receipt/v1"
+        and execution.get("providerQuiescenceReceipt")
+        == "ambit.runtime-provider-quiescence-receipt/v1"
+        and execution.get("cancellationFrame")
+        == "exact-nonce-bound-cancel-races-helper-terminal-selection"
+        and execution.get("helperPrivateRootCleanup")
+        == "completed-before-terminal-frame"
+        and execution.get("helperTerminalSelection")
+        == "cancel-or-terminal-selected-exactly-once"
+        and execution.get("hardTransportFailure")
+        == "outcome_unknown-unless-provider-quiescence-and-reconciliation-prove-terminal",
+        "specialist framed authority boundary differs",
+    )
+    _require(
+        contract.get("runtime")
+        == {
+            "network": "none",
+            "pathAuthority": "none",
+            "privateRoots": {
+                "home": "/workspace",
+                "scratch": "/tmp/ambit-task",
+            },
+            "processNamespace": "provider-owned-no-agent-processes",
+            "rootFilesystem": "read-only",
+        },
+        "specialist framed runtime isolation differs",
+    )
+    provider = contract.get("provider")
+    _require(
+        isinstance(provider, dict)
+        and provider.get("frameSchema")
+        == "ambit.runtime-provider-specialist-render-jsonl@1"
+        and provider.get("api")
+        == {
+            "contentType": "application/vnd.ambit.runtime-provider-specialist-render+jsonl;version=1",
+            "execute": "POST /sandboxes/:sandboxId/specialist-renders",
+            "observe": "POST /sandboxes/:sandboxId/specialist-renders/observe",
+            "observeCurrentGeneration": "POST /sandboxes/:sandboxId/generation/observe-current",
+        }
+        and provider.get("authority", {}).get("workspacePtyOrExec") == "forbidden"
+        and provider.get("authority", {}).get("filesystem")
+        == "runner-host-private-custody-only"
+        and provider.get("authority", {}).get("currentness")
+        == "exact-parent-generation-before-launch-and-after-child-quiescence"
+        and provider.get("authority", {}).get("durableIdempotency")
+        == "immutable-operation-claim-output-objects-and-receipt-by-operationId-plus-requestFingerprint"
+        and provider.get("input", {}).get("strictlyPositivePayloads") is True
+        and provider.get("output", {}).get("maximumCanonicalReceiptBytes")
+        == 65_536
+        and provider.get("receipt", {}).get("schema")
+        == "ambit.runtime-provider-specialist-render-receipt/v1",
+        "specialist provider transport authority differs",
+    )
+    _require(
+        contract.get("output", {}).get("maximumPathBytes") == 128,
+        "specialist response path bound differs",
+    )
+    return {
+        "ref": "ambit.runtime-interface/specialist-render@1",
+        "digest": digest,
+    }
+
+
 def _verify_executor(root: Path, pack_id: str) -> None:
     lock = _load_json(root / pack_id / "executor.lock.json")
     _require(
         isinstance(lock, dict)
-        and set(lock) == {"digest", "facets", "ref", "schema"},
+        and set(lock) == {"digest", "facets", "ref", "schema", "transport"},
         f"{pack_id} executor lock fields are invalid",
     )
-    body = {key: lock[key] for key in ("facets", "ref", "schema")}
+    body = {
+        key: lock[key]
+        for key in ("facets", "ref", "schema", "transport")
+    }
     expected_digest = "sha256:" + hashlib.sha256(
         json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8")
     ).hexdigest()
     _require(
-        lock["schema"] == "ambit.c18-specialist-render-executor-lock/v1"
+        lock["schema"] == "ambit.c18-specialist-render-executor-lock/v2"
         and lock["facets"] == EXECUTOR_FACETS[pack_id]
         and lock["ref"] == f"ambit://specialist-render-executors/{pack_id}@1"
+        and lock["transport"] == _framed_interface_pin(root)
         and lock["digest"] == expected_digest,
         f"{pack_id} executor lock identity is invalid",
     )
@@ -464,7 +589,7 @@ def verify_source(root: Path, *, verify_hashes: bool = True) -> dict[str, object
         _require(item["requires"] == expected["requires"], "pack-set requires mismatch")
 
     runtime_policy = _load_json(root / "policy/runtime-policy.json")
-    _require(runtime_policy.get("schema") == "ambit.c18-runtime-policy/v2", "runtime policy schema is invalid")
+    _require(runtime_policy.get("schema") == "ambit.c18-runtime-policy/v3", "runtime policy schema is invalid")
     _require(
         runtime_policy["identity"]
         == {
@@ -495,9 +620,11 @@ def verify_source(root: Path, *, verify_hashes: bool = True) -> dict[str, object
                 "root": "/ambit",
             },
             "product": {
+                "filesystemAuthority": "none",
                 "jobRefPattern": "ambit://artifact-render-jobs/<lowercase-uuid>",
+                "logicalRootPattern": "/workspace/.ambit/render-jobs/<lowercase-uuid>",
                 "matchingJobIdRequired": True,
-                "rootPattern": "/workspace/.ambit/render-jobs/<lowercase-uuid>",
+                "transport": _framed_interface_pin(root),
             },
         },
         "semantic job-root policy is invalid",

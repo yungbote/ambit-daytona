@@ -6,6 +6,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"io"
 )
 
 // ObjectStorageClient defines the interface for object storage operations
@@ -45,4 +46,19 @@ type PrivateObjectStorageClient interface {
 	GetPrivateObjectRange(ctx context.Context, key string, offset, maximumBytes int64) ([]byte, error)
 	StatPrivateObject(ctx context.Context, key string) (PrivateObjectInfo, error)
 	DeletePrivateObject(ctx context.Context, key string) error
+}
+
+// PrivateObjectStreamStorageClient extends immutable provider custody without
+// materializing large specialist-render payloads in process memory.
+type PrivateObjectStreamStorageClient interface {
+	PrivateObjectStorageClient
+	CreatePrivateObjectStream(
+		ctx context.Context,
+		key string,
+		reader io.Reader,
+		size int64,
+		contentType string,
+		metadata map[string]string,
+	) error
+	OpenPrivateObject(ctx context.Context, key string) (io.ReadCloser, PrivateObjectInfo, error)
 }

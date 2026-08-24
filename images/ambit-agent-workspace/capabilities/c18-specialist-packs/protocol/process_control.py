@@ -49,22 +49,33 @@ def _limits(remaining: float) -> None:
 
 
 def _terminate(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is not None:
-        return
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
         return
-    try:
-        process.wait(timeout=1)
-        return
-    except subprocess.TimeoutExpired:
-        pass
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        process.poll()
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            process.wait(timeout=0)
+            return
+        time.sleep(PROCESS_POLL_SECONDS)
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         return
-    process.wait(timeout=2)
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        process.poll()
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            process.wait(timeout=0)
+            return
+        time.sleep(PROCESS_POLL_SECONDS)
+    raise ProcessDeadlineExceeded("bounded child process group did not quiesce")
 
 
 def run_bounded(
@@ -80,7 +91,9 @@ def run_bounded(
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise ProcessDeadlineExceeded
-    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+    with tempfile.TemporaryFile(dir=cwd) as stdout_file, tempfile.TemporaryFile(
+        dir=cwd
+    ) as stderr_file:
         process = subprocess.Popen(
             argv,
             cwd=cwd,

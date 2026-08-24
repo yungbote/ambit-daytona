@@ -101,20 +101,43 @@ python3 -B certification/pack_bundle.py \
 
 The host selects exactly one semantic job root and binds it into the canonical
 request, invocation, result, and receipt identity. Pack conformance exclusively
-uses `/ambit` with the exact conformance profile. Product execution exclusively
-uses `/workspace/.ambit/render-jobs/<exact-job-id>`, where the lowercase UUID
-must also be the artifact-render job reference suffix. Callers cannot submit a
-free-form path. Request, source, output, cancellation, retry, and reconciliation
-all retain that same root; every component and semantic zone must be a real
-directory rather than a symlink or substituted inode.
+uses `/ambit` with the exact conformance profile and is the only file-based
+command mode. A product request retains the logical
+`/workspace/.ambit/render-jobs/<exact-job-id>` identity, where the lowercase
+UUID must also be the artifact-render job reference suffix, but the executor
+has no authority over that path. The provider streams the canonical request and
+source over the nonce-bound raw no-echo PTY interface and accepts result,
+preview, evidence, and artifact bytes only from its bounded response frames.
+Pre-existing, replaced, or deleted same-UID workspace files are never request or
+result authority.
 
-Both conformance lanes exercise the actual render command through their own
-`inputs` and `outputs` zones. The ordinary pack lane mounts one empty `/ambit`
-root. The product-path lane mounts an ordinary Daytona workspace at
-`/workspace` and creates the exact job-owned subtree beneath it. Containers run
-with network disabled, all capabilities dropped, no-new-privileges, read-only
-rootfs, bounded PID/memory/CPU resources, private tmpfs scratch, and the exact
-rootless browser seccomp profile for `web-browser`.
+The framed product helper uses provider-task-private tmpfs roots for all native
+tool scratch, terminates the process groups it directly created, streams only
+descriptor-held verified output, removes those private roots, and then emits
+its terminal frame.
+The host commits nothing without the exact ready process identity, nonce-bound
+terminal aggregate, matching helper exit, and provider container removal plus
+quiescence receipt. Provider quiescence is the sole authority that no escaped
+or daemonized task descendant remains.
+Partial frames or transport loss are discarded and remain outcome-unknown until
+provider reconciliation proves a terminal state. Both conformance and framed
+product lanes run with network disabled, all capabilities dropped,
+no-new-privileges, read-only rootfs, bounded PID/memory/CPU resources, private
+tmpfs scratch, and the exact rootless browser seccomp profile for `web-browser`.
+
+The authenticated Runner route is
+`POST /sandboxes/:sandboxId/specialist-renders` with the exact provider JSONL
+content type frozen in `protocol/specialist-render-interface.lock.json`.
+The Runner spools request/source bytes into host-private custody, generates the
+helper nonce, resolves the caller pins against one canonical runner-owned
+policy, and creates an isolated sibling container by immutable image config
+digest. It never calls workspace toolbox exec or PTY. Immutable operation
+claims, output objects, and receipts make operation ID plus request fingerprint
+replayable; `POST /sandboxes/:sandboxId/specialist-renders/observe` reports only
+absent, partial, or complete durable state. Current parent generation discovery
+uses the provider-owner contract at
+`POST /sandboxes/:sandboxId/generation/observe-current`, avoiding any fabricated
+working-copy identity.
 
 Reproducible image export must set BuildKit's predefined
 `SOURCE_DATE_EPOCH=0` build argument and use an OCI or Docker output with

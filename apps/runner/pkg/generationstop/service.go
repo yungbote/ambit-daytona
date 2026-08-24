@@ -35,6 +35,7 @@ var (
 	ErrInvalidRequest = errors.New("invalid stopped-generation request")
 	ErrConflict       = errors.New("stopped-generation conflict")
 	ErrUnavailable    = errors.New("stopped-generation provider unavailable")
+	ErrNotFound       = errors.New("sandbox generation not found")
 	ErrOutcomeUnknown = errors.New("stopped-generation outcome is unknown")
 
 	documentRendererSessionPattern = regexp.MustCompile(`^ambit-document-render-[0-9a-f]{40}$`)
@@ -63,12 +64,31 @@ type ObjectStore interface {
 // ambitWorkspaceId, ambitTenantId, ambitPrincipalId, ambitTaskId,
 // ambitGrantId, ambitProfile, and ambitWorkspaceExecutionManifestRef), never
 // by echoing request values.
-type ContainerClient interface {
+type GenerationInspector interface {
 	InspectGeneration(
 		ctx context.Context,
 		providerResourceID string,
 	) (CurrentGenerationObservation, error)
+}
+
+type ContainerClient interface {
+	GenerationInspector
 	StopGeneration(ctx context.Context, target ExactStopTarget) error
+}
+
+// Observer is the read-only provider-generation authority. It deliberately
+// has no object store and no mutation port, so currentness checks remain
+// available even when durable stopped-generation custody is not configured.
+type Observer struct {
+	containers GenerationInspector
+	now        func() time.Time
+}
+
+func NewObserver(containers GenerationInspector) (*Observer, error) {
+	if containers == nil {
+		return nil, fmt.Errorf("%w: exact container-generation client is not configured", ErrUnavailable)
+	}
+	return &Observer{containers: containers, now: time.Now}, nil
 }
 
 type Service struct {
@@ -118,7 +138,7 @@ func NewService(containers ContainerClient, objects ObjectStore) (*Service, erro
 // discovery half of the protocol: callers that do not yet know the Docker
 // execution epoch can obtain it, then submit that exact generation in a
 // separately authorized StopRequest.
-func (s *Service) ObserveCurrent(
+func (s *Observer) ObserveCurrent(
 	ctx context.Context,
 	request GenerationObservationRequest,
 ) (GenerationObservation, error) {
@@ -127,6 +147,9 @@ func (s *Service) ObserveCurrent(
 	}
 	observed, err := s.containers.InspectGeneration(ctx, request.Source.ProviderResourceID)
 	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return GenerationObservation{}, err
+		}
 		return GenerationObservation{}, fmt.Errorf("%w: inspect current sandbox generation: %v", ErrUnavailable, err)
 	}
 	if err := requireObservedAuthority(observed, request.Source, request.Owner, request.Fence); err != nil {
@@ -159,6 +182,74 @@ func (s *Service) ObserveCurrent(
 		State:      state,
 		ObservedAt: s.now().UTC().Format(time.RFC3339Nano),
 	}, nil
+}
+
+// ObserveProviderCurrent is current-generation discovery for effects whose
+// authority is entirely provider-observable. It deliberately omits the
+// working-copy-only identifier required by ObserveCurrent.
+func (s *Observer) ObserveProviderCurrent(
+	ctx context.Context,
+	request ProviderGenerationObservationRequest,
+) (ProviderGenerationObservation, error) {
+	if err := validateProviderGenerationObservationRequest(request); err != nil {
+		return ProviderGenerationObservation{}, err
+	}
+	observed, err := s.containers.InspectGeneration(ctx, request.Source.ProviderResourceID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return ProviderGenerationObservation{}, err
+		}
+		return ProviderGenerationObservation{}, fmt.Errorf("%w: inspect current sandbox generation: %v", ErrUnavailable, err)
+	}
+	if err := requireObservedProviderAuthority(observed, request.Source, request.Owner, request.Fence); err != nil {
+		return ProviderGenerationObservation{}, err
+	}
+	if err := validateObservedGeneration(observed.Generation); err != nil {
+		return ProviderGenerationObservation{}, err
+	}
+	if err := validateRuntimeState(observed.State); err != nil {
+		return ProviderGenerationObservation{}, err
+	}
+	state := ""
+	switch {
+	case isExactRunning(observed.State) && observed.Generation.ExecutionFinishedAt == "":
+		state = "running"
+	case isExactExited(observed.State) && observed.Generation.ExecutionFinishedAt != "":
+		state = "stopped"
+	default:
+		return ProviderGenerationObservation{}, fmt.Errorf(
+			"%w: current generation is paused, restarting, dead, or incomplete (status=%q)",
+			ErrConflict,
+			observed.State.Status,
+		)
+	}
+	return ProviderGenerationObservation{
+		Source:     request.Source,
+		Owner:      request.Owner,
+		Fence:      request.Fence,
+		Generation: observed.Generation.ExpectedGeneration,
+		State:      state,
+		ObservedAt: s.now().UTC().Format(time.RFC3339Nano),
+	}, nil
+}
+
+// ObserveCurrent retains the durable service's compatibility surface while
+// delegating to the same read-only mechanism used independently by provider
+// tasks.
+func (s *Service) ObserveCurrent(
+	ctx context.Context,
+	request GenerationObservationRequest,
+) (GenerationObservation, error) {
+	observer := Observer{containers: s.containers, now: s.now}
+	return observer.ObserveCurrent(ctx, request)
+}
+
+func (s *Service) ObserveProviderCurrent(
+	ctx context.Context,
+	request ProviderGenerationObservationRequest,
+) (ProviderGenerationObservation, error) {
+	observer := Observer{containers: s.containers, now: s.now}
+	return observer.ObserveProviderCurrent(ctx, request)
 }
 
 // StopOnce durably claims one logical operation before any container read or
@@ -627,6 +718,19 @@ func validateGenerationObservationRequest(request GenerationObservationRequest) 
 	return nil
 }
 
+func validateProviderGenerationObservationRequest(request ProviderGenerationObservationRequest) error {
+	if err := ValidateSource(request.Source); err != nil {
+		return err
+	}
+	if err := ValidateProviderOwner(request.Owner); err != nil {
+		return err
+	}
+	if !boundedRef(request.Fence.WorkspaceExecutionManifestRef, 2048) {
+		return invalidf("workspace execution manifest fence is invalid")
+	}
+	return nil
+}
+
 // ValidateStopAuthority validates the complete compact durable authority
 // without reading storage or requiring the sandbox to remain stopped.
 func ValidateStopAuthority(authority StopAuthority) error {
@@ -672,6 +776,19 @@ func ValidateOwner(owner Owner) error {
 		!canonicalUUID(owner.GrantID) ||
 		!canonicalUUID(owner.WorkingCopyID) {
 		return invalidf("owner must contain six non-nil canonical UUIDs")
+	}
+	return nil
+}
+
+// ValidateProviderOwner validates the exact owner dimensions that a provider
+// can independently derive from immutable container metadata.
+func ValidateProviderOwner(owner ProviderOwner) error {
+	if !canonicalUUID(owner.TenantID) ||
+		!canonicalUUID(owner.UserID) ||
+		!canonicalUUID(owner.WorkspaceID) ||
+		!canonicalUUID(owner.RunID) ||
+		!canonicalUUID(owner.GrantID) {
+		return invalidf("provider owner must contain five non-nil canonical UUIDs")
 	}
 	return nil
 }
@@ -771,6 +888,24 @@ func requireObservedAuthority(
 		return fmt.Errorf("%w: provider source identity differs from admitted source", ErrConflict)
 	}
 	if observed.Owner != providerOwner(owner) {
+		return fmt.Errorf("%w: provider owner identity differs from admitted owner", ErrConflict)
+	}
+	if observed.Fence != fence {
+		return fmt.Errorf("%w: workspace execution manifest fence differs", ErrConflict)
+	}
+	return nil
+}
+
+func requireObservedProviderAuthority(
+	observed CurrentGenerationObservation,
+	source Source,
+	owner ProviderOwner,
+	fence Fence,
+) error {
+	if observed.Source != source {
+		return fmt.Errorf("%w: provider source identity differs from admitted source", ErrConflict)
+	}
+	if observed.Owner != owner {
 		return fmt.Errorf("%w: provider owner identity differs from admitted owner", ErrConflict)
 	}
 	if observed.Fence != fence {

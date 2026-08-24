@@ -17,6 +17,7 @@ import (
 	"github.com/daytonaio/runner/pkg/models"
 	"github.com/daytonaio/runner/pkg/netrules"
 	"github.com/daytonaio/runner/pkg/services"
+	"github.com/daytonaio/runner/pkg/specialistrender"
 	"github.com/daytonaio/runner/pkg/sshgateway"
 	"github.com/daytonaio/runner/pkg/workingcopy"
 )
@@ -33,6 +34,7 @@ type RunnerInstanceConfig struct {
 	SSHGatewayService   *sshgateway.Service
 	WorkingCopyCaptures *workingcopy.Service
 	GenerationStops     *generationstop.Service
+	SpecialistRenders   *specialistrender.Service
 }
 
 type Runner struct {
@@ -47,6 +49,7 @@ type Runner struct {
 	SSHGatewayService   *sshgateway.Service
 	WorkingCopyCaptures *workingcopy.Service
 	GenerationStops     *generationstop.Service
+	SpecialistRenders   *specialistrender.Service
 }
 
 var runner *Runner
@@ -78,6 +81,7 @@ func GetInstance(config *RunnerInstanceConfig) (*Runner, error) {
 			SSHGatewayService:   config.SSHGatewayService,
 			WorkingCopyCaptures: config.WorkingCopyCaptures,
 			GenerationStops:     config.GenerationStops,
+			SpecialistRenders:   config.SpecialistRenders,
 		}
 	}
 

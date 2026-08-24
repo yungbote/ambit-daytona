@@ -1,9 +1,13 @@
 {
-  "digest": "sha256:832f3dfe25d2ae4a13563d0ad8c07d633af2c5564db5afd6f208a10ec00fe4fb",
+  "digest": "sha256:3229b439844f4c3f071563fe137fcba8c8826a757927867d32f345bb56539594",
   "facets": [
     "presentation",
     "spreadsheet"
   ],
   "ref": "ambit://specialist-render-executors/office-authoring@1",
-  "schema": "ambit.c18-specialist-render-executor-lock/v1"
+  "schema": "ambit.c18-specialist-render-executor-lock/v2",
+  "transport": {
+    "digest": "sha256:253ea86e0d8f6593a5fa4a25c10db1971052539227cfac83207df9b34c11eff3",
+    "ref": "ambit.runtime-interface/specialist-render@1"
+  }
 }

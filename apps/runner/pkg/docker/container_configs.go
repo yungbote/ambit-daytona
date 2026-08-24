@@ -114,6 +114,7 @@ func (d *DockerClient) getContainerCreateConfig(sandboxDto dto.CreateSandboxDTO,
 	}
 
 	labels := make(map[string]string)
+	labels[RunnerContainerKindLabel] = RunnerContainerKindSandbox
 	if sandboxDto.Name != "" {
 		labels[sandboxNameLabel] = sandboxDto.Name
 	}

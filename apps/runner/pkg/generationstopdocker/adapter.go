@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/containerd/errdefs"
 	"github.com/daytonaio/runner/pkg/generationstop"
 	containertypes "github.com/docker/docker/api/types/container"
 )
@@ -47,6 +48,9 @@ func (adapter *Adapter) InspectGeneration(
 ) (generationstop.CurrentGenerationObservation, error) {
 	inspect, err := adapter.api.ContainerInspect(ctx, providerResourceID)
 	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return generationstop.CurrentGenerationObservation{}, generationstop.ErrNotFound
+		}
 		return generationstop.CurrentGenerationObservation{}, err
 	}
 	return observation(providerResourceID, inspect)

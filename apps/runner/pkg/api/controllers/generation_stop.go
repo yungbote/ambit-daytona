@@ -27,6 +27,7 @@ const maximumGenerationStopRequestBytes = 128 * 1024
 //	@Success	200	{object}	generationstop.GenerationObservation
 //	@Failure	400	{object}	common_errors.ErrorResponse
 //	@Failure	401	{object}	common_errors.ErrorResponse
+//	@Failure	404	{object}	common_errors.ErrorResponse
 //	@Failure	409	{object}	common_errors.ErrorResponse
 //	@Failure	503	{object}	common_errors.ErrorResponse
 //	@Router		/sandboxes/{sandboxId}/generation/observe [post]
@@ -48,6 +49,44 @@ func ObserveSandboxGeneration(ctx *gin.Context) {
 		return
 	}
 	observation, err := service.ObserveCurrent(ctx.Request.Context(), request)
+	if err != nil {
+		writeGenerationStopError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, observation)
+}
+
+// ObserveCurrentSandboxGeneration godoc
+//
+//	@Tags		sandbox
+//	@Summary	Observe current generation with provider-observable owner authority
+//	@Param		sandboxId	path	string										true	"Sandbox ID"
+//	@Param		body		body	generationstop.ProviderGenerationObservationRequest	true	"Exact provider source, owner and fence"
+//	@Produce	json
+//	@Success	200	{object}	generationstop.ProviderGenerationObservation
+//	@Failure	400	{object}	common_errors.ErrorResponse
+//	@Failure	401	{object}	common_errors.ErrorResponse
+//	@Failure	409	{object}	common_errors.ErrorResponse
+//	@Failure	503	{object}	common_errors.ErrorResponse
+//	@Router		/sandboxes/{sandboxId}/generation/observe-current [post]
+//
+//	@id			ObserveCurrentSandboxGeneration
+func ObserveCurrentSandboxGeneration(ctx *gin.Context) {
+	var request generationstop.ProviderGenerationObservationRequest
+	if err := decodeExactGenerationBody(ctx, &request); err != nil {
+		ctx.Error(common_errors.NewInvalidBodyRequestError(err))
+		return
+	}
+	service, err := generationStopService()
+	if err != nil {
+		writeGenerationStopError(ctx, err)
+		return
+	}
+	if request.Source.ProviderResourceID != ctx.Param("sandboxId") {
+		writeGenerationStopError(ctx, fmt.Errorf("%w: source providerResourceId differs from sandbox", generationstop.ErrInvalidRequest))
+		return
+	}
+	observation, err := service.ObserveProviderCurrent(ctx.Request.Context(), request)
 	if err != nil {
 		writeGenerationStopError(ctx, err)
 		return
@@ -146,6 +185,8 @@ func writeGenerationStopError(ctx *gin.Context, err error) {
 	switch {
 	case errors.Is(err, generationstop.ErrInvalidRequest):
 		ctx.Error(common_errors.NewBadRequestError(err))
+	case errors.Is(err, generationstop.ErrNotFound):
+		ctx.Error(common_errors.NewNotFoundError(err))
 	case errors.Is(err, generationstop.ErrOutcomeUnknown):
 		ctx.Error(common_errors.NewCustomError(
 			http.StatusServiceUnavailable,

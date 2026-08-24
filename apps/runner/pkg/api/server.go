@@ -151,6 +151,9 @@ func (a *ApiServer) Start(ctx context.Context) error {
 		sandboxController.POST("/:sandboxId/working-copy-captures/delete", controllers.DeleteWorkingCopyCapture)
 		sandboxController.POST("/:sandboxId/working-copy-captures/exists", controllers.WorkingCopyCaptureExists)
 		sandboxController.POST("/:sandboxId/generation/observe", controllers.ObserveSandboxGeneration)
+		sandboxController.POST("/:sandboxId/generation/observe-current", controllers.ObserveCurrentSandboxGeneration)
+		sandboxController.POST("/:sandboxId/specialist-renders", controllers.ExecuteSpecialistRender)
+		sandboxController.POST("/:sandboxId/specialist-renders/observe", controllers.ObserveSpecialistRender)
 		sandboxController.POST("/:sandboxId/stop-generation-once", controllers.StopSandboxGenerationOnce)
 		sandboxController.POST("/:sandboxId/stop-generation-once/observe", controllers.ObserveSandboxGenerationStop)
 

@@ -146,6 +146,50 @@ func (m *minioClient) CreatePrivateObject(
 	return nil
 }
 
+func (m *minioClient) CreatePrivateObjectStream(
+	ctx context.Context,
+	key string,
+	reader io.Reader,
+	size int64,
+	contentType string,
+	metadata map[string]string,
+) error {
+	if reader == nil || size < 0 {
+		return fmt.Errorf("private stream object reader or size is invalid")
+	}
+	opts := minio.PutObjectOptions{
+		ContentType: contentType, UserMetadata: cloneStringMap(metadata),
+		Checksum: minio.ChecksumSHA256, DisableMultipart: true,
+	}
+	opts.SetMatchETagExcept("*")
+	_, err := m.client.PutObject(ctx, m.bucketName, key, reader, size, opts)
+	if err != nil {
+		if isPreconditionFailure(err) {
+			return ErrPrivateObjectAlreadyExists
+		}
+		return fmt.Errorf("create private stream object: %w", err)
+	}
+	return nil
+}
+
+func (m *minioClient) OpenPrivateObject(
+	ctx context.Context,
+	key string,
+) (io.ReadCloser, PrivateObjectInfo, error) {
+	info, err := m.StatPrivateObject(ctx, key)
+	if err != nil {
+		return nil, PrivateObjectInfo{}, err
+	}
+	object, err := m.client.GetObject(ctx, m.bucketName, key, minio.GetObjectOptions{})
+	if err != nil {
+		if isNotFound(err) {
+			return nil, PrivateObjectInfo{}, ErrPrivateObjectNotFound
+		}
+		return nil, PrivateObjectInfo{}, fmt.Errorf("open private object stream: %w", err)
+	}
+	return object, info, nil
+}
+
 func (m *minioClient) GetPrivateObject(ctx context.Context, key string, maximumBytes int64) ([]byte, error) {
 	if maximumBytes < 0 {
 		return nil, fmt.Errorf("private object maximum must be non-negative")

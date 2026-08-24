@@ -19,7 +19,6 @@ from public_preview import parse_preview_bytes  # noqa: E402
 from render_command import (  # noqa: E402
     CONFORMANCE_PROFILE_REF,
     PREVIEW_MEDIA_TYPE,
-    PRODUCT_JOB_ROOT,
     canonical_bytes,
     create_request,
     parse_check_evidence_bytes,
@@ -30,25 +29,13 @@ from render_policy import POLICY_MATRIX  # noqa: E402
 
 
 CONFORMANCE_ROOT = Path("/ambit")
-PRODUCT_CONFORMANCE_PROFILE_REF = (
-    "ambit.workspace-runtime/c18-specialist-product-path-conformance@1"
-)
 
 
-def semantic_job_identity(value: str, slug: str) -> tuple[Path, str, str]:
-    if value == str(CONFORMANCE_ROOT):
-        return (
-            CONFORMANCE_ROOT,
-            f"ambit://artifact-render-jobs/conformance-{slug}",
-            CONFORMANCE_PROFILE_REF,
-        )
-    match = PRODUCT_JOB_ROOT.fullmatch(value)
-    if match is None:
-        raise ValueError("render probe job root is not policy-admitted")
+def semantic_job_identity(slug: str) -> tuple[Path, str, str]:
     return (
-        Path(value),
-        f"ambit://artifact-render-jobs/{match.group('job_id')}",
-        PRODUCT_CONFORMANCE_PROFILE_REF,
+        CONFORMANCE_ROOT,
+        f"ambit://artifact-render-jobs/conformance-{slug}",
+        CONFORMANCE_PROFILE_REF,
     )
 
 
@@ -111,19 +98,10 @@ def probe(args: argparse.Namespace) -> dict[str, object]:
     source = args.source.resolve(strict=True)
     policy = exact_policy(args.facet, args.media_type)
     slug = args.name
-    job_root, job_ref, profile_ref = semantic_job_identity(args.job_root, slug)
-    if job_root == CONFORMANCE_ROOT:
-        require_real_directory(job_root)
-    else:
-        workspace_root = Path("/workspace")
-        require_real_directory(workspace_root)
-        require_real_directory(job_root, create_beneath=workspace_root)
-    if job_root == CONFORMANCE_ROOT:
-        input_root = job_root / "inputs" / "c18-render-probe" / slug
-        output_root = job_root / "outputs" / "c18-render-probe" / slug
-    else:
-        input_root = job_root / "inputs"
-        output_root = job_root / "outputs" / "render"
+    job_root, job_ref, profile_ref = semantic_job_identity(slug)
+    require_real_directory(job_root)
+    input_root = job_root / "inputs" / "c18-render-probe" / slug
+    output_root = job_root / "outputs" / "c18-render-probe" / slug
     require_real_directory(input_root, create_beneath=job_root)
     require_real_directory(output_root.parent, create_beneath=job_root)
     admitted_source = input_root / f"source{source.suffix}"
@@ -264,7 +242,6 @@ def main() -> int:
     parser.add_argument("--media-type", required=True)
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument("--receipt", required=True, type=Path)
-    parser.add_argument("--job-root", default=str(CONFORMANCE_ROOT))
     args = parser.parse_args()
     try:
         receipt = probe(args)

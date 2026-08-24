@@ -16,7 +16,7 @@
   },
   "network": {
     "conformance": "none",
-    "runtime": "provider-policy-owned"
+    "runtime": "none"
   },
   "process": {
     "linuxCapabilities": [],
@@ -47,7 +47,7 @@
       "yarn"
     ]
   },
-  "schema": "ambit.c18-runtime-policy/v2",
+  "schema": "ambit.c18-runtime-policy/v3",
   "semanticJobRoots": {
     "callerPathSelection": "forbidden",
     "conformance": {
@@ -55,9 +55,14 @@
       "root": "/ambit"
     },
     "product": {
+      "filesystemAuthority": "none",
       "jobRefPattern": "ambit://artifact-render-jobs/<lowercase-uuid>",
+      "logicalRootPattern": "/workspace/.ambit/render-jobs/<lowercase-uuid>",
       "matchingJobIdRequired": true,
-      "rootPattern": "/workspace/.ambit/render-jobs/<lowercase-uuid>"
+      "transport": {
+        "digest": "sha256:253ea86e0d8f6593a5fa4a25c10db1971052539227cfac83207df9b34c11eff3",
+        "ref": "ambit.runtime-interface/specialist-render@1"
+      }
     }
   },
   "secrets": {

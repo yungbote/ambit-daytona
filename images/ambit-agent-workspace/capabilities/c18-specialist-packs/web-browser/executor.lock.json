@@ -1,8 +1,12 @@
 {
-  "digest": "sha256:869f6292cbbdae6ef4f07152089e98535dec1dcf48cfbb80b1d3915d6b30fad8",
+  "digest": "sha256:4927537dc261b00a5cca80cdc39cbc0323fae37a59b1d4e557809f3e2f816170",
   "facets": [
     "web_application"
   ],
   "ref": "ambit://specialist-render-executors/web-browser@1",
-  "schema": "ambit.c18-specialist-render-executor-lock/v1"
+  "schema": "ambit.c18-specialist-render-executor-lock/v2",
+  "transport": {
+    "digest": "sha256:253ea86e0d8f6593a5fa4a25c10db1971052539227cfac83207df9b34c11eff3",
+    "ref": "ambit.runtime-interface/specialist-render@1"
+  }
 }
