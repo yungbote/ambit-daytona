@@ -1,7 +1,7 @@
 {
   "schema": "ambit.runtime-interface-lock/v1",
   "state": "candidate-ready",
-  "digest": "sha256:72a319d24d3d973aedf7dfbb46452281aab7dcd62c8f2ccbffd363b5c655aa05",
+  "digest": "sha256:b57c0815bf3cf5e808ba96c6ea0dbe34b2f379685d32c500b30a01b404431892",
   "contract": {
     "arguments": [
       "--framed-jsonl",
@@ -218,7 +218,7 @@
       "inputEcho": "forbidden",
       "maximumLineBytes": 70000,
       "medium": "raw-noecho-pty",
-      "providerLaunch": "stty raw -echo -onlcr; exec exact-helper --framed-jsonl --nonce exact-nonce",
+      "providerLaunch": "stty raw -echo -onlcr && exec exact-helper --framed-jsonl --nonce exact-nonce",
       "readyFrame": "required-before-request",
       "stdinClosure": "request_end-frame-not-eof",
       "stdoutClosure": "response_end-frame-then-helper-exit-0"

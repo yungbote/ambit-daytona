@@ -186,6 +186,15 @@ class SourceContractTests(unittest.TestCase):
             lambda value: value.__setitem__("digest", f"sha256:{'0' * 64}"),
         )
 
+    def test_provider_launch_cannot_run_helper_after_stty_failure(self) -> None:
+        self.assert_rejected(
+            "locks/document-render-interface.lock.json",
+            lambda value: value["contract"]["transport"].__setitem__(
+                "providerLaunch",
+                "stty raw -echo -onlcr; exec exact-helper --framed-jsonl --nonce exact-nonce",
+            ),
+        )
+
     def test_structural_archive_and_materializer_authority_cannot_self_promote(self) -> None:
         self.assert_rejected(
             "locks/structural-compatibility-input.lock.json",
