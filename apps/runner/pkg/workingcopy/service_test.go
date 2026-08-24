@@ -866,7 +866,7 @@ func TestTransientDockerFailuresAreUnavailableNotConflicts(t *testing.T) {
 	}
 }
 
-func TestDecodeExactJSONRejectsDuplicateKeysAtEveryObjectDepth(t *testing.T) {
+func TestDecodeExactJSONRejectsDuplicateMissingZeroAndNullFields(t *testing.T) {
 	t.Parallel()
 	binding := validBinding()
 	canonical, err := json.Marshal(binding)
@@ -890,6 +890,33 @@ func TestDecodeExactJSONRejectsDuplicateKeysAtEveryObjectDepth(t *testing.T) {
 		if err := DecodeExactJSON(data, &CaptureBinding{}); err == nil || !strings.Contains(err.Error(), "duplicate JSON object key") {
 			t.Fatalf("%s duplicate key was not rejected precisely: %v", name, err)
 		}
+	}
+	missingOrNull := map[string][]byte{
+		"missing-restart-count": bytes.Replace(canonical, []byte(`,"restartCount":0`), nil, 1),
+		"missing-exit-code":     bytes.Replace(canonical, []byte(`,"exitCode":0`), nil, 1),
+		"missing-oom-killed":    bytes.Replace(canonical, []byte(`,"oomKilled":false`), nil, 1),
+		"null-oom-killed":       bytes.Replace(canonical, []byte(`"oomKilled":false`), []byte(`"oomKilled":null`), 1),
+	}
+	for name, data := range missingOrNull {
+		if err := DecodeExactJSON(data, &CaptureBinding{}); err == nil ||
+			!strings.Contains(err.Error(), "exact declared nested contract") {
+			t.Fatalf("%s exact-schema drift was accepted: %v", name, err)
+		}
+	}
+	read := CaptureReadRequest{
+		CaptureIdentity:              CaptureIdentity{CaptureBinding: binding, ProviderResourceID: "daytona-working-copy-capture:v2:sha256:" + strings.Repeat("d", 64)},
+		ExpectedTotalByteLength:      0,
+		ExpectedProviderSHA256Digest: "sha256:" + strings.Repeat("e", 64),
+		Offset:                       0,
+		MaximumBytes:                 1,
+	}
+	readJSON, err := json.Marshal(read)
+	if err != nil {
+		t.Fatalf("marshal exact read: %v", err)
+	}
+	withoutOffset := bytes.Replace(readJSON, []byte(`,"offset":0`), nil, 1)
+	if err := DecodeExactJSON(withoutOffset, &CaptureReadRequest{}); err == nil {
+		t.Fatal("missing required zero offset was accepted")
 	}
 }
 
