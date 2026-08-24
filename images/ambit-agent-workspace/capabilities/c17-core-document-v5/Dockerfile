@@ -418,6 +418,7 @@ RUN --network=none set -eu; \
     /opt/ambit/runtime-pack/core-document-v5/bin/node -e \
       "const c=require('/opt/ambit/runtime-pack/core-document-v5/renderer/node_modules/@napi-rs/canvas'); if(typeof c.createCanvas!=='function') process.exit(1)"; \
     find /tmp /workspace -xdev -mindepth 1 -delete; \
+    rm -f /var/cache/fontconfig/* /var/cache/ldconfig/aux-cache; \
     test -z "$(find /workspace -mindepth 1 -print -quit)"; \
     for path in /etc/apt /etc/dpkg /usr/lib/apt /usr/lib/dpkg \
       /var/cache/apt /var/cache/debconf /var/lib/apt /var/lib/debconf \
