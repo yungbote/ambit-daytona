@@ -65,6 +65,13 @@ def build(
     if not isinstance(core, dict):
         raise CoreDerivedBuildError("core parent lock is absent")
     core_manifest = _digest(core.get("platformManifestDigest"), "core manifest")
+    core_source_date_epoch = core.get("sourceDateEpoch")
+    if (
+        not isinstance(core_source_date_epoch, int)
+        or isinstance(core_source_date_epoch, bool)
+        or core_source_date_epoch <= 0
+    ):
+        raise CoreDerivedBuildError("core source epoch is invalid")
     _verify_external_composition_inputs(union_lock, composition_source)
 
     records: list[dict[str, object]] = []
@@ -79,6 +86,7 @@ def build(
             materializer_inputs=materializer_inputs,
             core_layout=core_layout,
             core_manifest=core_manifest,
+            core_source_date_epoch=core_source_date_epoch,
             composition_source=composition_source,
             identity=identity,
             archive=archive,
@@ -147,13 +155,15 @@ def _build_command(
     materializer_inputs: Path,
     core_layout: Path,
     core_manifest: str,
+    core_source_date_epoch: int,
     composition_source: Path,
     identity: dict[str, Any],
     archive: Path,
     metadata: Path,
 ) -> list[str]:
     values = {
-        "SOURCE_DATE_EPOCH": identity["sourceDateEpoch"],
+        "SOURCE_DATE_EPOCH": core_source_date_epoch,
+        "BUILD_SOURCE_DATE_EPOCH": identity["sourceDateEpoch"],
         "BUILD_SOURCE_REVISION": identity["revision"],
         "BUILD_SOURCE_TREE": identity["repositoryTree"],
         "BUILD_SOURCE_SUBTREE": identity["subtree"],

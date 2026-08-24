@@ -24,6 +24,7 @@ class CoreDerivedCandidateBuildTests(unittest.TestCase):
             materializer_inputs=Path("/materializer"),
             core_layout=Path("/core"),
             core_manifest="sha256:" + "1" * 64,
+            core_source_date_epoch=10,
             composition_source=Path("/composition"),
             identity={
                 "sourceDateEpoch": 1,
@@ -46,6 +47,8 @@ class CoreDerivedCandidateBuildTests(unittest.TestCase):
         self.assertIn("source_identity=/identity", rendered)
         self.assertIn("composition_source=/composition", rendered)
         self.assertIn("rewrite-timestamp=true", rendered)
+        self.assertIn("SOURCE_DATE_EPOCH=10", rendered)
+        self.assertIn("BUILD_SOURCE_DATE_EPOCH=1", rendered)
 
     def test_admits_exact_repeated_core_prefix_and_one_overlay(self) -> None:
         archive, core, identity = oci_fixture()

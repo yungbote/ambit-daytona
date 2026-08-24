@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
 ARG BASE_IMAGE=docker.io/library/debian@sha256:38a76d01668772e381ad2826d876627c89e7133e2f8a0f5d567306798b0f2a16
-ARG SOURCE_DATE_EPOCH=0
+ARG SOURCE_DATE_EPOCH=1787551756
+ARG BUILD_SOURCE_DATE_EPOCH=0
 ARG BUILD_SOURCE_REVISION=unbound
 ARG BUILD_SOURCE_TREE=unbound
 ARG BUILD_SOURCE_SUBTREE=unbound
@@ -15,6 +16,7 @@ FROM core_parent AS qualified_core_parent
 
 FROM ${BASE_IMAGE} AS input_guard
 ARG SOURCE_DATE_EPOCH
+ARG BUILD_SOURCE_DATE_EPOCH
 ARG BUILD_SOURCE_REVISION
 ARG BUILD_SOURCE_TREE
 ARG BUILD_SOURCE_SUBTREE
@@ -36,7 +38,8 @@ RUN --network=none \
     printf '%s\n' "${BUILD_SOURCE_REVISION}" | grep -Eq '^[0-9a-f]{40}$'; \
     printf '%s\n' "${BUILD_SOURCE_TREE}" | grep -Eq '^[0-9a-f]{40}$'; \
     printf '%s\n' "${BUILD_SOURCE_SUBTREE}" | grep -Eq '^[0-9a-f]{40}$'; \
-    case "${SOURCE_DATE_EPOCH}" in ''|*[!0-9]*|0) exit 44 ;; esac; \
+    test "${SOURCE_DATE_EPOCH}" = 1787551756; \
+    case "${BUILD_SOURCE_DATE_EPOCH}" in ''|*[!0-9]*|0) exit 44 ;; esac; \
     for digest in \
       "${BUILD_SOURCE_ARCHIVE_SHA256}" \
       "${BUILD_SOURCE_CONTEXT_SHA256}" \
@@ -52,7 +55,7 @@ RUN --network=none \
     echo "${BUILD_SOURCE_MODES_SHA256#sha256:}  /source-identity/source-modes.tsv" | sha256sum -c -; \
     echo "${BUILD_SOURCE_IDENTITY_SHA256#sha256:}  /source-identity/source-identity.json" | sha256sum -c -; \
     printf '%s\n' \
-      "{\"archiveSha256\":\"${BUILD_SOURCE_ARCHIVE_SHA256}\",\"contextSha256\":\"${BUILD_SOURCE_CONTEXT_SHA256}\",\"path\":\"images/ambit-agent-workspace/capabilities/c17-core-document-v5\",\"repositoryTree\":\"${BUILD_SOURCE_TREE}\",\"revision\":\"${BUILD_SOURCE_REVISION}\",\"schema\":\"ambit.git-source-identity/v1\",\"sourceDateEpoch\":${SOURCE_DATE_EPOCH},\"sourceFilesManifestSha256\":\"${BUILD_SOURCE_FILES_SHA256}\",\"sourceModesManifestSha256\":\"${BUILD_SOURCE_MODES_SHA256}\",\"subtree\":\"${BUILD_SOURCE_SUBTREE}\"}" \
+      "{\"archiveSha256\":\"${BUILD_SOURCE_ARCHIVE_SHA256}\",\"contextSha256\":\"${BUILD_SOURCE_CONTEXT_SHA256}\",\"path\":\"images/ambit-agent-workspace/capabilities/c17-core-document-v5\",\"repositoryTree\":\"${BUILD_SOURCE_TREE}\",\"revision\":\"${BUILD_SOURCE_REVISION}\",\"schema\":\"ambit.git-source-identity/v1\",\"sourceDateEpoch\":${BUILD_SOURCE_DATE_EPOCH},\"sourceFilesManifestSha256\":\"${BUILD_SOURCE_FILES_SHA256}\",\"sourceModesManifestSha256\":\"${BUILD_SOURCE_MODES_SHA256}\",\"subtree\":\"${BUILD_SOURCE_SUBTREE}\"}" \
       > /tmp/source-identity.expected; \
     cmp /source-identity/source-identity.json /tmp/source-identity.expected; \
     install -d -m 0700 /source-authority; \
@@ -460,6 +463,7 @@ RUN --network=none set -eu; \
 
 FROM qualified_core_parent AS core_document_v5
 ARG SOURCE_DATE_EPOCH
+ARG BUILD_SOURCE_DATE_EPOCH
 ARG BUILD_SOURCE_REVISION
 ARG BUILD_SOURCE_TREE
 ARG BUILD_SOURCE_SUBTREE
@@ -481,7 +485,7 @@ LABEL org.opencontainers.image.title="ambit-c17-core-document-v5" \
       org.opencontainers.image.version="5.0.0-candidate" \
       org.opencontainers.image.source="https://github.com/yungbote/ambit-daytona" \
       org.opencontainers.image.revision="${BUILD_SOURCE_REVISION}" \
-      io.ambit.source-date-epoch="${SOURCE_DATE_EPOCH}" \
+      io.ambit.source-date-epoch="${BUILD_SOURCE_DATE_EPOCH}" \
       io.ambit.source-tree="${BUILD_SOURCE_TREE}" \
       io.ambit.source-subtree="${BUILD_SOURCE_SUBTREE}" \
       io.ambit.source-archive-sha256="${BUILD_SOURCE_ARCHIVE_SHA256}" \
