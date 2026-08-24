@@ -1,0 +1,75 @@
+{
+  "artifact": {
+    "activation": "candidate-only",
+    "baseEnvironmentRef": "ambit.runtime-base/debian-core@1",
+    "packRevisionRef": "ambit.runtime-pack/core@1",
+    "platform": "linux/amd64",
+    "runtimeUser": "1000:1000"
+  },
+  "capabilityProjection": {
+    "provides": [
+      "ambit.runtime/command.execute@1",
+      "ambit.runtime/filesystem.read-write@1"
+    ],
+    "providerObservedNotPackProvided": [
+      "ambit.runtime/pty@1"
+    ],
+    "requires": [],
+    "unavailable": [
+      "ambit.runtime/browser.automation@1",
+      "ambit.runtime/data.analysis@1",
+      "ambit.runtime/document.edit@1",
+      "ambit.runtime/document.inspect@1",
+      "ambit.runtime/document.render@1",
+      "ambit.runtime/document.validate@1",
+      "ambit.runtime/pdf.edit@1",
+      "ambit.runtime/presentation.edit@1",
+      "ambit.runtime/python.locked-environment@1",
+      "ambit.runtime/research.workspace@1",
+      "ambit.runtime/spreadsheet.edit@1",
+      "ambit.runtime/web-application.authoring@1"
+    ]
+  },
+  "composition": {
+    "backendContract": "RuntimeCapabilityFullImageDeploymentBinding@1",
+    "backendPlanKind": "full_image_runtime_pack_plan",
+    "backendPlanVersion": 2,
+    "descendantRequirement": "the final OCI manifest must inherit this exact platform manifest as its literal OCI parent so the complete ordered core layer prefix is byte-identical",
+    "distinctDocumentArtifactRequired": true,
+    "packArtifactRefRule": "runtime-pack-artifact:<sha256>",
+    "tarOrFilesystemCopyCountsAsArtifactReuse": false
+  },
+  "historicalInput": {
+    "classification": "candidate_policy_passed_not_promoted",
+    "configDigest": "sha256:7b00fb6a1d3e420716cd7e62d7484fd4eebea8d4c1a0f5c9f165e905da4e945c",
+    "daytonaRevision": "5f656cf40e5d37fb67af8d134ed791187b813211",
+    "evidenceManifestSha256": "sha256:f34f4c6b97361e19fb4969b3c10aadb2754a0d9dc121a917bd2ecc09e45069e1",
+    "indexDigest": "sha256:57542e34fb60f23add49f7fdb7559ffbfa79bd79ecb97739facf4aab2c9bf4d2",
+    "packRevisionRef": "ambit.runtime-pack/core-document@4",
+    "platformManifestDigest": "sha256:a71ac9bcb773a81670c18b1dfdd73bc050f506cdbef7be4f066d0ed8f448379f",
+    "reusableAsCoreBaseline": false,
+    "reason": "the immutable artifact co-owns structural document bytes on Wolfi while current document and C18 descendants use a Debian closure and copy curated files instead of inheriting OCI layers"
+  },
+  "promotion": {
+    "backendPackRegistration": "not-performed",
+    "backendProfileRegistration": "not-performed",
+    "certifiedCoreProfile": "not-issued",
+    "disposition": "candidate",
+    "requiredBeforePromotion": [
+      "two no-cache builds with one platform manifest digest",
+      "complete recursive OCI layout",
+      "SBOM provenance publisher signature license and vulnerability evidence bound to the successor manifest",
+      "non-root network-none read-only-root conformance",
+      "real Daytona XFS lifecycle and materializer conformance",
+      "backend RuntimeCapabilityPackRevision CapabilityPackPromotion and CertifiedCoreProfile admission"
+    ]
+  },
+  "rollback": {
+    "historicalArtifactsRemainImmutable": true,
+    "predecessorActivation": null,
+    "procedure": "demote core@1 and its profile, remove only new-resolution authority, and retain all content-addressed manifests and receipts",
+    "requiresSeparateDemotionReceipt": true
+  },
+  "schema": "ambit.runtime-core-baseline/v2",
+  "state": "source-ready-unbuilt"
+}
