@@ -6,9 +6,12 @@ package storage
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 
 	"github.com/daytonaio/runner/cmd/runner/config"
@@ -81,9 +84,10 @@ func newMinioClientFromConfig() (*minioClient, error) {
 	}
 
 	client, err := minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(accessKeyId, secretKey, ""),
-		Secure: useSSL,
-		Region: region,
+		Creds:           credentials.NewStaticV4(accessKeyId, secretKey, ""),
+		Secure:          useSSL,
+		Region:          region,
+		TrailingHeaders: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create S3 client: %w", err)
@@ -119,8 +123,10 @@ func (m *minioClient) CreatePrivateObject(
 	metadata map[string]string,
 ) error {
 	opts := minio.PutObjectOptions{
-		ContentType:  contentType,
-		UserMetadata: cloneStringMap(metadata),
+		ContentType:      contentType,
+		UserMetadata:     cloneStringMap(metadata),
+		Checksum:         minio.ChecksumSHA256,
+		DisableMultipart: true,
 	}
 	opts.SetMatchETagExcept("*")
 	_, err := m.client.PutObject(
@@ -166,8 +172,43 @@ func (m *minioClient) GetPrivateObject(ctx context.Context, key string, maximumB
 	return data, nil
 }
 
+func (m *minioClient) GetPrivateObjectRange(
+	ctx context.Context,
+	key string,
+	offset int64,
+	maximumBytes int64,
+) ([]byte, error) {
+	if offset < 0 || maximumBytes <= 0 || offset > math.MaxInt64-maximumBytes {
+		return nil, fmt.Errorf("private object range is invalid")
+	}
+	opts := minio.GetObjectOptions{}
+	if err := opts.SetRange(offset, offset+maximumBytes-1); err != nil {
+		return nil, fmt.Errorf("set private object range: %w", err)
+	}
+	obj, err := m.client.GetObject(ctx, m.bucketName, key, opts)
+	if err != nil {
+		if isNotFound(err) {
+			return nil, ErrPrivateObjectNotFound
+		}
+		return nil, fmt.Errorf("open private object range: %w", err)
+	}
+	defer obj.Close()
+
+	data, err := io.ReadAll(io.LimitReader(obj, maximumBytes+1))
+	if err != nil {
+		if isNotFound(err) {
+			return nil, ErrPrivateObjectNotFound
+		}
+		return nil, fmt.Errorf("read private object range: %w", err)
+	}
+	if int64(len(data)) > maximumBytes {
+		return nil, ErrPrivateObjectTooLarge
+	}
+	return data, nil
+}
+
 func (m *minioClient) StatPrivateObject(ctx context.Context, key string) (PrivateObjectInfo, error) {
-	info, err := m.client.StatObject(ctx, m.bucketName, key, minio.StatObjectOptions{})
+	info, err := m.client.StatObject(ctx, m.bucketName, key, minio.StatObjectOptions{Checksum: true})
 	if err != nil {
 		if isNotFound(err) {
 			return PrivateObjectInfo{}, ErrPrivateObjectNotFound
@@ -175,8 +216,11 @@ func (m *minioClient) StatPrivateObject(ctx context.Context, key string) (Privat
 		return PrivateObjectInfo{}, fmt.Errorf("stat private object: %w", err)
 	}
 	return PrivateObjectInfo{
-		Size:         info.Size,
-		UserMetadata: cloneStringMap(info.UserMetadata),
+		Size:          info.Size,
+		ContentSHA256: canonicalChecksumSHA256(info.ChecksumSHA256),
+		ETag:          info.ETag,
+		VersionID:     info.VersionID,
+		UserMetadata:  cloneStringMap(info.UserMetadata),
 	}, nil
 }
 
@@ -202,6 +246,14 @@ func isPreconditionFailure(err error) bool {
 	}
 	response := minio.ToErrorResponse(err)
 	return response.Code == "PreconditionFailed" || response.StatusCode == 412
+}
+
+func canonicalChecksumSHA256(value string) string {
+	decoded, err := base64.StdEncoding.DecodeString(value)
+	if err != nil || len(decoded) != 32 {
+		return ""
+	}
+	return "sha256:" + hex.EncodeToString(decoded)
 }
 
 func cloneStringMap[T ~string](source map[string]T) map[string]string {

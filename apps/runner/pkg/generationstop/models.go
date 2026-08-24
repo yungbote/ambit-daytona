@@ -18,21 +18,21 @@ const (
 
 // Source is the exact provider-owned sandbox address admitted by the caller.
 type Source struct {
-	ProviderResourceID  string `json:"providerResourceId"`
-	ExpectedProfile     string `json:"expectedProfile"`
-	ExpectedRuntimeKind string `json:"expectedRuntimeKind"`
+	ProviderResourceID  string `json:"providerResourceId" validate:"required"`
+	ExpectedProfile     string `json:"expectedProfile" validate:"required"`
+	ExpectedRuntimeKind string `json:"expectedRuntimeKind" validate:"required"`
 }
 
 // Owner is the complete product authority whose provider effect is being
 // stopped.  Keeping every dimension in the durable claim prevents a replay
 // from silently crossing a tenant, principal, run, grant, or working copy.
 type Owner struct {
-	TenantID      string `json:"tenantId"`
-	UserID        string `json:"userId"`
-	WorkspaceID   string `json:"workspaceId"`
-	RunID         string `json:"runId"`
-	GrantID       string `json:"grantId"`
-	WorkingCopyID string `json:"workingCopyId"`
+	TenantID      string `json:"tenantId" validate:"required"`
+	UserID        string `json:"userId" validate:"required"`
+	WorkspaceID   string `json:"workspaceId" validate:"required"`
+	RunID         string `json:"runId" validate:"required"`
+	GrantID       string `json:"grantId" validate:"required"`
+	WorkingCopyID string `json:"workingCopyId" validate:"required"`
 }
 
 // ProviderOwner is the exact subset of Owner that is bound to provider-owned
@@ -51,22 +51,22 @@ type ProviderOwner struct {
 // container adapter must derive the same value from the inspected generation;
 // it must never accept the request value on trust.
 type Fence struct {
-	WorkspaceExecutionManifestRef string `json:"workspaceExecutionManifestRef"`
+	WorkspaceExecutionManifestRef string `json:"workspaceExecutionManifestRef" validate:"required"`
 }
 
 // RendererProcessIdentity is the exact renderer process generation inside a
 // sandbox.  StartTicks closes PID reuse without coupling this provider
 // contract to a particular cgroup layout.
 type RendererProcessIdentity struct {
-	PID        int64  `json:"pid"`
-	StartTicks string `json:"startTicks"`
+	PID        int64  `json:"pid" validate:"required"`
+	StartTicks string `json:"startTicks" validate:"required"`
 }
 
 // Purpose is a closed tagged union at this contract version.  Each variant is
 // validated exactly; fields belonging to another variant are rejected rather
 // than ignored.  New variants can be added without changing StopRequest.
 type Purpose struct {
-	Kind                    string                   `json:"kind"`
+	Kind                    string                   `json:"kind" validate:"required"`
 	SessionID               string                   `json:"sessionId,omitempty"`
 	Nonce                   string                   `json:"nonce,omitempty"`
 	RendererProcessIdentity *RendererProcessIdentity `json:"rendererProcessIdentity,omitempty"`
@@ -76,62 +76,62 @@ type Purpose struct {
 // the provider to stop.  ContainerID must identify the container itself, not a
 // reusable name.
 type ExpectedGeneration struct {
-	ContainerID        string `json:"containerId"`
-	ContainerCreatedAt string `json:"containerCreatedAt"`
-	ExecutionStartedAt string `json:"executionStartedAt"`
-	RestartCount       int    `json:"restartCount"`
+	ContainerID        string `json:"containerId" validate:"required"`
+	ContainerCreatedAt string `json:"containerCreatedAt" validate:"required"`
+	ExecutionStartedAt string `json:"executionStartedAt" validate:"required"`
+	RestartCount       int    `json:"restartCount" validate:"required"`
 }
 
 // StopRequest is the full authority captured before any container effect.
 // RequestFingerprint is the frozen cross-layer idempotency authority and must
 // equal ComputeRequestFingerprint for these exact fields and purpose variant.
 type StopRequest struct {
-	OperationID        string             `json:"operationId"`
-	RequestFingerprint string             `json:"requestFingerprint"`
-	Source             Source             `json:"source"`
-	Owner              Owner              `json:"owner"`
-	Fence              Fence              `json:"fence"`
-	ExpectedGeneration ExpectedGeneration `json:"expectedGeneration"`
-	Purpose            Purpose            `json:"purpose"`
+	OperationID        string             `json:"operationId" validate:"required"`
+	RequestFingerprint string             `json:"requestFingerprint" validate:"required"`
+	Source             Source             `json:"source" validate:"required"`
+	Owner              Owner              `json:"owner" validate:"required"`
+	Fence              Fence              `json:"fence" validate:"required"`
+	ExpectedGeneration ExpectedGeneration `json:"expectedGeneration" validate:"required"`
+	Purpose            Purpose            `json:"purpose" validate:"required"`
 }
 
 // TerminalGeneration is the exact expected epoch plus the immutable exit
 // facts observed after the provider stop completed.
 type TerminalGeneration struct {
 	ExpectedGeneration
-	ExecutionFinishedAt string `json:"executionFinishedAt"`
-	ExitCode            int    `json:"exitCode"`
-	OOMKilled           bool   `json:"oomKilled"`
+	ExecutionFinishedAt string `json:"executionFinishedAt" validate:"required"`
+	ExitCode            int    `json:"exitCode" validate:"required"`
+	OOMKilled           bool   `json:"oomKilled" validate:"required"`
 }
 
 // Receipt is an immutable historical proof that the exact requested
 // generation was observed in the terminal exited state.  It echoes the full
 // request so a receipt cannot be detached from its authority.
 type Receipt struct {
-	Version            int                `json:"version"`
-	Kind               string             `json:"kind"`
-	Request            StopRequest        `json:"request"`
-	ReceiptRef         string             `json:"receiptRef"`
-	ReceiptDigest      string             `json:"receiptDigest"`
-	TerminalGeneration TerminalGeneration `json:"terminalGeneration"`
-	StoppedAt          string             `json:"stoppedAt"`
+	Version            int                `json:"version" validate:"required"`
+	Kind               string             `json:"kind" validate:"required"`
+	Request            StopRequest        `json:"request" validate:"required"`
+	ReceiptRef         string             `json:"receiptRef" validate:"required"`
+	ReceiptDigest      string             `json:"receiptDigest" validate:"required"`
+	TerminalGeneration TerminalGeneration `json:"terminalGeneration" validate:"required"`
+	StoppedAt          string             `json:"stoppedAt" validate:"required"`
 }
 
 // StopAuthority is the minimal exact proof carried by a downstream operation.
 // RequireCurrentReceipt resolves it back to the full immutable claim and
 // receipt before freshly re-proving provider state.
 type StopAuthority struct {
-	OperationID        string             `json:"operationId"`
-	ReceiptRef         string             `json:"receiptRef"`
-	ReceiptDigest      string             `json:"receiptDigest"`
-	TerminalGeneration TerminalGeneration `json:"terminalGeneration"`
-	Fence              Fence              `json:"fence"`
+	OperationID        string             `json:"operationId" validate:"required"`
+	ReceiptRef         string             `json:"receiptRef" validate:"required"`
+	ReceiptDigest      string             `json:"receiptDigest" validate:"required"`
+	TerminalGeneration TerminalGeneration `json:"terminalGeneration" validate:"required"`
+	Fence              Fence              `json:"fence" validate:"required"`
 }
 
 // Observation reports only durable operation state.  A partial observation
 // means the immutable claim exists but no immutable terminal receipt does.
 type Observation struct {
-	Status  string       `json:"status"`
+	Status  string       `json:"status" validate:"required"`
 	Request *StopRequest `json:"request,omitempty"`
 	Receipt *Receipt     `json:"receipt,omitempty"`
 }
@@ -139,9 +139,9 @@ type Observation struct {
 // GenerationObservationRequest authorizes a read-only provider inspection
 // before the caller knows the current container generation.
 type GenerationObservationRequest struct {
-	Source Source `json:"source"`
-	Owner  Owner  `json:"owner"`
-	Fence  Fence  `json:"fence"`
+	Source Source `json:"source" validate:"required"`
+	Owner  Owner  `json:"owner" validate:"required"`
+	Fence  Fence  `json:"fence" validate:"required"`
 }
 
 // GenerationObservation is the stable public discovery response. State is
@@ -149,12 +149,12 @@ type GenerationObservationRequest struct {
 // through as authority. Owner includes the operation-local WorkingCopyID after
 // the provider-owned subset has been verified against container metadata.
 type GenerationObservation struct {
-	Source     Source             `json:"source"`
-	Owner      Owner              `json:"owner"`
-	Fence      Fence              `json:"fence"`
-	Generation ExpectedGeneration `json:"generation"`
-	State      string             `json:"state"`
-	ObservedAt string             `json:"observedAt"`
+	Source     Source             `json:"source" validate:"required"`
+	Owner      Owner              `json:"owner" validate:"required"`
+	Fence      Fence              `json:"fence" validate:"required"`
+	Generation ExpectedGeneration `json:"generation" validate:"required"`
+	State      string             `json:"state" validate:"required"`
+	ObservedAt string             `json:"observedAt" validate:"required"`
 }
 
 // RuntimeState is the narrow state surface needed to distinguish an exact

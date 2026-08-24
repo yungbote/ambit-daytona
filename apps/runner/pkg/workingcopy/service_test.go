@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/daytonaio/runner/pkg/generationstop"
 	"github.com/daytonaio/runner/pkg/storage"
 	containertypes "github.com/docker/docker/api/types/container"
 )
@@ -210,6 +211,29 @@ func TestCaptureRequiresExactStoppedGenerationBeforeAnyArchiveRead(t *testing.T)
 	}
 }
 
+func TestCaptureReplayFreshlyReprovesStopReceiptWhileDurableObservationRemainsReadable(t *testing.T) {
+	t.Parallel()
+	binding := validBinding()
+	containers := newFakeContainer([]byte("immutable after capture"))
+	service := mustService(t, containers, newFakeObjectStore(), binding.Authority)
+	receipt, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
+	if err != nil {
+		t.Fatalf("seed capture: %v", err)
+	}
+	copyCalls := containers.copyCalls
+	containers.state = &containertypes.State{Status: containertypes.StateRunning, Running: true, Pid: 42}
+	if _, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding); !errors.Is(err, ErrConflict) {
+		t.Fatalf("complete replay trusted historical stop authority: %v", err)
+	}
+	if containers.copyCalls != copyCalls {
+		t.Fatal("failed fresh stop reproof reached another archive read")
+	}
+	observation, err := service.Observe(context.Background(), binding.Source.ProviderResourceID, binding)
+	if err != nil || observation.Status != "complete" || observation.Receipt == nil || *observation.Receipt != receipt {
+		t.Fatalf("durable capture became unreadable after source restart: %#v, %v", observation, err)
+	}
+}
+
 func TestCaptureRejectsGenerationAndDescriptorDrift(t *testing.T) {
 	t.Parallel()
 	t.Run("generation", func(t *testing.T) {
@@ -394,8 +418,8 @@ func TestLostCreateResponsesReconcileWithoutReplacingDurableObjects(t *testing.T
 			if err != nil || replayed != receipt {
 				t.Fatalf("exact replay diverged after lost response: %#v, %v", replayed, err)
 			}
-			if containers.copyCalls != 1 || containers.inspectCalls != inspectCalls {
-				t.Fatalf("completed replay touched Docker: copies=%d inspect=%d->%d", containers.copyCalls, inspectCalls, containers.inspectCalls)
+			if containers.copyCalls != 1 || containers.inspectCalls != inspectCalls+1 {
+				t.Fatalf("completed replay did not perform exactly one fresh stop reproof: copies=%d inspect=%d->%d", containers.copyCalls, inspectCalls, containers.inspectCalls)
 			}
 		})
 	}
@@ -758,8 +782,8 @@ func TestCrossServiceCaptureAndDeleteConvergeThroughDurableAuthority(t *testing.
 	if err != nil || replayed != receipt {
 		t.Fatalf("second service did not converge on the exact receipt: %#v, %v", replayed, err)
 	}
-	if containers.copyCalls != 1 || containers.inspectCalls != inspectCalls {
-		t.Fatalf("cross-service replay touched Docker: copies=%d inspect=%d->%d", containers.copyCalls, inspectCalls, containers.inspectCalls)
+	if containers.copyCalls != 1 || containers.inspectCalls != inspectCalls+1 {
+		t.Fatalf("cross-service replay did not perform exactly one fresh stop reproof: copies=%d inspect=%d->%d", containers.copyCalls, inspectCalls, containers.inspectCalls)
 	}
 
 	deleted, err := second.Delete(context.Background(), binding.Source.ProviderResourceID, receipt.CaptureIdentity)
@@ -871,7 +895,7 @@ func TestDecodeExactJSONRejectsDuplicateKeysAtEveryObjectDepth(t *testing.T) {
 
 type fakeContainer struct {
 	mu                sync.Mutex
-	generation        containerGeneration
+	generation        testContainerGeneration
 	state             *containertypes.State
 	content           []byte
 	archive           []byte
@@ -880,7 +904,7 @@ type fakeContainer struct {
 	copyCalls         int
 	statCalls         int
 	copyPaths         []string
-	inspectMutations  map[int]containerGeneration
+	inspectMutations  map[int]testContainerGeneration
 	statMutation      func(containertypes.PathStat) containertypes.PathStat
 	afterStatMutation func(containertypes.PathStat) containertypes.PathStat
 	inspectErrors     []error
@@ -892,19 +916,47 @@ type fakeContainer struct {
 func newFakeContainer(content []byte) *fakeContainer {
 	copy := append([]byte(nil), content...)
 	return &fakeContainer{
-		generation: containerGeneration{
-			ID:           strings.Repeat("a", 64),
-			Created:      "2026-08-23T00:00:00Z",
-			StartedAt:    "2026-08-23T00:01:00Z",
-			FinishedAt:   "2026-08-23T00:02:00Z",
-			RestartCount: 0,
-			ExitCode:     0,
-			OOMKilled:    false,
-		},
+		generation:       defaultTestContainerGeneration(),
 		state:            &containertypes.State{Status: containertypes.StateExited},
 		content:          copy,
 		archive:          tarArchive(tarEntry{name: "report.txt", typeflag: tar.TypeReg, body: copy}),
-		inspectMutations: make(map[int]containerGeneration),
+		inspectMutations: make(map[int]testContainerGeneration),
+	}
+}
+
+func defaultTestContainerGeneration() testContainerGeneration {
+	return testContainerGeneration{
+		ID:           strings.Repeat("a", 64),
+		Created:      "2026-08-23T00:00:00Z",
+		StartedAt:    "2026-08-23T00:01:00Z",
+		FinishedAt:   "2026-08-23T00:02:00Z",
+		RestartCount: 0,
+		ExitCode:     0,
+		OOMKilled:    false,
+	}
+}
+
+type testContainerGeneration struct {
+	ID           string
+	Created      string
+	StartedAt    string
+	FinishedAt   string
+	RestartCount int
+	ExitCode     int
+	OOMKilled    bool
+}
+
+func (generation testContainerGeneration) terminal() generationstop.TerminalGeneration {
+	return generationstop.TerminalGeneration{
+		ExpectedGeneration: generationstop.ExpectedGeneration{
+			ContainerID:        generation.ID,
+			ContainerCreatedAt: generation.Created,
+			ExecutionStartedAt: generation.StartedAt,
+			RestartCount:       generation.RestartCount,
+		},
+		ExecutionFinishedAt: generation.FinishedAt,
+		ExitCode:            generation.ExitCode,
+		OOMKilled:           generation.OOMKilled,
 	}
 }
 
@@ -932,6 +984,61 @@ func (f *fakeContainer) ContainerInspect(
 	return containertypes.InspectResponse{ContainerJSONBase: &containertypes.ContainerJSONBase{
 		ID: generation.ID, Created: generation.Created, State: &state, RestartCount: generation.RestartCount,
 	}}, nil
+}
+
+type fakeStoppedGenerationAuthority struct {
+	container *fakeContainer
+}
+
+func (authority *fakeStoppedGenerationAuthority) RequireCurrentReceipt(
+	_ context.Context,
+	expectedSource generationstop.Source,
+	expectedOwner generationstop.Owner,
+	expectedPurpose generationstop.Purpose,
+	stopAuthority generationstop.StopAuthority,
+) (generationstop.Receipt, error) {
+	if err := generationstop.ValidateBinding(expectedSource, expectedOwner, stopAuthority); err != nil {
+		return generationstop.Receipt{}, err
+	}
+	if expectedPurpose != (generationstop.Purpose{Kind: generationstop.PurposeWorkingCopyCapture}) {
+		return generationstop.Receipt{}, fmt.Errorf("%w: purpose differs", generationstop.ErrConflict)
+	}
+	container := authority.container
+	container.mu.Lock()
+	defer container.mu.Unlock()
+	container.inspectCalls++
+	if len(container.inspectErrors) > 0 {
+		err := container.inspectErrors[0]
+		container.inspectErrors = container.inspectErrors[1:]
+		return generationstop.Receipt{}, fmt.Errorf("%w: %v", generationstop.ErrUnavailable, err)
+	}
+	generation := container.generation
+	if mutated, ok := container.inspectMutations[container.inspectCalls]; ok {
+		generation = mutated
+	}
+	state := container.state
+	if state == nil || state.Status != containertypes.StateExited || state.Running || state.Paused ||
+		state.Restarting || state.Dead || state.Pid != 0 || generation.FinishedAt == "" {
+		return generationstop.Receipt{}, fmt.Errorf("%w: generation is not exact exited PID-zero", generationstop.ErrConflict)
+	}
+	terminal := generation.terminal()
+	if terminal != stopAuthority.TerminalGeneration {
+		return generationstop.Receipt{}, fmt.Errorf("%w: terminal generation changed", generationstop.ErrConflict)
+	}
+	return generationstop.Receipt{
+		Version:            1,
+		Kind:               "agent_workspace_stopped_generation_receipt",
+		ReceiptRef:         stopAuthority.ReceiptRef,
+		ReceiptDigest:      stopAuthority.ReceiptDigest,
+		TerminalGeneration: terminal,
+		Request: generationstop.StopRequest{
+			OperationID: stopAuthority.OperationID,
+			Source:      expectedSource,
+			Owner:       expectedOwner,
+			Fence:       stopAuthority.Fence,
+			Purpose:     expectedPurpose,
+		},
+	}, nil
 }
 
 func (f *fakeContainer) ContainerStatPath(
@@ -1225,6 +1332,15 @@ func validBinding() CaptureBinding {
 			GrantID:       "55555555-5555-4555-8555-555555555555",
 			WorkingCopyID: "66666666-6666-4666-8666-666666666666",
 		},
+		StopAuthority: generationstop.StopAuthority{
+			OperationID:        "77777777-7777-4777-8777-777777777777",
+			ReceiptRef:         "ambit.stopped-generation-receipt:v1:sha256:" + strings.Repeat("9", 64),
+			ReceiptDigest:      "sha256:" + strings.Repeat("9", 64),
+			TerminalGeneration: defaultTestContainerGeneration().terminal(),
+			Fence: generationstop.Fence{
+				WorkspaceExecutionManifestRef: "ambit.workspace-execution-manifest:v1:sha256:" + strings.Repeat("c", 64),
+			},
+		},
 		Selector: CaptureSelector{
 			SemanticZoneRef:  "ambit.workspace-zone/work@1",
 			ZoneRelativePath: "report.txt",
@@ -1234,12 +1350,17 @@ func validBinding() CaptureBinding {
 
 func mustService(
 	t *testing.T,
-	containers ContainerClient,
+	containers *fakeContainer,
 	objects storage.PrivateObjectStorageClient,
 	authority CaptureAuthority,
 ) *Service {
 	t.Helper()
-	service, err := NewService(containers, objects, authority)
+	service, err := NewService(
+		containers,
+		objects,
+		&fakeStoppedGenerationAuthority{container: containers},
+		authority,
+	)
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
