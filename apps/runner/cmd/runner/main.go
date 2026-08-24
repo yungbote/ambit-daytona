@@ -28,7 +28,9 @@ import (
 	"github.com/daytonaio/runner/pkg/runner/v2/poller"
 	"github.com/daytonaio/runner/pkg/services"
 	"github.com/daytonaio/runner/pkg/sshgateway"
+	"github.com/daytonaio/runner/pkg/storage"
 	"github.com/daytonaio/runner/pkg/telemetry/filters"
+	"github.com/daytonaio/runner/pkg/workingcopy"
 	"github.com/docker/docker/client"
 	"github.com/lmittmann/tint"
 	"github.com/mattn/go-isatty"
@@ -272,16 +274,33 @@ func run() int {
 	})
 	metricsCollector.Start(ctx)
 
+	// Working-copy captures use Docker's archive API for the exact stopped
+	// container generation and private object storage for durable custody. A
+	// runner may still boot without object storage so unrelated lifecycle work
+	// remains available; the capture routes then fail closed as unavailable.
+	var workingCopyCaptures *workingcopy.Service
+	privateObjects, privateObjectsErr := storage.GetPrivateObjectStorageClient()
+	if privateObjectsErr != nil {
+		logger.Warn("Working-copy capture is unavailable", "error", privateObjectsErr)
+	} else {
+		workingCopyCaptures, err = workingcopy.NewService(cli, privateObjects)
+		if err != nil {
+			logger.Warn("Working-copy capture is unavailable", "error", err)
+			workingCopyCaptures = nil
+		}
+	}
+
 	_, err = runner.GetInstance(&runner.RunnerInstanceConfig{
-		Logger:             logger,
-		BackupInfoCache:    backupInfoCache,
-		SnapshotErrorCache: cache.NewSnapshotErrorCache(ctx, cfg.SnapshotErrorCacheRetention),
-		Docker:             dockerClient,
-		SandboxService:     sandboxService,
-		MetricsCollector:   metricsCollector,
-		NetRulesManager:    netRulesManager,
-		NetleashManager:    netleashManager,
-		SSHGatewayService:  sshGatewayService,
+		Logger:              logger,
+		BackupInfoCache:     backupInfoCache,
+		SnapshotErrorCache:  cache.NewSnapshotErrorCache(ctx, cfg.SnapshotErrorCacheRetention),
+		Docker:              dockerClient,
+		SandboxService:      sandboxService,
+		MetricsCollector:    metricsCollector,
+		NetRulesManager:     netRulesManager,
+		NetleashManager:     netleashManager,
+		SSHGatewayService:   sshGatewayService,
+		WorkingCopyCaptures: workingCopyCaptures,
 	})
 	if err != nil {
 		logger.Error("Failed to initialize runner instance", "error", err)
