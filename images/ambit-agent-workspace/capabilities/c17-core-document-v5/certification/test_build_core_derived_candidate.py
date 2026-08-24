@@ -46,7 +46,7 @@ class CoreDerivedCandidateBuildTests(unittest.TestCase):
         self.assertIn("core_parent=oci-layout:///core@sha256:" + "1" * 64, rendered)
         self.assertIn("source_identity=/identity", rendered)
         self.assertIn("composition_source=/composition", rendered)
-        self.assertIn("rewrite-timestamp=true", rendered)
+        self.assertNotIn("rewrite-timestamp=true", rendered)
         self.assertIn("SOURCE_DATE_EPOCH=10", rendered)
         self.assertIn("BUILD_SOURCE_DATE_EPOCH=1", rendered)
 

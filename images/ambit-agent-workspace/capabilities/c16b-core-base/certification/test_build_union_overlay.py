@@ -44,6 +44,7 @@ class UnionOverlayBuilderTests(unittest.TestCase):
                 target,
                 root / "result",
                 ["/protected/helper"],
+                1_787_551_756,
             )
 
             overlay = root / "result/overlay"
@@ -54,6 +55,7 @@ class UnionOverlayBuilderTests(unittest.TestCase):
             first = (overlay / "new/first").stat()
             second = (overlay / "new/second").stat()
             self.assertEqual((first.st_dev, first.st_ino), (second.st_dev, second.st_ino))
+            self.assertEqual(int(first.st_mtime), 1_787_551_756)
             stored = json.loads(
                 (root / "result/overlay-build-receipt.json").read_text()
             )
@@ -69,17 +71,23 @@ class UnionOverlayBuilderTests(unittest.TestCase):
             shutil.copytree(core, target)
             (target / "helper").write_bytes(b"two")
             with self.assertRaisesRegex(UnionOverlayBuildError, "protected"):
-                build(core, target, root / "protected-result", ["/helper"])
+                build(
+                    core,
+                    target,
+                    root / "protected-result",
+                    ["/helper"],
+                    1,
+                )
 
             (target / "helper").write_bytes(b"one")
             os.mkfifo(target / "fifo")
             with self.assertRaisesRegex(UnionOverlayBuildError, "special"):
-                build(core, target, root / "special-result", ["/helper"])
+                build(core, target, root / "special-result", ["/helper"], 1)
 
             (target / "fifo").unlink()
             (root / "existing").mkdir()
             with self.assertRaisesRegex(UnionOverlayBuildError, "already exists"):
-                build(core, target, root / "existing", ["/helper"])
+                build(core, target, root / "existing", ["/helper"], 1)
 
     def test_requires_sorted_unique_absolute_protected_paths(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -91,7 +99,13 @@ class UnionOverlayBuilderTests(unittest.TestCase):
             for values in ([], ["relative"], ["/z", "/a"], ["/a", "/a"]):
                 with self.subTest(values=values):
                     with self.assertRaises(UnionOverlayBuildError):
-                        build(core, target, root / ("out-" + str(len(values))), values)
+                        build(
+                            core,
+                            target,
+                            root / ("out-" + str(len(values))),
+                            values,
+                            1,
+                        )
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 {
   "schema": "ambit.runtime-interface-lock/v1",
   "state": "candidate-ready",
-  "digest": "sha256:b6848fe320d996287b69d4a279d4dc73a425d0e6d68999eceaf6d18d6347df7e",
+  "digest": "sha256:02de6f6b030012a76a1798ad510a07bb03d882e3f052d0ad329e78872d8cec9e",
   "contract": {
     "arguments": [
       "--framed-jsonl",
@@ -56,7 +56,7 @@
       },
       "overlayBuilder": {
         "path": "images/ambit-agent-workspace/runtime-composition/build_union_overlay.py",
-        "digest": "sha256:65573a7b6d903a8faf8f51d20609f91071336b61c46128a40615f20ff71820c8"
+        "digest": "sha256:f0a6e3a09d31f718809387fc666a2bc4af42b988995819dc3f0b00bb7d496307"
       },
       "protectedCorePaths": [
         "/opt/ambit/runtime-base/core/lineage/base-installed-dpkg.lock",
@@ -214,13 +214,13 @@
         ]
       },
       "protocolSources": {
-        "Dockerfile": "sha256:0811993ad09ec898fd94cbf891b39df98d46cd6115136bc6138eec917024648b",
+        "Dockerfile": "sha256:9bc2bb2661241acca5a6b918d6951206299964e138db1bbe13c211f8ee91ac2c",
         "certification/audit_offline_inputs.py": "sha256:fa3a8ffb13201dba092d9dbeab5cad52f86a0775e50b91c2a5499141e4848192",
-        "certification/build_core_derived_candidate.py": "sha256:761b9ffb082a04df0d8584a40b88377deae426cadbda59a125eead622fec7964",
+        "certification/build_core_derived_candidate.py": "sha256:4288d65a6cbae110030e0b51905f21ca6b95817d77c5f5fe175b27f3d30bab7f",
         "certification/runtime_pty_conformance.py": "sha256:bf591d8fe55c50a612886a3dcd5cbb4765a9bea1a027f61806a3ff528ace8dab",
         "certification/verify_render_output.mjs": "sha256:c3c9e0ea4469f48fb6cfb8f129ea18a769d851f68ec7ca2e2e06e34aff6d4814",
         "certification/verify_signed_debian_snapshot.py": "sha256:c9b36f28f14b639709f840836c8c5c36af3bd8935f9464e1ed44ccfb8a671899",
-        "certification/verify_source_contracts.py": "sha256:bd3af48b7385527ea762e81a82b12737ac103147f7a037857aaabd300b8ffd72",
+        "certification/verify_source_contracts.py": "sha256:bb64297c8a1d551412c1063a037250a1689a588dd446f239e90c4dcd3e44118c",
         "certification/verify_structural_contracts.py": "sha256:539ca505c9952e01ec213e606fb2823457aaa4acfce27278aae52eb307abb2da",
         "certification/verify_structural_runtime_archive.py": "sha256:73f247ceb6dd82087aaac68004888d66ee31884745d475cdda6cbde8d3e19401",
         "renderer/ambit-render-document.mjs": "sha256:46bc4bc0eb7df610ce4b8d68dcaaafc95d36a359b18ea8859ebf1589c26acf17",
@@ -234,7 +234,7 @@
         "renderer/render-output-verification.mjs": "sha256:4fadaea237d94446e408b97c546fc99b0cd8c8b7cd1df7510160bacb154e04b5",
         "renderer/render-terminal-arbiter.mjs": "sha256:2f57b599f1e6f55072dd6d2294034804cf77aa5aee2c4d74679719f649345078",
         "renderer/restricted-xml.mjs": "sha256:e3e6737a62fa2f46ce37227b1b331ea46648827159adebd62b594f6919cee48e",
-        "locks/union-overlay-builder-input.lock.json": "sha256:46d8da8b33929cccdae2a4fe4e1e8c4c9e635bfddf5ffa12c57e79cb4c855232",
+        "locks/union-overlay-builder-input.lock.json": "sha256:a9275bad5a1bce5ee8dd3fda2e1cd11924ad871f75997f9ad327cfa228324819",
         "structural/ambit-structural-python": "sha256:d971cbf56e92e2d73d038183e4c726cbaa872a177ebf1f1495e714c5bd22c099",
         "toolchain-manifest.json": "sha256:cfcd08a2a137e60446e3693033d8f69f7e91549b1bbd6ca9e0e8a6f335d61eb9"
       },

@@ -33,6 +33,7 @@ def build(
     target_root: Path,
     output: Path,
     protected_paths: list[str],
+    timestamp: int,
 ) -> dict[str, object]:
     core_root = core_root.resolve(strict=True)
     target_root = target_root.resolve(strict=True)
@@ -41,6 +42,8 @@ def build(
     if output.exists() or output.is_symlink():
         raise UnionOverlayBuildError("overlay output already exists")
     protected = _protected_paths(protected_paths)
+    if not isinstance(timestamp, int) or isinstance(timestamp, bool) or timestamp <= 0:
+        raise UnionOverlayBuildError("overlay timestamp is invalid")
     core = _root_manifest(core_root)
     target = _root_manifest(target_root)
 
@@ -76,7 +79,7 @@ def build(
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
     overlay_root = output / "overlay"
     overlay_root.mkdir(mode=0o700)
-    _materialize_overlay(target_root, target, selected, overlay_root)
+    _materialize_overlay(target_root, target, selected, overlay_root, timestamp)
     overlay = _root_manifest(overlay_root)
     expected_overlay = {path: target[path] for path in sorted(selected)}
     if overlay != expected_overlay:
@@ -120,6 +123,7 @@ def build(
         "hardlinkTopology": "exact-within-selected-overlay",
         "specialFiles": "forbidden",
         "xattrsOnOverlayEntries": "forbidden",
+        "normalizedTimestamp": timestamp,
         "lastWriterWins": False,
         "installPasses": 1,
         "prunePasses": 1,
@@ -219,6 +223,7 @@ def _materialize_overlay(
     target: dict[str, dict[str, Any]],
     selected: set[str],
     output: Path,
+    timestamp: int,
 ) -> None:
     directories = [
         path for path in sorted(selected) if target[path]["kind"] == "directory"
@@ -242,23 +247,34 @@ def _materialize_overlay(
                 )
             os.symlink(os.readlink(source), destination)
             os.chown(destination, int(entry["uid"]), int(entry["gid"]), follow_symlinks=False)
+            os.utime(
+                destination,
+                (timestamp, timestamp),
+                follow_symlinks=False,
+            )
             continue
         identity = str(entry["hardlinkIdentity"])
         existing = linked.get(identity)
         if existing is not None:
             os.link(existing, destination, follow_symlinks=False)
         else:
-            _copy_regular(source, destination, entry)
+            _copy_regular(source, destination, entry, timestamp)
             linked[identity] = destination
 
     for relative in sorted(directories, key=lambda value: (value.count("/"), value), reverse=True):
-        _apply_metadata(output / relative, target[relative], follow_symlinks=False)
+        _apply_metadata(
+            output / relative,
+            target[relative],
+            timestamp,
+            follow_symlinks=False,
+        )
 
 
 def _copy_regular(
     source: Path,
     destination: Path,
     expected: dict[str, Any],
+    timestamp: int,
 ) -> None:
     source_descriptor = os.open(source, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
     try:
@@ -297,12 +313,13 @@ def _copy_regular(
             os.close(destination_descriptor)
     finally:
         os.close(source_descriptor)
-    _apply_metadata(destination, expected, follow_symlinks=False)
+    _apply_metadata(destination, expected, timestamp, follow_symlinks=False)
 
 
 def _apply_metadata(
     path: Path,
     entry: dict[str, Any],
+    timestamp: int,
     *,
     follow_symlinks: bool,
 ) -> None:
@@ -311,6 +328,7 @@ def _apply_metadata(
     os.chown(path, int(entry["uid"]), int(entry["gid"]), follow_symlinks=follow_symlinks)
     if entry["kind"] != "symlink":
         os.chmod(path, int(str(entry["mode"]), 8), follow_symlinks=follow_symlinks)
+    os.utime(path, (timestamp, timestamp), follow_symlinks=follow_symlinks)
 
 
 def _read_regular(path: Path, expected: os.stat_result) -> str:
@@ -392,6 +410,7 @@ def main() -> int:
     parser.add_argument("--target-root", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--protected-path", action="append", default=[])
+    parser.add_argument("--timestamp", required=True, type=int)
     args = parser.parse_args()
     try:
         print(
@@ -401,6 +420,7 @@ def main() -> int:
                     args.target_root,
                     args.output,
                     args.protected_path,
+                    args.timestamp,
                 ),
                 indent=2,
                 sort_keys=True,
