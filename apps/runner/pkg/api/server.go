@@ -145,6 +145,11 @@ func (a *ApiServer) Start(ctx context.Context) error {
 		sandboxController.POST("/:sandboxId/is-recoverable", controllers.IsRecoverable)
 		sandboxController.POST("/:sandboxId/network-settings", controllers.UpdateNetworkSettings)
 		sandboxController.POST("/:sandboxId/secrets", controllers.UpdateSandboxSecrets)
+		sandboxController.POST("/:sandboxId/working-copy-captures", controllers.CaptureWorkingCopy)
+		sandboxController.POST("/:sandboxId/working-copy-captures/observe", controllers.ObserveWorkingCopyCapture)
+		sandboxController.POST("/:sandboxId/working-copy-captures/read", controllers.ReadWorkingCopyCapture)
+		sandboxController.POST("/:sandboxId/working-copy-captures/delete", controllers.DeleteWorkingCopyCapture)
+		sandboxController.POST("/:sandboxId/working-copy-captures/exists", controllers.WorkingCopyCaptureExists)
 
 		// Add proxy endpoint within the sandbox controller for toolbox
 		// Using Any() to handle all HTTP methods for the toolbox proxy
