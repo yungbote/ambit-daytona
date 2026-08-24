@@ -26,3 +26,13 @@ test('preserves semantic trailing spaces inside multiline template literals', ()
   assert.equal(eofNormalized, ['export const value = `first  ', 'second`;', ''].join('\n'))
   assert.match(eofNormalized, /first {2}\n/u)
 })
+
+test('lets one EOF edit subsume trailing whitespace on the terminal blank line', () => {
+  const source = 'export const value = 1;\n\n   \n'
+  const normalized = normalizeTypeScriptDiffWhitespace(source, [
+    { kind: 'trailing_whitespace', line: 3 },
+    { kind: 'blank_line_at_eof', line: 3 },
+  ])
+
+  assert.equal(normalized, 'export const value = 1;\n')
+})

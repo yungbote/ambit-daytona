@@ -60,12 +60,14 @@ export function normalizeTypeScriptDiffWhitespace(source, issues) {
     throw new TypeError('Generated TypeScript whitespace diagnostic kind is invalid.')
   }
   if (eofEdit) edits.push(eofEdit)
-  edits.sort((left, right) => right.start - left.start || right.end - left.end)
+  const effectiveEdits = eofEdit
+    ? edits.filter((edit) => edit === eofEdit || !(edit.start >= eofEdit.start && edit.end <= eofEdit.end))
+    : edits
+  effectiveEdits.sort((left, right) => right.start - left.start || right.end - left.end)
   let normalized = source
   let previousStart = source.length + 1
-  for (const edit of edits) {
+  for (const edit of effectiveEdits) {
     if (edit.end > previousStart) {
-      if (eofEdit && edit.start >= eofEdit.start && edit.end <= eofEdit.end) continue
       throw new Error('Generated TypeScript whitespace edits overlap.')
     }
     normalized = `${normalized.slice(0, edit.start)}${edit.replacement}${normalized.slice(edit.end)}`
