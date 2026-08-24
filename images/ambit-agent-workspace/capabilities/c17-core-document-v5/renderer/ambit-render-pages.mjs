@@ -102,9 +102,9 @@ function sameDirectoryIdentity(left, right) {
   )
 }
 
-export async function admitEmptyOutputDirectory(path) {
-  if (!isAbsolute(path)) {
-    throw new TypeError('Output path must be absolute.')
+export async function holdTaskPrivateDirectory(path, requireEmpty = false) {
+  if (!isAbsolute(path) || typeof requireEmpty !== 'boolean') {
+    throw new TypeError('Task-private directory input is invalid.')
   }
   const handle = await open(
     path,
@@ -117,10 +117,10 @@ export async function admitEmptyOutputDirectory(path) {
       identity.uid !== BigInt(process.getuid()) ||
       (identity.mode & 0o777n) !== 0o700n ||
       (await realpath(path)) !== path ||
-      (await readdir(path)).length !== 0
+      (requireEmpty && (await readdir(`/proc/self/fd/${handle.fd}`)).length !== 0)
     ) {
       throw new TypeError(
-        'Output must be one canonical empty task-private directory.',
+        'Directory must be one canonical task-private directory.',
       )
     }
     await reproveOutputDirectory(path, identity)
@@ -129,6 +129,10 @@ export async function admitEmptyOutputDirectory(path) {
     await handle.close()
     throw error
   }
+}
+
+export async function admitEmptyOutputDirectory(path) {
+  return holdTaskPrivateDirectory(path, true)
 }
 
 export async function reproveOutputDirectory(path, expected) {

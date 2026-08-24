@@ -540,7 +540,19 @@ export function admitPngPageEvidence(plan, bytes) {
     throw new TypeError('Rendered page bytes are not a PNG.')
   }
   const png = parsePng(bytes)
-  if (png.width !== page.width || png.height !== page.height) {
+  if (
+    !Number.isSafeInteger(page.index) ||
+    page.index < 0 ||
+    page.number !== page.index + 1 ||
+    !Number.isSafeInteger(page.width) ||
+    page.width <= 0 ||
+    !Number.isSafeInteger(page.height) ||
+    page.height <= 0 ||
+    !Number.isSafeInteger(page.pixels) ||
+    page.pixels !== page.width * page.height ||
+    png.width !== page.width ||
+    png.height !== page.height
+  ) {
     throw new TypeError('Rendered PNG dimensions differ from the page plan.')
   }
   return Object.freeze({
@@ -642,40 +654,45 @@ function crc32(...chunks) {
   return (crc ^ 0xffffffff) >>> 0
 }
 
-export function createRenderManifest({
+export function admitExactRenderEvidence({
   sourceDocument,
   intermediatePdfBytes,
-  policySha256,
   pages,
   policy,
-  executionLineage,
 }) {
-  exactSha256(policySha256, 'Render manifest policy')
-  positiveSafeInteger(intermediatePdfBytes, 'Intermediate PDF bytes')
   const source = exactKeys(
     sourceDocument,
     ['bytes', 'format', 'sha256'],
-    'Render manifest source document',
+    'Render evidence source document',
   )
   if (!['docx', 'pdf'].includes(source.format)) {
-    throw new TypeError('Render manifest source format is invalid.')
+    throw new TypeError('Render evidence source format is invalid.')
   }
-  exactSha256(source.sha256, 'Render manifest source document')
-  positiveSafeInteger(source.bytes, 'Source document bytes')
+  exactSha256(source.sha256, 'Render evidence source document')
+  positiveSafeInteger(source.bytes, 'Render evidence source document bytes')
+  positiveSafeInteger(intermediatePdfBytes, 'Render evidence intermediate PDF bytes')
   const admittedPolicy = admitRenderPolicy(policy)
-  const admittedLineage = admitRenderExecutionLineage(executionLineage)
-  const pageValues = exactArrayValues(pages, 'Render manifest page roster')
+  if (
+    source.bytes >
+      (source.format === 'docx'
+        ? admittedPolicy.input.maximumBytes
+        : admittedPolicy.libreOffice.maximumPdfBytes) ||
+    intermediatePdfBytes > admittedPolicy.libreOffice.maximumPdfBytes
+  ) {
+    throw new RangeError('Render source or intermediate PDF exceeds policy.')
+  }
+  const pageValues = exactArrayValues(pages, 'Render evidence page roster')
   if (
     pageValues.length === 0 ||
     pageValues.length > admittedPolicy.pages.maximumCount
   ) {
-    throw new TypeError('Render manifest page roster is invalid.')
+    throw new TypeError('Render evidence page roster is invalid.')
   }
   let totalOutputBytes = 0
   let totalPixels = 0
-  for (const [index, page] of pageValues.entries()) {
-    exactKeys(
-      page,
+  const admittedPages = pageValues.map((value, index) => {
+    const page = exactKeys(
+      value,
       [
         'bytes',
         'filename',
@@ -686,45 +703,98 @@ export function createRenderManifest({
         'sha256',
         'width',
       ],
-      'Render manifest page',
+      'Render evidence page',
     )
+    const width = positiveSafeInteger(page.width, 'Rendered page width')
+    const height = positiveSafeInteger(page.height, 'Rendered page height')
+    const pixels = positiveSafeInteger(page.pixels, 'Rendered page pixels')
+    const bytes = positiveSafeInteger(page.bytes, 'Rendered page bytes')
     if (
       page.index !== index ||
       page.number !== index + 1 ||
       page.filename !== `page-${String(index + 1).padStart(4, '0')}.png` ||
-      !/^sha256:[0-9a-f]{64}$/.test(page.sha256)
+      !/^sha256:[0-9a-f]{64}$/.test(page.sha256) ||
+      width > admittedPolicy.pages.maximumWidthPixels ||
+      height > admittedPolicy.pages.maximumHeightPixels ||
+      !Number.isSafeInteger(width * height) ||
+      pixels !== width * height ||
+      pixels > admittedPolicy.pages.maximumPixelsPerPage ||
+      bytes > admittedPolicy.pages.maximumBytesPerPage
     ) {
-      throw new TypeError('Render manifest page order or identity is invalid.')
+      throw new TypeError(
+        'Render manifest page order or identity, dimensions, or bounds are invalid.',
+      )
     }
-    totalOutputBytes += positiveSafeInteger(page.bytes, 'Rendered page bytes')
-    totalPixels += positiveSafeInteger(page.pixels, 'Rendered page pixels')
+    totalOutputBytes += bytes
+    totalPixels += pixels
     if (
-      page.bytes > admittedPolicy.pages.maximumBytesPerPage ||
+      !Number.isSafeInteger(totalOutputBytes) ||
+      !Number.isSafeInteger(totalPixels) ||
       totalOutputBytes > admittedPolicy.pages.maximumTotalOutputBytes ||
       totalPixels > admittedPolicy.pages.maximumTotalPixels
     ) {
-      throw new RangeError('Render manifest aggregate bounds are invalid.')
+      throw new RangeError('Render evidence aggregate bounds are invalid.')
     }
-  }
+    return Object.freeze({
+      index,
+      number: index + 1,
+      filename: page.filename,
+      width,
+      height,
+      pixels,
+      bytes,
+      sha256: page.sha256,
+    })
+  })
+  return Object.freeze({
+    sourceDocument: Object.freeze({
+      format: source.format,
+      sha256: source.sha256,
+      bytes: source.bytes,
+    }),
+    intermediatePdf: Object.freeze({
+      bytes: intermediatePdfBytes,
+      digestDisposition: 'excluded_volatile_converter_metadata',
+    }),
+    pageCount: admittedPages.length,
+    totalPixels,
+    totalOutputBytes,
+    pages: Object.freeze(admittedPages),
+  })
+}
+
+export function createRenderManifest({
+  sourceDocument,
+  intermediatePdfBytes,
+  policySha256,
+  pages,
+  policy,
+  executionLineage,
+}) {
+  exactSha256(policySha256, 'Render manifest policy')
+  const evidence = admitExactRenderEvidence({
+    sourceDocument,
+    intermediatePdfBytes,
+    pages,
+    policy,
+  })
+  const admittedLineage = admitRenderExecutionLineage(executionLineage)
   const body = Object.freeze({
     schema: 'ambit.runtime-pack-paginated-render-manifest/v1',
     kind: 'paginated_render_candidate',
     canonicalAuthority: 'none',
     canonicalBoundary: 'external_artifact_commit',
-    sourceDocument: Object.freeze(source),
-    intermediatePdf: Object.freeze({
-      bytes: intermediatePdfBytes,
-      digestDisposition: 'excluded_volatile_converter_metadata',
-    }),
+    sourceDocument: evidence.sourceDocument,
+    intermediatePdf: evidence.intermediatePdf,
     policy: Object.freeze({
       ref: 'ambit.render-policy/core-document-paginated@1',
       digest: policySha256,
     }),
     executionLineage: admittedLineage,
-    pageCount: pageValues.length,
-    totalPixels,
-    totalOutputBytes,
-    pages: Object.freeze(pageValues),
+    pageCount: evidence.pageCount,
+    totalPixels: evidence.totalPixels,
+    totalOutputBytes: evidence.totalOutputBytes,
+    pages: evidence.pages,
   })
   const digest = sha256(Buffer.from(canonicalJson(body)))
   return Object.freeze({
