@@ -52,10 +52,10 @@ export class WorkingCopyCaptureService {
     )
     try {
       const receipt = await adapter.captureWorkingCopy(sandbox.id, binding)
-      assertReceipt(receipt, binding)
+      mutationReceiptGuard(() => assertReceipt(receipt, binding))
       return receipt
     } catch (error) {
-      throw translateRunnerCaptureError(error)
+      throw translateRunnerCaptureError(error, true)
     }
   }
 
@@ -77,7 +77,7 @@ export class WorkingCopyCaptureService {
       assertObservation(observation, binding)
       return observation
     } catch (error) {
-      throw translateRunnerCaptureError(error)
+      throw translateRunnerCaptureError(error, false)
     }
   }
 
@@ -137,7 +137,7 @@ export class WorkingCopyCaptureService {
       }
       return response
     } catch (error) {
-      throw translateRunnerCaptureError(error)
+      throw translateRunnerCaptureError(error, false)
     }
   }
 
@@ -156,33 +156,35 @@ export class WorkingCopyCaptureService {
     )
     try {
       const receipt = await adapter.deleteWorkingCopyCapture(sandbox.id, identity)
-      assertExactKeys(
-        receipt,
-        [
-          'authority',
-          'outcome',
-          'owner',
-          'providerName',
-          'providerResourceId',
-          'requestFingerprint',
-          'selector',
-          'source',
-          'stopAuthority',
-        ],
-        'capture deletion receipt',
-        ConflictException,
-      )
-      assertProviderIdentity(receipt)
-      if (
-        !sameBinding(receipt, identity) ||
-        receipt.providerResourceId !== identity.providerResourceId ||
-        !['deleted', 'already_absent'].includes(receipt.outcome)
-      ) {
-        throw new ConflictException('Runner returned a conflicting capture deletion receipt.')
-      }
+      mutationReceiptGuard(() => {
+        assertExactKeys(
+          receipt,
+          [
+            'authority',
+            'outcome',
+            'owner',
+            'providerName',
+            'providerResourceId',
+            'requestFingerprint',
+            'selector',
+            'source',
+            'stopAuthority',
+          ],
+          'capture deletion receipt',
+          ConflictException,
+        )
+        assertProviderIdentity(receipt)
+        if (
+          !sameBinding(receipt, identity) ||
+          receipt.providerResourceId !== identity.providerResourceId ||
+          !['deleted', 'already_absent'].includes(receipt.outcome)
+        ) {
+          throw new ConflictException('Runner returned a conflicting capture deletion receipt.')
+        }
+      })
       return receipt
     } catch (error) {
-      throw translateRunnerCaptureError(error)
+      throw translateRunnerCaptureError(error, true)
     }
   }
 
@@ -238,7 +240,7 @@ export class WorkingCopyCaptureService {
       }
       return response
     } catch (error) {
-      throw translateRunnerCaptureError(error)
+      throw translateRunnerCaptureError(error, false)
     }
   }
 }
@@ -621,7 +623,24 @@ function assertExactKeys(
   }
 }
 
-function translateRunnerCaptureError(error: unknown): unknown {
+function mutationReceiptGuard(action: () => void): void {
+  try {
+    action()
+  } catch {
+    throw captureOutcomeUnknown()
+  }
+}
+
+function captureOutcomeUnknown(): ServiceUnavailableException {
+  return new ServiceUnavailableException({
+    statusCode: 503,
+    message: 'Working-copy capture outcome is unknown; observe the exact operation before retrying.',
+    error: 'Service Unavailable',
+    code: 'WORKING_COPY_CAPTURE_OUTCOME_UNKNOWN',
+  })
+}
+
+function translateRunnerCaptureError(error: unknown, mutating: boolean): unknown {
   if (!(error instanceof RunnerApiError)) return error
   switch (error.statusCode) {
     case 400:
@@ -641,6 +660,7 @@ function translateRunnerCaptureError(error: unknown): unknown {
             : 'WORKING_COPY_CAPTURE_UNAVAILABLE',
       })
     default:
+      if (mutating) return captureOutcomeUnknown()
       return new ServiceUnavailableException('The sandbox runner could not complete working-copy capture.')
   }
 }
