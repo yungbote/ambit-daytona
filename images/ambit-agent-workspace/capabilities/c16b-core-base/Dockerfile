@@ -31,9 +31,9 @@ COPY locks/materializer-input.lock.json /inputs/materializer-input.lock.json
 COPY --from=materializer_inputs /ambit-atomic-materialize /inputs/ambit-atomic-materialize
 COPY --from=materializer_inputs /backend-atomic-materializer-source.tar /inputs/backend-atomic-materializer-source.tar
 RUN --network=none set -eu; \
-    case "${BUILD_SOURCE_REVISION}" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;; *) exit 41 ;; esac; \
-    case "${BUILD_SOURCE_TREE}" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;; *) exit 42 ;; esac; \
-    case "${BUILD_SOURCE_SUBTREE}" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;; *) exit 43 ;; esac; \
+    printf '%s\\n' "${BUILD_SOURCE_REVISION}" | grep -Eq '^[0-9a-f]{40}$'; \
+    printf '%s\\n' "${BUILD_SOURCE_TREE}" | grep -Eq '^[0-9a-f]{40}$'; \
+    printf '%s\\n' "${BUILD_SOURCE_SUBTREE}" | grep -Eq '^[0-9a-f]{40}$'; \
     case "${SOURCE_DATE_EPOCH}" in ''|*[!0-9]*|0) exit 44 ;; esac; \
     for digest in \
       "${BUILD_SOURCE_ARCHIVE_SHA256}" \
@@ -41,7 +41,7 @@ RUN --network=none set -eu; \
       "${BUILD_SOURCE_FILES_SHA256}" \
       "${BUILD_SOURCE_MODES_SHA256}" \
       "${BUILD_SOURCE_IDENTITY_SHA256}"; do \
-      case "${digest}" in sha256:[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;; *) exit 45 ;; esac; \
+      printf '%s\\n' "${digest}" | grep -Eq '^sha256:[0-9a-f]{64}$'; \
     done; \
     test "$(find /source-identity -maxdepth 1 -type f | wc -l)" = 4; \
     test -z "$(find /source-identity -mindepth 1 ! -type f -print -quit)"; \
