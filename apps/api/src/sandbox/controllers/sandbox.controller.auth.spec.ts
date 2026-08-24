@@ -318,6 +318,21 @@ describe('[AUTH] SandboxController', () => {
     ])
   })
 
+  it('setTtl', () => {
+    const methodName = trackMethod('setTtl')
+    expect(isPublicEndpoint(SandboxController, methodName)).toBe(false)
+    expectArrayMatch(getAllowedAuthStrategies(SandboxController, methodName), [
+      AuthStrategyType.API_KEY,
+      AuthStrategyType.JWT,
+    ])
+    expectArrayMatch(getAuthContextGuards(SandboxController, methodName), [OrganizationAuthContextGuard])
+    expectArrayMatch(getResourceAccessGuards(SandboxController, methodName), [SandboxAccessGuard])
+    expect(getRequiredOrganizationMemberRole(SandboxController, methodName)).toBeUndefined()
+    expectArrayMatch(getRequiredOrganizationResourcePermissions(SandboxController, methodName), [
+      OrganizationResourcePermission.WRITE_SANDBOXES,
+    ])
+  })
+
   it('updateNetworkSettings', () => {
     const methodName = trackMethod('updateNetworkSettings')
     expect(isPublicEndpoint(SandboxController, methodName)).toBe(false)
