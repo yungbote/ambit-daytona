@@ -473,6 +473,553 @@ definitions:
       - SandboxStateError
       - SandboxStateUnknown
       - SandboxStatePullingSnapshot
+  generationstop.ExpectedGeneration:
+    properties:
+      containerCreatedAt:
+        type: string
+      containerId:
+        type: string
+      executionStartedAt:
+        type: string
+      restartCount:
+        type: integer
+    required:
+      - containerCreatedAt
+      - containerId
+      - executionStartedAt
+      - restartCount
+    type: object
+  generationstop.Fence:
+    properties:
+      workspaceExecutionManifestRef:
+        type: string
+    required:
+      - workspaceExecutionManifestRef
+    type: object
+  generationstop.GenerationObservation:
+    properties:
+      fence:
+        $ref: '#/definitions/generationstop.Fence'
+      generation:
+        $ref: '#/definitions/generationstop.ExpectedGeneration'
+      observedAt:
+        type: string
+      owner:
+        $ref: '#/definitions/generationstop.Owner'
+      source:
+        $ref: '#/definitions/generationstop.Source'
+      state:
+        type: string
+    required:
+      - fence
+      - generation
+      - observedAt
+      - owner
+      - source
+      - state
+    type: object
+  generationstop.GenerationObservationRequest:
+    properties:
+      fence:
+        $ref: '#/definitions/generationstop.Fence'
+      owner:
+        $ref: '#/definitions/generationstop.Owner'
+      source:
+        $ref: '#/definitions/generationstop.Source'
+    required:
+      - fence
+      - owner
+      - source
+    type: object
+  generationstop.Observation:
+    properties:
+      receipt:
+        $ref: '#/definitions/generationstop.Receipt'
+      request:
+        $ref: '#/definitions/generationstop.StopRequest'
+      status:
+        type: string
+    required:
+      - status
+    type: object
+  generationstop.Owner:
+    properties:
+      grantId:
+        type: string
+      runId:
+        type: string
+      tenantId:
+        type: string
+      userId:
+        type: string
+      workingCopyId:
+        type: string
+      workspaceId:
+        type: string
+    required:
+      - grantId
+      - runId
+      - tenantId
+      - userId
+      - workingCopyId
+      - workspaceId
+    type: object
+  generationstop.Purpose:
+    properties:
+      kind:
+        type: string
+      nonce:
+        type: string
+      rendererProcessIdentity:
+        $ref: '#/definitions/generationstop.RendererProcessIdentity'
+      sessionId:
+        type: string
+    required:
+      - kind
+    type: object
+  generationstop.Receipt:
+    properties:
+      kind:
+        type: string
+      receiptDigest:
+        type: string
+      receiptRef:
+        type: string
+      request:
+        $ref: '#/definitions/generationstop.StopRequest'
+      stoppedAt:
+        type: string
+      terminalGeneration:
+        $ref: '#/definitions/generationstop.TerminalGeneration'
+      version:
+        type: integer
+    required:
+      - kind
+      - receiptDigest
+      - receiptRef
+      - request
+      - stoppedAt
+      - terminalGeneration
+      - version
+    type: object
+  generationstop.RendererProcessIdentity:
+    properties:
+      pid:
+        type: integer
+      startTicks:
+        type: string
+    required:
+      - pid
+      - startTicks
+    type: object
+  generationstop.Source:
+    properties:
+      expectedProfile:
+        type: string
+      expectedRuntimeKind:
+        type: string
+      providerResourceId:
+        type: string
+    required:
+      - expectedProfile
+      - expectedRuntimeKind
+      - providerResourceId
+    type: object
+  generationstop.StopAuthority:
+    properties:
+      fence:
+        $ref: '#/definitions/generationstop.Fence'
+      operationId:
+        type: string
+      receiptDigest:
+        type: string
+      receiptRef:
+        type: string
+      terminalGeneration:
+        $ref: '#/definitions/generationstop.TerminalGeneration'
+    required:
+      - fence
+      - operationId
+      - receiptDigest
+      - receiptRef
+      - terminalGeneration
+    type: object
+  generationstop.StopRequest:
+    properties:
+      expectedGeneration:
+        $ref: '#/definitions/generationstop.ExpectedGeneration'
+      fence:
+        $ref: '#/definitions/generationstop.Fence'
+      operationId:
+        type: string
+      owner:
+        $ref: '#/definitions/generationstop.Owner'
+      purpose:
+        $ref: '#/definitions/generationstop.Purpose'
+      requestFingerprint:
+        type: string
+      source:
+        $ref: '#/definitions/generationstop.Source'
+    required:
+      - expectedGeneration
+      - fence
+      - operationId
+      - owner
+      - purpose
+      - requestFingerprint
+      - source
+    type: object
+  generationstop.TerminalGeneration:
+    properties:
+      containerCreatedAt:
+        type: string
+      containerId:
+        type: string
+      executionFinishedAt:
+        type: string
+      executionStartedAt:
+        type: string
+      exitCode:
+        type: integer
+      oomKilled:
+        type: boolean
+      restartCount:
+        type: integer
+    required:
+      - containerCreatedAt
+      - containerId
+      - executionFinishedAt
+      - executionStartedAt
+      - exitCode
+      - oomKilled
+      - restartCount
+    type: object
+  workingcopy.CaptureAuthority:
+    properties:
+      authorityRef:
+        type: string
+      helper:
+        $ref: '#/definitions/workingcopy.CaptureAuthorityArtifact'
+      lineageRef:
+        type: string
+      protocol:
+        $ref: '#/definitions/workingcopy.CaptureAuthorityArtifact'
+      roleRef:
+        type: string
+    required:
+      - authorityRef
+      - helper
+      - lineageRef
+      - protocol
+      - roleRef
+    type: object
+  workingcopy.CaptureAuthorityArtifact:
+    properties:
+      digest:
+        type: string
+      ref:
+        type: string
+    required:
+      - digest
+      - ref
+    type: object
+  workingcopy.CaptureBinding:
+    properties:
+      authority:
+        $ref: '#/definitions/workingcopy.CaptureAuthority'
+      owner:
+        $ref: '#/definitions/workingcopy.CaptureOwner'
+      providerName:
+        type: string
+      requestFingerprint:
+        type: string
+      selector:
+        $ref: '#/definitions/workingcopy.CaptureSelector'
+      source:
+        $ref: '#/definitions/workingcopy.SourceAddress'
+      stopAuthority:
+        $ref: '#/definitions/generationstop.StopAuthority'
+    required:
+      - authority
+      - owner
+      - providerName
+      - requestFingerprint
+      - selector
+      - source
+      - stopAuthority
+    type: object
+  workingcopy.CaptureDeleteReceipt:
+    properties:
+      authority:
+        $ref: '#/definitions/workingcopy.CaptureAuthority'
+      outcome:
+        type: string
+      owner:
+        $ref: '#/definitions/workingcopy.CaptureOwner'
+      providerName:
+        type: string
+      providerResourceId:
+        type: string
+      requestFingerprint:
+        type: string
+      selector:
+        $ref: '#/definitions/workingcopy.CaptureSelector'
+      source:
+        $ref: '#/definitions/workingcopy.SourceAddress'
+      stopAuthority:
+        $ref: '#/definitions/generationstop.StopAuthority'
+    required:
+      - authority
+      - outcome
+      - owner
+      - providerName
+      - providerResourceId
+      - requestFingerprint
+      - selector
+      - source
+      - stopAuthority
+    type: object
+  workingcopy.CaptureExistsResponse:
+    properties:
+      authority:
+        $ref: '#/definitions/workingcopy.CaptureAuthority'
+      exists:
+        type: boolean
+      owner:
+        $ref: '#/definitions/workingcopy.CaptureOwner'
+      providerName:
+        type: string
+      providerResourceId:
+        type: string
+      receipt:
+        $ref: '#/definitions/workingcopy.CaptureReceipt'
+      requestFingerprint:
+        type: string
+      selector:
+        $ref: '#/definitions/workingcopy.CaptureSelector'
+      source:
+        $ref: '#/definitions/workingcopy.SourceAddress'
+      status:
+        type: string
+      stopAuthority:
+        $ref: '#/definitions/generationstop.StopAuthority'
+    required:
+      - authority
+      - owner
+      - providerName
+      - providerResourceId
+      - requestFingerprint
+      - selector
+      - source
+      - status
+      - stopAuthority
+    type: object
+  workingcopy.CaptureIdentity:
+    properties:
+      authority:
+        $ref: '#/definitions/workingcopy.CaptureAuthority'
+      owner:
+        $ref: '#/definitions/workingcopy.CaptureOwner'
+      providerName:
+        type: string
+      providerResourceId:
+        type: string
+      requestFingerprint:
+        type: string
+      selector:
+        $ref: '#/definitions/workingcopy.CaptureSelector'
+      source:
+        $ref: '#/definitions/workingcopy.SourceAddress'
+      stopAuthority:
+        $ref: '#/definitions/generationstop.StopAuthority'
+    required:
+      - authority
+      - owner
+      - providerName
+      - providerResourceId
+      - requestFingerprint
+      - selector
+      - source
+      - stopAuthority
+    type: object
+  workingcopy.CaptureObservation:
+    properties:
+      binding:
+        $ref: '#/definitions/workingcopy.CaptureBinding'
+      identity:
+        $ref: '#/definitions/workingcopy.CaptureIdentity'
+      receipt:
+        $ref: '#/definitions/workingcopy.CaptureReceipt'
+      status:
+        type: string
+    required:
+      - status
+    type: object
+  workingcopy.CaptureOwner:
+    properties:
+      grantId:
+        type: string
+      runId:
+        type: string
+      tenantId:
+        type: string
+      userId:
+        type: string
+      workingCopyId:
+        type: string
+      workspaceId:
+        type: string
+    required:
+      - grantId
+      - runId
+      - tenantId
+      - userId
+      - workingCopyId
+      - workspaceId
+    type: object
+  workingcopy.CaptureReadRequest:
+    properties:
+      authority:
+        $ref: '#/definitions/workingcopy.CaptureAuthority'
+      expectedProviderSha256Digest:
+        type: string
+      expectedTotalByteLength:
+        type: integer
+      maximumBytes:
+        type: integer
+      offset:
+        type: integer
+      owner:
+        $ref: '#/definitions/workingcopy.CaptureOwner'
+      providerName:
+        type: string
+      providerResourceId:
+        type: string
+      requestFingerprint:
+        type: string
+      selector:
+        $ref: '#/definitions/workingcopy.CaptureSelector'
+      source:
+        $ref: '#/definitions/workingcopy.SourceAddress'
+      stopAuthority:
+        $ref: '#/definitions/generationstop.StopAuthority'
+    required:
+      - authority
+      - expectedProviderSha256Digest
+      - expectedTotalByteLength
+      - maximumBytes
+      - offset
+      - owner
+      - providerName
+      - providerResourceId
+      - requestFingerprint
+      - selector
+      - source
+      - stopAuthority
+    type: object
+  workingcopy.CaptureReadResponse:
+    properties:
+      authority:
+        $ref: '#/definitions/workingcopy.CaptureAuthority'
+      byteLength:
+        type: integer
+      bytesBase64:
+        type: string
+      eof:
+        type: boolean
+      offset:
+        type: integer
+      owner:
+        $ref: '#/definitions/workingcopy.CaptureOwner'
+      providerName:
+        type: string
+      providerResourceId:
+        type: string
+      providerSha256Digest:
+        type: string
+      requestFingerprint:
+        type: string
+      selector:
+        $ref: '#/definitions/workingcopy.CaptureSelector'
+      source:
+        $ref: '#/definitions/workingcopy.SourceAddress'
+      stopAuthority:
+        $ref: '#/definitions/generationstop.StopAuthority'
+      totalByteLength:
+        type: integer
+    required:
+      - authority
+      - offset
+      - owner
+      - providerName
+      - providerResourceId
+      - providerSha256Digest
+      - requestFingerprint
+      - selector
+      - source
+      - stopAuthority
+      - totalByteLength
+    type: object
+  workingcopy.CaptureReceipt:
+    properties:
+      authority:
+        $ref: '#/definitions/workingcopy.CaptureAuthority'
+      capturedAt:
+        type: string
+      owner:
+        $ref: '#/definitions/workingcopy.CaptureOwner'
+      providerName:
+        type: string
+      providerResourceId:
+        type: string
+      providerSha256Digest:
+        type: string
+      requestFingerprint:
+        type: string
+      selector:
+        $ref: '#/definitions/workingcopy.CaptureSelector'
+      source:
+        $ref: '#/definitions/workingcopy.SourceAddress'
+      stopAuthority:
+        $ref: '#/definitions/generationstop.StopAuthority'
+      totalByteLength:
+        type: integer
+    required:
+      - authority
+      - capturedAt
+      - owner
+      - providerName
+      - providerResourceId
+      - providerSha256Digest
+      - requestFingerprint
+      - selector
+      - source
+      - stopAuthority
+      - totalByteLength
+    type: object
+  workingcopy.CaptureSelector:
+    properties:
+      semanticZoneRef:
+        type: string
+      zoneRelativePath:
+        type: string
+    required:
+      - semanticZoneRef
+      - zoneRelativePath
+    type: object
+  workingcopy.SourceAddress:
+    properties:
+      expectedProfile:
+        type: string
+      expectedRuntimeKind:
+        type: string
+      providerResourceId:
+        type: string
+    required:
+      - expectedProfile
+      - expectedRuntimeKind
+      - providerResourceId
+    type: object
 info:
   contact: {}
   description: Daytona Runner API
@@ -673,6 +1220,47 @@ paths:
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Destroy sandbox
+      tags:
+        - sandbox
+  /sandboxes/{sandboxId}/generation/observe:
+    post:
+      operationId: ObserveSandboxGeneration
+      parameters:
+        - description: Sandbox ID
+          in: path
+          name: sandboxId
+          required: true
+          type: string
+        - description: Exact source, owner and fence
+          in: body
+          name: body
+          required: true
+          schema:
+            $ref: '#/definitions/generationstop.GenerationObservationRequest'
+      produces:
+        - application/json
+      responses:
+        '200':
+          description: OK
+          schema:
+            $ref: '#/definitions/generationstop.GenerationObservation'
+        '400':
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '401':
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '409':
+          description: Conflict
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '503':
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+      summary: Observe one exact provider-owned container generation
       tags:
         - sandbox
   /sandboxes/{sandboxId}/is-recoverable:
@@ -1079,6 +1667,88 @@ paths:
       summary: Stop sandbox
       tags:
         - sandbox
+  /sandboxes/{sandboxId}/stop-generation-once:
+    post:
+      operationId: StopSandboxGenerationOnce
+      parameters:
+        - description: Sandbox ID
+          in: path
+          name: sandboxId
+          required: true
+          type: string
+        - description: Exact idempotent stopped-generation request
+          in: body
+          name: body
+          required: true
+          schema:
+            $ref: '#/definitions/generationstop.StopRequest'
+      produces:
+        - application/json
+      responses:
+        '200':
+          description: OK
+          schema:
+            $ref: '#/definitions/generationstop.Receipt'
+        '400':
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '401':
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '409':
+          description: Conflict
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '503':
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+      summary: Durably stop one exact sandbox generation once
+      tags:
+        - sandbox
+  /sandboxes/{sandboxId}/stop-generation-once/observe:
+    post:
+      operationId: ObserveSandboxGenerationStop
+      parameters:
+        - description: Sandbox ID
+          in: path
+          name: sandboxId
+          required: true
+          type: string
+        - description: Exact stopped-generation request
+          in: body
+          name: body
+          required: true
+          schema:
+            $ref: '#/definitions/generationstop.StopRequest'
+      produces:
+        - application/json
+      responses:
+        '200':
+          description: OK
+          schema:
+            $ref: '#/definitions/generationstop.Observation'
+        '400':
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '401':
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '409':
+          description: Conflict
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '503':
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+      summary: Observe one exact durable stopped-generation operation
+      tags:
+        - sandbox
   /sandboxes/{sandboxId}/toolbox/{path}:
     delete:
       description: Forwards the request to the specified sandbox's container
@@ -1200,6 +1870,213 @@ paths:
       summary: Proxy requests to the sandbox toolbox
       tags:
         - toolbox
+  /sandboxes/{sandboxId}/working-copy-captures:
+    post:
+      description: Persist one host-admitted regular file from the exact stopped container
+        generation.
+      operationId: CaptureWorkingCopy
+      parameters:
+        - description: Sandbox ID
+          in: path
+          name: sandboxId
+          required: true
+          type: string
+        - description: Exact capture binding
+          in: body
+          name: body
+          required: true
+          schema:
+            $ref: '#/definitions/workingcopy.CaptureBinding'
+      produces:
+        - application/json
+      responses:
+        '200':
+          description: OK
+          schema:
+            $ref: '#/definitions/workingcopy.CaptureReceipt'
+        '400':
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '401':
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '409':
+          description: Conflict
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '503':
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+      summary: Capture one stopped sandbox working-copy file
+      tags:
+        - sandbox
+  /sandboxes/{sandboxId}/working-copy-captures/delete:
+    post:
+      operationId: DeleteWorkingCopyCapture
+      parameters:
+        - description: Sandbox ID
+          in: path
+          name: sandboxId
+          required: true
+          type: string
+        - description: Exact capture identity
+          in: body
+          name: body
+          required: true
+          schema:
+            $ref: '#/definitions/workingcopy.CaptureIdentity'
+      produces:
+        - application/json
+      responses:
+        '200':
+          description: OK
+          schema:
+            $ref: '#/definitions/workingcopy.CaptureDeleteReceipt'
+        '400':
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '401':
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '409':
+          description: Conflict
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '503':
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+      summary: Delete an exact private working-copy capture
+      tags:
+        - sandbox
+  /sandboxes/{sandboxId}/working-copy-captures/exists:
+    post:
+      operationId: WorkingCopyCaptureExists
+      parameters:
+        - description: Sandbox ID
+          in: path
+          name: sandboxId
+          required: true
+          type: string
+        - description: Exact capture identity
+          in: body
+          name: body
+          required: true
+          schema:
+            $ref: '#/definitions/workingcopy.CaptureIdentity'
+      produces:
+        - application/json
+      responses:
+        '200':
+          description: OK
+          schema:
+            $ref: '#/definitions/workingcopy.CaptureExistsResponse'
+        '400':
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '401':
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '409':
+          description: Conflict
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '503':
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+      summary: Check an exact private working-copy capture identity
+      tags:
+        - sandbox
+  /sandboxes/{sandboxId}/working-copy-captures/observe:
+    post:
+      operationId: ObserveWorkingCopyCapture
+      parameters:
+        - description: Sandbox ID
+          in: path
+          name: sandboxId
+          required: true
+          type: string
+        - description: Exact capture binding
+          in: body
+          name: body
+          required: true
+          schema:
+            $ref: '#/definitions/workingcopy.CaptureBinding'
+      produces:
+        - application/json
+      responses:
+        '200':
+          description: OK
+          schema:
+            $ref: '#/definitions/workingcopy.CaptureObservation'
+        '400':
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '401':
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '409':
+          description: Conflict
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '503':
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+      summary: Observe an exact working-copy capture
+      tags:
+        - sandbox
+  /sandboxes/{sandboxId}/working-copy-captures/read:
+    post:
+      operationId: ReadWorkingCopyCapture
+      parameters:
+        - description: Sandbox ID
+          in: path
+          name: sandboxId
+          required: true
+          type: string
+        - description: Exact capture identity and read bounds
+          in: body
+          name: body
+          required: true
+          schema:
+            $ref: '#/definitions/workingcopy.CaptureReadRequest'
+      produces:
+        - application/json
+      responses:
+        '200':
+          description: OK
+          schema:
+            $ref: '#/definitions/workingcopy.CaptureReadResponse'
+        '400':
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '401':
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '409':
+          description: Conflict
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '503':
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+      summary: Read an exact immutable working-copy capture
+      tags:
+        - sandbox
   /snapshots/build:
     post:
       description: Build a snapshot from a Dockerfile and context hashes. The operation

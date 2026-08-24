@@ -30,6 +30,16 @@ import type { CreateSnapshotFromSandboxRequest } from '../models';
 // @ts-ignore
 import type { ErrorResponse } from '../models';
 // @ts-ignore
+import type { GenerationstopGenerationObservation } from '../models';
+// @ts-ignore
+import type { GenerationstopGenerationObservationRequest } from '../models';
+// @ts-ignore
+import type { GenerationstopObservation } from '../models';
+// @ts-ignore
+import type { GenerationstopReceipt } from '../models';
+// @ts-ignore
+import type { GenerationstopStopRequest } from '../models';
+// @ts-ignore
 import type { IsRecoverableDTO } from '../models';
 // @ts-ignore
 import type { IsRecoverableResponse } from '../models';
@@ -49,11 +59,69 @@ import type { StopSandboxDTO } from '../models';
 import type { UpdateNetworkSettingsDTO } from '../models';
 // @ts-ignore
 import type { UpdateSandboxSecretsDTO } from '../models';
+// @ts-ignore
+import type { WorkingcopyCaptureBinding } from '../models';
+// @ts-ignore
+import type { WorkingcopyCaptureDeleteReceipt } from '../models';
+// @ts-ignore
+import type { WorkingcopyCaptureExistsResponse } from '../models';
+// @ts-ignore
+import type { WorkingcopyCaptureIdentity } from '../models';
+// @ts-ignore
+import type { WorkingcopyCaptureObservation } from '../models';
+// @ts-ignore
+import type { WorkingcopyCaptureReadRequest } from '../models';
+// @ts-ignore
+import type { WorkingcopyCaptureReadResponse } from '../models';
+// @ts-ignore
+import type { WorkingcopyCaptureReceipt } from '../models';
 /**
  * SandboxApi - axios parameter creator
  */
 export const SandboxApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
+        /**
+         * Persist one host-admitted regular file from the exact stopped container generation.
+         * @summary Capture one stopped sandbox working-copy file
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyCaptureBinding} body Exact capture binding
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        captureWorkingCopy: async (sandboxId: string, body: WorkingcopyCaptureBinding, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxId' is not null or undefined
+            assertParamExists('captureWorkingCopy', 'sandboxId', sandboxId)
+            // verify required parameter 'body' is not null or undefined
+            assertParamExists('captureWorkingCopy', 'body', body)
+            const localVarPath = `/sandboxes/{sandboxId}/working-copy-captures`
+                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication Bearer required
+            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(body, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
         /**
          * Create a sandbox
          * @summary Create a sandbox
@@ -128,6 +196,48 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
             localVarRequestOptions.data = serializeDataIfNeeded(sandbox, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         *
+         * @summary Delete an exact private working-copy capture
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyCaptureIdentity} body Exact capture identity
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        deleteWorkingCopyCapture: async (sandboxId: string, body: WorkingcopyCaptureIdentity, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxId' is not null or undefined
+            assertParamExists('deleteWorkingCopyCapture', 'sandboxId', sandboxId)
+            // verify required parameter 'body' is not null or undefined
+            assertParamExists('deleteWorkingCopyCapture', 'body', body)
+            const localVarPath = `/sandboxes/{sandboxId}/working-copy-captures/delete`
+                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication Bearer required
+            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(body, localVarRequestOptions, configuration)
 
             return {
                 url: toPathString(localVarUrlObj),
@@ -281,6 +391,174 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
             localVarRequestOptions.data = serializeDataIfNeeded(request, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         *
+         * @summary Observe one exact provider-owned container generation
+         * @param {string} sandboxId Sandbox ID
+         * @param {GenerationstopGenerationObservationRequest} body Exact source, owner and fence
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        observeSandboxGeneration: async (sandboxId: string, body: GenerationstopGenerationObservationRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxId' is not null or undefined
+            assertParamExists('observeSandboxGeneration', 'sandboxId', sandboxId)
+            // verify required parameter 'body' is not null or undefined
+            assertParamExists('observeSandboxGeneration', 'body', body)
+            const localVarPath = `/sandboxes/{sandboxId}/generation/observe`
+                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication Bearer required
+            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(body, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         *
+         * @summary Observe one exact durable stopped-generation operation
+         * @param {string} sandboxId Sandbox ID
+         * @param {GenerationstopStopRequest} body Exact stopped-generation request
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        observeSandboxGenerationStop: async (sandboxId: string, body: GenerationstopStopRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxId' is not null or undefined
+            assertParamExists('observeSandboxGenerationStop', 'sandboxId', sandboxId)
+            // verify required parameter 'body' is not null or undefined
+            assertParamExists('observeSandboxGenerationStop', 'body', body)
+            const localVarPath = `/sandboxes/{sandboxId}/stop-generation-once/observe`
+                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication Bearer required
+            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(body, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         *
+         * @summary Observe an exact working-copy capture
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyCaptureBinding} body Exact capture binding
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        observeWorkingCopyCapture: async (sandboxId: string, body: WorkingcopyCaptureBinding, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxId' is not null or undefined
+            assertParamExists('observeWorkingCopyCapture', 'sandboxId', sandboxId)
+            // verify required parameter 'body' is not null or undefined
+            assertParamExists('observeWorkingCopyCapture', 'body', body)
+            const localVarPath = `/sandboxes/{sandboxId}/working-copy-captures/observe`
+                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication Bearer required
+            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(body, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         *
+         * @summary Read an exact immutable working-copy capture
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyCaptureReadRequest} body Exact capture identity and read bounds
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        readWorkingCopyCapture: async (sandboxId: string, body: WorkingcopyCaptureReadRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxId' is not null or undefined
+            assertParamExists('readWorkingCopyCapture', 'sandboxId', sandboxId)
+            // verify required parameter 'body' is not null or undefined
+            assertParamExists('readWorkingCopyCapture', 'body', body)
+            const localVarPath = `/sandboxes/{sandboxId}/working-copy-captures/read`
+                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication Bearer required
+            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(body, localVarRequestOptions, configuration)
 
             return {
                 url: toPathString(localVarUrlObj),
@@ -504,6 +782,48 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
+         *
+         * @summary Durably stop one exact sandbox generation once
+         * @param {string} sandboxId Sandbox ID
+         * @param {GenerationstopStopRequest} body Exact idempotent stopped-generation request
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        stopSandboxGenerationOnce: async (sandboxId: string, body: GenerationstopStopRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxId' is not null or undefined
+            assertParamExists('stopSandboxGenerationOnce', 'sandboxId', sandboxId)
+            // verify required parameter 'body' is not null or undefined
+            assertParamExists('stopSandboxGenerationOnce', 'body', body)
+            const localVarPath = `/sandboxes/{sandboxId}/stop-generation-once`
+                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication Bearer required
+            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(body, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
          * Update sandbox network settings
          * @summary Update sandbox network settings
          * @param {string} sandboxId Sandbox ID
@@ -587,6 +907,48 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
                 options: localVarRequestOptions,
             };
         },
+        /**
+         *
+         * @summary Check an exact private working-copy capture identity
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyCaptureIdentity} body Exact capture identity
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        workingCopyCaptureExists: async (sandboxId: string, body: WorkingcopyCaptureIdentity, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxId' is not null or undefined
+            assertParamExists('workingCopyCaptureExists', 'sandboxId', sandboxId)
+            // verify required parameter 'body' is not null or undefined
+            assertParamExists('workingCopyCaptureExists', 'body', body)
+            const localVarPath = `/sandboxes/{sandboxId}/working-copy-captures/exists`
+                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication Bearer required
+            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(body, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
     }
 };
 
@@ -596,6 +958,20 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
 export const SandboxApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = SandboxApiAxiosParamCreator(configuration)
     return {
+        /**
+         * Persist one host-admitted regular file from the exact stopped container generation.
+         * @summary Capture one stopped sandbox working-copy file
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyCaptureBinding} body Exact capture binding
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async captureWorkingCopy(sandboxId: string, body: WorkingcopyCaptureBinding, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingcopyCaptureReceipt>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.captureWorkingCopy(sandboxId, body, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.captureWorkingCopy']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
         /**
          * Create a sandbox
          * @summary Create a sandbox
@@ -621,6 +997,20 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.createBackup(sandboxId, sandbox, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['SandboxApi.createBackup']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         *
+         * @summary Delete an exact private working-copy capture
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyCaptureIdentity} body Exact capture identity
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async deleteWorkingCopyCapture(sandboxId: string, body: WorkingcopyCaptureIdentity, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingcopyCaptureDeleteReceipt>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.deleteWorkingCopyCapture(sandboxId, body, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.deleteWorkingCopyCapture']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -674,6 +1064,62 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.isRecoverable(sandboxId, request, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['SandboxApi.isRecoverable']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         *
+         * @summary Observe one exact provider-owned container generation
+         * @param {string} sandboxId Sandbox ID
+         * @param {GenerationstopGenerationObservationRequest} body Exact source, owner and fence
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async observeSandboxGeneration(sandboxId: string, body: GenerationstopGenerationObservationRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<GenerationstopGenerationObservation>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.observeSandboxGeneration(sandboxId, body, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.observeSandboxGeneration']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         *
+         * @summary Observe one exact durable stopped-generation operation
+         * @param {string} sandboxId Sandbox ID
+         * @param {GenerationstopStopRequest} body Exact stopped-generation request
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async observeSandboxGenerationStop(sandboxId: string, body: GenerationstopStopRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<GenerationstopObservation>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.observeSandboxGenerationStop(sandboxId, body, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.observeSandboxGenerationStop']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         *
+         * @summary Observe an exact working-copy capture
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyCaptureBinding} body Exact capture binding
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async observeWorkingCopyCapture(sandboxId: string, body: WorkingcopyCaptureBinding, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingcopyCaptureObservation>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.observeWorkingCopyCapture(sandboxId, body, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.observeWorkingCopyCapture']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         *
+         * @summary Read an exact immutable working-copy capture
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyCaptureReadRequest} body Exact capture identity and read bounds
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async readWorkingCopyCapture(sandboxId: string, body: WorkingcopyCaptureReadRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingcopyCaptureReadResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.readWorkingCopyCapture(sandboxId, body, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.readWorkingCopyCapture']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -749,6 +1195,20 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
+         *
+         * @summary Durably stop one exact sandbox generation once
+         * @param {string} sandboxId Sandbox ID
+         * @param {GenerationstopStopRequest} body Exact idempotent stopped-generation request
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async stopSandboxGenerationOnce(sandboxId: string, body: GenerationstopStopRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<GenerationstopReceipt>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.stopSandboxGenerationOnce(sandboxId, body, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.stopSandboxGenerationOnce']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
          * Update sandbox network settings
          * @summary Update sandbox network settings
          * @param {string} sandboxId Sandbox ID
@@ -776,6 +1236,20 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             const localVarOperationServerBasePath = operationServerMap['SandboxApi.updateSandboxSecrets']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
+        /**
+         *
+         * @summary Check an exact private working-copy capture identity
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyCaptureIdentity} body Exact capture identity
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async workingCopyCaptureExists(sandboxId: string, body: WorkingcopyCaptureIdentity, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingcopyCaptureExistsResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.workingCopyCaptureExists(sandboxId, body, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.workingCopyCaptureExists']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
     }
 };
 
@@ -785,6 +1259,17 @@ export const SandboxApiFp = function(configuration?: Configuration) {
 export const SandboxApiFactory = function (configuration?: Configuration, basePath?: string, axios?: AxiosInstance) {
     const localVarFp = SandboxApiFp(configuration)
     return {
+        /**
+         * Persist one host-admitted regular file from the exact stopped container generation.
+         * @summary Capture one stopped sandbox working-copy file
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyCaptureBinding} body Exact capture binding
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        captureWorkingCopy(sandboxId: string, body: WorkingcopyCaptureBinding, options?: RawAxiosRequestConfig): AxiosPromise<WorkingcopyCaptureReceipt> {
+            return localVarFp.captureWorkingCopy(sandboxId, body, options).then((request) => request(axios, basePath));
+        },
         /**
          * Create a sandbox
          * @summary Create a sandbox
@@ -805,6 +1290,17 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
          */
         createBackup(sandboxId: string, sandbox: CreateBackupDTO, options?: RawAxiosRequestConfig): AxiosPromise<string> {
             return localVarFp.createBackup(sandboxId, sandbox, options).then((request) => request(axios, basePath));
+        },
+        /**
+         *
+         * @summary Delete an exact private working-copy capture
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyCaptureIdentity} body Exact capture identity
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        deleteWorkingCopyCapture(sandboxId: string, body: WorkingcopyCaptureIdentity, options?: RawAxiosRequestConfig): AxiosPromise<WorkingcopyCaptureDeleteReceipt> {
+            return localVarFp.deleteWorkingCopyCapture(sandboxId, body, options).then((request) => request(axios, basePath));
         },
         /**
          * Destroy sandbox
@@ -846,6 +1342,50 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
          */
         isRecoverable(sandboxId: string, request: IsRecoverableDTO, options?: RawAxiosRequestConfig): AxiosPromise<IsRecoverableResponse> {
             return localVarFp.isRecoverable(sandboxId, request, options).then((request) => request(axios, basePath));
+        },
+        /**
+         *
+         * @summary Observe one exact provider-owned container generation
+         * @param {string} sandboxId Sandbox ID
+         * @param {GenerationstopGenerationObservationRequest} body Exact source, owner and fence
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        observeSandboxGeneration(sandboxId: string, body: GenerationstopGenerationObservationRequest, options?: RawAxiosRequestConfig): AxiosPromise<GenerationstopGenerationObservation> {
+            return localVarFp.observeSandboxGeneration(sandboxId, body, options).then((request) => request(axios, basePath));
+        },
+        /**
+         *
+         * @summary Observe one exact durable stopped-generation operation
+         * @param {string} sandboxId Sandbox ID
+         * @param {GenerationstopStopRequest} body Exact stopped-generation request
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        observeSandboxGenerationStop(sandboxId: string, body: GenerationstopStopRequest, options?: RawAxiosRequestConfig): AxiosPromise<GenerationstopObservation> {
+            return localVarFp.observeSandboxGenerationStop(sandboxId, body, options).then((request) => request(axios, basePath));
+        },
+        /**
+         *
+         * @summary Observe an exact working-copy capture
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyCaptureBinding} body Exact capture binding
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        observeWorkingCopyCapture(sandboxId: string, body: WorkingcopyCaptureBinding, options?: RawAxiosRequestConfig): AxiosPromise<WorkingcopyCaptureObservation> {
+            return localVarFp.observeWorkingCopyCapture(sandboxId, body, options).then((request) => request(axios, basePath));
+        },
+        /**
+         *
+         * @summary Read an exact immutable working-copy capture
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyCaptureReadRequest} body Exact capture identity and read bounds
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        readWorkingCopyCapture(sandboxId: string, body: WorkingcopyCaptureReadRequest, options?: RawAxiosRequestConfig): AxiosPromise<WorkingcopyCaptureReadResponse> {
+            return localVarFp.readWorkingCopyCapture(sandboxId, body, options).then((request) => request(axios, basePath));
         },
         /**
          * Recover sandbox from error state using specified recovery type
@@ -905,6 +1445,17 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.stop(sandboxId, sandbox, options).then((request) => request(axios, basePath));
         },
         /**
+         *
+         * @summary Durably stop one exact sandbox generation once
+         * @param {string} sandboxId Sandbox ID
+         * @param {GenerationstopStopRequest} body Exact idempotent stopped-generation request
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        stopSandboxGenerationOnce(sandboxId: string, body: GenerationstopStopRequest, options?: RawAxiosRequestConfig): AxiosPromise<GenerationstopReceipt> {
+            return localVarFp.stopSandboxGenerationOnce(sandboxId, body, options).then((request) => request(axios, basePath));
+        },
+        /**
          * Update sandbox network settings
          * @summary Update sandbox network settings
          * @param {string} sandboxId Sandbox ID
@@ -926,6 +1477,17 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
         updateSandboxSecrets(sandboxId: string, sandbox: UpdateSandboxSecretsDTO, options?: RawAxiosRequestConfig): AxiosPromise<string> {
             return localVarFp.updateSandboxSecrets(sandboxId, sandbox, options).then((request) => request(axios, basePath));
         },
+        /**
+         *
+         * @summary Check an exact private working-copy capture identity
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyCaptureIdentity} body Exact capture identity
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        workingCopyCaptureExists(sandboxId: string, body: WorkingcopyCaptureIdentity, options?: RawAxiosRequestConfig): AxiosPromise<WorkingcopyCaptureExistsResponse> {
+            return localVarFp.workingCopyCaptureExists(sandboxId, body, options).then((request) => request(axios, basePath));
+        },
     };
 };
 
@@ -933,6 +1495,18 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
  * SandboxApi - object-oriented interface
  */
 export class SandboxApi extends BaseAPI {
+    /**
+     * Persist one host-admitted regular file from the exact stopped container generation.
+     * @summary Capture one stopped sandbox working-copy file
+     * @param {string} sandboxId Sandbox ID
+     * @param {WorkingcopyCaptureBinding} body Exact capture binding
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public captureWorkingCopy(sandboxId: string, body: WorkingcopyCaptureBinding, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).captureWorkingCopy(sandboxId, body, options).then((request) => request(this.axios, this.basePath));
+    }
+
     /**
      * Create a sandbox
      * @summary Create a sandbox
@@ -954,6 +1528,18 @@ export class SandboxApi extends BaseAPI {
      */
     public createBackup(sandboxId: string, sandbox: CreateBackupDTO, options?: RawAxiosRequestConfig) {
         return SandboxApiFp(this.configuration).createBackup(sandboxId, sandbox, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     *
+     * @summary Delete an exact private working-copy capture
+     * @param {string} sandboxId Sandbox ID
+     * @param {WorkingcopyCaptureIdentity} body Exact capture identity
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public deleteWorkingCopyCapture(sandboxId: string, body: WorkingcopyCaptureIdentity, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).deleteWorkingCopyCapture(sandboxId, body, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -999,6 +1585,54 @@ export class SandboxApi extends BaseAPI {
      */
     public isRecoverable(sandboxId: string, request: IsRecoverableDTO, options?: RawAxiosRequestConfig) {
         return SandboxApiFp(this.configuration).isRecoverable(sandboxId, request, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     *
+     * @summary Observe one exact provider-owned container generation
+     * @param {string} sandboxId Sandbox ID
+     * @param {GenerationstopGenerationObservationRequest} body Exact source, owner and fence
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public observeSandboxGeneration(sandboxId: string, body: GenerationstopGenerationObservationRequest, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).observeSandboxGeneration(sandboxId, body, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     *
+     * @summary Observe one exact durable stopped-generation operation
+     * @param {string} sandboxId Sandbox ID
+     * @param {GenerationstopStopRequest} body Exact stopped-generation request
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public observeSandboxGenerationStop(sandboxId: string, body: GenerationstopStopRequest, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).observeSandboxGenerationStop(sandboxId, body, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     *
+     * @summary Observe an exact working-copy capture
+     * @param {string} sandboxId Sandbox ID
+     * @param {WorkingcopyCaptureBinding} body Exact capture binding
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public observeWorkingCopyCapture(sandboxId: string, body: WorkingcopyCaptureBinding, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).observeWorkingCopyCapture(sandboxId, body, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     *
+     * @summary Read an exact immutable working-copy capture
+     * @param {string} sandboxId Sandbox ID
+     * @param {WorkingcopyCaptureReadRequest} body Exact capture identity and read bounds
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public readWorkingCopyCapture(sandboxId: string, body: WorkingcopyCaptureReadRequest, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).readWorkingCopyCapture(sandboxId, body, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -1064,6 +1698,18 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
+     *
+     * @summary Durably stop one exact sandbox generation once
+     * @param {string} sandboxId Sandbox ID
+     * @param {GenerationstopStopRequest} body Exact idempotent stopped-generation request
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public stopSandboxGenerationOnce(sandboxId: string, body: GenerationstopStopRequest, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).stopSandboxGenerationOnce(sandboxId, body, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
      * Update sandbox network settings
      * @summary Update sandbox network settings
      * @param {string} sandboxId Sandbox ID
@@ -1085,6 +1731,18 @@ export class SandboxApi extends BaseAPI {
      */
     public updateSandboxSecrets(sandboxId: string, sandbox: UpdateSandboxSecretsDTO, options?: RawAxiosRequestConfig) {
         return SandboxApiFp(this.configuration).updateSandboxSecrets(sandboxId, sandbox, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     *
+     * @summary Check an exact private working-copy capture identity
+     * @param {string} sandboxId Sandbox ID
+     * @param {WorkingcopyCaptureIdentity} body Exact capture identity
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public workingCopyCaptureExists(sandboxId: string, body: WorkingcopyCaptureIdentity, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).workingCopyCaptureExists(sandboxId, body, options).then((request) => request(this.axios, this.basePath));
     }
 }
 

@@ -23,8 +23,11 @@ var (
 // durable effects. Keys remain private to the caller and are never returned
 // through a public API.
 type PrivateObjectInfo struct {
-	Size         int64
-	UserMetadata map[string]string
+	Size          int64
+	ContentSHA256 string
+	ETag          string
+	VersionID     string
+	UserMetadata  map[string]string
 }
 
 // PrivateObjectStorageClient is the runner-owned durable object boundary.
@@ -39,6 +42,7 @@ type PrivateObjectStorageClient interface {
 		metadata map[string]string,
 	) error
 	GetPrivateObject(ctx context.Context, key string, maximumBytes int64) ([]byte, error)
+	GetPrivateObjectRange(ctx context.Context, key string, offset, maximumBytes int64) ([]byte, error)
 	StatPrivateObject(ctx context.Context, key string) (PrivateObjectInfo, error)
 	DeletePrivateObject(ctx context.Context, key string) error
 }

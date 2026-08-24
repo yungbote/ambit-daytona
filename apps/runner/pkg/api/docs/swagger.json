@@ -281,6 +281,64 @@
         }
       }
     },
+    "/sandboxes/{sandboxId}/generation/observe": {
+      "post": {
+        "produces": ["application/json"],
+        "tags": ["sandbox"],
+        "summary": "Observe one exact provider-owned container generation",
+        "operationId": "ObserveSandboxGeneration",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "Sandbox ID",
+            "name": "sandboxId",
+            "in": "path",
+            "required": true
+          },
+          {
+            "description": "Exact source, owner and fence",
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/generationstop.GenerationObservationRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/generationstop.GenerationObservation"
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
     "/sandboxes/{sandboxId}/is-recoverable": {
       "post": {
         "description": "Check if the sandbox's error reason indicates a recoverable error",
@@ -843,6 +901,122 @@
         }
       }
     },
+    "/sandboxes/{sandboxId}/stop-generation-once": {
+      "post": {
+        "produces": ["application/json"],
+        "tags": ["sandbox"],
+        "summary": "Durably stop one exact sandbox generation once",
+        "operationId": "StopSandboxGenerationOnce",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "Sandbox ID",
+            "name": "sandboxId",
+            "in": "path",
+            "required": true
+          },
+          {
+            "description": "Exact idempotent stopped-generation request",
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/generationstop.StopRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/generationstop.Receipt"
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "/sandboxes/{sandboxId}/stop-generation-once/observe": {
+      "post": {
+        "produces": ["application/json"],
+        "tags": ["sandbox"],
+        "summary": "Observe one exact durable stopped-generation operation",
+        "operationId": "ObserveSandboxGenerationStop",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "Sandbox ID",
+            "name": "sandboxId",
+            "in": "path",
+            "required": true
+          },
+          {
+            "description": "Exact stopped-generation request",
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/generationstop.StopRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/generationstop.Observation"
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
     "/sandboxes/{sandboxId}/toolbox/{path}": {
       "get": {
         "description": "Forwards the request to the specified sandbox's container",
@@ -1011,6 +1185,297 @@
             "description": "Internal server error",
             "schema": {
               "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "/sandboxes/{sandboxId}/working-copy-captures": {
+      "post": {
+        "description": "Persist one host-admitted regular file from the exact stopped container generation.",
+        "produces": ["application/json"],
+        "tags": ["sandbox"],
+        "summary": "Capture one stopped sandbox working-copy file",
+        "operationId": "CaptureWorkingCopy",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "Sandbox ID",
+            "name": "sandboxId",
+            "in": "path",
+            "required": true
+          },
+          {
+            "description": "Exact capture binding",
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/workingcopy.CaptureBinding"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/workingcopy.CaptureReceipt"
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "/sandboxes/{sandboxId}/working-copy-captures/delete": {
+      "post": {
+        "produces": ["application/json"],
+        "tags": ["sandbox"],
+        "summary": "Delete an exact private working-copy capture",
+        "operationId": "DeleteWorkingCopyCapture",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "Sandbox ID",
+            "name": "sandboxId",
+            "in": "path",
+            "required": true
+          },
+          {
+            "description": "Exact capture identity",
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/workingcopy.CaptureIdentity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/workingcopy.CaptureDeleteReceipt"
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "/sandboxes/{sandboxId}/working-copy-captures/exists": {
+      "post": {
+        "produces": ["application/json"],
+        "tags": ["sandbox"],
+        "summary": "Check an exact private working-copy capture identity",
+        "operationId": "WorkingCopyCaptureExists",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "Sandbox ID",
+            "name": "sandboxId",
+            "in": "path",
+            "required": true
+          },
+          {
+            "description": "Exact capture identity",
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/workingcopy.CaptureIdentity"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/workingcopy.CaptureExistsResponse"
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "/sandboxes/{sandboxId}/working-copy-captures/observe": {
+      "post": {
+        "produces": ["application/json"],
+        "tags": ["sandbox"],
+        "summary": "Observe an exact working-copy capture",
+        "operationId": "ObserveWorkingCopyCapture",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "Sandbox ID",
+            "name": "sandboxId",
+            "in": "path",
+            "required": true
+          },
+          {
+            "description": "Exact capture binding",
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/workingcopy.CaptureBinding"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/workingcopy.CaptureObservation"
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "/sandboxes/{sandboxId}/working-copy-captures/read": {
+      "post": {
+        "produces": ["application/json"],
+        "tags": ["sandbox"],
+        "summary": "Read an exact immutable working-copy capture",
+        "operationId": "ReadWorkingCopyCapture",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "Sandbox ID",
+            "name": "sandboxId",
+            "in": "path",
+            "required": true
+          },
+          {
+            "description": "Exact capture identity and read bounds",
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/workingcopy.CaptureReadRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/workingcopy.CaptureReadResponse"
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
             }
           }
         }
@@ -2079,6 +2544,692 @@
         "SandboxStateUnknown",
         "SandboxStatePullingSnapshot"
       ]
+    },
+    "generationstop.ExpectedGeneration": {
+      "type": "object",
+      "required": ["containerCreatedAt", "containerId", "executionStartedAt", "restartCount"],
+      "properties": {
+        "containerCreatedAt": {
+          "type": "string"
+        },
+        "containerId": {
+          "type": "string"
+        },
+        "executionStartedAt": {
+          "type": "string"
+        },
+        "restartCount": {
+          "type": "integer"
+        }
+      }
+    },
+    "generationstop.Fence": {
+      "type": "object",
+      "required": ["workspaceExecutionManifestRef"],
+      "properties": {
+        "workspaceExecutionManifestRef": {
+          "type": "string"
+        }
+      }
+    },
+    "generationstop.GenerationObservation": {
+      "type": "object",
+      "required": ["fence", "generation", "observedAt", "owner", "source", "state"],
+      "properties": {
+        "fence": {
+          "$ref": "#/definitions/generationstop.Fence"
+        },
+        "generation": {
+          "$ref": "#/definitions/generationstop.ExpectedGeneration"
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "owner": {
+          "$ref": "#/definitions/generationstop.Owner"
+        },
+        "source": {
+          "$ref": "#/definitions/generationstop.Source"
+        },
+        "state": {
+          "type": "string"
+        }
+      }
+    },
+    "generationstop.GenerationObservationRequest": {
+      "type": "object",
+      "required": ["fence", "owner", "source"],
+      "properties": {
+        "fence": {
+          "$ref": "#/definitions/generationstop.Fence"
+        },
+        "owner": {
+          "$ref": "#/definitions/generationstop.Owner"
+        },
+        "source": {
+          "$ref": "#/definitions/generationstop.Source"
+        }
+      }
+    },
+    "generationstop.Observation": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "receipt": {
+          "$ref": "#/definitions/generationstop.Receipt"
+        },
+        "request": {
+          "$ref": "#/definitions/generationstop.StopRequest"
+        },
+        "status": {
+          "type": "string"
+        }
+      }
+    },
+    "generationstop.Owner": {
+      "type": "object",
+      "required": ["grantId", "runId", "tenantId", "userId", "workingCopyId", "workspaceId"],
+      "properties": {
+        "grantId": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "tenantId": {
+          "type": "string"
+        },
+        "userId": {
+          "type": "string"
+        },
+        "workingCopyId": {
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        }
+      }
+    },
+    "generationstop.Purpose": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "nonce": {
+          "type": "string"
+        },
+        "rendererProcessIdentity": {
+          "$ref": "#/definitions/generationstop.RendererProcessIdentity"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      }
+    },
+    "generationstop.Receipt": {
+      "type": "object",
+      "required": ["kind", "receiptDigest", "receiptRef", "request", "stoppedAt", "terminalGeneration", "version"],
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "receiptDigest": {
+          "type": "string"
+        },
+        "receiptRef": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/definitions/generationstop.StopRequest"
+        },
+        "stoppedAt": {
+          "type": "string"
+        },
+        "terminalGeneration": {
+          "$ref": "#/definitions/generationstop.TerminalGeneration"
+        },
+        "version": {
+          "type": "integer"
+        }
+      }
+    },
+    "generationstop.RendererProcessIdentity": {
+      "type": "object",
+      "required": ["pid", "startTicks"],
+      "properties": {
+        "pid": {
+          "type": "integer"
+        },
+        "startTicks": {
+          "type": "string"
+        }
+      }
+    },
+    "generationstop.Source": {
+      "type": "object",
+      "required": ["expectedProfile", "expectedRuntimeKind", "providerResourceId"],
+      "properties": {
+        "expectedProfile": {
+          "type": "string"
+        },
+        "expectedRuntimeKind": {
+          "type": "string"
+        },
+        "providerResourceId": {
+          "type": "string"
+        }
+      }
+    },
+    "generationstop.StopAuthority": {
+      "type": "object",
+      "required": ["fence", "operationId", "receiptDigest", "receiptRef", "terminalGeneration"],
+      "properties": {
+        "fence": {
+          "$ref": "#/definitions/generationstop.Fence"
+        },
+        "operationId": {
+          "type": "string"
+        },
+        "receiptDigest": {
+          "type": "string"
+        },
+        "receiptRef": {
+          "type": "string"
+        },
+        "terminalGeneration": {
+          "$ref": "#/definitions/generationstop.TerminalGeneration"
+        }
+      }
+    },
+    "generationstop.StopRequest": {
+      "type": "object",
+      "required": ["expectedGeneration", "fence", "operationId", "owner", "purpose", "requestFingerprint", "source"],
+      "properties": {
+        "expectedGeneration": {
+          "$ref": "#/definitions/generationstop.ExpectedGeneration"
+        },
+        "fence": {
+          "$ref": "#/definitions/generationstop.Fence"
+        },
+        "operationId": {
+          "type": "string"
+        },
+        "owner": {
+          "$ref": "#/definitions/generationstop.Owner"
+        },
+        "purpose": {
+          "$ref": "#/definitions/generationstop.Purpose"
+        },
+        "requestFingerprint": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/definitions/generationstop.Source"
+        }
+      }
+    },
+    "generationstop.TerminalGeneration": {
+      "type": "object",
+      "required": [
+        "containerCreatedAt",
+        "containerId",
+        "executionFinishedAt",
+        "executionStartedAt",
+        "exitCode",
+        "oomKilled",
+        "restartCount"
+      ],
+      "properties": {
+        "containerCreatedAt": {
+          "type": "string"
+        },
+        "containerId": {
+          "type": "string"
+        },
+        "executionFinishedAt": {
+          "type": "string"
+        },
+        "executionStartedAt": {
+          "type": "string"
+        },
+        "exitCode": {
+          "type": "integer"
+        },
+        "oomKilled": {
+          "type": "boolean"
+        },
+        "restartCount": {
+          "type": "integer"
+        }
+      }
+    },
+    "workingcopy.CaptureAuthority": {
+      "type": "object",
+      "required": ["authorityRef", "helper", "lineageRef", "protocol", "roleRef"],
+      "properties": {
+        "authorityRef": {
+          "type": "string"
+        },
+        "helper": {
+          "$ref": "#/definitions/workingcopy.CaptureAuthorityArtifact"
+        },
+        "lineageRef": {
+          "type": "string"
+        },
+        "protocol": {
+          "$ref": "#/definitions/workingcopy.CaptureAuthorityArtifact"
+        },
+        "roleRef": {
+          "type": "string"
+        }
+      }
+    },
+    "workingcopy.CaptureAuthorityArtifact": {
+      "type": "object",
+      "required": ["digest", "ref"],
+      "properties": {
+        "digest": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string"
+        }
+      }
+    },
+    "workingcopy.CaptureBinding": {
+      "type": "object",
+      "required": ["authority", "owner", "providerName", "requestFingerprint", "selector", "source", "stopAuthority"],
+      "properties": {
+        "authority": {
+          "$ref": "#/definitions/workingcopy.CaptureAuthority"
+        },
+        "owner": {
+          "$ref": "#/definitions/workingcopy.CaptureOwner"
+        },
+        "providerName": {
+          "type": "string"
+        },
+        "requestFingerprint": {
+          "type": "string"
+        },
+        "selector": {
+          "$ref": "#/definitions/workingcopy.CaptureSelector"
+        },
+        "source": {
+          "$ref": "#/definitions/workingcopy.SourceAddress"
+        },
+        "stopAuthority": {
+          "$ref": "#/definitions/generationstop.StopAuthority"
+        }
+      }
+    },
+    "workingcopy.CaptureDeleteReceipt": {
+      "type": "object",
+      "required": [
+        "authority",
+        "outcome",
+        "owner",
+        "providerName",
+        "providerResourceId",
+        "requestFingerprint",
+        "selector",
+        "source",
+        "stopAuthority"
+      ],
+      "properties": {
+        "authority": {
+          "$ref": "#/definitions/workingcopy.CaptureAuthority"
+        },
+        "outcome": {
+          "type": "string"
+        },
+        "owner": {
+          "$ref": "#/definitions/workingcopy.CaptureOwner"
+        },
+        "providerName": {
+          "type": "string"
+        },
+        "providerResourceId": {
+          "type": "string"
+        },
+        "requestFingerprint": {
+          "type": "string"
+        },
+        "selector": {
+          "$ref": "#/definitions/workingcopy.CaptureSelector"
+        },
+        "source": {
+          "$ref": "#/definitions/workingcopy.SourceAddress"
+        },
+        "stopAuthority": {
+          "$ref": "#/definitions/generationstop.StopAuthority"
+        }
+      }
+    },
+    "workingcopy.CaptureExistsResponse": {
+      "type": "object",
+      "required": [
+        "authority",
+        "owner",
+        "providerName",
+        "providerResourceId",
+        "requestFingerprint",
+        "selector",
+        "source",
+        "status",
+        "stopAuthority"
+      ],
+      "properties": {
+        "authority": {
+          "$ref": "#/definitions/workingcopy.CaptureAuthority"
+        },
+        "exists": {
+          "type": "boolean"
+        },
+        "owner": {
+          "$ref": "#/definitions/workingcopy.CaptureOwner"
+        },
+        "providerName": {
+          "type": "string"
+        },
+        "providerResourceId": {
+          "type": "string"
+        },
+        "receipt": {
+          "$ref": "#/definitions/workingcopy.CaptureReceipt"
+        },
+        "requestFingerprint": {
+          "type": "string"
+        },
+        "selector": {
+          "$ref": "#/definitions/workingcopy.CaptureSelector"
+        },
+        "source": {
+          "$ref": "#/definitions/workingcopy.SourceAddress"
+        },
+        "status": {
+          "type": "string"
+        },
+        "stopAuthority": {
+          "$ref": "#/definitions/generationstop.StopAuthority"
+        }
+      }
+    },
+    "workingcopy.CaptureIdentity": {
+      "type": "object",
+      "required": [
+        "authority",
+        "owner",
+        "providerName",
+        "providerResourceId",
+        "requestFingerprint",
+        "selector",
+        "source",
+        "stopAuthority"
+      ],
+      "properties": {
+        "authority": {
+          "$ref": "#/definitions/workingcopy.CaptureAuthority"
+        },
+        "owner": {
+          "$ref": "#/definitions/workingcopy.CaptureOwner"
+        },
+        "providerName": {
+          "type": "string"
+        },
+        "providerResourceId": {
+          "type": "string"
+        },
+        "requestFingerprint": {
+          "type": "string"
+        },
+        "selector": {
+          "$ref": "#/definitions/workingcopy.CaptureSelector"
+        },
+        "source": {
+          "$ref": "#/definitions/workingcopy.SourceAddress"
+        },
+        "stopAuthority": {
+          "$ref": "#/definitions/generationstop.StopAuthority"
+        }
+      }
+    },
+    "workingcopy.CaptureObservation": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "binding": {
+          "$ref": "#/definitions/workingcopy.CaptureBinding"
+        },
+        "identity": {
+          "$ref": "#/definitions/workingcopy.CaptureIdentity"
+        },
+        "receipt": {
+          "$ref": "#/definitions/workingcopy.CaptureReceipt"
+        },
+        "status": {
+          "type": "string"
+        }
+      }
+    },
+    "workingcopy.CaptureOwner": {
+      "type": "object",
+      "required": ["grantId", "runId", "tenantId", "userId", "workingCopyId", "workspaceId"],
+      "properties": {
+        "grantId": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "tenantId": {
+          "type": "string"
+        },
+        "userId": {
+          "type": "string"
+        },
+        "workingCopyId": {
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        }
+      }
+    },
+    "workingcopy.CaptureReadRequest": {
+      "type": "object",
+      "required": [
+        "authority",
+        "expectedProviderSha256Digest",
+        "expectedTotalByteLength",
+        "maximumBytes",
+        "offset",
+        "owner",
+        "providerName",
+        "providerResourceId",
+        "requestFingerprint",
+        "selector",
+        "source",
+        "stopAuthority"
+      ],
+      "properties": {
+        "authority": {
+          "$ref": "#/definitions/workingcopy.CaptureAuthority"
+        },
+        "expectedProviderSha256Digest": {
+          "type": "string"
+        },
+        "expectedTotalByteLength": {
+          "type": "integer"
+        },
+        "maximumBytes": {
+          "type": "integer"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "owner": {
+          "$ref": "#/definitions/workingcopy.CaptureOwner"
+        },
+        "providerName": {
+          "type": "string"
+        },
+        "providerResourceId": {
+          "type": "string"
+        },
+        "requestFingerprint": {
+          "type": "string"
+        },
+        "selector": {
+          "$ref": "#/definitions/workingcopy.CaptureSelector"
+        },
+        "source": {
+          "$ref": "#/definitions/workingcopy.SourceAddress"
+        },
+        "stopAuthority": {
+          "$ref": "#/definitions/generationstop.StopAuthority"
+        }
+      }
+    },
+    "workingcopy.CaptureReadResponse": {
+      "type": "object",
+      "required": [
+        "authority",
+        "offset",
+        "owner",
+        "providerName",
+        "providerResourceId",
+        "providerSha256Digest",
+        "requestFingerprint",
+        "selector",
+        "source",
+        "stopAuthority",
+        "totalByteLength"
+      ],
+      "properties": {
+        "authority": {
+          "$ref": "#/definitions/workingcopy.CaptureAuthority"
+        },
+        "byteLength": {
+          "type": "integer"
+        },
+        "bytesBase64": {
+          "type": "string"
+        },
+        "eof": {
+          "type": "boolean"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "owner": {
+          "$ref": "#/definitions/workingcopy.CaptureOwner"
+        },
+        "providerName": {
+          "type": "string"
+        },
+        "providerResourceId": {
+          "type": "string"
+        },
+        "providerSha256Digest": {
+          "type": "string"
+        },
+        "requestFingerprint": {
+          "type": "string"
+        },
+        "selector": {
+          "$ref": "#/definitions/workingcopy.CaptureSelector"
+        },
+        "source": {
+          "$ref": "#/definitions/workingcopy.SourceAddress"
+        },
+        "stopAuthority": {
+          "$ref": "#/definitions/generationstop.StopAuthority"
+        },
+        "totalByteLength": {
+          "type": "integer"
+        }
+      }
+    },
+    "workingcopy.CaptureReceipt": {
+      "type": "object",
+      "required": [
+        "authority",
+        "capturedAt",
+        "owner",
+        "providerName",
+        "providerResourceId",
+        "providerSha256Digest",
+        "requestFingerprint",
+        "selector",
+        "source",
+        "stopAuthority",
+        "totalByteLength"
+      ],
+      "properties": {
+        "authority": {
+          "$ref": "#/definitions/workingcopy.CaptureAuthority"
+        },
+        "capturedAt": {
+          "type": "string"
+        },
+        "owner": {
+          "$ref": "#/definitions/workingcopy.CaptureOwner"
+        },
+        "providerName": {
+          "type": "string"
+        },
+        "providerResourceId": {
+          "type": "string"
+        },
+        "providerSha256Digest": {
+          "type": "string"
+        },
+        "requestFingerprint": {
+          "type": "string"
+        },
+        "selector": {
+          "$ref": "#/definitions/workingcopy.CaptureSelector"
+        },
+        "source": {
+          "$ref": "#/definitions/workingcopy.SourceAddress"
+        },
+        "stopAuthority": {
+          "$ref": "#/definitions/generationstop.StopAuthority"
+        },
+        "totalByteLength": {
+          "type": "integer"
+        }
+      }
+    },
+    "workingcopy.CaptureSelector": {
+      "type": "object",
+      "required": ["semanticZoneRef", "zoneRelativePath"],
+      "properties": {
+        "semanticZoneRef": {
+          "type": "string"
+        },
+        "zoneRelativePath": {
+          "type": "string"
+        }
+      }
+    },
+    "workingcopy.SourceAddress": {
+      "type": "object",
+      "required": ["expectedProfile", "expectedRuntimeKind", "providerResourceId"],
+      "properties": {
+        "expectedProfile": {
+          "type": "string"
+        },
+        "expectedRuntimeKind": {
+          "type": "string"
+        },
+        "providerResourceId": {
+          "type": "string"
+        }
+      }
     }
   },
   "securityDefinitions": {

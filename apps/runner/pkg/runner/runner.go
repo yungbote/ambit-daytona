@@ -13,6 +13,7 @@ import (
 	"github.com/daytonaio/runner/internal/metrics"
 	"github.com/daytonaio/runner/pkg/cache"
 	"github.com/daytonaio/runner/pkg/docker"
+	"github.com/daytonaio/runner/pkg/generationstop"
 	"github.com/daytonaio/runner/pkg/models"
 	"github.com/daytonaio/runner/pkg/netrules"
 	"github.com/daytonaio/runner/pkg/services"
@@ -31,6 +32,7 @@ type RunnerInstanceConfig struct {
 	NetleashManager     *manager.Manager
 	SSHGatewayService   *sshgateway.Service
 	WorkingCopyCaptures *workingcopy.Service
+	GenerationStops     *generationstop.Service
 }
 
 type Runner struct {
@@ -44,6 +46,7 @@ type Runner struct {
 	NetleashManager     *manager.Manager
 	SSHGatewayService   *sshgateway.Service
 	WorkingCopyCaptures *workingcopy.Service
+	GenerationStops     *generationstop.Service
 }
 
 var runner *Runner
@@ -74,6 +77,7 @@ func GetInstance(config *RunnerInstanceConfig) (*Runner, error) {
 			NetleashManager:     config.NetleashManager,
 			SSHGatewayService:   config.SSHGatewayService,
 			WorkingCopyCaptures: config.WorkingCopyCaptures,
+			GenerationStops:     config.GenerationStops,
 		}
 	}
 

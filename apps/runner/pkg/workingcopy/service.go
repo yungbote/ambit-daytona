@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -22,16 +23,19 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/daytonaio/runner/pkg/generationstop"
 	"github.com/daytonaio/runner/pkg/storage"
 	containertypes "github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/errdefs"
 )
 
 const (
-	captureRoleRef         = "ambit.runtime-component/working-copy-capture@1"
-	captureProtocolRef     = "ambit.runtime-interface/working-copy-capture@1"
-	privateRoot            = "private/working-copy-captures/v1"
+	captureRoleRef         = "ambit.runtime-component/working-copy-capture@2"
+	captureProtocolRef     = "ambit.runtime-interface/working-copy-capture@2"
+	privateRoot            = "private/working-copy-captures/v2"
 	maximumIntentBytes     = 32 * 1024
 	maximumReceiptBytes    = 32 * 1024
+	maximumDeletionBytes   = 32 * 1024
 	maximumArchiveOverhead = 1024 * 1024
 )
 
@@ -39,21 +43,33 @@ var (
 	ErrInvalidRequest = errors.New("invalid working-copy capture request")
 	ErrConflict       = errors.New("working-copy capture conflict")
 	ErrUnavailable    = errors.New("working-copy capture unavailable")
+	ErrOutcomeUnknown = errors.New("working-copy capture outcome is unknown")
 )
 
 type ContainerClient interface {
-	ContainerInspect(ctx context.Context, containerID string) (containertypes.InspectResponse, error)
 	ContainerStatPath(ctx context.Context, containerID, path string) (containertypes.PathStat, error)
 	CopyFromContainer(ctx context.Context, containerID, path string) (io.ReadCloser, containertypes.PathStat, error)
+}
+
+type StoppedGenerationAuthority interface {
+	RequireCurrentReceipt(
+		ctx context.Context,
+		expectedSource generationstop.Source,
+		expectedOwner generationstop.Owner,
+		expectedPurpose generationstop.Purpose,
+		authority generationstop.StopAuthority,
+	) (generationstop.Receipt, error)
 }
 
 type clock func() time.Time
 
 type Service struct {
-	containers ContainerClient
-	objects    storage.PrivateObjectStorageClient
-	now        clock
-	locks      keyedLocks
+	containers        ContainerClient
+	objects           storage.PrivateObjectStorageClient
+	stops             StoppedGenerationAuthority
+	admittedAuthority CaptureAuthority
+	now               clock
+	locks             keyedLocks
 }
 
 type keyedLocks struct {
@@ -66,22 +82,23 @@ type keyedLock struct {
 	refs int
 }
 
-type containerGeneration struct {
-	ID      string `json:"id"`
-	Created string `json:"created"`
+type captureIntent struct {
+	Version            int                               `json:"version"`
+	Binding            CaptureBinding                    `json:"binding"`
+	ProviderResourceID string                            `json:"providerResourceId"`
+	Generation         generationstop.TerminalGeneration `json:"generation"`
 }
 
-type captureIntent struct {
-	Version            int                 `json:"version"`
-	Binding            CaptureBinding      `json:"binding"`
-	ProviderResourceID string              `json:"providerResourceId"`
-	Generation         containerGeneration `json:"generation"`
+type captureDeletion struct {
+	Version  int             `json:"version"`
+	Identity CaptureIdentity `json:"identity"`
 }
 
 type objectKeys struct {
-	intent  string
-	content string
-	receipt string
+	intent   string
+	content  string
+	receipt  string
+	deletion string
 }
 
 type capturedFile struct {
@@ -93,6 +110,8 @@ type capturedFile struct {
 func NewService(
 	containers ContainerClient,
 	objects storage.PrivateObjectStorageClient,
+	stops StoppedGenerationAuthority,
+	admittedAuthority CaptureAuthority,
 ) (*Service, error) {
 	if containers == nil {
 		return nil, fmt.Errorf("%w: Docker archive client is not configured", ErrUnavailable)
@@ -100,12 +119,36 @@ func NewService(
 	if objects == nil {
 		return nil, fmt.Errorf("%w: private object storage is not configured", ErrUnavailable)
 	}
+	if stops == nil {
+		return nil, fmt.Errorf("%w: stopped-generation authority is not configured", ErrUnavailable)
+	}
+	if err := validateAuthority(admittedAuthority); err != nil {
+		return nil, fmt.Errorf("%w: admitted capture authority is invalid: %v", ErrUnavailable, err)
+	}
 	return &Service{
-		containers: containers,
-		objects:    objects,
-		now:        time.Now,
-		locks:      keyedLocks{items: make(map[string]*keyedLock)},
+		containers:        containers,
+		objects:           objects,
+		stops:             stops,
+		admittedAuthority: admittedAuthority,
+		now:               time.Now,
+		locks:             keyedLocks{items: make(map[string]*keyedLock)},
 	}, nil
+}
+
+func NewCaptureAuthority(lineageRef, protocolDigest, helperDigest string) (CaptureAuthority, error) {
+	authority := CaptureAuthority{
+		LineageRef: lineageRef,
+		RoleRef:    captureRoleRef,
+		Protocol:   CaptureAuthorityArtifact{Ref: captureProtocolRef, Digest: protocolDigest},
+		Helper: CaptureAuthorityArtifact{
+			Ref: "runtime-component-artifact:" + helperDigest, Digest: helperDigest,
+		},
+	}
+	authority.AuthorityRef = captureAuthorityRef(authority)
+	if err := validateAuthority(authority); err != nil {
+		return CaptureAuthority{}, err
+	}
+	return authority, nil
 }
 
 func (s *Service) Capture(
@@ -113,7 +156,7 @@ func (s *Service) Capture(
 	sandboxID string,
 	binding CaptureBinding,
 ) (CaptureReceipt, error) {
-	zonePath, err := validateBinding(sandboxID, binding)
+	zonePath, err := s.validateBinding(sandboxID, binding)
 	if err != nil {
 		return CaptureReceipt{}, err
 	}
@@ -121,6 +164,20 @@ func (s *Service) Capture(
 	bindingRoot := bindingObjectRoot(binding)
 	release := s.locks.acquire(bindingRoot)
 	defer release()
+	if deletion, deleting, err := s.readDeletion(ctx, bindingRoot); err != nil {
+		return CaptureReceipt{}, err
+	} else if deleting {
+		if err := requireBinding(deletion.Identity.CaptureBinding, binding); err != nil {
+			return CaptureReceipt{}, err
+		}
+		if cleanupErr := s.deleteOperationalObjects(ctx, deletion.Identity); cleanupErr != nil {
+			return CaptureReceipt{}, errors.Join(
+				fmt.Errorf("%w: capture has been retired", ErrConflict),
+				cleanupErr,
+			)
+		}
+		return CaptureReceipt{}, fmt.Errorf("%w: capture has been retired", ErrConflict)
+	}
 
 	existing, exists, err := s.readIntent(ctx, bindingRoot)
 	if err != nil {
@@ -133,10 +190,11 @@ func (s *Service) Capture(
 		return s.resumeCapture(ctx, sandboxID, zonePath, existing)
 	}
 
-	generation, err := s.inspectStoppedGeneration(ctx, sandboxID)
+	stopReceipt, err := s.requireCurrentStop(ctx, binding)
 	if err != nil {
 		return CaptureReceipt{}, err
 	}
+	generation := stopReceipt.TerminalGeneration
 	intent := captureIntent{
 		Version:            1,
 		Binding:            binding,
@@ -152,17 +210,20 @@ func (s *Service) Capture(
 		intentKey(bindingRoot),
 		intentBytes,
 		"application/json",
-		map[string]string{"contract": "ambit-working-copy-capture-intent-v1"},
+		map[string]string{"contract": "ambit-working-copy-capture-intent-v2"},
 	); err != nil {
-		if !errors.Is(err, storage.ErrPrivateObjectAlreadyExists) {
-			return CaptureReceipt{}, fmt.Errorf("persist capture intent: %w", err)
-		}
 		winner, winnerExists, readErr := s.readIntent(ctx, bindingRoot)
 		if readErr != nil {
-			return CaptureReceipt{}, readErr
+			return CaptureReceipt{}, errors.Join(
+				fmt.Errorf("%w: persist capture intent: %v", ErrOutcomeUnknown, err),
+				readErr,
+			)
 		}
 		if !winnerExists {
-			return CaptureReceipt{}, fmt.Errorf("%w: capture intent disappeared during admission", ErrConflict)
+			if errors.Is(err, storage.ErrPrivateObjectAlreadyExists) {
+				return CaptureReceipt{}, fmt.Errorf("%w: capture intent disappeared during admission", ErrConflict)
+			}
+			return CaptureReceipt{}, fmt.Errorf("%w: persist capture intent: %v", ErrOutcomeUnknown, err)
 		}
 		if err := requireBinding(winner.Binding, binding); err != nil {
 			return CaptureReceipt{}, err
@@ -178,12 +239,45 @@ func (s *Service) Observe(
 	sandboxID string,
 	binding CaptureBinding,
 ) (CaptureObservation, error) {
-	if _, err := validateBinding(sandboxID, binding); err != nil {
+	if _, err := s.validateBinding(sandboxID, binding); err != nil {
 		return CaptureObservation{}, err
 	}
 	bindingRoot := bindingObjectRoot(binding)
 	release := s.locks.acquire(bindingRoot)
 	defer release()
+	return s.observeLocked(ctx, binding, nil)
+}
+
+func (s *Service) observeLocked(
+	ctx context.Context,
+	binding CaptureBinding,
+	expectedIdentity *CaptureIdentity,
+) (CaptureObservation, error) {
+	bindingRoot := bindingObjectRoot(binding)
+	deletion, deleting, err := s.readDeletion(ctx, bindingRoot)
+	if err != nil {
+		return CaptureObservation{}, err
+	}
+	if deleting {
+		if err := requireBinding(deletion.Identity.CaptureBinding, binding); err != nil {
+			return CaptureObservation{}, err
+		}
+		if expectedIdentity != nil {
+			if deletion.Identity != *expectedIdentity {
+				return CaptureObservation{}, fmt.Errorf("%w: deletion identity differs", ErrConflict)
+			}
+		}
+		present, presentErr := s.operationalObjectsPresent(ctx, deletion.Identity)
+		if presentErr != nil {
+			return CaptureObservation{}, presentErr
+		}
+		if present {
+			identity := deletion.Identity
+			return CaptureObservation{Status: "partial", Identity: &identity}, nil
+		}
+		copy := binding
+		return CaptureObservation{Status: "absent", Binding: &copy}, nil
+	}
 
 	intent, exists, err := s.readIntent(ctx, bindingRoot)
 	if err != nil {
@@ -197,6 +291,9 @@ func (s *Service) Observe(
 		return CaptureObservation{}, err
 	}
 	identity := identityFromIntent(intent)
+	if expectedIdentity != nil && identity != *expectedIdentity {
+		return CaptureObservation{}, fmt.Errorf("%w: provider capture generation does not match", ErrConflict)
+	}
 	receipt, complete, err := s.readReceipt(ctx, intent)
 	if err != nil {
 		return CaptureObservation{}, err
@@ -207,6 +304,24 @@ func (s *Service) Observe(
 	if err := s.verifyContentMetadata(ctx, intent, receipt); err != nil {
 		return CaptureObservation{}, err
 	}
+	// A deletion tombstone can win after the first read in another runner
+	// process. Never certify complete custody once that durable authority exists.
+	if deletion, deleting, err := s.readDeletion(ctx, bindingRoot); err != nil {
+		return CaptureObservation{}, err
+	} else if deleting {
+		if deletion.Identity != identity {
+			return CaptureObservation{}, fmt.Errorf("%w: deletion identity differs", ErrConflict)
+		}
+		present, presentErr := s.operationalObjectsPresent(ctx, deletion.Identity)
+		if presentErr != nil {
+			return CaptureObservation{}, presentErr
+		}
+		if present {
+			return CaptureObservation{Status: "partial", Identity: &identity}, nil
+		}
+		copy := binding
+		return CaptureObservation{Status: "absent", Binding: &copy}, nil
+	}
 	return CaptureObservation{Status: "complete", Receipt: &receipt}, nil
 }
 
@@ -214,115 +329,183 @@ func (s *Service) Read(
 	ctx context.Context,
 	sandboxID string,
 	request CaptureReadRequest,
-) ([]byte, error) {
-	if _, err := validateBinding(sandboxID, request.CaptureBinding); err != nil {
-		return nil, err
+) (CaptureReadResponse, error) {
+	if _, err := s.validateBinding(sandboxID, request.CaptureBinding); err != nil {
+		return CaptureReadResponse{}, err
 	}
 	if err := validateProviderResourceID(request.ProviderResourceID); err != nil {
-		return nil, err
+		return CaptureReadResponse{}, err
 	}
-	if request.ExpectedByteLength < 0 ||
-		request.MaximumBytes < 0 ||
-		request.MaximumBytes > MaximumCaptureBytes ||
-		request.ExpectedByteLength > request.MaximumBytes {
-		return nil, invalidf("capture read bounds are invalid")
+	if request.ExpectedTotalByteLength < 0 || request.ExpectedTotalByteLength > MaximumCaptureBytes ||
+		!isSHA256Digest(request.ExpectedProviderSHA256Digest) ||
+		request.Offset < 0 || request.Offset > request.ExpectedTotalByteLength ||
+		request.MaximumBytes <= 0 || request.MaximumBytes > MaximumReadBytes {
+		return CaptureReadResponse{}, invalidf("capture read bounds are invalid")
 	}
 
 	bindingRoot := bindingObjectRoot(request.CaptureBinding)
 	release := s.locks.acquire(bindingRoot)
 	defer release()
+	if deletion, deleting, err := s.readDeletion(ctx, bindingRoot); err != nil {
+		return CaptureReadResponse{}, err
+	} else if deleting {
+		if deletion.Identity != request.CaptureIdentity {
+			return CaptureReadResponse{}, fmt.Errorf("%w: deletion identity differs", ErrConflict)
+		}
+		return CaptureReadResponse{}, fmt.Errorf("%w: capture is deleting or absent", ErrConflict)
+	}
 	intent, exists, err := s.readIntent(ctx, bindingRoot)
 	if err != nil {
-		return nil, err
+		return CaptureReadResponse{}, err
 	}
 	if !exists {
-		return nil, fmt.Errorf("%w: capture identity is absent", ErrConflict)
+		return CaptureReadResponse{}, fmt.Errorf("%w: capture identity is absent", ErrConflict)
 	}
 	if err := requireIdentity(intent, request.CaptureIdentity); err != nil {
-		return nil, err
+		return CaptureReadResponse{}, err
 	}
 	receipt, complete, err := s.readReceipt(ctx, intent)
 	if err != nil {
-		return nil, err
+		return CaptureReadResponse{}, err
 	}
 	if !complete {
-		return nil, fmt.Errorf("%w: capture is partial", ErrConflict)
+		return CaptureReadResponse{}, fmt.Errorf("%w: capture is partial", ErrConflict)
 	}
-	if request.ExpectedByteLength != receipt.ByteLength {
-		return nil, fmt.Errorf("%w: capture length authority changed", ErrConflict)
+	if request.ExpectedTotalByteLength != receipt.TotalByteLength ||
+		request.ExpectedProviderSHA256Digest != receipt.ProviderSHA256Digest {
+		return CaptureReadResponse{}, fmt.Errorf("%w: capture receipt authority changed", ErrConflict)
 	}
-	data, err := s.objects.GetPrivateObject(
-		ctx,
-		keysForIntent(intent).content,
-		request.MaximumBytes,
-	)
-	if err != nil {
-		return nil, objectReadError("read capture content", err)
+	if err := s.verifyContentMetadata(ctx, intent, receipt); err != nil {
+		return CaptureReadResponse{}, err
 	}
-	if int64(len(data)) != receipt.ByteLength || sha256Digest(data) != receipt.ProviderSHA256Digest {
-		return nil, fmt.Errorf("%w: captured content drifted", ErrConflict)
+	remaining := receipt.TotalByteLength - request.Offset
+	readLength := min(request.MaximumBytes, remaining)
+	var data []byte
+	if readLength > 0 {
+		data, err = s.objects.GetPrivateObjectRange(
+			ctx,
+			keysForIntent(intent).content,
+			request.Offset,
+			readLength,
+		)
+		if err != nil {
+			return CaptureReadResponse{}, objectReadError("read capture content range", err)
+		}
+		if int64(len(data)) != readLength {
+			return CaptureReadResponse{}, fmt.Errorf("%w: captured content range is short", ErrConflict)
+		}
 	}
-	return data, nil
+	return CaptureReadResponse{
+		CaptureIdentity:      receipt.CaptureIdentity,
+		TotalByteLength:      receipt.TotalByteLength,
+		ProviderSHA256Digest: receipt.ProviderSHA256Digest,
+		Offset:               request.Offset,
+		ByteLength:           int64(len(data)),
+		EOF:                  request.Offset+int64(len(data)) == receipt.TotalByteLength,
+		BytesBase64:          base64.StdEncoding.EncodeToString(data),
+	}, nil
 }
 
 func (s *Service) Delete(
 	ctx context.Context,
 	sandboxID string,
 	identity CaptureIdentity,
-) error {
-	if _, err := validateBinding(sandboxID, identity.CaptureBinding); err != nil {
-		return err
+) (CaptureDeleteReceipt, error) {
+	if _, err := s.validateBinding(sandboxID, identity.CaptureBinding); err != nil {
+		return CaptureDeleteReceipt{}, err
 	}
 	if err := validateProviderResourceID(identity.ProviderResourceID); err != nil {
-		return err
+		return CaptureDeleteReceipt{}, err
 	}
 	bindingRoot := bindingObjectRoot(identity.CaptureBinding)
 	release := s.locks.acquire(bindingRoot)
 	defer release()
 
-	intent, exists, err := s.readIntent(ctx, bindingRoot)
+	deletion, deleting, err := s.readDeletion(ctx, bindingRoot)
 	if err != nil {
-		return err
+		return CaptureDeleteReceipt{}, err
 	}
-	if !exists {
-		return nil
+	if deleting && deletion.Identity != identity {
+		return CaptureDeleteReceipt{}, fmt.Errorf("%w: deletion identity differs", ErrConflict)
 	}
-	if err := requireIdentity(intent, identity); err != nil {
-		return err
-	}
-	keys := keysForIntent(intent)
-	// The intent is deleted last. Any interrupted deletion remains observable as
-	// partial and can be resumed or deleted again using the same identity.
-	for _, key := range []string{keys.receipt, keys.content, keys.intent} {
-		if err := s.objects.DeletePrivateObject(ctx, key); err != nil {
-			return fmt.Errorf("delete capture object: %w", err)
+	if !deleting {
+		intent, exists, readErr := s.readIntent(ctx, bindingRoot)
+		if readErr != nil {
+			return CaptureDeleteReceipt{}, readErr
+		}
+		if exists {
+			if err := requireIdentity(intent, identity); err != nil {
+				return CaptureDeleteReceipt{}, err
+			}
+		}
+		deletion = captureDeletion{Version: 1, Identity: identity}
+		deletionBytes, marshalErr := json.Marshal(deletion)
+		if marshalErr != nil {
+			return CaptureDeleteReceipt{}, fmt.Errorf("marshal capture deletion: %w", marshalErr)
+		}
+		createErr := s.objects.CreatePrivateObject(
+			ctx,
+			deletionKey(bindingRoot),
+			deletionBytes,
+			"application/json",
+			map[string]string{"contract": "ambit-working-copy-capture-deletion-v2"},
+		)
+		if createErr != nil {
+			winner, winnerExists, readWinnerErr := s.readDeletion(ctx, bindingRoot)
+			if readWinnerErr != nil {
+				return CaptureDeleteReceipt{}, errors.Join(
+					fmt.Errorf("%w: publish capture deletion: %v", ErrOutcomeUnknown, createErr),
+					readWinnerErr,
+				)
+			}
+			if !winnerExists {
+				return CaptureDeleteReceipt{}, fmt.Errorf("%w: publish capture deletion: %v", ErrOutcomeUnknown, createErr)
+			}
+			if winner.Identity != identity {
+				return CaptureDeleteReceipt{}, fmt.Errorf("%w: deletion publication conflicted", ErrConflict)
+			}
+			deletion = winner
 		}
 	}
-	return nil
+	present, probeErr := s.operationalObjectsPresent(ctx, identity)
+	cleanupErr := s.deleteOperationalObjects(ctx, identity)
+	if cleanupErr != nil {
+		return CaptureDeleteReceipt{}, errors.Join(probeErr, cleanupErr)
+	}
+	outcome := "already_absent"
+	if present || probeErr != nil {
+		outcome = "deleted"
+	}
+	return CaptureDeleteReceipt{CaptureIdentity: deletion.Identity, Outcome: outcome}, nil
 }
 
 func (s *Service) Exists(
 	ctx context.Context,
 	sandboxID string,
 	identity CaptureIdentity,
-) (bool, error) {
-	if _, err := validateBinding(sandboxID, identity.CaptureBinding); err != nil {
-		return false, err
+) (CaptureExistsResponse, error) {
+	if _, err := s.validateBinding(sandboxID, identity.CaptureBinding); err != nil {
+		return CaptureExistsResponse{}, err
 	}
 	if err := validateProviderResourceID(identity.ProviderResourceID); err != nil {
-		return false, err
+		return CaptureExistsResponse{}, err
 	}
 	bindingRoot := bindingObjectRoot(identity.CaptureBinding)
 	release := s.locks.acquire(bindingRoot)
 	defer release()
-	intent, exists, err := s.readIntent(ctx, bindingRoot)
-	if err != nil || !exists {
-		return false, err
+	observation, err := s.observeLocked(ctx, identity.CaptureBinding, &identity)
+	if err != nil {
+		return CaptureExistsResponse{}, err
 	}
-	if err := requireIdentity(intent, identity); err != nil {
-		return false, err
+	response := CaptureExistsResponse{
+		CaptureIdentity: identity,
+		Status:          observation.Status,
+		Exists:          observation.Status != "absent",
 	}
-	return true, nil
+	if observation.Status == "complete" {
+		response.Receipt = observation.Receipt
+	}
+	return response, nil
 }
 
 func (s *Service) resumeCapture(
@@ -331,10 +514,23 @@ func (s *Service) resumeCapture(
 	zonePath string,
 	intent captureIntent,
 ) (CaptureReceipt, error) {
+	currentStop, err := s.requireCurrentStop(ctx, intent.Binding)
+	if err != nil {
+		return CaptureReceipt{}, err
+	}
+	if currentStop.TerminalGeneration != intent.Generation {
+		return CaptureReceipt{}, fmt.Errorf("%w: stopped generation differs from immutable capture intent", ErrConflict)
+	}
+	if err := s.ensureNotDeleting(ctx, intent); err != nil {
+		return CaptureReceipt{}, err
+	}
 	if receipt, complete, err := s.readReceipt(ctx, intent); err != nil {
 		return CaptureReceipt{}, err
 	} else if complete {
 		if err := s.verifyContentMetadata(ctx, intent, receipt); err != nil {
+			return CaptureReceipt{}, err
+		}
+		if err := s.ensureNotDeleting(ctx, intent); err != nil {
 			return CaptureReceipt{}, err
 		}
 		return receipt, nil
@@ -346,16 +542,11 @@ func (s *Service) resumeCapture(
 		return CaptureReceipt{}, err
 	}
 	if !stagedExists {
-		generation, err := s.inspectStoppedGeneration(ctx, sandboxID)
+		staged, err = s.captureStableFile(ctx, sandboxID, zonePath, intent)
 		if err != nil {
 			return CaptureReceipt{}, err
 		}
-		if generation != intent.Generation {
-			return CaptureReceipt{}, fmt.Errorf("%w: sandbox container generation changed", ErrConflict)
-		}
-
-		staged, err = s.captureStableFile(ctx, sandboxID, zonePath, generation)
-		if err != nil {
+		if err := s.ensureNotDeleting(ctx, intent); err != nil {
 			return CaptureReceipt{}, err
 		}
 		metadata := map[string]string{
@@ -363,7 +554,7 @@ func (s *Service) resumeCapture(
 			"sha256":               staged.digest,
 			"byte-length":          strconv.FormatInt(int64(len(staged.bytes)), 10),
 			"provider-resource-id": intent.ProviderResourceID,
-			"contract":             "ambit-working-copy-capture-content-v1",
+			"contract":             "ambit-working-copy-capture-content-v2",
 		}
 		if err := s.objects.CreatePrivateObject(
 			ctx,
@@ -372,17 +563,23 @@ func (s *Service) resumeCapture(
 			"application/octet-stream",
 			metadata,
 		); err != nil {
-			if !errors.Is(err, storage.ErrPrivateObjectAlreadyExists) {
-				return CaptureReceipt{}, fmt.Errorf("persist capture content: %w", err)
-			}
 			winner, winnerExists, readErr := s.readStagedContent(ctx, intent)
 			if readErr != nil {
-				return CaptureReceipt{}, readErr
+				return CaptureReceipt{}, errors.Join(
+					fmt.Errorf("%w: persist capture content: %v", ErrOutcomeUnknown, err),
+					readErr,
+				)
 			}
 			if !winnerExists {
-				return CaptureReceipt{}, fmt.Errorf("%w: capture content disappeared during admission", ErrConflict)
+				if errors.Is(err, storage.ErrPrivateObjectAlreadyExists) {
+					return CaptureReceipt{}, fmt.Errorf("%w: capture content disappeared during admission", ErrConflict)
+				}
+				return CaptureReceipt{}, fmt.Errorf("%w: persist capture content: %v", ErrOutcomeUnknown, err)
 			}
 			staged = winner
+		}
+		if err := s.ensureNotDeleting(ctx, intent); err != nil {
+			return CaptureReceipt{}, err
 		}
 	}
 
@@ -396,19 +593,31 @@ func (s *Service) resumeCapture(
 		keys.receipt,
 		receiptBytes,
 		"application/json",
-		map[string]string{"contract": "ambit-working-copy-capture-receipt-v1"},
+		map[string]string{"contract": "ambit-working-copy-capture-receipt-v2"},
 	); err != nil {
-		if !errors.Is(err, storage.ErrPrivateObjectAlreadyExists) {
-			return CaptureReceipt{}, fmt.Errorf("publish capture receipt: %w", err)
-		}
 		winner, complete, readErr := s.readReceipt(ctx, intent)
 		if readErr != nil {
-			return CaptureReceipt{}, readErr
+			return CaptureReceipt{}, errors.Join(
+				fmt.Errorf("%w: publish capture receipt: %v", ErrOutcomeUnknown, err),
+				readErr,
+			)
 		}
-		if !complete || winner != receipt {
+		if !complete {
+			if !errors.Is(err, storage.ErrPrivateObjectAlreadyExists) {
+				return CaptureReceipt{}, fmt.Errorf("%w: publish capture receipt: %v", ErrOutcomeUnknown, err)
+			}
+			return CaptureReceipt{}, fmt.Errorf("%w: capture receipt disappeared during publication", ErrConflict)
+		}
+		if winner != receipt {
 			return CaptureReceipt{}, fmt.Errorf("%w: capture receipt publication conflicted", ErrConflict)
 		}
+		if err := s.ensureNotDeleting(ctx, intent); err != nil {
+			return CaptureReceipt{}, err
+		}
 		return winner, nil
+	}
+	if err := s.ensureNotDeleting(ctx, intent); err != nil {
+		return CaptureReceipt{}, err
 	}
 	return receipt, nil
 }
@@ -417,8 +626,15 @@ func (s *Service) captureStableFile(
 	ctx context.Context,
 	sandboxID string,
 	zonePath string,
-	generation containerGeneration,
+	intent captureIntent,
 ) (capturedFile, error) {
+	beforeStop, err := s.requireCurrentStop(ctx, intent.Binding)
+	if err != nil {
+		return capturedFile{}, err
+	}
+	if beforeStop.TerminalGeneration != intent.Generation {
+		return capturedFile{}, fmt.Errorf("%w: stopped generation changed before capture", ErrConflict)
+	}
 	before, err := s.statPathChain(ctx, sandboxID, zonePath)
 	if err != nil {
 		return capturedFile{}, err
@@ -426,7 +642,7 @@ func (s *Service) captureStableFile(
 	fileBefore := before[len(before)-1]
 	archive, copyStat, err := s.containers.CopyFromContainer(ctx, sandboxID, zonePath)
 	if err != nil {
-		return capturedFile{}, fmt.Errorf("%w: Docker archive read failed: %v", ErrConflict, err)
+		return capturedFile{}, dockerReadError("open Docker archive", err)
 	}
 	defer archive.Close()
 	if !samePathStat(fileBefore, copyStat) {
@@ -438,7 +654,7 @@ func (s *Service) captureStableFile(
 		MaximumCaptureBytes+maximumArchiveOverhead+1,
 	))
 	if err != nil {
-		return capturedFile{}, fmt.Errorf("%w: Docker archive stream failed: %v", ErrConflict, err)
+		return capturedFile{}, fmt.Errorf("%w: Docker archive stream failed: %v", ErrUnavailable, err)
 	}
 	if int64(len(archiveBytes)) > MaximumCaptureBytes+maximumArchiveOverhead {
 		return capturedFile{}, invalidf("Docker archive exceeds the bounded single-file envelope")
@@ -455,12 +671,12 @@ func (s *Service) captureStableFile(
 	if !samePathStatChain(before, after) {
 		return capturedFile{}, fmt.Errorf("%w: source path changed during capture", ErrConflict)
 	}
-	afterGeneration, err := s.inspectStoppedGeneration(ctx, sandboxID)
+	afterStop, err := s.requireCurrentStop(ctx, intent.Binding)
 	if err != nil {
 		return capturedFile{}, err
 	}
-	if afterGeneration != generation {
-		return capturedFile{}, fmt.Errorf("%w: sandbox container generation changed during capture", ErrConflict)
+	if afterStop.TerminalGeneration != intent.Generation {
+		return capturedFile{}, fmt.Errorf("%w: stopped generation changed during capture", ErrConflict)
 	}
 
 	return capturedFile{
@@ -468,25 +684,6 @@ func (s *Service) captureStableFile(
 		digest:     sha256Digest(content),
 		capturedAt: s.now().UTC().Format(time.RFC3339Nano),
 	}, nil
-}
-
-func (s *Service) inspectStoppedGeneration(
-	ctx context.Context,
-	sandboxID string,
-) (containerGeneration, error) {
-	inspect, err := s.containers.ContainerInspect(ctx, sandboxID)
-	if err != nil {
-		return containerGeneration{}, fmt.Errorf("%w: inspect sandbox container: %v", ErrConflict, err)
-	}
-	if inspect.ID == "" || inspect.Created == "" || inspect.State == nil {
-		return containerGeneration{}, fmt.Errorf("%w: sandbox container identity is incomplete", ErrConflict)
-	}
-	state := inspect.State
-	if state.Status != containertypes.StateExited ||
-		state.Running || state.Paused || state.Restarting || state.Dead || state.Pid != 0 {
-		return containerGeneration{}, fmt.Errorf("%w: sandbox container is not exactly stopped", ErrConflict)
-	}
-	return containerGeneration{ID: inspect.ID, Created: inspect.Created}, nil
 }
 
 func (s *Service) statPathChain(
@@ -501,7 +698,7 @@ func (s *Service) statPathChain(
 		current += "/" + part
 		stat, err := s.containers.ContainerStatPath(ctx, sandboxID, current)
 		if err != nil {
-			return nil, fmt.Errorf("%w: stat admitted source path: %v", ErrConflict, err)
+			return nil, dockerReadError("stat admitted source path", err)
 		}
 		if stat.Name != part || stat.LinkTarget != "" || stat.Mode&os.ModeSymlink != 0 {
 			return nil, fmt.Errorf("%w: source path contains a symlink or mismatched descriptor", ErrConflict)
@@ -536,15 +733,125 @@ func (s *Service) readIntent(
 	if err := strictJSON(data, &intent); err != nil || intent.Version != 1 {
 		return captureIntent{}, false, fmt.Errorf("%w: capture intent is not canonical", ErrConflict)
 	}
-	if _, err := validateBinding(intent.Binding.Source.ProviderResourceID, intent.Binding); err != nil {
+	if _, err := s.validateBinding(intent.Binding.Source.ProviderResourceID, intent.Binding); err != nil {
 		return captureIntent{}, false, fmt.Errorf("%w: stored capture binding is invalid", ErrConflict)
 	}
 	if err := validateProviderResourceID(intent.ProviderResourceID); err != nil ||
 		intent.ProviderResourceID != providerResourceID(intent.Binding, intent.Generation) ||
-		intent.Generation.ID == "" || intent.Generation.Created == "" {
+		intent.Generation.ContainerID == "" || intent.Generation.ContainerCreatedAt == "" ||
+		intent.Generation.ExecutionStartedAt == "" || intent.Generation.ExecutionFinishedAt == "" ||
+		intent.Generation.RestartCount < 0 {
 		return captureIntent{}, false, fmt.Errorf("%w: capture intent identity is invalid", ErrConflict)
 	}
 	return intent, true, nil
+}
+
+func (s *Service) readDeletion(
+	ctx context.Context,
+	bindingRoot string,
+) (captureDeletion, bool, error) {
+	data, err := s.objects.GetPrivateObject(ctx, deletionKey(bindingRoot), maximumDeletionBytes)
+	if errors.Is(err, storage.ErrPrivateObjectNotFound) {
+		return captureDeletion{}, false, nil
+	}
+	if err != nil {
+		return captureDeletion{}, false, objectReadError("read capture deletion", err)
+	}
+	var deletion captureDeletion
+	if err := strictJSON(data, &deletion); err != nil || deletion.Version != 1 {
+		return captureDeletion{}, false, fmt.Errorf("%w: capture deletion is not canonical", ErrConflict)
+	}
+	if _, err := s.validateBinding(
+		deletion.Identity.Source.ProviderResourceID,
+		deletion.Identity.CaptureBinding,
+	); err != nil {
+		return captureDeletion{}, false, fmt.Errorf("%w: stored deletion binding is invalid", ErrConflict)
+	}
+	if err := validateProviderResourceID(deletion.Identity.ProviderResourceID); err != nil {
+		return captureDeletion{}, false, fmt.Errorf("%w: stored deletion identity is invalid", ErrConflict)
+	}
+	if bindingObjectRoot(deletion.Identity.CaptureBinding) != bindingRoot {
+		return captureDeletion{}, false, fmt.Errorf("%w: stored deletion root differs", ErrConflict)
+	}
+	return deletion, true, nil
+}
+
+func (s *Service) operationalObjectsPresent(
+	ctx context.Context,
+	identity CaptureIdentity,
+) (bool, error) {
+	keys := keysForIdentity(identity)
+	present := false
+	var failures []error
+	for _, key := range []string{keys.receipt, keys.content, keys.intent} {
+		exists, err := s.privateObjectExists(ctx, key)
+		present = present || exists
+		if err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return present, errors.Join(failures...)
+}
+
+func (s *Service) privateObjectExists(ctx context.Context, key string) (bool, error) {
+	_, err := s.objects.StatPrivateObject(ctx, key)
+	if errors.Is(err, storage.ErrPrivateObjectNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("%w: stat private capture object: %v", ErrUnavailable, err)
+	}
+	return true, nil
+}
+
+func (s *Service) deleteOperationalObjects(ctx context.Context, identity CaptureIdentity) error {
+	keys := keysForIdentity(identity)
+	var failures []error
+	for _, key := range []string{keys.receipt, keys.content, keys.intent} {
+		if err := s.deleteObjectReconciled(ctx, key); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
+}
+
+func (s *Service) deleteObjectReconciled(ctx context.Context, key string) error {
+	deleteErr := s.objects.DeletePrivateObject(ctx, key)
+	_, statErr := s.objects.StatPrivateObject(ctx, key)
+	if errors.Is(statErr, storage.ErrPrivateObjectNotFound) {
+		return nil
+	}
+	if statErr == nil {
+		if deleteErr != nil {
+			return fmt.Errorf("%w: delete private capture object: %v", ErrOutcomeUnknown, deleteErr)
+		}
+		return fmt.Errorf("%w: deleted private capture object is still present", ErrOutcomeUnknown)
+	}
+	if deleteErr != nil {
+		return errors.Join(
+			fmt.Errorf("%w: delete private capture object: %v", ErrOutcomeUnknown, deleteErr),
+			fmt.Errorf("%w: verify private capture deletion: %v", ErrUnavailable, statErr),
+		)
+	}
+	return fmt.Errorf("%w: verify private capture deletion: %v", ErrOutcomeUnknown, statErr)
+}
+
+func (s *Service) ensureNotDeleting(ctx context.Context, intent captureIntent) error {
+	deletion, deleting, err := s.readDeletion(ctx, bindingObjectRoot(intent.Binding))
+	if err != nil {
+		return err
+	}
+	if !deleting {
+		return nil
+	}
+	identity := identityFromIntent(intent)
+	if deletion.Identity != identity {
+		return fmt.Errorf("%w: deletion identity differs", ErrConflict)
+	}
+	if cleanupErr := s.deleteOperationalObjects(ctx, identity); cleanupErr != nil {
+		return errors.Join(fmt.Errorf("%w: capture has been retired", ErrConflict), cleanupErr)
+	}
+	return fmt.Errorf("%w: capture has been retired", ErrConflict)
 }
 
 func (s *Service) readReceipt(
@@ -563,7 +870,7 @@ func (s *Service) readReceipt(
 		return CaptureReceipt{}, false, fmt.Errorf("%w: capture receipt is not canonical", ErrConflict)
 	}
 	if err := requireIdentity(intent, receipt.CaptureIdentity); err != nil ||
-		receipt.ByteLength < 0 || receipt.ByteLength > MaximumCaptureBytes ||
+		receipt.TotalByteLength < 0 || receipt.TotalByteLength > MaximumCaptureBytes ||
 		!isSHA256Digest(receipt.ProviderSHA256Digest) {
 		return CaptureReceipt{}, false, fmt.Errorf("%w: capture receipt is invalid", ErrConflict)
 	}
@@ -594,8 +901,9 @@ func (s *Service) readStagedContent(
 	capturedAt, timeErr := time.Parse(time.RFC3339Nano, metadata["captured-at"])
 	if lengthErr != nil || byteLength != info.Size ||
 		metadata["provider-resource-id"] != intent.ProviderResourceID ||
-		metadata["contract"] != "ambit-working-copy-capture-content-v1" ||
+		metadata["contract"] != "ambit-working-copy-capture-content-v2" ||
 		!isSHA256Digest(metadata["sha256"]) ||
+		info.ContentSHA256 != metadata["sha256"] ||
 		timeErr != nil || capturedAt.Location() != time.UTC {
 		return capturedFile{}, false, fmt.Errorf("%w: staged capture metadata is invalid", ErrConflict)
 	}
@@ -623,18 +931,47 @@ func (s *Service) verifyContentMetadata(
 		return objectReadError("stat completed capture content", err)
 	}
 	metadata := lowerMetadata(info.UserMetadata)
-	if info.Size != receipt.ByteLength ||
-		metadata["byte-length"] != strconv.FormatInt(receipt.ByteLength, 10) ||
+	if info.Size != receipt.TotalByteLength ||
+		info.ContentSHA256 != receipt.ProviderSHA256Digest ||
+		metadata["byte-length"] != strconv.FormatInt(receipt.TotalByteLength, 10) ||
 		metadata["sha256"] != receipt.ProviderSHA256Digest ||
 		metadata["captured-at"] != receipt.CapturedAt ||
 		metadata["provider-resource-id"] != receipt.ProviderResourceID ||
-		metadata["contract"] != "ambit-working-copy-capture-content-v1" {
+		metadata["contract"] != "ambit-working-copy-capture-content-v2" {
 		return fmt.Errorf("%w: completed capture metadata drifted", ErrConflict)
 	}
 	return nil
 }
 
-func validateBinding(sandboxID string, binding CaptureBinding) (string, error) {
+func (s *Service) requireCurrentStop(
+	ctx context.Context,
+	binding CaptureBinding,
+) (generationstop.Receipt, error) {
+	receipt, err := s.stops.RequireCurrentReceipt(
+		ctx,
+		binding.Source,
+		binding.Owner,
+		generationstop.Purpose{Kind: generationstop.PurposeWorkingCopyCapture},
+		binding.StopAuthority,
+	)
+	if err == nil {
+		return receipt, nil
+	}
+	switch {
+	case errors.Is(err, generationstop.ErrInvalidRequest):
+		return generationstop.Receipt{}, fmt.Errorf("%w: stopped-generation authority: %v", ErrInvalidRequest, err)
+	case errors.Is(err, generationstop.ErrOutcomeUnknown):
+		return generationstop.Receipt{}, fmt.Errorf("%w: stopped-generation authority: %v", ErrOutcomeUnknown, err)
+	case errors.Is(err, generationstop.ErrUnavailable):
+		return generationstop.Receipt{}, fmt.Errorf("%w: stopped-generation authority: %v", ErrUnavailable, err)
+	case errors.Is(err, generationstop.ErrConflict):
+		return generationstop.Receipt{}, fmt.Errorf("%w: stopped-generation authority: %v", ErrConflict, err)
+	default:
+		return generationstop.Receipt{}, fmt.Errorf("%w: stopped-generation authority: %v", ErrUnavailable, err)
+	}
+}
+
+func (s *Service) validateBinding(sandboxID string, binding CaptureBinding) (string, error) {
 	if !boundedRef(binding.ProviderName, 512) {
 		return "", invalidf("providerName is invalid")
 	}
@@ -644,14 +981,17 @@ func validateBinding(sandboxID string, binding CaptureBinding) (string, error) {
 	if err := validateAuthority(binding.Authority); err != nil {
 		return "", err
 	}
+	if binding.Authority != s.admittedAuthority {
+		return "", invalidf("capture authority is not the admitted current lineage")
+	}
+	if err := generationstop.ValidateBinding(binding.Source, binding.Owner, binding.StopAuthority); err != nil {
+		return "", invalidf("stopped-generation binding is invalid: " + err.Error())
+	}
 	if !boundedRef(sandboxID, 512) || binding.Source.ProviderResourceID != sandboxID {
 		return "", invalidf("source providerResourceId does not match the sandbox")
 	}
-	if !boundedRef(binding.Source.WorkspaceID, 512) ||
-		!boundedRef(binding.Source.TenantID, 512) ||
-		!boundedRef(binding.Source.UserID, 512) ||
-		binding.Source.ExpectedProfile != "managed-container" ||
-		binding.Source.ExpectedRuntimeKind != "container" {
+	if binding.Source.ExpectedProfile != "managed-container" ||
+		binding.Source.ExpectedRuntimeKind != "full_image_runtime_pack" {
 		return "", invalidf("source address is not an admitted managed container")
 	}
 	root, ok := map[string]string{
@@ -670,6 +1010,7 @@ func validateBinding(sandboxID string, binding CaptureBinding) (string, error) {
 
 func validateAuthority(authority CaptureAuthority) error {
 	if authority.RoleRef != captureRoleRef ||
+		!boundedRef(authority.LineageRef, 512) ||
 		authority.Protocol.Ref != captureProtocolRef ||
 		!isSHA256Digest(authority.Protocol.Digest) ||
 		!isSHA256Digest(authority.Helper.Digest) ||
@@ -685,14 +1026,10 @@ func validateAuthority(authority CaptureAuthority) error {
 
 func captureAuthorityRef(authority CaptureAuthority) string {
 	preimage := strings.Join([]string{
-		"ambit.working-copy-capture-authority/v1",
-		authority.RoleRef,
-		authority.Protocol.Ref,
-		authority.Protocol.Digest,
-		authority.Helper.Ref,
-		authority.Helper.Digest,
+		"ambit.working-copy-capture-authority/v2",
+		authority.LineageRef,
 	}, "\n")
-	return "ambit.working-copy-capture-authority:v1:sha256:" + hashHex(preimage)
+	return "ambit.working-copy-capture-authority:v2:sha256:" + hashHex(preimage)
 }
 
 func canonicalRelativePath(value string) bool {
@@ -747,37 +1084,51 @@ func readExactRegularTar(
 }
 
 func bindingObjectRoot(binding CaptureBinding) string {
-	tenantDigest := hashHex("ambit-working-copy-capture-tenant/v1\n" + binding.Source.TenantID)
+	tenantDigest := hashHex("ambit-working-copy-capture-tenant/v2\n" + binding.Owner.TenantID)
 	bindingDigest := hashHex(strings.Join([]string{
-		"ambit-working-copy-capture-binding/v1",
+		"ambit-working-copy-capture-binding/v2",
 		binding.ProviderName,
 		binding.RequestFingerprint,
 	}, "\n"))
 	return privateRoot + "/" + tenantDigest + "/" + bindingDigest
 }
 
-func providerResourceID(binding CaptureBinding, generation containerGeneration) string {
+func providerResourceID(binding CaptureBinding, generation generationstop.TerminalGeneration) string {
+	bindingBytes, _ := json.Marshal(binding)
 	digest := hashHex(strings.Join([]string{
-		"ambit-working-copy-capture-generation/v1",
-		binding.ProviderName,
-		binding.RequestFingerprint,
-		generation.ID,
-		generation.Created,
+		"ambit-working-copy-capture-generation/v2",
+		sha256Digest(bindingBytes),
+		generation.ContainerID,
+		generation.ContainerCreatedAt,
+		generation.ExecutionStartedAt,
+		generation.ExecutionFinishedAt,
+		strconv.Itoa(generation.RestartCount),
+		strconv.Itoa(generation.ExitCode),
+		strconv.FormatBool(generation.OOMKilled),
 	}, "\n"))
-	return "daytona-working-copy-capture:v1:sha256:" + digest
+	return "daytona-working-copy-capture:v2:sha256:" + digest
 }
 
 func intentKey(bindingRoot string) string {
 	return bindingRoot + "/intent.json"
 }
 
+func deletionKey(bindingRoot string) string {
+	return bindingRoot + "/deletion.json"
+}
+
 func keysForIntent(intent captureIntent) objectKeys {
-	root := bindingObjectRoot(intent.Binding)
-	generationDigest := strings.TrimPrefix(intent.ProviderResourceID, "daytona-working-copy-capture:v1:sha256:")
+	return keysForIdentity(identityFromIntent(intent))
+}
+
+func keysForIdentity(identity CaptureIdentity) objectKeys {
+	root := bindingObjectRoot(identity.CaptureBinding)
+	generationDigest := strings.TrimPrefix(identity.ProviderResourceID, "daytona-working-copy-capture:v2:sha256:")
 	return objectKeys{
-		intent:  intentKey(root),
-		content: root + "/" + generationDigest + "/content.bin",
-		receipt: root + "/" + generationDigest + "/receipt.json",
+		intent:   intentKey(root),
+		content:  root + "/" + generationDigest + "/content.bin",
+		receipt:  root + "/" + generationDigest + "/receipt.json",
+		deletion: deletionKey(root),
 	}
 }
 
@@ -788,7 +1139,7 @@ func identityFromIntent(intent captureIntent) CaptureIdentity {
 func receiptFromIntent(intent captureIntent, staged capturedFile) CaptureReceipt {
 	return CaptureReceipt{
 		CaptureIdentity:      identityFromIntent(intent),
-		ByteLength:           int64(len(staged.bytes)),
+		TotalByteLength:      int64(len(staged.bytes)),
 		ProviderSHA256Digest: staged.digest,
 		CapturedAt:           staged.capturedAt,
 	}
@@ -812,7 +1163,7 @@ func requireIdentity(intent captureIntent, expected CaptureIdentity) error {
 }
 
 func validateProviderResourceID(value string) error {
-	const prefix = "daytona-working-copy-capture:v1:sha256:"
+	const prefix = "daytona-working-copy-capture:v2:sha256:"
 	if !strings.HasPrefix(value, prefix) || len(value) != len(prefix)+64 || !isLowerHex(strings.TrimPrefix(value, prefix)) {
 		return invalidf("providerResourceId is invalid")
 	}
@@ -820,6 +1171,12 @@ func validateProviderResourceID(value string) error {
 }
 
 func strictJSON(data []byte, target any) error {
+	if !utf8.Valid(data) {
+		return errors.New("JSON is not valid UTF-8")
+	}
+	if err := rejectDuplicateJSONKeys(data); err != nil {
+		return err
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
@@ -829,6 +1186,84 @@ func strictJSON(data []byte, target any) error {
 		return errors.New("trailing JSON data")
 	}
 	return nil
+}
+
+// DecodeExactJSON is the shared request/stored-object decoder for this exact
+// authority boundary. DisallowUnknownFields alone accepts duplicate keys and
+// therefore cannot distinguish two conflicting identities in one envelope.
+func DecodeExactJSON(data []byte, target any) error {
+	return strictJSON(data, target)
+}
+
+func rejectDuplicateJSONKeys(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := consumeJSONValue(decoder); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("JSON contains trailing data")
+		}
+		return err
+	}
+	return nil
+}
+
+func consumeJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, isDelimiter := token.(json.Delim)
+	if !isDelimiter {
+		return nil
+	}
+	switch delimiter {
+	case '{':
+		seen := make(map[string]struct{})
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return errors.New("JSON object key is not a string")
+			}
+			if _, duplicate := seen[key]; duplicate {
+				return fmt.Errorf("duplicate JSON object key %q", key)
+			}
+			seen[key] = struct{}{}
+			if err := consumeJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		closing, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		if closing != json.Delim('}') {
+			return errors.New("JSON object is not closed")
+		}
+		return nil
+	case '[':
+		for decoder.More() {
+			if err := consumeJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		closing, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		if closing != json.Delim(']') {
+			return errors.New("JSON array is not closed")
+		}
+		return nil
+	default:
+		return errors.New("unexpected JSON delimiter")
+	}
 }
 
 func samePathStat(left, right containertypes.PathStat) bool {
@@ -897,7 +1332,14 @@ func objectReadError(action string, err error) error {
 	if errors.Is(err, storage.ErrPrivateObjectNotFound) || errors.Is(err, storage.ErrPrivateObjectTooLarge) {
 		return fmt.Errorf("%w: %s: %v", ErrConflict, action, err)
 	}
-	return fmt.Errorf("%s: %w", action, err)
+	return fmt.Errorf("%w: %s: %v", ErrUnavailable, action, err)
+}
+
+func dockerReadError(action string, err error) error {
+	if errdefs.IsNotFound(err) || errdefs.IsConflict(err) {
+		return fmt.Errorf("%w: %s: %v", ErrConflict, action, err)
+	}
+	return fmt.Errorf("%w: %s: %v", ErrUnavailable, action, err)
 }
 
 func invalidf(message string) error {

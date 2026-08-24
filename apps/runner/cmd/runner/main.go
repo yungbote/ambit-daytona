@@ -21,6 +21,8 @@ import (
 	"github.com/daytonaio/runner/pkg/cache"
 	"github.com/daytonaio/runner/pkg/daemon"
 	"github.com/daytonaio/runner/pkg/docker"
+	"github.com/daytonaio/runner/pkg/generationstop"
+	"github.com/daytonaio/runner/pkg/generationstopdocker"
 	"github.com/daytonaio/runner/pkg/netrules"
 	"github.com/daytonaio/runner/pkg/runner"
 	"github.com/daytonaio/runner/pkg/runner/v2/executor"
@@ -279,14 +281,40 @@ func run() int {
 	// runner may still boot without object storage so unrelated lifecycle work
 	// remains available; the capture routes then fail closed as unavailable.
 	var workingCopyCaptures *workingcopy.Service
+	var generationStops *generationstop.Service
 	privateObjects, privateObjectsErr := storage.GetPrivateObjectStorageClient()
 	if privateObjectsErr != nil {
-		logger.Warn("Working-copy capture is unavailable", "error", privateObjectsErr)
+		logger.Warn("Stopped-generation and working-copy custody are unavailable", "error", privateObjectsErr)
 	} else {
-		workingCopyCaptures, err = workingcopy.NewService(cli, privateObjects)
-		if err != nil {
-			logger.Warn("Working-copy capture is unavailable", "error", err)
-			workingCopyCaptures = nil
+		generationAdapter, adapterErr := generationstopdocker.New(cli)
+		if adapterErr != nil {
+			logger.Warn("Stopped-generation custody is unavailable", "error", adapterErr)
+		} else {
+			generationStops, adapterErr = generationstop.NewService(generationAdapter, privateObjects)
+			if adapterErr != nil {
+				logger.Warn("Stopped-generation custody is unavailable", "error", adapterErr)
+				generationStops = nil
+			}
+		}
+		captureAuthority, authorityErr := workingcopy.NewCaptureAuthority(
+			cfg.WorkingCopyCaptureLineageRef,
+			cfg.WorkingCopyCaptureProtocolDigest,
+			cfg.WorkingCopyCaptureHelperDigest,
+		)
+		if authorityErr != nil {
+			logger.Warn("Working-copy capture is unavailable", "error", authorityErr)
+		} else {
+			var captureErr error
+			workingCopyCaptures, captureErr = workingcopy.NewService(
+				cli,
+				privateObjects,
+				generationStops,
+				captureAuthority,
+			)
+			if captureErr != nil {
+				logger.Warn("Working-copy capture is unavailable", "error", captureErr)
+				workingCopyCaptures = nil
+			}
 		}
 	}
 
@@ -301,6 +329,7 @@ func run() int {
 		NetleashManager:     netleashManager,
 		SSHGatewayService:   sshGatewayService,
 		WorkingCopyCaptures: workingCopyCaptures,
+		GenerationStops:     generationStops,
 	})
 	if err != nil {
 		logger.Error("Failed to initialize runner instance", "error", err)
