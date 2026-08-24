@@ -56,6 +56,10 @@
       "digest": "sha256:38a76d01668772e381ad2826d876627c89e7133e2f8a0f5d567306798b0f2a16",
       "ref": "docker.io/library/debian@sha256:38a76d01668772e381ad2826d876627c89e7133e2f8a0f5d567306798b0f2a16"
     },
+    "overlayBuilder": {
+      "digest": "sha256:65573a7b6d903a8faf8f51d20609f91071336b61c46128a40615f20ff71820c8",
+      "ref": "images/ambit-agent-workspace/runtime-composition/build_union_overlay.py"
+    },
     "bundleOrder": "packRevisionRef-canonical-byte-order",
     "compositionMethod": "literal-core-oci-parent-plus-one-closed-union-overlay",
     "dependencyResolution": "complete-selected-bundle-union-before-install",

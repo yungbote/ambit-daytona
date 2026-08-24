@@ -155,12 +155,20 @@ def verify(contract_root: Path, receipt_path: Path) -> dict[str, object]:
 
     builder = _exact(
         receipt["builder"],
-        {"baseInput", "network", "offline", "packageManagersAvailableOnlyHere"},
+        {
+            "baseInput",
+            "network",
+            "offline",
+            "overlayBuilder",
+            "packageManagersAvailableOnlyHere",
+        },
         "builder",
     )
     base_input = _pin(builder["baseInput"], "builder base input")
+    overlay_builder = _pin(builder["overlayBuilder"], "overlay builder")
     _require(
         base_input == contract["union"]["builderBaseInput"]
+        and overlay_builder == contract["union"]["overlayBuilder"]
         and builder["network"] == "none"
         and builder["offline"] is True
         and builder["packageManagersAvailableOnlyHere"] is True,
