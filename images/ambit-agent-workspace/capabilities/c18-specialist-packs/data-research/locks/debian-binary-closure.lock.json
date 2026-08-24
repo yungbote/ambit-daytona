@@ -1,0 +1,1155 @@
+{
+  "archiveCount": 79,
+  "archives": [
+    {
+      "architecture": "amd64",
+      "bytes": 318308,
+      "localFilename": "fontconfig-config_2.15.0-2.3_amd64.deb",
+      "package": "fontconfig-config",
+      "sha256": "sha256:0475c00d02660c07a15085051818625331bb502e053242106aaaa1f2ddb41225",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/f/fontconfig/fontconfig-config_2.15.0-2.3_amd64.deb"
+        }
+      ],
+      "version": "2.15.0-2.3"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 463312,
+      "localFilename": "fontconfig_2.15.0-2.3_amd64.deb",
+      "package": "fontconfig",
+      "sha256": "sha256:09794b188e042c90b4a89fcb5afeb276bc231b74ddf8a3efbbc7dfb6f0eac4cb",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/f/fontconfig/fontconfig_2.15.0-2.3_amd64.deb"
+        }
+      ],
+      "version": "2.15.0-2.3"
+    },
+    {
+      "architecture": "all",
+      "bytes": 840460,
+      "localFilename": "fonts-dejavu-core_2.37-8_all.deb",
+      "package": "fonts-dejavu-core",
+      "sha256": "sha256:86635b3d25b3655fc11cb3ecc3af59f0bf19643b02b94f2de48bd10253cdba12",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/f/fonts-dejavu/fonts-dejavu-core_2.37-8_all.deb"
+        }
+      ],
+      "version": "2.37-8"
+    },
+    {
+      "architecture": "all",
+      "bytes": 488808,
+      "localFilename": "fonts-dejavu-mono_2.37-8_all.deb",
+      "package": "fonts-dejavu-mono",
+      "sha256": "sha256:3003e98a5debfdeadc7040a7f715fe9fe6fb67f68deacf6049b54e30f07fc014",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/f/fonts-dejavu/fonts-dejavu-mono_2.37-8_all.deb"
+        }
+      ],
+      "version": "2.37-8"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 620808,
+      "localFilename": "graphviz_2.42.4-3_amd64.deb",
+      "package": "graphviz",
+      "sha256": "sha256:21cb13d6e9b514edde8d8a8efee9e3b350bb1c9d9c87ab60b4592ff69f23e625",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/g/graphviz/graphviz_2.42.4-3_amd64.deb"
+        }
+      ],
+      "version": "2.42.4-3"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 491548,
+      "localFilename": "libabsl20240722_20240722.0-4_amd64.deb",
+      "package": "libabsl20240722",
+      "sha256": "sha256:78c6d7692890990a27cb1d5bbd95b7bfe47a4183ffafec5b30f689f9b58ec6f7",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/a/abseil/libabsl20240722_20240722.0-4_amd64.deb"
+        }
+      ],
+      "version": "20240722.0-4"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 25092,
+      "localFilename": "libann0_1.1.2+doc-9+b1_amd64.deb",
+      "package": "libann0",
+      "sha256": "sha256:13c419c0daec7733adaa92efeb24b6cf52c9e7722e2cfe81f2b1a9464e4fc94c",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/a/ann/libann0_1.1.2+doc-9+b1_amd64.deb"
+        }
+      ],
+      "version": "1.1.2+doc-9+b1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 1871136,
+      "localFilename": "libaom3_3.12.1-1_amd64.deb",
+      "package": "libaom3",
+      "sha256": "sha256:16321210c4a3e27bf5ad1d56c1f09c9f7958f0c8ec3b8ae894ea1be322c5d055",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/a/aom/libaom3_3.12.1-1_amd64.deb"
+        }
+      ],
+      "version": "3.12.1-1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 9308,
+      "localFilename": "libatomic1_14.2.0-19_amd64.deb",
+      "package": "libatomic1",
+      "sha256": "sha256:212b399aae2f7299203d261a57e49372e09565a9a5ea971905f94a3960366c05",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/g/gcc-14/libatomic1_14.2.0-19_amd64.deb"
+        }
+      ],
+      "version": "14.2.0-19"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 133120,
+      "localFilename": "libavif16_1.2.1-1.2_amd64.deb",
+      "package": "libavif16",
+      "sha256": "sha256:ba6c334454d3562560ad583fbe2c998e203b0fc5a0e0e91112ddcd3cff4704bb",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/liba/libavif/libavif16_1.2.1-1.2_amd64.deb"
+        }
+      ],
+      "version": "1.2.1-1.2"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 306624,
+      "localFilename": "libbrotli1_1.1.0-2+b7_amd64.deb",
+      "package": "libbrotli1",
+      "sha256": "sha256:0fb79f88db210afbd69282ab9649e525f393ec6950ca34da1a6b359250b8d7db",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/b/brotli/libbrotli1_1.1.0-2+b7_amd64.deb"
+        }
+      ],
+      "version": "1.1.0-2+b7"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 537556,
+      "localFilename": "libcairo2_1.18.4-1+b1_amd64.deb",
+      "package": "libcairo2",
+      "sha256": "sha256:01390b049661e4cc8bd39cef78b41c2587d4035619d3b00d6c7846f43d80bbba",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/c/cairo/libcairo2_1.18.4-1+b1_amd64.deb"
+        }
+      ],
+      "version": "1.18.4-1+b1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 40284,
+      "localFilename": "libcdt5_2.42.4-3_amd64.deb",
+      "package": "libcdt5",
+      "sha256": "sha256:5da7f9faa69262ef270b9db22e27773e5928d4066a7fc12171296952efbf6c27",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/g/graphviz/libcdt5_2.42.4-3_amd64.deb"
+        }
+      ],
+      "version": "2.42.4-3"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 63952,
+      "localFilename": "libcgraph6_2.42.4-3_amd64.deb",
+      "package": "libcgraph6",
+      "sha256": "sha256:11cd202b7988fddfde8b7a93ac5309d468e79eaa4e666d19636551ff845dae69",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/g/graphviz/libcgraph6_2.42.4-3_amd64.deb"
+        }
+      ],
+      "version": "2.42.4-3"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 38132,
+      "localFilename": "libdatrie1_0.2.13-3+b1_amd64.deb",
+      "package": "libdatrie1",
+      "sha256": "sha256:339eb88f23d72b8f0b7b1aebcefbab6de600d97b88bc6222dd8aad11d2ca9051",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libd/libdatrie/libdatrie1_0.2.13-3+b1_amd64.deb"
+        }
+      ],
+      "version": "0.2.13-3+b1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 558612,
+      "localFilename": "libdav1d7_1.5.1-1_amd64.deb",
+      "package": "libdav1d7",
+      "sha256": "sha256:8c64de4465a8ae1ca23e1dada1dfc73d7b431540fd5ae18f21430928576d5b05",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/d/dav1d/libdav1d7_1.5.1-1_amd64.deb"
+        }
+      ],
+      "version": "1.5.1-1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 189084,
+      "localFilename": "libde265-0_1.0.15-1+b3_amd64.deb",
+      "package": "libde265-0",
+      "sha256": "sha256:d80d262c7a323fb594712354e4080c1ffe0c25e6cfbbd1192cda82536be123d4",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libd/libde265/libde265-0_1.0.15-1+b3_amd64.deb"
+        }
+      ],
+      "version": "1.0.15-1+b3"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 47344,
+      "localFilename": "libdeflate0_1.23-2_amd64.deb",
+      "package": "libdeflate0",
+      "sha256": "sha256:5fe37fb79d53f5c91da6ba3ac4c1a8453e1f2b1ff0e0ea45189c5338bbfdbf82",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libd/libdeflate/libdeflate0_1.23-2_amd64.deb"
+        }
+      ],
+      "version": "1.23-2"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 122300,
+      "localFilename": "libexpat1_2.8.2-1~deb13u1_amd64.deb",
+      "package": "libexpat1",
+      "sha256": "sha256:f5258ad21bc9f92da3beeca78258a799c6418a5021cb9bcaf45e842fd4d480c2",
+      "signedLocations": [
+        {
+          "repository": "debian-security",
+          "repositoryPath": "pool/updates/main/e/expat/libexpat1_2.8.2-1~deb13u1_amd64.deb"
+        }
+      ],
+      "version": "2.8.2-1~deb13u1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 24144,
+      "localFilename": "libffi8_3.4.8-2_amd64.deb",
+      "package": "libffi8",
+      "sha256": "sha256:0ebdc340de33333639c3c63874cd4b15ac2e83dfa1ef3053b7eefaf4919f4f68",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libf/libffi/libffi8_3.4.8-2_amd64.deb"
+        }
+      ],
+      "version": "3.4.8-2"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 391576,
+      "localFilename": "libfontconfig1_2.15.0-2.3_amd64.deb",
+      "package": "libfontconfig1",
+      "sha256": "sha256:7ae91ec59857cc8e375eb2bdd371a4a69daea38f7787d06d474a847867d852b1",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/f/fontconfig/libfontconfig1_2.15.0-2.3_amd64.deb"
+        }
+      ],
+      "version": "2.15.0-2.3"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 452308,
+      "localFilename": "libfreetype6_2.13.3+dfsg-1+deb13u1_amd64.deb",
+      "package": "libfreetype6",
+      "sha256": "sha256:e4947f3291528f03d574f2b01d5c5fc45c58c47480f32888a5cdf0f231ab584e",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/f/freetype/libfreetype6_2.13.3+dfsg-1+deb13u1_amd64.deb"
+        },
+        {
+          "repository": "debian-security",
+          "repositoryPath": "pool/updates/main/f/freetype/libfreetype6_2.13.3+dfsg-1+deb13u1_amd64.deb"
+        }
+      ],
+      "version": "2.13.3+dfsg-1+deb13u1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 26484,
+      "localFilename": "libfribidi0_1.0.16-1_amd64.deb",
+      "package": "libfribidi0",
+      "sha256": "sha256:f8c35ec8606d0843bd3cf020c6cfa39ddfe717ec58ed826b5855ba9927eb0d55",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/f/fribidi/libfribidi0_1.0.16-1_amd64.deb"
+        }
+      ],
+      "version": "1.0.16-1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 352956,
+      "localFilename": "libgav1-1_0.19.0-3+b1_amd64.deb",
+      "package": "libgav1-1",
+      "sha256": "sha256:94010041e59c7a8d2d3d1f5e62afd523f002b7b1caa3189419160b66d71c0195",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libg/libgav1/libgav1-1_0.19.0-3+b1_amd64.deb"
+        }
+      ],
+      "version": "0.19.0-3+b1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 126372,
+      "localFilename": "libgd3_2.3.3-14~deb13u1_amd64.deb",
+      "package": "libgd3",
+      "sha256": "sha256:26814d821656ef587e841d186aa8be1e3794214acb7bdd0d938e2a6d172aa0a9",
+      "signedLocations": [
+        {
+          "repository": "debian-security",
+          "repositoryPath": "pool/updates/main/libg/libgd2/libgd3_2.3.3-14~deb13u1_amd64.deb"
+        }
+      ],
+      "version": "2.3.3-14~deb13u1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 1518888,
+      "localFilename": "libglib2.0-0t64_2.84.4-3~deb13u3_amd64.deb",
+      "package": "libglib2.0-0t64",
+      "sha256": "sha256:e7bc3813fa7effa8bbd0d5547e6198ba18f53f5e79d305b8c34e8dce27f6c454",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/g/glib2.0/libglib2.0-0t64_2.84.4-3~deb13u3_amd64.deb"
+        }
+      ],
+      "version": "2.84.4-3~deb13u3"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 137148,
+      "localFilename": "libgomp1_14.2.0-19_amd64.deb",
+      "package": "libgomp1",
+      "sha256": "sha256:72b7a1a33c48f3195efeb044111b34ae684b1e640bb6495c832443b798601cd5",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/g/gcc-14/libgomp1_14.2.0-19_amd64.deb"
+        }
+      ],
+      "version": "14.2.0-19"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 75172,
+      "localFilename": "libgraphite2-3_1.3.14-2+deb13u1_amd64.deb",
+      "package": "libgraphite2-3",
+      "sha256": "sha256:1769ba3ed3c1fc75b7fbe02678e32aa24391205813eceef4e1e3500015d12ee3",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/g/graphite2/libgraphite2-3_1.3.14-2+deb13u1_amd64.deb"
+        }
+      ],
+      "version": "1.3.14-2+deb13u1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 159564,
+      "localFilename": "libgts-0.7-5t64_0.7.6+darcs121130-5.2+b1_amd64.deb",
+      "package": "libgts-0.7-5t64",
+      "sha256": "sha256:496e776db876750a6379549630e6a5e411a79b2b66e8eb5105e551ce7aafcf37",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/g/gts/libgts-0.7-5t64_0.7.6+darcs121130-5.2+b1_amd64.deb"
+        }
+      ],
+      "version": "0.7.6+darcs121130-5.2+b1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 686040,
+      "localFilename": "libgvc6_2.42.4-3_amd64.deb",
+      "package": "libgvc6",
+      "sha256": "sha256:a6f5311fdfe1e8260edef8d1bccfbe80a436a7803699925d9c478d6a72a29f31",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/g/graphviz/libgvc6_2.42.4-3_amd64.deb"
+        }
+      ],
+      "version": "2.42.4-3"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 192244,
+      "localFilename": "libgvpr2_2.42.4-3_amd64.deb",
+      "package": "libgvpr2",
+      "sha256": "sha256:d54d3ab4edd75458264230829e8a0c6fd01c7d5b0dd487037512d5fa75af5248",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/g/graphviz/libgvpr2_2.42.4-3_amd64.deb"
+        }
+      ],
+      "version": "2.42.4-3"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 478952,
+      "localFilename": "libharfbuzz0b_10.2.0-1+deb13u1_amd64.deb",
+      "package": "libharfbuzz0b",
+      "sha256": "sha256:932165b933e5eb633293afe984a983ebe89cb27c923ce7208626f1da6c0c7941",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/h/harfbuzz/libharfbuzz0b_10.2.0-1+deb13u1_amd64.deb"
+        }
+      ],
+      "version": "10.2.0-1+deb13u1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 11688,
+      "localFilename": "libheif-plugin-dav1d_1.19.8-1_amd64.deb",
+      "package": "libheif-plugin-dav1d",
+      "sha256": "sha256:fed7de7d14f7df765bb6ef1a79bd55b90475808793a5c41dc9ccb9deacf639ae",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libh/libheif/libheif-plugin-dav1d_1.19.8-1_amd64.deb"
+        }
+      ],
+      "version": "1.19.8-1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 15280,
+      "localFilename": "libheif-plugin-libde265_1.19.8-1_amd64.deb",
+      "package": "libheif-plugin-libde265",
+      "sha256": "sha256:719918204bc83dc3aac68973b997e0934e96e4ef59052c5670e05548f3863904",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libh/libheif/libheif-plugin-libde265_1.19.8-1_amd64.deb"
+        }
+      ],
+      "version": "1.19.8-1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 520256,
+      "localFilename": "libheif1_1.19.8-1_amd64.deb",
+      "package": "libheif1",
+      "sha256": "sha256:06460065e7768d7a4a72cb02a0eddd386936756a33596bb23901faeb72dc8f68",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libh/libheif/libheif1_1.19.8-1_amd64.deb"
+        }
+      ],
+      "version": "1.19.8-1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 65376,
+      "localFilename": "libice6_2%3a1.1.1-1_amd64.deb",
+      "package": "libice6",
+      "sha256": "sha256:38185997162793b5dfb768644badc57852879784a2f9d83c6c4e47efa5e36698",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libi/libice/libice6_1.1.1-1_amd64.deb"
+        }
+      ],
+      "version": "2:1.1.1-1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 35184,
+      "localFilename": "libimagequant0_2.18.0-1+b2_amd64.deb",
+      "package": "libimagequant0",
+      "sha256": "sha256:83a86fe813ca44d5c6ede86684d6ebe5c8f8b1b01d19743fa382315b38080b64",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libi/libimagequant/libimagequant0_2.18.0-1+b2_amd64.deb"
+        }
+      ],
+      "version": "2.18.0-1+b2"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 32116,
+      "localFilename": "libjbig0_2.1-6.1+b2_amd64.deb",
+      "package": "libjbig0",
+      "sha256": "sha256:95cbc44561651e1b3385454df08e8f2efe84498f6963a85259be2cc2fe798709",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/j/jbigkit/libjbig0_2.1-6.1+b2_amd64.deb"
+        }
+      ],
+      "version": "2.1-6.1+b2"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 168152,
+      "localFilename": "libjpeg62-turbo_1%3a2.1.5-4_amd64.deb",
+      "package": "libjpeg62-turbo",
+      "sha256": "sha256:5504299ad0e3c0a9ca9f962a68a650a040db52f9f416a109e74df48d55601d3f",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libj/libjpeg-turbo/libjpeg62-turbo_2.1.5-4_amd64.deb"
+        }
+      ],
+      "version": "1:2.1.5-4"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 198436,
+      "localFilename": "liblab-gamut1_2.42.4-3_amd64.deb",
+      "package": "liblab-gamut1",
+      "sha256": "sha256:f90f37e249c50108307b760e016a7d2e0a6eee934852959e5ce2199d91ecb245",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/g/graphviz/liblab-gamut1_2.42.4-3_amd64.deb"
+        }
+      ],
+      "version": "2.42.4-3"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 182976,
+      "localFilename": "liblerc4_4.0.0+ds-5_amd64.deb",
+      "package": "liblerc4",
+      "sha256": "sha256:2e0c13c0ddbde12968c2c713c2e0474a5b78e90d5216031256a725e8c76aa31c",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/l/lerc/liblerc4_4.0.0+ds-5_amd64.deb"
+        }
+      ],
+      "version": "4.0.0+ds-5"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 415648,
+      "localFilename": "libltdl7_2.5.4-4_amd64.deb",
+      "package": "libltdl7",
+      "sha256": "sha256:ab38167fc5aba8d133309fa98ca0a8b4e8b3c31588214ea70803a2bf3c6aa5ba",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libt/libtool/libltdl7_2.5.4-4_amd64.deb"
+        }
+      ],
+      "version": "2.5.4-4"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 146640,
+      "localFilename": "liblua5.4-0_5.4.7-1+b2_amd64.deb",
+      "package": "liblua5.4-0",
+      "sha256": "sha256:3456e23667f21a5bea4f2182ec878621bf4c47fbc9819fdaad8835d6d1ee6247",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/l/lua5.4/liblua5.4-0_5.4.7-1+b2_amd64.deb"
+        }
+      ],
+      "version": "5.4.7-1+b2"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 22212,
+      "localFilename": "libnuma1_2.0.19-1_amd64.deb",
+      "package": "libnuma1",
+      "sha256": "sha256:e578583f73f8208564e5035b18aa729c441fc7ecb389c666923552e123f4d655",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/n/numactl/libnuma1_2.0.19-1_amd64.deb"
+        }
+      ],
+      "version": "2.0.19-1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 226324,
+      "localFilename": "libpango-1.0-0_1.56.3-1_amd64.deb",
+      "package": "libpango-1.0-0",
+      "sha256": "sha256:4fa38472696d2ddb10bfc9a4692a9446e8478fdb1f48c769a609fc9fec3adfc5",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/p/pango1.0/libpango-1.0-0_1.56.3-1_amd64.deb"
+        }
+      ],
+      "version": "1.56.3-1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 35748,
+      "localFilename": "libpangocairo-1.0-0_1.56.3-1_amd64.deb",
+      "package": "libpangocairo-1.0-0",
+      "sha256": "sha256:6994729c5b7a9649661ec078cf039991f22eff44600543aa917894f83c89cd05",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/p/pango1.0/libpangocairo-1.0-0_1.56.3-1_amd64.deb"
+        }
+      ],
+      "version": "1.56.3-1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 55568,
+      "localFilename": "libpangoft2-1.0-0_1.56.3-1_amd64.deb",
+      "package": "libpangoft2-1.0-0",
+      "sha256": "sha256:b506cf66f78ddf542ddb4bb4a68b3d748d41caa6e190e4480430a6630c1e5105",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/p/pango1.0/libpangoft2-1.0-0_1.56.3-1_amd64.deb"
+        }
+      ],
+      "version": "1.56.3-1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 42584,
+      "localFilename": "libpathplan4_2.42.4-3_amd64.deb",
+      "package": "libpathplan4",
+      "sha256": "sha256:923abaf44e4680f7ada86eeb0e3a9aef868e48787269b61d602b2a27c0939245",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/g/graphviz/libpathplan4_2.42.4-3_amd64.deb"
+        }
+      ],
+      "version": "2.42.4-3"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 247888,
+      "localFilename": "libpixman-1-0_0.44.0-3_amd64.deb",
+      "package": "libpixman-1-0",
+      "sha256": "sha256:3862c87596f6b4b60fc916395fd69aa10af28a875a8e5c081a8cf30ddd120bd6",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/p/pixman/libpixman-1-0_0.44.0-3_amd64.deb"
+        }
+      ],
+      "version": "0.44.0-3"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 283204,
+      "localFilename": "libpng16-16t64_1.6.48-1+deb13u5_amd64.deb",
+      "package": "libpng16-16t64",
+      "sha256": "sha256:2465b4e9fa85cff54dc10a6da3e64074d8d9292c86e4a8f989b809d6b158e97e",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libp/libpng1.6/libpng16-16t64_1.6.48-1+deb13u5_amd64.deb"
+        },
+        {
+          "repository": "debian-security",
+          "repositoryPath": "pool/updates/main/libp/libpng1.6/libpng16-16t64_1.6.48-1+deb13u5_amd64.deb"
+        }
+      ],
+      "version": "1.6.48-1+deb13u5"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 946396,
+      "localFilename": "librav1e0.7_0.7.1-9+b2_amd64.deb",
+      "package": "librav1e0.7",
+      "sha256": "sha256:d5b1373a8d6905ee4523faf1db7a626dc660e03836ec91b616e57ba386f47eb6",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/r/rust-rav1e/librav1e0.7_0.7.1-9+b2_amd64.deb"
+        }
+      ],
+      "version": "0.7.1-9+b2"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 168832,
+      "localFilename": "libreadline8t64_8.2-6_amd64.deb",
+      "package": "libreadline8t64",
+      "sha256": "sha256:eeadf2b5e755c9f183883feea2d9b5b28560284275d5f54d3e55d0923b1d0967",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/r/readline/libreadline8t64_8.2-6_amd64.deb"
+        }
+      ],
+      "version": "8.2-6"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 115612,
+      "localFilename": "libsharpyuv0_1.5.0-0.1_amd64.deb",
+      "package": "libsharpyuv0",
+      "sha256": "sha256:51934833d909588f7761fd84362114e90d8d2d38af57edf5df5c4a705e037547",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libw/libwebp/libsharpyuv0_1.5.0-0.1_amd64.deb"
+        }
+      ],
+      "version": "1.5.0-0.1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 37264,
+      "localFilename": "libsm6_2%3a1.2.6-1_amd64.deb",
+      "package": "libsm6",
+      "sha256": "sha256:03038b3002e6f44322554e335d60d8ff87acfcf2e21c904b6866610a9913ee00",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libs/libsm/libsm6_1.2.6-1_amd64.deb"
+        }
+      ],
+      "version": "2:1.2.6-1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 2489492,
+      "localFilename": "libsvtav1enc2_2.3.0+dfsg-1_amd64.deb",
+      "package": "libsvtav1enc2",
+      "sha256": "sha256:cdaf961c3cc4fe78a19ff18c17d83d813f78a378fdcc4c86ccbb9b54e84ae599",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/s/svt-av1/libsvtav1enc2_2.3.0+dfsg-1_amd64.deb"
+        }
+      ],
+      "version": "2.3.0+dfsg-1"
+    },
+    {
+      "architecture": "all",
+      "bytes": 167504,
+      "localFilename": "libthai-data_0.1.29-2_all.deb",
+      "package": "libthai-data",
+      "sha256": "sha256:fd38d40602834d510a29140bd27fd48485105e834f03dccab1c02e2edaa794dd",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libt/libthai/libthai-data_0.1.29-2_all.deb"
+        }
+      ],
+      "version": "0.1.29-2"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 49420,
+      "localFilename": "libthai0_0.1.29-2+b1_amd64.deb",
+      "package": "libthai0",
+      "sha256": "sha256:e6364c07aeeffe9a95f267061d9df168e48e9dc9126c3b40e19dc829f67702a7",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libt/libthai/libthai0_0.1.29-2+b1_amd64.deb"
+        }
+      ],
+      "version": "0.1.29-2+b1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 345492,
+      "localFilename": "libtiff6_4.7.0-3+deb13u3_amd64.deb",
+      "package": "libtiff6",
+      "sha256": "sha256:6bb2038f36817ae1ee6d33df03917b21835dcc2e0f3e3e80a71390e83c171173",
+      "signedLocations": [
+        {
+          "repository": "debian-security",
+          "repositoryPath": "pool/updates/main/t/tiff/libtiff6_4.7.0-3+deb13u3_amd64.deb"
+        }
+      ],
+      "version": "4.7.0-3+deb13u3"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 317856,
+      "localFilename": "libwebp7_1.5.0-0.1_amd64.deb",
+      "package": "libwebp7",
+      "sha256": "sha256:c749744b04abdd1426b0c7718e516362c03a557c5151662092d6d4f2cef6e7c1",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libw/libwebp/libwebp7_1.5.0-0.1_amd64.deb"
+        }
+      ],
+      "version": "1.5.0-0.1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 815292,
+      "localFilename": "libx11-6_2%3a1.8.12-1_amd64.deb",
+      "package": "libx11-6",
+      "sha256": "sha256:b5a3fd3bf8c8fd0364bfb9bea00dcba7fc301229bd02dded084632d31f5b0fb3",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libx/libx11/libx11-6_1.8.12-1_amd64.deb"
+        }
+      ],
+      "version": "2:1.8.12-1"
+    },
+    {
+      "architecture": "all",
+      "bytes": 343072,
+      "localFilename": "libx11-data_2%3a1.8.12-1_all.deb",
+      "package": "libx11-data",
+      "sha256": "sha256:c54f87069888f80ba4da586da6147d74c7598ccdd8b90906dbc4271fa414c738",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libx/libx11/libx11-data_1.8.12-1_all.deb"
+        }
+      ],
+      "version": "2:1.8.12-1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 20392,
+      "localFilename": "libxau6_1%3a1.0.11-1_amd64.deb",
+      "package": "libxau6",
+      "sha256": "sha256:689a9f0e0ba3e2c65431f864871e303ee904de69dd28abfc462663fae030227f",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libx/libxau/libxau6_1.0.11-1_amd64.deb"
+        }
+      ],
+      "version": "1:1.0.11-1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 211848,
+      "localFilename": "libxaw7_2%3a1.0.16-1_amd64.deb",
+      "package": "libxaw7",
+      "sha256": "sha256:e79f3ab51ecbbfd3414a0568a8947ac59a29c30d631e6c7b6e07ea46e688c047",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libx/libxaw/libxaw7_1.0.16-1_amd64.deb"
+        }
+      ],
+      "version": "2:1.0.16-1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 115100,
+      "localFilename": "libxcb-render0_1.17.0-2+b1_amd64.deb",
+      "package": "libxcb-render0",
+      "sha256": "sha256:7f6e36978e0f70a590fbad4042a692c70b50ca7cbcdc53fa7e9d9ab87933acc6",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libx/libxcb/libxcb-render0_1.17.0-2+b1_amd64.deb"
+        }
+      ],
+      "version": "1.17.0-2+b1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 105284,
+      "localFilename": "libxcb-shm0_1.17.0-2+b1_amd64.deb",
+      "package": "libxcb-shm0",
+      "sha256": "sha256:d1777a813f484e89f3dcaadd1d5f2b1a13e9313b6bf70eded16d8ce743208fef",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libx/libxcb/libxcb-shm0_1.17.0-2+b1_amd64.deb"
+        }
+      ],
+      "version": "1.17.0-2+b1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 144340,
+      "localFilename": "libxcb1_1.17.0-2+b1_amd64.deb",
+      "package": "libxcb1",
+      "sha256": "sha256:5c222a72d11b866447da31693254f738430726e3e065a384e82687b2fd2f978b",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libx/libxcb/libxcb1_1.17.0-2+b1_amd64.deb"
+        }
+      ],
+      "version": "1.17.0-2+b1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 27756,
+      "localFilename": "libxdmcp6_1%3a1.1.5-1_amd64.deb",
+      "package": "libxdmcp6",
+      "sha256": "sha256:0740dc760916b2008b45417a42a8fd7dd5de370fb57d31373f15034cda8acf0b",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libx/libxdmcp/libxdmcp6_1.1.5-1_amd64.deb"
+        }
+      ],
+      "version": "1:1.1.5-1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 50448,
+      "localFilename": "libxext6_2%3a1.3.4-1+b3_amd64.deb",
+      "package": "libxext6",
+      "sha256": "sha256:fc618ec40465e5ce48622606299cb47833efc3fb235ba15543b81f850722f443",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libx/libxext/libxext6_1.3.4-1+b3_amd64.deb"
+        }
+      ],
+      "version": "2:1.3.4-1+b3"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 58972,
+      "localFilename": "libxmu6_2%3a1.1.3-3+b4_amd64.deb",
+      "package": "libxmu6",
+      "sha256": "sha256:cfdf1dee8f9abd87f503222fc8b04a30ce820fb1255247b7c3a28ff9c244431a",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libx/libxmu/libxmu6_1.1.3-3+b4_amd64.deb"
+        }
+      ],
+      "version": "2:1.1.3-3+b4"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 55912,
+      "localFilename": "libxpm4_1%3a3.5.17-1+deb13u1_amd64.deb",
+      "package": "libxpm4",
+      "sha256": "sha256:d2f8933b552e7a282bbc32bc7545628195c4a3692a20ad0e232cc5fee9130790",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libx/libxpm/libxpm4_3.5.17-1+deb13u1_amd64.deb"
+        }
+      ],
+      "version": "1:3.5.17-1+deb13u1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 27896,
+      "localFilename": "libxrender1_1%3a0.9.12-1_amd64.deb",
+      "package": "libxrender1",
+      "sha256": "sha256:9d042dfd5e613be1e02e6ddd0c5c4adef19c5eb08f6db838c2eba672c496dca4",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libx/libxrender/libxrender1_0.9.12-1_amd64.deb"
+        }
+      ],
+      "version": "1:0.9.12-1"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 188232,
+      "localFilename": "libxt6t64_1%3a1.2.1-1.2+b2_amd64.deb",
+      "package": "libxt6t64",
+      "sha256": "sha256:a1f4557c03113681ee24863495adc244cecec95fe3ab7256ce76e87320157300",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libx/libxt/libxt6t64_1.2.1-1.2+b2_amd64.deb"
+        }
+      ],
+      "version": "1:1.2.1-1.2+b2"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 52524,
+      "localFilename": "libyaml-0-2_0.2.5-2_amd64.deb",
+      "package": "libyaml-0-2",
+      "sha256": "sha256:8a5475402801de445a17887bb72d03613565a6a84b216b4b606d1462c613eeb2",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/liby/libyaml/libyaml-0-2_0.2.5-2_amd64.deb"
+        }
+      ],
+      "version": "0.2.5-2"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 173700,
+      "localFilename": "libyuv0_0.0.1904.20250204-1_amd64.deb",
+      "package": "libyuv0",
+      "sha256": "sha256:1a6827fe94fa5572a032332df7313ed408e9c0ad78f3a1248391bddc6d920ef2",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/liby/libyuv/libyuv0_0.0.1904.20250204-1_amd64.deb"
+        }
+      ],
+      "version": "0.0.1904.20250204-1"
+    },
+    {
+      "architecture": "all",
+      "bytes": 458988,
+      "localFilename": "pandoc-data_3.1.11.1-3_all.deb",
+      "package": "pandoc-data",
+      "sha256": "sha256:68cd7e251886eb84a3865a0ac5fbe202fd464b66ce66d4c203e29657e669af84",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/h/haskell-pandoc/pandoc-data_3.1.11.1-3_all.deb"
+        }
+      ],
+      "version": "3.1.11.1-3"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 26376556,
+      "localFilename": "pandoc_3.1.11.1+ds-2_amd64.deb",
+      "package": "pandoc",
+      "sha256": "sha256:1886ca2533006513545a67a1d8e33a368d6fa97b6dcbef291c473322d549b140",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/p/pandoc/pandoc_3.1.11.1+ds-2_amd64.deb"
+        }
+      ],
+      "version": "3.1.11.1+ds-2"
+    },
+    {
+      "architecture": "all",
+      "bytes": 69360,
+      "localFilename": "readline-common_8.2-6_all.deb",
+      "package": "readline-common",
+      "sha256": "sha256:f77e8aa0bf0de618f11cb0b21658a4ed60f177d63b3cf26d7fc3706b6d0eaaa9",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/r/readline/readline-common_8.2-6_all.deb"
+        }
+      ],
+      "version": "8.2-6"
+    },
+    {
+      "architecture": "amd64",
+      "bytes": 384104,
+      "localFilename": "sqlite3_3.46.1-7+deb13u1_amd64.deb",
+      "package": "sqlite3",
+      "sha256": "sha256:6e3700c3bd09cbf1044a5a611ad2696fb1cc037918c071a82df6afd10ac59ee3",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/s/sqlite3/sqlite3_3.46.1-7+deb13u1_amd64.deb"
+        }
+      ],
+      "version": "3.46.1-7+deb13u1"
+    },
+    {
+      "architecture": "all",
+      "bytes": 216864,
+      "localFilename": "x11-common_1%3a7.7+24+deb13u1_all.deb",
+      "package": "x11-common",
+      "sha256": "sha256:57a981938506b26dc552f19cafeaa8c04e9b59dc7508509151f8507a9d4e5f24",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/x/xorg/x11-common_7.7+24+deb13u1_all.deb"
+        }
+      ],
+      "version": "1:7.7+24+deb13u1"
+    }
+  ],
+  "baseImage": "docker.io/library/python@sha256:d6e0850f13fda0e2305d4c3c1c2f7930fe1042d34ddd958e49bba6ef685d0bb2",
+  "installedClosure": {
+    "entryCount": 163,
+    "sha256": "sha256:0b6df4a96f7c00b9694db5e748ca4d79ddd394fd21aef59b2ae15c3638853900"
+  },
+  "packRef": "ambit.runtime-pack/data-research@1",
+  "platform": "linux/amd64",
+  "requestedPackages": [
+    "graphviz=2.42.4-3",
+    "pandoc=3.1.11.1+ds-2",
+    "sqlite3=3.46.1-7+deb13u1"
+  ],
+  "resolution": {
+    "installRecommends": false,
+    "installScripts": "package-maintainer-scripts-captured-during-image-build",
+    "mode": "offline-dpkg-replay",
+    "runtimePackageManager": "absent"
+  },
+  "schema": "ambit.c18-debian-binary-closure-lock/v1",
+  "signaturePolicy": {
+    "checkValidUntil": false,
+    "exception": "immutable-snapshot-and-exact-inrelease-digests",
+    "inReleaseVerification": "required-external-input",
+    "trustedKeyring": "debian-archive-keyring-2025.1"
+  },
+  "snapshots": {
+    "debian": {
+      "inReleaseSha256": "sha256:98b25b5cd185c59d34aa6e4c3e9b5b8f01bbe9d104fe2dcfbcd30dc0a14a59ed",
+      "url": "https://snapshot.debian.org/archive/debian/20260802T202614Z/"
+    },
+    "debian-security": {
+      "inReleaseSha256": "sha256:c5b38b54765337d3f141385c5cd7b5ef2dd64557c44b519bd079c5ac8f40b369",
+      "url": "https://snapshot.debian.org/archive/debian-security/20260802T121235Z/"
+    }
+  },
+  "transitiveGraphDigest": "sha256:89551ae843044eda8eb452c845f9d6933a134eb0aebfa0a5358460fdd842cd72"
+}
