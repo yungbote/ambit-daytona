@@ -229,10 +229,29 @@ def _verify_web_pack(root: Path) -> None:
     seccomp = sandbox.get("conformanceSeccompProfile")
     _require(
         isinstance(seccomp, dict)
-        and seccomp.get("path") == "../../policy/playwright-seccomp-v1.55.0.json"
-        and seccomp.get("sha256")
+        and seccomp.get("upstreamPath")
+        == "../../policy/playwright-seccomp-v1.55.0.json"
+        and seccomp.get("sourceCommit")
+        == "f992162f04ae0b0b5a0f4b6114b894215be98995"
+        and seccomp.get("sourceUrl")
+        == (
+            "https://raw.githubusercontent.com/microsoft/playwright/"
+            "f992162f04ae0b0b5a0f4b6114b894215be98995/"
+            "utils/docker/seccomp_profile.json"
+        )
+        and seccomp.get("tag") == "v1.55.0"
+        and seccomp.get("upstreamSha256")
         == f"sha256:{_sha256(root / 'policy/playwright-seccomp-v1.55.0.json')}",
         "web seccomp profile identity is invalid",
+    )
+    from render_browser_seccomp import render_profile
+
+    rendered = render_profile(root / "policy/playwright-seccomp-v1.55.0.json")
+    _require(
+        seccomp.get("renderer") == "../../certification/render_browser_seccomp.py"
+        and seccomp.get("renderedSha256")
+        == f"sha256:{hashlib.sha256(rendered).hexdigest()}",
+        "web rendered seccomp profile identity is invalid",
     )
     npm = _load_json(lock_root / "npm-inputs.lock.json")
     _require(npm.get("schema") == "ambit.c18-npm-input-lock/v1", "web npm schema is invalid")

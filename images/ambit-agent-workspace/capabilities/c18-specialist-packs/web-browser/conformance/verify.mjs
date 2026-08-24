@@ -118,7 +118,7 @@ section,aside{background:#fff;color:#172033;border:1px solid #cbd5e1;border-radi
 .eyebrow{color:#174ea6;font-weight:700;text-transform:uppercase;letter-spacing:.08em}h1{font-size:clamp(2rem,5vw,4rem);line-height:1.05;margin:.5rem 0 1rem}
 form{display:grid;gap:.75rem;margin-top:2rem}label{font-weight:700}input,button{font:inherit;border-radius:.6rem;padding:.8rem 1rem}input{border:2px solid #64748b;background:#fff;color:#111}input:user-invalid{border-color:#b42318}button{border:0;background:#174ea6;color:#fff;font-weight:700;cursor:pointer}button:focus-visible,input:focus-visible{outline:3px solid #f59e0b;outline-offset:3px}
 #status{min-height:1.5rem;font-weight:700}li+li{margin-top:.5rem}@media(max-width:720px){main{grid-template-columns:1fr}aside{order:-1}}@media(prefers-reduced-motion:no-preference){button{transition:transform .15s ease}button:hover{transform:translateY(-1px)}}
-	@media(prefers-color-scheme:dark){:root{background:#0f172a;color:#f8fafc}section,aside{background:#172033;color:#f8fafc;border-color:#475569}.eyebrow{color:#93c5fd}input{background:#f8fafc;color:#111}}
+@media(prefers-color-scheme:dark){:root{background:#0f172a;color:#f8fafc}section,aside{background:#172033;color:#f8fafc;border-color:#475569}.eyebrow{color:#93c5fd}input{background:#f8fafc;color:#111}}
 `,
 );
 fs.writeFileSync(
@@ -215,6 +215,7 @@ try {
       if (!(await page.locator('#email').evaluate((element) => element.matches(':invalid')))) {
         throw new Error('required-email validation did not activate');
       }
+      await page.screenshot({ path: path.join(caseRoot, 'validation.png'), fullPage: true });
       await page.locator('#email').fill('qa@example.com');
       await page.locator('button').click();
       await page.getByRole('status').filter({ hasText: 'Ready' }).waitFor();
@@ -275,6 +276,11 @@ canonicalJson(path.join(OUTPUT_ROOT, 'conformance-receipt.json'), {
   runtime: guard,
   checks: pack.conformance.requiredChecks.map((ref) => ({ ref, outcome: 'passed' })),
   browserCases: results,
+  browserSandbox: {
+    chromium: 'required-and-launched',
+    outerLinuxCapabilities: [],
+    seccompMode: 2,
+  },
   localService: {
     bind: '127.0.0.1:ephemeral',
     externalRequestCount: 0,
