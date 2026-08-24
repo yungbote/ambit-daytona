@@ -12,6 +12,7 @@
   "coreParent": {
     "packRevisionRef": "ambit.runtime-pack/core@1",
     "sourceRevision": "ebbeb2bcc2caa695a6102946eebad9359ea8ba58",
+    "sourceDateEpoch": 1787551756,
     "sourceIdentitySha256": "sha256:4f36259ba173bcae67c80c6b4d3178890cad02198f7e2ca6831c13a9ca0ee835",
     "platformManifestDigest": "sha256:ebedd4a1dbca59499468595db8f3aba140234eeb2b2fdcd4fcc0c8f99a5dda94",
     "configDigest": "sha256:3e609a4df9b53cc4022d70a73d342d387e3bd06bdfa43ad3443f17d8dcfddcbe",
