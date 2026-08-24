@@ -182,7 +182,7 @@ describe(SandboxGenerationStopService.name, () => {
     expect(adapter.stopSandboxGenerationOnce).not.toHaveBeenCalled()
   })
 
-  it('rejects response request, terminal, digest and observation-shape drift', async () => {
+  it('classifies unusable mutation receipts as outcome unknown and rejects observation-shape drift', async () => {
     const request = validStopRequest()
     const mutations: Array<(receipt: StoppedSandboxGenerationReceiptDto & Record<string, unknown>) => void> = [
       (receipt) => {
@@ -202,8 +202,18 @@ describe(SandboxGenerationStopService.name, () => {
       const receipt = validReceipt(request) as StoppedSandboxGenerationReceiptDto & Record<string, unknown>
       mutate(receipt)
       adapter.stopSandboxGenerationOnce.mockResolvedValueOnce(receipt)
-      await expect(service.stopOnce('org-1', 'sandbox-1', request)).rejects.toBeInstanceOf(ConflictException)
+      await expect(service.stopOnce('org-1', 'sandbox-1', request)).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'STOPPED_GENERATION_OUTCOME_UNKNOWN', statusCode: 503 }),
+      })
     }
+
+    adapter.stopSandboxGenerationOnce.mockResolvedValueOnce(undefined as never)
+    await expect(service.stopOnce('org-1', 'sandbox-1', request)).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'STOPPED_GENERATION_OUTCOME_UNKNOWN', statusCode: 503 }),
+    })
+
+    adapter.observeSandboxGenerationStop.mockResolvedValueOnce(undefined as never)
+    await expect(service.observeStop('org-1', 'sandbox-1', request)).rejects.toBeInstanceOf(ConflictException)
   })
 
   it('preserves runner outcome-unknown status and hides unknown transport failures', async () => {
