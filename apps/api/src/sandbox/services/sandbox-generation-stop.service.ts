@@ -68,7 +68,7 @@ export class SandboxGenerationStopService {
     const { sandbox, adapter } = await this.authorized(organizationId, sandboxIdOrName, request)
     try {
       const receipt = await adapter.stopSandboxGenerationOnce(sandbox.id, request)
-      responseGuard(() => assertStoppedGenerationReceipt(receipt, request))
+      mutationReceiptGuard(() => assertStoppedGenerationReceipt(receipt, request))
       await this.reconcileStoppedState(sandbox, adapter, receipt)
       return receipt
     } catch (error) {
@@ -160,6 +160,23 @@ function responseGuard(action: () => void): void {
   }
 }
 
+function mutationReceiptGuard(action: () => void): void {
+  try {
+    action()
+  } catch {
+    throw stoppedGenerationOutcomeUnknown()
+  }
+}
+
+function stoppedGenerationOutcomeUnknown(): ServiceUnavailableException {
+  return new ServiceUnavailableException({
+    statusCode: 503,
+    message: 'Stopped-generation outcome is unknown; observe the exact operation before retrying.',
+    error: 'Service Unavailable',
+    code: 'STOPPED_GENERATION_OUTCOME_UNKNOWN',
+  })
+}
+
 function translateGenerationStopError(error: unknown, mutating: boolean): unknown {
   if (!(error instanceof RunnerApiError)) return error
   switch (error.statusCode) {
@@ -180,14 +197,7 @@ function translateGenerationStopError(error: unknown, mutating: boolean): unknow
             : 'STOPPED_GENERATION_UNAVAILABLE',
       })
     default:
-      if (mutating) {
-        return new ServiceUnavailableException({
-          statusCode: 503,
-          message: 'Stopped-generation outcome is unknown; observe the exact operation before retrying.',
-          error: 'Service Unavailable',
-          code: 'STOPPED_GENERATION_OUTCOME_UNKNOWN',
-        })
-      }
+      if (mutating) return stoppedGenerationOutcomeUnknown()
       return new ServiceUnavailableException('The sandbox runner could not settle stopped-generation authority.')
   }
 }
