@@ -220,6 +220,20 @@ def _verify_web_pack(root: Path) -> None:
         image.get("fontconfigRosterSha256") == f"sha256:{_sha256(lock_root / 'fontconfig-roster.lock')}",
         "web browser font roster digest mismatch",
     )
+    sandbox = toolchain.get("sandbox")
+    _require(
+        isinstance(sandbox, dict)
+        and sandbox.get("chromiumSandboxRequired") is True,
+        "web Chromium sandbox policy is invalid",
+    )
+    seccomp = sandbox.get("conformanceSeccompProfile")
+    _require(
+        isinstance(seccomp, dict)
+        and seccomp.get("path") == "../../policy/playwright-seccomp-v1.55.0.json"
+        and seccomp.get("sha256")
+        == f"sha256:{_sha256(root / 'policy/playwright-seccomp-v1.55.0.json')}",
+        "web seccomp profile identity is invalid",
+    )
     npm = _load_json(lock_root / "npm-inputs.lock.json")
     _require(npm.get("schema") == "ambit.c18-npm-input-lock/v1", "web npm schema is invalid")
     _require(npm.get("packRef") == PACKS["web-browser"]["ref"], "web npm pack ref mismatch")

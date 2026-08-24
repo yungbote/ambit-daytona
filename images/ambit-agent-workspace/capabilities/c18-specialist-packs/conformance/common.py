@@ -32,6 +32,7 @@ def runtime_guard(path: Path) -> dict[str, str]:
         "no_new_privileges": "1",
         "root_filesystem": "read_only",
         "runtime_installers": "absent",
+        "seccomp_mode": "2",
         "uid": "1000",
         "user": "daytona",
     }
