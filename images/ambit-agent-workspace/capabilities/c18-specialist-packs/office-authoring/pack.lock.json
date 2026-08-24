@@ -2,12 +2,12 @@
   "capabilities": {
     "provides": [
       "presentations_design",
+      "python",
       "spreadsheets"
     ],
     "requires": [
       "core",
-      "documents_publishing",
-      "python"
+      "documents_publishing"
     ]
   },
   "conformance": {

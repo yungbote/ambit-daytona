@@ -144,7 +144,15 @@ class FullImageBindingTests(unittest.TestCase):
 
     def test_preserves_native_windows_office_as_explicitly_unsupported(self) -> None:
         binding = self._binding("C18_SPREADSHEETS")
-        self.assertEqual(self._verify(binding)["outcome"], "passed")
+        receipt = self._verify(binding)
+        self.assertEqual(receipt["outcome"], "passed")
+        self.assertEqual(
+            sorted(receipt["conformanceReceiptDigests"]),
+            [
+                "ambit.runtime-pack/data-research@1",
+                "ambit.runtime-pack/office-authoring@1",
+            ],
+        )
         binding["unsupportedCapabilities"] = []
         with self.assertRaisesRegex(FullImageBindingError, "Windows/Office unsupported"):
             self._verify(binding)

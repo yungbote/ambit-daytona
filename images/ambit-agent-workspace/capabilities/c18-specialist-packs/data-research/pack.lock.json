@@ -2,11 +2,11 @@
   "capabilities": {
     "provides": [
       "data_local_query",
+      "python",
       "research_scientific"
     ],
     "requires": [
-      "core",
-      "python"
+      "core"
     ]
   },
   "conformance": {

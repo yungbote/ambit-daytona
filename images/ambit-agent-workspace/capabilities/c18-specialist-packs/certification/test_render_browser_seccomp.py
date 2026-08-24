@@ -9,18 +9,34 @@ from pathlib import Path
 from render_browser_seccomp import BrowserSeccompError, render_profile
 
 
-SOURCE = Path(__file__).resolve().parents[1] / "policy/playwright-seccomp-v1.55.0.json"
+SOURCE = Path(__file__).resolve().parents[1] / "policy/playwright-seccomp-v1.62.1.json"
 
 
 class BrowserSeccompTests(unittest.TestCase):
     def test_derives_one_deny_by_default_rootless_browser_profile(self) -> None:
         rendered = render_profile(SOURCE)
         profile = json.loads(rendered)
+        upstream = json.loads(SOURCE.read_text())
         self.assertEqual(profile["defaultAction"], "SCMP_ACT_ERRNO")
         self.assertEqual(
             profile["syscalls"][0]["names"],
             ["chroot", "clone", "setns", "unshare"],
         )
+        self.assertEqual(
+            set(profile["syscalls"][0]["names"])
+            - set(upstream["syscalls"][0]["names"]),
+            {"chroot"},
+        )
+        self.assertEqual(
+            profile["syscalls"][0]["args"], upstream["syscalls"][0]["args"]
+        )
+        self.assertEqual(
+            profile["syscalls"][0]["includes"], upstream["syscalls"][0]["includes"]
+        )
+        self.assertEqual(
+            profile["syscalls"][0]["excludes"], upstream["syscalls"][0]["excludes"]
+        )
+        self.assertEqual(profile["syscalls"][1:], upstream["syscalls"][1:])
         self.assertEqual(
             hashlib.sha256(rendered).hexdigest(),
             "4e893e9d976bf12cfb01912ed62b88079bb23ff9be5ebe3a2a264798908aec42",

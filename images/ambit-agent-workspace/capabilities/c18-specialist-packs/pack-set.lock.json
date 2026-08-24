@@ -20,6 +20,7 @@
       "ambit.runtime-pack/web-browser@1"
     ],
     "C18_SPREADSHEETS": [
+      "ambit.runtime-pack/data-research@1",
       "ambit.runtime-pack/office-authoring@1"
     ],
     "C18_WEB_APPLICATION": [
@@ -32,24 +33,24 @@
       "packRevisionRef": "ambit.runtime-pack/office-authoring@1",
       "provides": [
         "presentations_design",
+        "python",
         "spreadsheets"
       ],
       "requires": [
         "core",
-        "documents_publishing",
-        "python"
+        "documents_publishing"
       ]
     },
     {
       "directory": "pdf-ocr",
       "packRevisionRef": "ambit.runtime-pack/pdf-ocr@1",
       "provides": [
-        "pdf_scan_ocr"
+        "pdf_scan_ocr",
+        "python"
       ],
       "requires": [
         "core",
-        "documents_publishing",
-        "python"
+        "documents_publishing"
       ]
     },
     {
@@ -57,11 +58,11 @@
       "packRevisionRef": "ambit.runtime-pack/data-research@1",
       "provides": [
         "data_local_query",
+        "python",
         "research_scientific"
       ],
       "requires": [
-        "core",
-        "python"
+        "core"
       ]
     },
     {
