@@ -17,6 +17,7 @@ import {
   assertStopObservation,
   assertStopRequest,
   assertStoppedGenerationReceipt,
+  sameCanonical,
 } from '../dto/sandbox-generation-stop.contract'
 import {
   SandboxGenerationObservationDto,
@@ -28,6 +29,7 @@ import {
 import { Sandbox } from '../entities/sandbox.entity'
 import { SandboxState } from '../enums/sandbox-state.enum'
 import { RunnerApiError } from '../errors/runner-api-error'
+import { RunnerAdapter } from '../runner-adapter/runnerAdapter'
 import { SandboxExecutionAuthorityService } from './sandbox-execution-authority.service'
 import { SandboxService } from './sandbox.service'
 
@@ -64,7 +66,7 @@ export class SandboxGenerationStopService {
     try {
       const receipt = await adapter.stopSandboxGenerationOnce(sandbox.id, request)
       responseGuard(() => assertStoppedGenerationReceipt(receipt, request))
-      await this.reconcileStoppedState(sandbox)
+      await this.reconcileStoppedState(sandbox, adapter, receipt)
       return receipt
     } catch (error) {
       throw translateGenerationStopError(error)
@@ -81,7 +83,9 @@ export class SandboxGenerationStopService {
     try {
       const observation = await adapter.observeSandboxGenerationStop(sandbox.id, request)
       responseGuard(() => assertStopObservation(observation, request))
-      if (observation.status === 'complete') await this.reconcileStoppedState(sandbox)
+      if (observation.status === 'complete') {
+        await this.reconcileStoppedState(sandbox, adapter, observation.receipt as StoppedSandboxGenerationReceiptDto)
+      }
       return observation
     } catch (error) {
       throw translateGenerationStopError(error)
@@ -106,7 +110,21 @@ export class SandboxGenerationStopService {
     return authority
   }
 
-  private async reconcileStoppedState(sandbox: Sandbox): Promise<void> {
+  private async reconcileStoppedState(
+    sandbox: Sandbox,
+    adapter: RunnerAdapter,
+    receipt: StoppedSandboxGenerationReceiptDto,
+  ): Promise<void> {
+    const request = {
+      source: receipt.request.source,
+      owner: receipt.request.owner,
+      fence: receipt.request.fence,
+    }
+    const current = await adapter.observeSandboxGeneration(sandbox.id, request)
+    responseGuard(() => assertGenerationObservation(current, request))
+    if (current.state !== 'stopped' || !sameCanonical(current.generation, receipt.request.expectedGeneration)) {
+      throw new ConflictException('Historical stop receipt is not current stopped-generation authority.')
+    }
     if (sandbox.state === SandboxState.STOPPED) return
     await this.sandboxes.updateState(sandbox.id, SandboxState.STOPPED)
   }

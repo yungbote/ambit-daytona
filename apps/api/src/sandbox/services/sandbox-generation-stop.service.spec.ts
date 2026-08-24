@@ -44,6 +44,7 @@ describe(SandboxGenerationStopService.name, () => {
       stopSandboxGenerationOnce: jest.fn(),
       observeSandboxGenerationStop: jest.fn(),
     } as unknown as jest.Mocked<RunnerAdapter>
+    adapter.observeSandboxGeneration.mockResolvedValue(validGenerationObservation('stopped'))
     sandboxes = {
       findOneByIdOrName: jest.fn().mockResolvedValue(validSandbox()),
       updateState: jest.fn().mockResolvedValue(undefined),
@@ -92,6 +93,7 @@ describe(SandboxGenerationStopService.name, () => {
 
     await expect(service.stopOnce('org-1', 'sandbox-1', request)).resolves.toEqual(receipt)
     expect(adapter.stopSandboxGenerationOnce).toHaveBeenCalledWith('sandbox-1', request)
+    expect(adapter.observeSandboxGeneration).toHaveBeenCalledWith('sandbox-1', generationRequest())
     expect(sandboxes.updateState).toHaveBeenCalledWith('sandbox-1', SandboxState.STOPPED)
     expect(stopAuthorityFromReceipt(receipt)).toEqual({
       operationId: request.operationId,
@@ -125,6 +127,18 @@ describe(SandboxGenerationStopService.name, () => {
     adapter.stopSandboxGenerationOnce.mockResolvedValue(validReceipt(request))
 
     await service.stopOnce('org-1', 'sandbox-1', request)
+    expect(sandboxes.updateState).not.toHaveBeenCalled()
+  })
+
+  it('never lets a historical receipt mark a restarted generation stopped', async () => {
+    const request = validStopRequest()
+    adapter.stopSandboxGenerationOnce.mockResolvedValue(validReceipt(request))
+    const restarted = validGenerationObservation('running')
+    restarted.generation.restartCount = 1
+    restarted.generation.executionStartedAt = '2026-08-24T00:03:00Z'
+    adapter.observeSandboxGeneration.mockResolvedValueOnce(restarted)
+
+    await expect(service.stopOnce('org-1', 'sandbox-1', request)).rejects.toBeInstanceOf(ConflictException)
     expect(sandboxes.updateState).not.toHaveBeenCalled()
   })
 
@@ -232,14 +246,14 @@ function validStopRequest(): StopSandboxGenerationRequestDto {
   return request
 }
 
-function validGenerationObservation(): SandboxGenerationObservationDto {
+function validGenerationObservation(state: 'running' | 'stopped' = 'running'): SandboxGenerationObservationDto {
   const request = validStopRequest()
   return {
     source: structuredClone(request.source),
     owner: structuredClone(request.owner),
     fence: structuredClone(request.fence),
     generation: structuredClone(request.expectedGeneration),
-    state: 'running',
+    state,
     observedAt: '2026-08-24T00:00:30Z',
   }
 }
