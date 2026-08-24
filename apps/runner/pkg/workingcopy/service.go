@@ -187,7 +187,7 @@ func (s *Service) Capture(
 		if err := requireBinding(existing.Binding, binding); err != nil {
 			return CaptureReceipt{}, err
 		}
-		return s.resumeCapture(ctx, sandboxID, zonePath, existing)
+		return s.resumeCapture(ctx, zonePath, existing)
 	}
 
 	stopReceipt, err := s.requireCurrentStop(ctx, binding)
@@ -228,10 +228,10 @@ func (s *Service) Capture(
 		if err := requireBinding(winner.Binding, binding); err != nil {
 			return CaptureReceipt{}, err
 		}
-		return s.resumeCapture(ctx, sandboxID, zonePath, winner)
+		return s.resumeCapture(ctx, zonePath, winner)
 	}
 
-	return s.resumeCapture(ctx, sandboxID, zonePath, intent)
+	return s.resumeCapture(ctx, zonePath, intent)
 }
 
 func (s *Service) Observe(
@@ -437,6 +437,25 @@ func (s *Service) Delete(
 			if err := requireIdentity(intent, identity); err != nil {
 				return CaptureDeleteReceipt{}, err
 			}
+		} else {
+			// An opaque-looking providerResourceId is not deletion authority. When
+			// the intent has already disappeared, rederive the only admissible
+			// identity from the exact binding and the current terminal generation
+			// before publishing the irreversible retirement tombstone.
+			stopReceipt, stopErr := s.requireCurrentStop(ctx, identity.CaptureBinding)
+			if stopErr != nil {
+				return CaptureDeleteReceipt{}, stopErr
+			}
+			expectedProviderResourceID := providerResourceID(
+				identity.CaptureBinding,
+				stopReceipt.TerminalGeneration,
+			)
+			if identity.ProviderResourceID != expectedProviderResourceID {
+				return CaptureDeleteReceipt{}, fmt.Errorf(
+					"%w: absent capture identity does not derive from the current terminal generation",
+					ErrConflict,
+				)
+			}
 		}
 		deletion = captureDeletion{Version: 1, Identity: identity}
 		deletionBytes, marshalErr := json.Marshal(deletion)
@@ -510,7 +529,6 @@ func (s *Service) Exists(
 
 func (s *Service) resumeCapture(
 	ctx context.Context,
-	sandboxID string,
 	zonePath string,
 	intent captureIntent,
 ) (CaptureReceipt, error) {
@@ -542,7 +560,7 @@ func (s *Service) resumeCapture(
 		return CaptureReceipt{}, err
 	}
 	if !stagedExists {
-		staged, err = s.captureStableFile(ctx, sandboxID, zonePath, intent)
+		staged, err = s.captureStableFile(ctx, zonePath, intent)
 		if err != nil {
 			return CaptureReceipt{}, err
 		}
@@ -624,7 +642,6 @@ func (s *Service) resumeCapture(
 
 func (s *Service) captureStableFile(
 	ctx context.Context,
-	sandboxID string,
 	zonePath string,
 	intent captureIntent,
 ) (capturedFile, error) {
@@ -635,12 +652,13 @@ func (s *Service) captureStableFile(
 	if beforeStop.TerminalGeneration != intent.Generation {
 		return capturedFile{}, fmt.Errorf("%w: stopped generation changed before capture", ErrConflict)
 	}
-	before, err := s.statPathChain(ctx, sandboxID, zonePath)
+	containerID := intent.Generation.ContainerID
+	before, err := s.statPathChain(ctx, containerID, zonePath)
 	if err != nil {
 		return capturedFile{}, err
 	}
 	fileBefore := before[len(before)-1]
-	archive, copyStat, err := s.containers.CopyFromContainer(ctx, sandboxID, zonePath)
+	archive, copyStat, err := s.containers.CopyFromContainer(ctx, containerID, zonePath)
 	if err != nil {
 		return capturedFile{}, dockerReadError("open Docker archive", err)
 	}
@@ -664,7 +682,7 @@ func (s *Service) captureStableFile(
 		return capturedFile{}, err
 	}
 
-	after, err := s.statPathChain(ctx, sandboxID, zonePath)
+	after, err := s.statPathChain(ctx, containerID, zonePath)
 	if err != nil {
 		return capturedFile{}, err
 	}
@@ -688,7 +706,7 @@ func (s *Service) captureStableFile(
 
 func (s *Service) statPathChain(
 	ctx context.Context,
-	sandboxID string,
+	containerID string,
 	zonePath string,
 ) ([]containertypes.PathStat, error) {
 	parts := strings.Split(strings.TrimPrefix(zonePath, "/"), "/")
@@ -696,7 +714,7 @@ func (s *Service) statPathChain(
 	current := ""
 	for index, part := range parts {
 		current += "/" + part
-		stat, err := s.containers.ContainerStatPath(ctx, sandboxID, current)
+		stat, err := s.containers.ContainerStatPath(ctx, containerID, current)
 		if err != nil {
 			return nil, dockerReadError("stat admitted source path", err)
 		}
@@ -730,7 +748,7 @@ func (s *Service) readIntent(
 		return captureIntent{}, false, objectReadError("read capture intent", err)
 	}
 	var intent captureIntent
-	if err := strictJSON(data, &intent); err != nil || intent.Version != 1 {
+	if err := decodeCanonicalStoredJSON(data, &intent); err != nil || intent.Version != 1 {
 		return captureIntent{}, false, fmt.Errorf("%w: capture intent is not canonical", ErrConflict)
 	}
 	if _, err := s.validateBinding(intent.Binding.Source.ProviderResourceID, intent.Binding); err != nil {
@@ -758,7 +776,7 @@ func (s *Service) readDeletion(
 		return captureDeletion{}, false, objectReadError("read capture deletion", err)
 	}
 	var deletion captureDeletion
-	if err := strictJSON(data, &deletion); err != nil || deletion.Version != 1 {
+	if err := decodeCanonicalStoredJSON(data, &deletion); err != nil || deletion.Version != 1 {
 		return captureDeletion{}, false, fmt.Errorf("%w: capture deletion is not canonical", ErrConflict)
 	}
 	if _, err := s.validateBinding(
@@ -866,7 +884,7 @@ func (s *Service) readReceipt(
 		return CaptureReceipt{}, false, objectReadError("read capture receipt", err)
 	}
 	var receipt CaptureReceipt
-	if err := strictJSON(data, &receipt); err != nil {
+	if err := decodeCanonicalStoredJSON(data, &receipt); err != nil {
 		return CaptureReceipt{}, false, fmt.Errorf("%w: capture receipt is not canonical", ErrConflict)
 	}
 	if err := requireIdentity(intent, receipt.CaptureIdentity); err != nil ||
@@ -1172,6 +1190,20 @@ func validateProviderResourceID(value string) error {
 
 func strictJSON(data []byte, target any) error {
 	return generationstop.DecodeExactJSON(data, target)
+}
+
+func decodeCanonicalStoredJSON(data []byte, target any) error {
+	if err := strictJSON(data, target); err != nil {
+		return err
+	}
+	canonical, err := json.Marshal(target)
+	if err != nil {
+		return fmt.Errorf("marshal canonical durable JSON: %w", err)
+	}
+	if !bytes.Equal(data, canonical) {
+		return errors.New("durable JSON bytes are not canonical")
+	}
+	return nil
 }
 
 // DecodeExactJSON keeps the WorkingCopy API name while delegating schema

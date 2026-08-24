@@ -53,6 +53,14 @@ func TestCapturePersistsIntentBeforeOneStableStoppedContainerFile(t *testing.T) 
 	if containers.copyCalls != 1 {
 		t.Fatalf("expected one Docker archive read, got %d", containers.copyCalls)
 	}
+	if len(containers.copyContainerIDs) != 1 || containers.copyContainerIDs[0] != containers.generation.ID {
+		t.Fatalf("archive read did not address the immutable terminal container ID: %#v", containers.copyContainerIDs)
+	}
+	for _, containerID := range containers.statContainerIDs {
+		if containerID != containers.generation.ID {
+			t.Fatalf("source stat addressed reusable sandbox name instead of terminal container ID: %q", containerID)
+		}
+	}
 	if got := containers.copyPaths[0]; got != "/workspace/work/report.txt" {
 		t.Fatalf("unexpected provider path %q", got)
 	}
@@ -627,6 +635,56 @@ func TestStoredContentDriftFailsClosed(t *testing.T) {
 	}
 }
 
+func TestDurableJSONReadersRejectEquivalentNonCanonicalBytes(t *testing.T) {
+	t.Parallel()
+	for _, durableKind := range []string{"intent", "receipt", "deletion"} {
+		durableKind := durableKind
+		t.Run(durableKind, func(t *testing.T) {
+			binding := validBinding()
+			binding.ProviderName += "-noncanonical-" + durableKind
+			binding.RequestFingerprint = hashHex(binding.ProviderName)
+			objects := newFakeObjectStore()
+			service := mustService(t, newFakeContainer([]byte("canonical custody")), objects, binding.Authority)
+			receipt, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
+			if err != nil {
+				t.Fatalf("capture failed: %v", err)
+			}
+			if durableKind == "deletion" {
+				if _, err := service.Delete(context.Background(), binding.Source.ProviderResourceID, receipt.CaptureIdentity); err != nil {
+					t.Fatalf("seed deletion failed: %v", err)
+				}
+			}
+			keys := keysForIdentity(receipt.CaptureIdentity)
+			key := map[string]string{
+				"intent":   keys.intent,
+				"receipt":  keys.receipt,
+				"deletion": keys.deletion,
+			}[durableKind]
+			objects.mu.Lock()
+			object := objects.objects[key]
+			var equivalent any
+			if err := json.Unmarshal(object.data, &equivalent); err != nil {
+				objects.mu.Unlock()
+				t.Fatalf("decode fixture: %v", err)
+			}
+			reformatted, err := json.MarshalIndent(equivalent, "", "  ")
+			if err != nil {
+				objects.mu.Unlock()
+				t.Fatalf("reformat fixture: %v", err)
+			}
+			object.data = reformatted
+			object.contentSHA256 = sha256Digest(reformatted)
+			objects.objects[key] = object
+			objects.mu.Unlock()
+
+			_, readErr := service.Observe(context.Background(), binding.Source.ProviderResourceID, binding)
+			if !errors.Is(readErr, ErrConflict) {
+				t.Fatalf("equivalent non-canonical %s bytes were admitted: %v", durableKind, readErr)
+			}
+		})
+	}
+}
+
 func TestReadUsesExactBoundedRangesAndReportsOffsetsAndEOF(t *testing.T) {
 	t.Parallel()
 	binding := validBinding()
@@ -762,6 +820,43 @@ func TestDeleteCleansExactOrphansWhenIntentIsMissing(t *testing.T) {
 	objects.mu.Unlock()
 	if contentPresent || receiptPresent || !tombstonePresent {
 		t.Fatalf("orphan cleanup did not converge to its tombstone: content=%v receipt=%v tombstone=%v", contentPresent, receiptPresent, tombstonePresent)
+	}
+}
+
+func TestDeleteWithoutIntentRequiresIdentityDerivedFromCurrentTerminalGeneration(t *testing.T) {
+	t.Parallel()
+	binding := validBinding()
+	objects := newFakeObjectStore()
+	containers := newFakeContainer([]byte("never captured"))
+	service := mustService(t, containers, objects, binding.Authority)
+	forged := CaptureIdentity{
+		CaptureBinding:     binding,
+		ProviderResourceID: "daytona-working-copy-capture:v2:sha256:" + strings.Repeat("f", 64),
+	}
+
+	if _, err := service.Delete(context.Background(), binding.Source.ProviderResourceID, forged); !errors.Is(err, ErrConflict) {
+		t.Fatalf("opaque-shaped identity retired an absent binding without terminal derivation: %v", err)
+	}
+	objects.mu.Lock()
+	_, forgedTombstoneExists := objects.objects[deletionKey(bindingObjectRoot(binding))]
+	objects.mu.Unlock()
+	if forgedTombstoneExists {
+		t.Fatal("rejected absent identity published a poisoning tombstone")
+	}
+
+	exact := CaptureIdentity{
+		CaptureBinding:     binding,
+		ProviderResourceID: providerResourceID(binding, containers.generation.terminal()),
+	}
+	receipt, err := service.Delete(context.Background(), binding.Source.ProviderResourceID, exact)
+	if err != nil || receipt.CaptureIdentity != exact || receipt.Outcome != "already_absent" {
+		t.Fatalf("terminal-derived absent identity did not converge: %#v, %v", receipt, err)
+	}
+	objects.mu.Lock()
+	_, exactTombstoneExists := objects.objects[deletionKey(bindingObjectRoot(binding))]
+	objects.mu.Unlock()
+	if !exactTombstoneExists {
+		t.Fatal("terminal-derived absent identity did not publish its retirement tombstone")
 	}
 }
 
@@ -931,6 +1026,8 @@ type fakeContainer struct {
 	copyCalls         int
 	statCalls         int
 	copyPaths         []string
+	copyContainerIDs  []string
+	statContainerIDs  []string
 	inspectMutations  map[int]testContainerGeneration
 	statMutation      func(containertypes.PathStat) containertypes.PathStat
 	afterStatMutation func(containertypes.PathStat) containertypes.PathStat
@@ -1070,12 +1167,13 @@ func (authority *fakeStoppedGenerationAuthority) RequireCurrentReceipt(
 
 func (f *fakeContainer) ContainerStatPath(
 	_ context.Context,
-	_ string,
+	containerID string,
 	containerPath string,
 ) (containertypes.PathStat, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.statCalls++
+	f.statContainerIDs = append(f.statContainerIDs, containerID)
 	if len(f.statErrors) > 0 {
 		err := f.statErrors[0]
 		f.statErrors = f.statErrors[1:]
@@ -1111,13 +1209,14 @@ func (f *fakeContainer) ContainerStatPath(
 
 func (f *fakeContainer) CopyFromContainer(
 	_ context.Context,
-	_ string,
+	containerID string,
 	containerPath string,
 ) (io.ReadCloser, containertypes.PathStat, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.copyCalls++
 	f.copyPaths = append(f.copyPaths, containerPath)
+	f.copyContainerIDs = append(f.copyContainerIDs, containerID)
 	if f.beforeCopy != nil {
 		if err := f.beforeCopy(); err != nil {
 			return nil, containertypes.PathStat{}, err
