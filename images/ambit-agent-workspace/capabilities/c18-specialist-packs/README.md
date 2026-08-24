@@ -106,5 +106,14 @@ run with network disabled, all capabilities dropped, no-new-privileges,
 read-only rootfs, bounded PID/memory/CPU resources, private tmpfs scratch, and
 the exact rootless browser seccomp profile for `web-browser`.
 
+Reproducible image export must set BuildKit's predefined
+`SOURCE_DATE_EPOCH=0` build argument and use an OCI or Docker output with
+`rewrite-timestamp=true`. The install closures delete package-manager logs,
+host-generated hostname state, loader caches, and font caches after deriving
+the exact installed-content and fontconfig rosters; those mutable caches are
+not runtime authority. Reproducibility is proved by two no-cache exports from
+the same verified bundle producing the same manifest, config, and layer
+digests—not by reusing a build cache or comparing tags.
+
 Wheel and Debian lock replay takes the independently held input directories;
 the large upstream artifacts are never committed to this repository.
