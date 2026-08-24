@@ -66,13 +66,38 @@ SOURCE_CONTRACT_PATHS = (
     "renderer/ambit-render-pages.mjs",
     "renderer/docx-package-admission.mjs",
     "renderer/framed-jsonl-protocol.mjs",
-    "renderer/libreoffice-subreaper.py",
     "renderer/pdfjs-page-renderer.mjs",
     "renderer/process-group-execution.mjs",
+    "renderer/process-group-subreaper.py",
     "renderer/render-output-verification.mjs",
+    "renderer/render-terminal-arbiter.mjs",
     "renderer/render-contracts.mjs",
+    "renderer/restricted-xml.mjs",
     "structural/ambit-structural-python",
     "structural/verify_private_elf.py",
+    "toolchain-manifest.json",
+)
+
+PROTOCOL_SOURCE_PATHS = (
+    "Dockerfile",
+    "certification/audit_offline_inputs.py",
+    "certification/verify_render_output.mjs",
+    "certification/verify_signed_debian_snapshot.py",
+    "certification/verify_source_contracts.py",
+    "certification/verify_structural_contracts.py",
+    "certification/verify_structural_runtime_archive.py",
+    "renderer/ambit-render-document.mjs",
+    "renderer/ambit-render-pages.mjs",
+    "renderer/docx-package-admission.mjs",
+    "renderer/framed-jsonl-protocol.mjs",
+    "renderer/pdfjs-page-renderer.mjs",
+    "renderer/process-group-execution.mjs",
+    "renderer/process-group-subreaper.py",
+    "renderer/render-contracts.mjs",
+    "renderer/render-output-verification.mjs",
+    "renderer/render-terminal-arbiter.mjs",
+    "renderer/restricted-xml.mjs",
+    "structural/ambit-structural-python",
     "toolchain-manifest.json",
 )
 
@@ -397,6 +422,27 @@ def _verify_candidate_evidence(
         f"sha256:{hashlib.sha256(contract_bytes).hexdigest()}",
         "document render interface digest",
     )
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    documented_interface = re.search(
+        r"The stable component contract is:\n\n"
+        r"- role: `([^`]+)`;\n"
+        r"- interface: `([^`]+)`;\n"
+        r"- digest:\n  `([^`]+)`;\n"
+        r"- exact preimage: `([^`]+)`\.",
+        readme,
+    )
+    if documented_interface is None:
+        raise ValueError("documented render interface identity is absent")
+    _expect(
+        list(documented_interface.groups()),
+        [
+            render_interface["contract"]["roleRef"],
+            render_interface["contract"]["interfaceRef"],
+            render_interface["digest"],
+            "locks/document-render-interface.lock.json",
+        ],
+        "documented render interface identity",
+    )
     _expect(
         render_interface["contract"]["roleRef"],
         "ambit.runtime-component/document-renderer@1",
@@ -414,6 +460,7 @@ def _verify_candidate_evidence(
             "arguments",
             "authority",
             "cancellation",
+            "execution",
             "executable",
             "frames",
             "identities",
@@ -446,18 +493,51 @@ def _verify_candidate_evidence(
         contract["identities"]["protocolSources"],
         {
             relative: _raw_sha256(root / relative)
-            for relative in (
-                "renderer/ambit-render-document.mjs",
-                "renderer/docx-package-admission.mjs",
-                "renderer/framed-jsonl-protocol.mjs",
-                "renderer/libreoffice-subreaper.py",
-                "renderer/process-group-execution.mjs",
-                "renderer/render-output-verification.mjs",
-            )
+            for relative in PROTOCOL_SOURCE_PATHS
         },
         "document render protocol source roster",
     )
+    render_document_source = (
+        root / "renderer/ambit-render-document.mjs"
+    ).read_text(encoding="utf-8")
+    if "process.stderr.write" in render_document_source:
+        raise ValueError("top render helper plaintext stderr is forbidden")
+    for required in (
+        "new RenderTerminalArbiter()",
+        "streamSealedResponseBody",
+        "lineReader.close(new RenderControlAdmissionClosed())",
+        "process-group-subreaper.py",
+        "--internal-render-child",
+        "maximumTerminalWriteMilliseconds",
+        "maximumCleanupMilliseconds",
+        "all-render-process-groups-settled-and-private-roots-removed",
+    ):
+        if required not in render_document_source:
+            raise ValueError(f"whole-pipeline render control is absent: {required}")
+    if "renderPagesToDirectory({" in render_document_source:
+        raise ValueError("PDF.js/native rendering is not process-group isolated")
+    protocol_source = (root / "renderer/framed-jsonl-protocol.mjs").read_text(
+        encoding="utf-8"
+    )
+    if (
+        "canonicalBytes.equals(lineBytes)" not in protocol_source
+        or "Buffer.from(canonicalJson(value), 'utf8')" not in protocol_source
+    ):
+        raise ValueError("raw canonical UTF-8 frame admission is absent")
+    dockerfile_source = (root / "Dockerfile").read_text(encoding="utf-8")
+    for required in (
+        "renderer/process-group-subreaper.py",
+        "renderer/render-terminal-arbiter.mjs",
+        "renderer/restricted-xml.mjs",
+    ):
+        if required not in dockerfile_source:
+            raise ValueError(f"runtime image omits transitive behavior owner: {required}")
     _expect(contract["input"]["maximumBytes"], 67108864, "interface DOCX bytes")
+    _expect(
+        contract["input"]["metadataXmlBounds"],
+        "bytes=4194304,nodes=65536,depth=64,attributes-per-element=64,attribute-bytes=1048576,entities=65536,decoded-text-bytes=4194304",
+        "interface restricted XML bounds",
+    )
     _expect(
         contract["output"]["maximumBytesPerPage"],
         67108864,
@@ -467,6 +547,48 @@ def _verify_candidate_evidence(
         contract["output"]["maximumTotalOutputBytes"],
         536870912,
         "interface total output bytes",
+    )
+    _expect(
+        contract["output"]["evidenceInvariant"],
+        "source<=input-max;pdf<=pdf-max;dense-exact-page-identity;width*height=pixels;png-dimensions-and-digest;per-page-and-aggregate-bounds",
+        "interface render evidence invariant",
+    )
+    _expect(
+        contract["execution"],
+        _read(root / "policy/render-policy.json")["execution"],
+        "interface whole-pipeline execution bounds",
+    )
+    _expect(
+        contract["runtime"],
+        {
+            "network": "none",
+            "pathAuthority": "none",
+            "processModel": "one-helper-with-separate-bounded-libreoffice-and-pdfjs-native-process-groups",
+            "rootFilesystem": "read-only",
+            "taskCache": {
+                "path": "/tmp",
+                "filesystem": "task-private-tmpfs",
+                "requiredBytes": 67108864,
+                "uid": 1000,
+                "gid": 1000,
+                "mode": "0700",
+            },
+            "workspaceScratch": {
+                "path": "/workspace",
+                "filesystem": "task-private-tmpfs",
+                "requiredBytes": 838860800,
+                "derivation": "max(input-docx+intermediate-pdf,intermediate-pdf+page-output)+33554432-bounded-overhead",
+                "uid": 1000,
+                "gid": 1000,
+                "mode": "0700",
+            },
+        },
+        "interface runtime and scratch contract",
+    )
+    _expect(
+        contract["transport"]["plaintextHelperStderr"],
+        "forbidden",
+        "render PTY plaintext stderr",
     )
     _expect(
         contract["policy"],
@@ -494,6 +616,26 @@ def _verify_candidate_evidence(
         "runtime cancellation state",
     )
     _expect(cancellation["helperProtocol"]["exitCode"], 130, "cancel exit code")
+    _expect(
+        cancellation["helperProtocol"]["typedOutcomeRequires"],
+        [
+            "exact-nonce-match",
+            "all-render-process-groups-empty",
+            "private-workspace-root-removed",
+            "private-cache-root-removed",
+        ],
+        "complete render cancellation quiescence",
+    )
+    _expect(
+        contract["cancellation"]["quiescence"],
+        "all-render-process-groups-settled-and-private-roots-removed",
+        "interface cancellation quiescence",
+    )
+    _expect(
+        contract["cancellation"]["successCommit"],
+        "control-admission-atomically-closed-before-awaited-response_end-write",
+        "interface success terminal arbitration",
+    )
     hard_failure = cancellation["hardTransportFailure"]
     _expect(
         hard_failure["typedCancelledWithoutProviderReceipt"],
@@ -1494,6 +1636,7 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
         render,
         {
             "canonicalArtifactBoundary",
+            "execution",
             "input",
             "libreOffice",
             "pages",
@@ -1501,6 +1644,7 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
             "policyRef",
             "renderOutputGrantsCanonicalAuthority",
             "schema",
+            "scratch",
         },
         "render policy",
     )
@@ -1516,10 +1660,28 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
             "maximumPackageEntries",
             "maximumRelationshipBytes",
             "maximumUncompressedBytes",
+            "maximumXmlAttributeBytes",
+            "maximumXmlAttributesPerElement",
+            "maximumXmlBytes",
+            "maximumXmlDecodedTextBytes",
+            "maximumXmlDepth",
+            "maximumXmlEntityReferences",
+            "maximumXmlNodes",
             "passwordProtected",
             "remoteUrls",
         },
         "render input policy",
+    )
+    _keys(
+        render["execution"],
+        {
+            "maximumChildStderrBytes",
+            "maximumChildStdoutBytes",
+            "maximumCleanupMilliseconds",
+            "maximumPipelineWallMilliseconds",
+            "maximumTerminalWriteMilliseconds",
+        },
+        "render execution policy",
     )
     _keys(
         render["libreOffice"],
@@ -1570,6 +1732,16 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
         "render PDF.js policy",
     )
     _keys(
+        render["scratch"],
+        {
+            "cacheRequiredBytes",
+            "derivation",
+            "workspaceOverheadBytes",
+            "workspaceRequiredBytes",
+        },
+        "render scratch policy",
+    )
+    _keys(
         license_policy,
         {
             "nativeCanvas",
@@ -1614,6 +1786,29 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
         268435456,
         "DOCX uncompressed bytes",
     )
+    _expect(render["input"]["maximumXmlBytes"], 4194304, "DOCX XML bytes")
+    _expect(render["input"]["maximumXmlNodes"], 65536, "DOCX XML nodes")
+    _expect(render["input"]["maximumXmlDepth"], 64, "DOCX XML depth")
+    _expect(
+        render["input"]["maximumXmlAttributesPerElement"],
+        64,
+        "DOCX XML attributes",
+    )
+    _expect(
+        render["input"]["maximumXmlAttributeBytes"],
+        1048576,
+        "DOCX XML attribute bytes",
+    )
+    _expect(
+        render["input"]["maximumXmlEntityReferences"],
+        65536,
+        "DOCX XML entity references",
+    )
+    _expect(
+        render["input"]["maximumXmlDecodedTextBytes"],
+        4194304,
+        "DOCX XML decoded bytes",
+    )
     _expect(
         render["libreOffice"]["maximumPdfBytes"],
         268435456,
@@ -1632,6 +1827,33 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
     )
     _expect(render["pages"]["rasterScale"], 2, "page raster scale")
     _expect(render["pages"]["background"], "#ffffff", "page background")
+    _expect(
+        render["execution"],
+        {
+            "maximumChildStderrBytes": 65536,
+            "maximumChildStdoutBytes": 16384,
+            "maximumCleanupMilliseconds": 10000,
+            "maximumPipelineWallMilliseconds": 180000,
+            "maximumTerminalWriteMilliseconds": 5000,
+        },
+        "whole-pipeline execution bounds",
+    )
+    expected_workspace_bytes = max(
+        render["input"]["maximumBytes"]
+        + render["libreOffice"]["maximumPdfBytes"],
+        render["libreOffice"]["maximumPdfBytes"]
+        + render["pages"]["maximumTotalOutputBytes"],
+    ) + render["scratch"]["workspaceOverheadBytes"]
+    _expect(
+        render["scratch"],
+        {
+            "cacheRequiredBytes": 67108864,
+            "derivation": "max(input-docx+intermediate-pdf,intermediate-pdf+page-output)+bounded-overhead",
+            "workspaceOverheadBytes": 33554432,
+            "workspaceRequiredBytes": expected_workspace_bytes,
+        },
+        "derived render scratch bounds",
+    )
     _expect(
         render["pdfjs"]["requiredGlobals"],
         ["DOMMatrix", "ImageData", "Path2D"],

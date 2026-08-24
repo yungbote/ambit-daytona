@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import tempfile
 import unittest
@@ -44,7 +45,67 @@ class SourceContractTests(unittest.TestCase):
         update(value)
         path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         if refresh_manifest:
-            self.refresh_manifest_digest(relative)
+            interface = json.loads(
+                (
+                    self.root / "locks/document-render-interface.lock.json"
+                ).read_text(encoding="utf-8")
+            )
+            if relative in interface["contract"]["identities"]["protocolSources"]:
+                self.refresh_protocol_source(relative)
+            elif relative == "policy/render-policy.json":
+                self.refresh_manifest_digest(relative)
+                interface["contract"]["policy"]["digest"] = (
+                    f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
+                )
+                interface_path = (
+                    self.root / "locks/document-render-interface.lock.json"
+                )
+                interface_path.write_text(
+                    json.dumps(interface, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                self.refresh_interface_digest()
+            else:
+                self.refresh_manifest_digest(relative)
+
+    def refresh_interface_digest(self) -> str:
+        relative = "locks/document-render-interface.lock.json"
+        path = self.root / relative
+        value = json.loads(path.read_text(encoding="utf-8"))
+        contract_bytes = json.dumps(
+            value["contract"], sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        digest = f"sha256:{hashlib.sha256(contract_bytes).hexdigest()}"
+        value["digest"] = digest
+        path.write_text(
+            json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        readme = self.root / "README.md"
+        text = readme.read_text(encoding="utf-8")
+        text, count = re.subn(
+            r"(?<=- digest:\n  `)sha256:[0-9a-f]{64}(?=`;)",
+            digest,
+            text,
+            count=1,
+        )
+        if count != 1:
+            raise AssertionError("README interface digest anchor is not exact")
+        readme.write_text(text, encoding="utf-8")
+        self.refresh_manifest_digest(relative)
+        self.refresh_manifest_digest("README.md")
+        return digest
+
+    def refresh_protocol_source(self, relative: str) -> None:
+        interface = self.root / "locks/document-render-interface.lock.json"
+        value = json.loads(interface.read_text(encoding="utf-8"))
+        value["contract"]["identities"]["protocolSources"][relative] = (
+            f"sha256:{hashlib.sha256((self.root / relative).read_bytes()).hexdigest()}"
+        )
+        interface.write_text(
+            json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        self.refresh_manifest_digest(relative)
+        self.refresh_interface_digest()
 
     def assert_rejected(self, relative: str, update) -> None:
         self.mutate(relative, update)
@@ -187,13 +248,67 @@ class SourceContractTests(unittest.TestCase):
         )
 
     def test_provider_launch_cannot_run_helper_after_stty_failure(self) -> None:
-        self.assert_rejected(
+        self.mutate(
             "locks/document-render-interface.lock.json",
             lambda value: value["contract"]["transport"].__setitem__(
                 "providerLaunch",
                 "stty raw -echo -onlcr; exec exact-helper --framed-jsonl --nonce exact-nonce",
             ),
+            refresh_manifest=False,
         )
+        self.refresh_interface_digest()
+        with self.assertRaisesRegex(ValueError, "fail-closed render provider launch differs"):
+            verify(self.root)
+
+    def test_refreshed_identity_cannot_authorize_plaintext_helper_stderr(self) -> None:
+        relative = "renderer/ambit-render-document.mjs"
+        path = self.root / relative
+        path.write_text(
+            path.read_text(encoding="utf-8")
+            + "\nprocess.stderr.write('forbidden plaintext')\n",
+            encoding="utf-8",
+        )
+        self.refresh_protocol_source(relative)
+        with self.assertRaisesRegex(ValueError, "plaintext stderr is forbidden"):
+            verify(self.root)
+
+    def test_refreshed_identity_cannot_weaken_raw_canonical_byte_admission(self) -> None:
+        relative = "renderer/framed-jsonl-protocol.mjs"
+        path = self.root / relative
+        source = path.read_text(encoding="utf-8")
+        path.write_text(
+            source.replace(
+                "!canonicalBytes.equals(lineBytes)",
+                "false",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        self.refresh_protocol_source(relative)
+        with self.assertRaisesRegex(ValueError, "raw canonical UTF-8 frame admission is absent"):
+            verify(self.root)
+
+    def test_documented_interface_identity_cannot_drift_from_lock(self) -> None:
+        readme = self.root / "README.md"
+        text = readme.read_text(encoding="utf-8")
+        current = json.loads(
+            (self.root / "locks/document-render-interface.lock.json").read_text(
+                encoding="utf-8"
+            )
+        )["digest"]
+        readme.write_text(
+            text.replace(
+                current,
+                f"sha256:{'0' * 64}",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        self.refresh_manifest_digest("README.md")
+        with self.assertRaisesRegex(
+            ValueError, "documented render interface identity differs"
+        ):
+            verify(self.root)
 
     def test_structural_archive_and_materializer_authority_cannot_self_promote(self) -> None:
         self.assert_rejected(
