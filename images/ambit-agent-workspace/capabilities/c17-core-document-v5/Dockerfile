@@ -11,16 +11,27 @@ RUN --network=none --mount=type=bind,from=public_inputs,source=.,target=/inputs,
     grep -Fx '  "state": "ready",' locks/offline-build-input.lock.json; \
     cd /inputs; \
     sha256sum -c /source/locks/offline-public-artifacts.sha256; \
+    sha256sum -c /source/locks/offline-frozen-evidence.sha256; \
     while IFS='  ' read -r expected path; do \
       test -f "${path}"; \
       test ! -L "${path}"; \
       test "$(wc -c < "${path}")" = "${expected}"; \
     done < /source/locks/offline-public-artifacts.bytes; \
+    while IFS='  ' read -r expected path; do \
+      test -f "${path}"; \
+      test ! -L "${path}"; \
+      test "$(wc -c < "${path}")" = "${expected}"; \
+    done < /source/locks/offline-frozen-evidence.bytes; \
     cut -d ' ' -f 3 /source/locks/offline-public-artifacts.sha256 \
       > /tmp/public-files.expected; \
     find public -type f -print | LC_ALL=C sort > /tmp/public-files.actual; \
     cmp /tmp/public-files.expected /tmp/public-files.actual; \
     test -z "$(find public -type l -print -quit)"; \
+    cut -d ' ' -f 3 /source/locks/offline-frozen-evidence.sha256 \
+      > /tmp/frozen-files.expected; \
+    find structural -type f -print | LC_ALL=C sort > /tmp/frozen-files.actual; \
+    cmp /tmp/frozen-files.expected /tmp/frozen-files.actual; \
+    test -z "$(find structural -type l -print -quit)"; \
     test -f /inputs/debian/runtime-debs.sha256; \
     test -f /inputs/debian/runtime-dpkg.lock; \
     test -f /inputs/lineage/installed-render-engine-lineage.json; \
@@ -158,7 +169,74 @@ USER 1000:1000
 WORKDIR /workspace
 ENTRYPOINT ["sleep", "infinity"]
 
-FROM renderer_substrate AS core_document_v5
+FROM renderer_substrate AS structural_renderer_substrate
+USER root
+COPY --from=public_inputs /structural/core-document-v4-structural-runtime.tar /tmp/structural-runtime.tar
+COPY --from=public_inputs /structural/conformance/ /tmp/structural-conformance/
+COPY structural/ambit-structural-python /tmp/ambit-structural-python
+COPY locks/structural-runtime-files.sha256 /tmp/structural-runtime-files.sha256
+COPY locks/structural-runtime-links.txt /tmp/structural-runtime-links.txt
+RUN --network=none set -eu; \
+    echo '89f4f0fdcb0376e5079922a3bfb6dcc3a0262ab5a0e2449813f2b658ea94641c  /tmp/structural-runtime.tar' | sha256sum -c -; \
+    install -d -m 0555 /opt/ambit/structural-runtime \
+      /opt/ambit/runtime-pack/core-document-v5/conformance; \
+    tar -xf /tmp/structural-runtime.tar -C /opt/ambit/structural-runtime \
+      --strip-components=1; \
+    cd /opt/ambit/structural-runtime; \
+    sha256sum -c /tmp/structural-runtime-files.sha256; \
+    cut -d ' ' -f 3 /tmp/structural-runtime-files.sha256 \
+      > /tmp/structural-files.expected; \
+    find . -type f -print | sed 's#^./##' | LC_ALL=C sort \
+      > /tmp/structural-files.actual; \
+    cmp /tmp/structural-files.expected /tmp/structural-files.actual; \
+    find . -type l -printf '%P -> %l\n' | LC_ALL=C sort \
+      > /tmp/structural-links.actual; \
+    cmp /tmp/structural-runtime-links.txt /tmp/structural-links.actual; \
+    cd /; \
+    install -m 0555 /tmp/ambit-structural-python \
+      /opt/ambit/runtime-pack/core-document-v5/bin/ambit-structural-python; \
+    install -m 0444 /tmp/structural-conformance/* \
+      /opt/ambit/runtime-pack/core-document-v5/conformance/; \
+    /opt/ambit/runtime-pack/core-document-v5/bin/ambit-structural-python \
+      -c 'from importlib.metadata import version; import docx,lxml,mammoth,cobble,typing_extensions; assert [version(n) for n in ("python-docx","lxml","mammoth","cobble","typing-extensions")] == ["1.2.0","6.1.2","1.12.1","0.1.4","4.16.0"]'; \
+    rm -f /tmp/structural-runtime.tar /tmp/structural-runtime-files.sha256 \
+      /tmp/structural-runtime-links.txt /tmp/structural-files.* \
+      /tmp/structural-links.actual /tmp/ambit-structural-python; \
+    find /opt/ambit/structural-runtime -type d -exec chmod 0555 {} +; \
+    find /opt/ambit/structural-runtime -type f -exec chmod 0444 {} +; \
+    chmod 0555 /opt/ambit/structural-runtime/bin/python3.14 \
+      /opt/ambit/structural-runtime/lib/ld-linux-x86-64.so.2
+RUN --network=none \
+    --mount=type=secret,id=ambit_atomic_materializer_source_archive,required=true \
+    --mount=type=secret,id=ambit_atomic_materializer_binary,required=true \
+    set -eu; \
+    test "$(wc -c < /run/secrets/ambit_atomic_materializer_source_archive)" = 184320; \
+    echo 'af8db17dc5d7b2266444efc4911661659fdaf23035b7dde0172f29d9e55374ca  /run/secrets/ambit_atomic_materializer_source_archive' | sha256sum -c -; \
+    test "$(wc -c < /run/secrets/ambit_atomic_materializer_binary)" = 2568340; \
+    echo '8d4405a1bd8f5d9d65be0860e52cab75cc9b7f5f659e510b4932347e0c6008e5  /run/secrets/ambit_atomic_materializer_binary' | sha256sum -c -; \
+    install -m 0555 /run/secrets/ambit_atomic_materializer_binary \
+      /opt/ambit/runtime-pack/core-document-v5/bin/ambit-atomic-materialize; \
+    tar -xOf /run/secrets/ambit_atomic_materializer_source_archive \
+      runtime/agent-workspace-atomic-materializer/LICENSE.md \
+      > /tmp/ATOMIC-MATERIALIZER-LICENSE.md; \
+    tar -xOf /run/secrets/ambit_atomic_materializer_source_archive \
+      runtime/agent-workspace-atomic-materializer/license.lock.json \
+      > /tmp/atomic-materializer-license.lock.json; \
+    echo 'ebda4883114f2939d766c552df33881f40da5710f6af5abbfe31a92c73070aff  /tmp/ATOMIC-MATERIALIZER-LICENSE.md' | sha256sum -c -; \
+    echo '710d581169c105538897e9b6a719c47d437ceaeb980784e7996f8227264cc89c  /tmp/atomic-materializer-license.lock.json' | sha256sum -c -; \
+    install -m 0444 /tmp/ATOMIC-MATERIALIZER-LICENSE.md \
+      /tmp/atomic-materializer-license.lock.json \
+      /opt/ambit/runtime-pack/core-document-v5/licenses/; \
+    rm -f /tmp/ATOMIC-MATERIALIZER-LICENSE.md \
+      /tmp/atomic-materializer-license.lock.json
+LABEL org.opencontainers.image.title="ambit-c17-core-document-v5-structural-renderer-substrate" \
+      org.opencontainers.image.version="5.0.0-structural-renderer-substrate-unavailable" \
+      io.ambit.runtime-pack-authority="none" \
+      io.ambit.structural-source="ambit.runtime-pack/core-document@4-curated-files" \
+      io.ambit.activation="forbidden"
+USER 1000:1000
+
+FROM structural_renderer_substrate AS core_document_v5
 RUN --network=none --mount=type=secret,id=ambit_capture_helper_archive,required=true \
     set -eu; \
     echo 'core-document@5 unavailable: @4 structural/materializer composition and capture helper admission are not frozen' >&2; \
