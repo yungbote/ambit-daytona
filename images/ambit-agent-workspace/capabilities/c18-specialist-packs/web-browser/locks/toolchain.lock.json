@@ -46,6 +46,14 @@
     "licenseSha256": "sha256:45873d00a0dd243596deb4aa23b2493b3d1f0671921bf2538ea431d7380220eb",
     "version": "1.55.0"
   },
+  "sandbox": {
+    "chromiumSandboxRequired": true,
+    "conformanceSeccompProfile": {
+      "path": "../../policy/playwright-seccomp-v1.55.0.json",
+      "sha256": "sha256:cc3e61cabda6bbc1e53e54d27ba4d55a9d3be829b6dd1a596f4a7b31b1cc7849",
+      "source": "https://github.com/microsoft/playwright/blob/v1.55.0/utils/docker/seccomp_profile.json"
+    }
+  },
   "schema": "ambit.c18-toolchain-lock/v1",
   "state": "candidate"
 }

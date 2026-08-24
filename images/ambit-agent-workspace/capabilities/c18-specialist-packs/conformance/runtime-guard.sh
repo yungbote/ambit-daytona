@@ -24,8 +24,10 @@ test -z "$(find "${output_root}" -mindepth 1 -maxdepth 1 -print -quit)"
 
 cap_eff=$(awk '$1 == "CapEff:" {print $2}' /proc/self/status)
 no_new_privileges=$(awk '$1 == "NoNewPrivs:" {print $2}' /proc/self/status)
+seccomp_mode=$(awk '$1 == "Seccomp:" {print $2}' /proc/self/status)
 test "${cap_eff}" = 0000000000000000
 test "${no_new_privileges}" = 1
+test "${seccomp_mode}" = 2
 
 if touch /ambit-c18-root-write-probe 2>/dev/null; then
   rm -f /ambit-c18-root-write-probe
@@ -69,6 +71,7 @@ fi
   printf 'pack\t%s\n' "${pack_id}"
   printf 'root_filesystem\tread_only\n'
   printf 'runtime_installers\tabsent\n'
+  printf 'seccomp_mode\t%s\n' "${seccomp_mode}"
   printf 'uid\t%s\n' "$(id -u)"
   printf 'user\t%s\n' "$(id -un)"
 } > "${output_root}/runtime-guard.tsv"

@@ -106,6 +106,20 @@ class SourceContractTests(unittest.TestCase):
                 "does not enable the Chromium sandbox",
             ):
                 verify_source(root, verify_hashes=False)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "source"
+            shutil.copytree(SOURCE_ROOT, root)
+            toolchain_path = root / "web-browser/locks/toolchain.lock.json"
+            toolchain = json.loads(toolchain_path.read_text())
+            toolchain["sandbox"]["conformanceSeccompProfile"]["sha256"] = (
+                "sha256:" + "0" * 64
+            )
+            toolchain_path.write_text(json.dumps(toolchain), encoding="utf-8")
+            with self.assertRaisesRegex(
+                SourceContractError,
+                "web seccomp profile identity",
+            ):
+                verify_source(root, verify_hashes=False)
 
 
 if __name__ == "__main__":
