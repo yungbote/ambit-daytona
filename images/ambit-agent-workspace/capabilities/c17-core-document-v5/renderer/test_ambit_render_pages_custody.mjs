@@ -17,7 +17,6 @@ import test from 'node:test'
 
 import {
   admitEmptyOutputDirectory,
-  parseArguments,
   readRegularNoFollow,
   reproveOutputDirectory,
   writeDurableOutput,
@@ -31,36 +30,6 @@ async function temporaryRoot(run) {
     await rm(root, { recursive: true, force: true })
   }
 }
-
-test('parses only the authority-explicit CLI argument roster', () => {
-  assert.deepEqual(
-    parseArguments([
-      '--input',
-      '/input.pdf',
-      '--output',
-      '/output',
-      '--backend-lineage',
-      '/lineage.json',
-    ]),
-    {
-      input: '/input.pdf',
-      output: '/output',
-      backendLineage: '/lineage.json',
-    },
-  )
-  assert.throws(
-    () =>
-      parseArguments([
-        '--input',
-        '/input.pdf',
-        '--output',
-        '/output',
-        '--lineage',
-        '/lineage.json',
-      ]),
-    /--backend-lineage/,
-  )
-})
 
 test('reads one no-follow immutable file and rejects writable or linked inputs', async () => {
   await temporaryRoot(async (root) => {

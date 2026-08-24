@@ -37,14 +37,8 @@
   ],
   "resolution": {
     "installRecommends": false,
-    "state": "unavailable",
-    "requiredClosureLock": "debian-closure.lock.json",
-    "missing": [
-      "exact-signed-packages-index-digests",
-      "exact-binary-deb-sha256-roster",
-      "exact-source-artifact-sha256-roster",
-      "exact-installed-dpkg-closure",
-      "exact-copyright-file-digest-roster"
-    ]
+    "state": "candidate-ready",
+    "requiredClosureLock": "debian-runtime-dpkg.lock",
+    "missing": []
   }
 }

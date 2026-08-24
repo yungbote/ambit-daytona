@@ -1,0 +1,64 @@
+{
+  "schema": "ambit.runtime-pack-cancellation-authority-lock/v1",
+  "state": "candidate-ready-local-xfs",
+  "helperProtocol": {
+    "cancelFrame": "canonical-jsonl:{schema,kind=cancel,nonce}",
+    "terminalFrame": "canonical-jsonl:{schema,kind=cancelled,nonce,outcome,exitCode,quiescence}",
+    "exitCode": 130,
+    "typedOutcomeRequires": [
+      "exact-nonce-match",
+      "libreoffice-process-group-empty",
+      "private-workspace-root-removed",
+      "private-cache-root-removed"
+    ]
+  },
+  "hardTransportFailure": {
+    "typedCancelledWithoutProviderReceipt": "forbidden",
+    "requiredAuthority": "ambit.runtime-provider-quiescence-receipt/v1",
+    "localXfsAdapter": {
+      "interfaceRef": "ambit.runtime-provider-quiescence/local-xfs-isolated-docker@1",
+      "interfaceDigest": "sha256:17c0d841a4d1449ba0f773c5c76418a1fc68c675e94ecbef70195666b36f1a1f",
+      "interfaceContract": {
+        "schema": "ambit.runtime-provider-quiescence-contract/v1",
+        "provider": "local-xfs-isolated-docker",
+        "repository": "yungbote/ambit-daytona",
+        "sourceCommit": "b0efa08fb744c94cec5e074a6fc34ae340a4e177",
+        "launcher": {
+          "path": "docker/ambit-local/stop-isolated-docker.sh",
+          "sha256": "sha256:a8eba1b974859aecb6423daa1babbce27fb6ca10314fdd0da59c862b014a0a09"
+        },
+        "supervisor": {
+          "path": "docker/ambit-local/isolated_runtime_supervisor.py",
+          "sha256": "sha256:8a5f11cafb228b5f79a3d0a468bc35d5e5a9b32d4f800e6baec135801613be1f"
+        },
+        "operations": [
+          "ensure-stopped",
+          "ensure-stopped-orphaned"
+        ],
+        "receipt": {
+          "schema": "ambit.local-daytona-isolated-docker-stop/v2",
+          "exactFields": [
+            "bootId",
+            "cgroupRemoved",
+            "observedAt",
+            "outcome",
+            "runtimeRootRemoved",
+            "schema",
+            "socketRootRemoved",
+            "stateRoot"
+          ],
+          "required": {
+            "outcome": "passed",
+            "runtimeRootRemoved": true,
+            "socketRootRemoved": true,
+            "cgroupRemoved": true
+          }
+        }
+      }
+    },
+    "cloudDaytonaAdapter": {
+      "state": "unavailable",
+      "requiredBeforeActivation": "provider-runtime-quiescence-receipt-v1"
+    }
+  }
+}

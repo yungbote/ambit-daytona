@@ -181,7 +181,11 @@ test('creates deterministic byte-free candidate lineage with no authority', () =
     admitPngPageEvidence(plan, testPng(plan.width, plan.height, index)),
   )
   const input = {
-    intermediatePdfSha256: `sha256:${'1'.repeat(64)}`,
+    sourceDocument: {
+      format: 'docx',
+      sha256: `sha256:${'1'.repeat(64)}`,
+      bytes: 2048,
+    },
     intermediatePdfBytes: 1024,
     policySha256: `sha256:${'2'.repeat(64)}`,
     pages,
@@ -200,7 +204,10 @@ test('creates deterministic byte-free candidate lineage with no authority', () =
   )
   const changed = createRenderManifest({
     ...input,
-    intermediatePdfSha256: `sha256:${'3'.repeat(64)}`,
+    sourceDocument: {
+      ...input.sourceDocument,
+      sha256: `sha256:${'3'.repeat(64)}`,
+    },
   })
   assert.notEqual(first.manifestDigest, changed.manifestDigest)
 })
@@ -217,7 +224,11 @@ test('rejects reordered pages and substituted engine lineage', () => {
     admitPngPageEvidence(plan, testPng(plan.width, plan.height, index)),
   )
   const base = {
-    intermediatePdfSha256: `sha256:${'1'.repeat(64)}`,
+    sourceDocument: {
+      format: 'docx',
+      sha256: `sha256:${'1'.repeat(64)}`,
+      bytes: 2048,
+    },
     intermediatePdfBytes: 1024,
     policySha256: `sha256:${'2'.repeat(64)}`,
     pages,

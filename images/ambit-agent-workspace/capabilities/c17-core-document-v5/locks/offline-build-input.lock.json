@@ -1,8 +1,9 @@
 {
   "schema": "ambit.runtime-pack-offline-build-input-lock/v1",
-  "state": "unavailable",
+  "state": "candidate-ready",
   "platform": "linux/amd64",
   "namedBuildContext": "public_inputs",
+  "materializerNamedBuildContext": "materializer_inputs",
   "networkDuringBuild": "none",
   "buildFrontend": {
     "reference": "docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e",
@@ -27,7 +28,7 @@
     },
     {
       "path": "public/canvas/canvas-source-062130c03715f275fd46a59a4bb224e907c91686.tar.gz",
-      "bytes": 2273773,
+      "bytes": 29917286,
       "sha256": "sha256:a742c5453323327c4d6de7bfdcc69d0678144c3bf0db8f7dc246668dc5273c22"
     },
     {
@@ -92,52 +93,34 @@
       "sha256": "sha256:b831597c8230810ed87a7eb4f871f281adfdb4bf04c6597e29bad702e13be0d5"
     }
   ],
-  "requiredUnfrozenEvidence": [
-    "canvas/complete-native-source-license.lock.json",
-    "debian/copyright-files.sha256",
-    "debian/runtime-debs.sha256",
-    "debian/runtime-dpkg.lock",
-    "debian/source-artifacts.sha256",
-    "fonts/font-files.sha256",
-    "fonts/font-license-inventory.json",
-    "fonts/fontconfig-roster.json",
-    "lineage/installed-render-engine-lineage.json",
-    "materializer/publisher-authentication.json",
-    "node/release-keyring-verification.json",
-    "structural/daytona-xfs-conformance.json",
-    "structural/native-source-license.lock.json",
-    "structural/original-wheel-archives.sha256"
-  ],
+  "requiredUnfrozenEvidence": [],
   "atomicMaterializer": {
-    "state": "unavailable",
+    "state": "candidate-ready",
     "sourceArchiveSecretId": "ambit_atomic_materializer_source_archive",
     "sourceArchiveBytes": 184320,
     "sourceArchiveSha256": "sha256:af8db17dc5d7b2266444efc4911661659fdaf23035b7dde0172f29d9e55374ca",
     "binarySecretId": "ambit_atomic_materializer_binary",
     "binaryBytes": 2568340,
     "binarySha256": "sha256:8d4405a1bd8f5d9d65be0860e52cab75cc9b7f5f659e510b4932347e0c6008e5",
-    "includedInNamedContext": false,
-    "publisherAuthentication": "unavailable"
+    "includedInNamedContext": true,
+    "publisherAuthentication": "local-content-binding-only"
   },
   "proprietaryHelper": {
-    "transport": "required-buildkit-secret",
-    "secretId": "ambit_capture_helper_archive",
+    "transport": "backend-provider-adapter-not-image-input",
+    "secretId": null,
     "includedInPublicContext": false,
-    "state": "unavailable"
+    "state": "provider-external"
   },
   "buildTargets": {
-    "rendererSubstrate": "unavailable",
-    "coreDocumentV5": "unavailable"
+    "rendererSubstrate": "candidate-ready",
+    "coreDocumentV5": "candidate-ready"
   },
   "missing": [
-    "exact-debian-runtime-binary-source-license-closure",
-    "exact-font-file-fontconfig-license-rosters",
-    "verified-node-release-keyring-and-runtime-closure",
-    "complete-canvas-skia-cargo-source-license-vulnerability-closure",
-    "root-owned-installed-engine-lineage",
     "structural-wheel-and-native-source-license-closure",
     "publisher-authenticated-atomic-materializer",
     "real-daytona-xfs-structural-materializer-conformance",
-    "independently-anchored-backend-capture-helper"
+    "complete-canvas-skia-transitive-source-license-vulnerability-closure",
+    "production-node-and-runtime-vulnerability-policy-scan",
+    "production-publisher-signature-and-backend-registration"
   ]
 }

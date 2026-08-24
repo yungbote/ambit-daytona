@@ -1,101 +1,190 @@
 # C17 core document runtime pack @5
 
-This new sibling is the fail-closed source boundary for the first native,
-paginated document runtime. It does not modify or reinterpret
-`c16b-core-document/**` (`core-document@4`).
+This directory builds the first complete structural and paginated DOCX runtime
+candidate for `ambit.runtime-pack/core-document@5`. It combines:
 
-The current source tree is deliberately **unavailable**, not a runnable image:
+- headless Debian LibreOffice Writer for DOCX-to-PDF conversion;
+- PDF.js plus `@napi-rs/canvas` for bounded every-page PNG rendering;
+- the frozen private structural Python runtime from the reviewed
+  `core-document@4` candidate;
+- the exact deterministic atomic file/tree materializer; and
+- a root-owned installed-engine lineage plus an opaque backend current-component
+  lineage input.
 
-- the exact Debian base and signed snapshot inputs are pinned, but the complete
-  binary/source package closure and final OCI output have not been frozen;
-- LibreOffice is limited to Debian's exact Writer-only, no-GUI package. This is
-  Debian's security-patched 25.2.3 package, not a claim that it is the newest
-  upstream LibreOffice release;
-- PDF.js is pinned as direct static assets, but no licensed Canvas execution
-  component is admitted yet. The candidate Node 24.19.0 plus
-  `@napi-rs/canvas@1.0.7` surface is raw-byte-pinned and behavior-probed, but
-  stays unavailable until Node release/ABI evidence and the native
-  Skia/Cargo/source/license/vulnerability closure are complete;
-- the exact retained PDF.js roster is frozen to 185 files: the legacy Node
-  API/worker, CMaps, ICC data, selected WASM decoders, and actual license files.
-  Standard fonts, QuickJS eval, stock viewer, maps, and the browser build are
-  excluded;
-- Noto Core/Mono/CJK are selected, but their exact archive, file, fontconfig,
-  source, and license rosters still have to be frozen from the signed snapshot;
-- an externally extracted, canonical raw-byte-pinned structural Python runtime
-  from the separately frozen `core-document@4` candidate is compatibility-
-  probed under the Debian base with a private ELF loader and no host-library
-  fallback. It is curated file input, not `@4` layer inheritance or authority,
-  and remains unavailable until its wheel/native source-license closure and
-  independent publisher authentication are complete;
-- the atomic materializer is accepted only through separately mounted,
-  exact-byte-pinned source and binary secrets. Its offline conformance result
-  is evidence, not publisher authority; promotion remains blocked until that
-  authority and real Daytona XFS conformance exist;
-- the proprietary `UNLICENSED` working-copy capture helper must arrive as an
-  independently supplied, raw-byte-pinned and publisher-signed backend archive.
-  Daytona never manufactures, fetches, or duplicates that source.
+The image is executable and locally verified. It is still a candidate, not an
+active or production-certified runtime. Backend registration, a production
+publisher signature, real Daytona/XFS conformance, and the remaining
+third-party source/license/vulnerability reproofs stay outside this repository
+candidate.
 
-`certification/verify_source_contracts.py` proves this unavailable state is
-internally exact and fails `--require-ready`. A future candidate may become
-ready only by replacing every named blocker with independently verified locks,
-an exact executable PDF.js Canvas surface, real offline per-page pixel tests,
-and a complete image/evidence freeze. Missing inputs never fall back to `@4`,
-Poppler, a CDN, runtime package installation, or consumer-generated helper
-archives.
+## Stable renderer interface
 
-The renderer source is split by authority:
+The installed executable is:
 
-- `renderer/render-contracts.mjs` owns canonical policy, opaque backend-lineage
-  envelopes, installed engine pins, page/PNG admission, and byte-free candidate
-  manifests;
-- `renderer/pdfjs-page-renderer.mjs` owns the exact PDF.js/Canvas behavioral
-  surface, early page-count admission, bounded sequential page sinks, and
-  cleanup on every path;
-- `renderer/ambit-render-pages.mjs` owns only no-follow input custody,
-  root-owned installed-engine derivation, durable task-private output, and the
-  CLI.
+```text
+/opt/ambit/runtime-pack/core-document-v5/bin/ambit-render-document \
+  --framed-jsonl --nonce LOWERCASE_128_BIT_HEX
+```
 
-Daytona does not define a second runtime-component lineage schema. The caller
-may supply only the authoritative backend component-lineage envelope; Node,
-PDF.js, Canvas, LibreOffice, and font pins are derived from a root-owned
-installed engine-lineage file. Both inputs remain unavailable until the exact
-backend schema and image closure freeze.
+The stable component contract is:
 
-## Offline build boundary
+- role: `ambit.runtime-component/document-renderer@1`;
+- interface: `ambit.runtime-interface/docx-paginated-render@1`;
+- digest:
+  `sha256:72a319d24d3d973aedf7dfbb46452281aab7dcd62c8f2ccbffd363b5c655aa05`;
+- exact preimage: `locks/document-render-interface.lock.json`.
 
-`Dockerfile` defines an explicitly non-authoritative `renderer_substrate`
-stage and an always-failing `core_document_v5` target. The required
-`public_inputs` BuildKit context is external; the source-owned input lock and
-raw SHA/byte manifests are checked under `RUN --network=none` before anything
-is copied. There is no caller-provided readiness argument and no downloader.
+There are no caller-supplied file paths. The provider opens one raw, no-echo
+PTY, launches the exact helper, waits for its nonce-bound `ready` frame, and
+sends canonical one-line JSON frames. A request is `request_start`, ordered
+49,152-byte raw DOCX chunks encoded as canonical padded base64, and
+`request_end`. The start frame carries the opaque backend lineage with exactly
+`schemaRef`, `ref`, `digest`, and `canonicalBytesSha256`; the backend must
+reprove that lineage before and after the render.
 
-The source lock currently contains exact pins only for already observed public
-archives. Every unresolved Debian, font, Node trust, Canvas native-license,
-installed-engine, backend-lineage, and helper artifact remains in
-`requiredUnfrozenEvidence`; it cannot pass through an existence-only field.
-The final runtime removes apt and dpkg executables, runs as UID 1000, and
-retains actual Node/PDF.js/Canvas/Skia and supplied closure license bytes.
+Every frame and nested field roster, discriminator, ordering rule, digest
+equation, success equation, and cancellation equation is frozen in the
+interface lock. That lock also binds the raw implementation digests, so a wire
+change cannot pass source verification while retaining the old interface
+digest.
 
-This substrate is not `core-document@5` image authority. It composes only the
-explicit external structural compatibility archive and separately mounted
-materializer bytes; it never inherits the `@4` image or reads its source tree at
-build time. The independently admitted capture helper is still absent. The
-default final target exits dark even if every current secret is supplied.
+Before LibreOffice receives process authority, the wrapper admits one ordinary
+single-disk OOXML ZIP with at most 2,048 parts, 64 MiB per part, 256 MiB total
+expanded bytes, and 4 MiB of relationship XML. It rejects encryption, ZIP64,
+unsafe or duplicate names, external relationships, macro/ActiveX/OLE payloads,
+and embedded HTML. This deliberately gives up exotic embedded-object documents
+so the common DOCX case has a deterministic, locally enforceable safety
+boundary instead of relying on converter judgment.
 
-## Intended narrow runtime
+The container must run with network disabled and a read-only root filesystem.
+It requires bounded, container-private, UID/GID 1000, mode-0700 tmpfs mounts at
+`/workspace` and `/tmp`. The latter is LibreOffice's private Unix-pipe/cache
+boundary; it is part of the interface rather than an ambient host assumption.
+The final filesystem contains neither apt/dpkg executables nor their mutable
+configuration, cache, or package databases, and both writable mountpoints are
+empty in the image before the provider supplies task-private tmpfs mounts.
 
-The eventual image is limited to:
+## Output contract
 
-- exact `linux/amd64` Debian 13.6 slim base bytes;
-- headless Writer conversion to PDF using a private per-invocation profile;
-- direct PDF.js pagination/rasterization through a separately frozen Canvas
-  implementation;
-- exact Noto Core/Mono/CJK fonts and recorded substitutions;
-- the independently admitted capture helper binary and required notices;
-- a non-root UID, read-only runtime root, task-private bounded scratch space,
-  no ambient network, no installers, and no long-lived office/UNO daemon.
+A successful render first creates and independently verifies only these
+mode-0444 files in a helper-owned private directory:
 
-Calc, Impress, Base, Java, macros, browser automation, OCR, Poppler,
-Ghostscript, emoji/extra font families, and specialist document tooling remain
-outside this pack. They require their own concrete capability and license gate.
+- `page-0001.png` through `page-NNNN.png`, densely ordered for every page;
+- `render-manifest.json`, canonical compact JSON plus one newline.
+
+The manifest schema is
+`ambit.runtime-pack-paginated-render-manifest/v1`. It binds the immutable
+source DOCX digest, policy, installed engine pins, opaque backend lineage,
+every PNG digest/dimension/byte count, aggregate bounds, and a deterministic
+manifest digest. Raw intermediate PDF metadata is deliberately excluded from
+identity because LibreOffice varies non-rendered PDF metadata across otherwise
+identical conversions; the exact intermediate byte count and the explicit
+`excluded_volatile_converter_metadata` disposition remain visible.
+
+Only after that seal passes does the helper emit ordered `page_start` and
+`page_chunk` frames, followed by `manifest_start`, `manifest_chunk`, and one
+terminal `response_end`. Each page is limited to 64 MiB and the aggregate is
+limited to 512 MiB. The terminal binds the exact policy ref/digest, manifest,
+frame count, and SHA-256 over the canonical UTF-8-plus-LF bytes of every prior
+response frame. Missing, reordered, partial, or extra frames invalidate the
+entire response; only `response_end` followed by helper exit 0 permits the host
+to commit an artifact.
+
+`renderer/render-output-verification.mjs` is the shared independent verifier;
+`certification/verify_render_output.mjs` is its CLI. It reopens every private
+output without following links, verifies PNG structure and digest, proves the
+closed file roster, and recreates the manifest identity before framing begins.
+
+An exact nonce-bound `cancel` causes the helper to kill and reap its detached
+LibreOffice process group, remove both private roots, emit `cancelled`, and
+exit 130. A lost PTY cannot be called a successful cancellation. It requires a
+provider quiescence receipt; the local adapter is pinned by
+`locks/runtime-cancellation-authority.lock.json` to the reviewed XFS supervisor
+and its exact stop-v2 all-authorities-removed receipt. Cloud provider
+quiescence remains an activation gate rather than being inferred from a closed
+socket.
+
+## Signed offline inputs
+
+The candidate uses the pinned Debian 13.6 amd64 base and two immutable signed
+snapshot cutoffs:
+
+- Debian: `20260802T202614Z`;
+- Debian security: `20260802T121235Z`.
+
+`certification/verify_signed_debian_snapshot.py` verifies the exact
+`InRelease` signer rosters, signed package/source index identities, 142
+runtime DEBs, one build-only xz extractor DEB, the 220-package installed
+closure, 153 source packages / 502 source artifacts, 276 font files, and two
+byte-identical offline installation derivations.
+
+Node 24.19.0 is independently checked against its signed
+`SHASUMS256.txt`. Public/frozen raw inputs use `public_inputs`; the private
+materializer source and binary use the separate read-only
+`materializer_inputs` context. No build `RUN` step has network access.
+
+## Verification
+
+From this directory:
+
+```bash
+PACK=$PWD
+PYTHONPATH="$PACK" python3 -m unittest discover \
+  -s "$PACK/certification" -t "$PACK" -p 'test_*.py' -v
+node --test "$PACK"/renderer/test_*.mjs \
+  "$PACK"/certification/test_verify_render_output.mjs
+PYTHONPATH="$PACK" python3 "$PACK/certification/verify_source_contracts.py" \
+  --root "$PACK"
+PYTHONPATH="$PACK" python3 "$PACK/certification/verify_signed_debian_snapshot.py" \
+  --input-root /path/to/preserved-debian-freeze --pack-root "$PACK"
+PYTHONPATH="$PACK" python3 "$PACK/certification/audit_offline_inputs.py" \
+  --pack-root "$PACK" --input-root /path/to/public-inputs --require-ready
+```
+
+Build the linux/amd64 candidate:
+
+```bash
+docker buildx build \
+  --platform linux/amd64 \
+  --pull=false \
+  --build-context public_inputs=/path/to/public-inputs \
+  --build-context materializer_inputs=/path/to/materializer-inputs \
+  --target core_document_v5 \
+  --tag ambit-c17-core-document-v5:candidate \
+  --load .
+```
+
+A hardened provider launch uses a raw PTY and no input/output bind mounts:
+
+```bash
+docker run --rm -it --network none --read-only --cap-drop ALL \
+  --security-opt no-new-privileges \
+  --tmpfs /workspace:rw,noexec,nosuid,nodev,size=256m,uid=1000,gid=1000,mode=0700 \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m,uid=1000,gid=1000,mode=0700 \
+  --entrypoint /bin/sh ambit-c17-core-document-v5:candidate -c \
+  'stty raw -echo -onlcr; exec /opt/ambit/runtime-pack/core-document-v5/bin/ambit-render-document --framed-jsonl --nonce 0123456789abcdef0123456789abcdef'
+```
+
+The caller must set Daytona PTY input echo suppression, validate the exact
+`ready` interface and policy digests, send the frozen frames, and validate the
+terminal plus process exit. The source tests expose the same encoder and
+mutants without making it a second operational interface.
+
+## Boundaries that remain open
+
+The image does not self-authorize activation. The remaining gates are:
+
+- replayed backend registration/currentness on the authoritative backend main;
+- backend PTY parser/currentness integration and provider cancellation receipt
+  admission;
+- a production publisher identity and signature for the final OCI manifest;
+- real Daytona/XFS materializer, scratch-capacity, and lifecycle conformance;
+- complete transitive Skia/Canvas source-license and production vulnerability
+  evidence;
+- final production Node/runtime vulnerability reproof; and
+- live end-to-end product policy/repair acceptance against a registered image.
+
+Working-copy capture is a backend/provider custody operation, not an in-image
+helper. Removing that speculative image secret is what lets one renderer
+contract work across Daytona and future workspace providers without moving
+domain authority into the image.

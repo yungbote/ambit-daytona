@@ -118,7 +118,7 @@ def audit(pack_root: Path, input_root: Path) -> dict[str, Any]:
     if extras:
         raise ValueError(f"offline public input contains extra files: {extras}")
     missing.extend(lock["requiredUnfrozenEvidence"])
-    ready = lock["state"] == "ready" and not missing
+    ready = lock["state"] == "candidate-ready" and not missing
     return {
         "schema": "ambit.runtime-pack-offline-input-audit/v1",
         "outcome": "ready" if ready else "unavailable",

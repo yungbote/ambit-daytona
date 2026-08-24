@@ -240,6 +240,9 @@ export async function renderPdfBytes({
         }
         await renderTask.promise
         const png = Buffer.from(await surface.encode('png'))
+        if (png.byteLength > admittedPolicy.pages.maximumBytesPerPage) {
+          throw new RangeError('Rendered PNG exceeds the per-page byte policy.')
+        }
         totalOutputBytes += png.byteLength
         if (totalOutputBytes > admittedPolicy.pages.maximumTotalOutputBytes) {
           throw new RangeError('Rendered PNG bytes exceed total output policy.')

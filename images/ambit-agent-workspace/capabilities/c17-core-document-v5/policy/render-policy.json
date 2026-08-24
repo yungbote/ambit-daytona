@@ -2,9 +2,16 @@
   "schema": "ambit.runtime-pack-document-render-policy/v1",
   "policyRef": "ambit.render-policy/core-document-paginated@1",
   "input": {
+    "formats": [
+      "docx"
+    ],
     "localImmutableBytesOnly": true,
     "remoteUrls": "forbidden",
     "maximumBytes": 67108864,
+    "maximumEntryBytes": 67108864,
+    "maximumPackageEntries": 2048,
+    "maximumRelationshipBytes": 4194304,
+    "maximumUncompressedBytes": 268435456,
     "macros": "disabled",
     "externalLinks": "disabled",
     "passwordProtected": "unsupported"
@@ -16,11 +23,14 @@
     "headless": true,
     "nologo": true,
     "nodefault": true,
+    "nolockcheck": true,
     "norestore": true,
+    "maximumPdfBytes": 268435456,
     "maximumWallMilliseconds": 120000
   },
   "pages": {
     "maximumCount": 512,
+    "maximumBytesPerPage": 67108864,
     "maximumWidthPixels": 20000,
     "maximumHeightPixels": 20000,
     "maximumPixelsPerPage": 100000000,
@@ -44,7 +54,7 @@
       "Path2D"
     ],
     "canvasFactory": "ambit.pdfjs-canvas-factory/napi-rs@1",
-    "executionState": "unavailable"
+    "executionState": "available"
   },
   "canonicalArtifactBoundary": "external-commit-only",
   "renderOutputGrantsCanonicalAuthority": false

@@ -1,0 +1,227 @@
+{
+  "schema": "ambit.runtime-interface-lock/v1",
+  "state": "candidate-ready",
+  "digest": "sha256:72a319d24d3d973aedf7dfbb46452281aab7dcd62c8f2ccbffd363b5c655aa05",
+  "contract": {
+    "arguments": [
+      "--framed-jsonl",
+      "--nonce",
+      "LOWERCASE_128_BIT_HEX"
+    ],
+    "authority": {
+      "backendLineageCurrentness": "host-reproved-before-and-after-render",
+      "canonicalArtifactCommit": "host-only-after-complete-terminal-frame-and-exit-0",
+      "renderOutput": "evidence-only"
+    },
+    "cancellation": {
+      "authorityLock": {
+        "ref": "locks/runtime-cancellation-authority.lock.json",
+        "digest": "sha256:180dd5515c733c3f02834d1d2e9f52d6fe7276ff98f3e23069f5f069359225ee"
+      },
+      "explicitFrame": "cancel",
+      "helperTerminalFrame": "cancelled",
+      "helperExitCode": 130,
+      "hardTransportFailure": "requires-provider-runtime-quiescence-receipt-v1",
+      "typedCancelledWithoutTerminalOrProviderReceipt": "forbidden"
+    },
+    "executable": "/opt/ambit/runtime-pack/core-document-v5/bin/ambit-render-document",
+    "frames": {
+      "ready": [
+        "cancellationExitCode",
+        "chunkBytes",
+        "interface",
+        "kind",
+        "nonce",
+        "policy",
+        "processIdentity",
+        "schema"
+      ],
+      "request_start": [
+        "backendLineage",
+        "chunkBytes",
+        "chunkCount",
+        "documentBytes",
+        "documentSha256",
+        "kind",
+        "nonce",
+        "schema"
+      ],
+      "document_chunk": [
+        "base64",
+        "bytes",
+        "index",
+        "kind",
+        "nonce",
+        "schema",
+        "sha256"
+      ],
+      "request_end": [
+        "chunkCount",
+        "documentBytes",
+        "documentSha256",
+        "kind",
+        "nonce",
+        "schema"
+      ],
+      "cancel": [
+        "kind",
+        "nonce",
+        "schema"
+      ],
+      "page_start": [
+        "chunkBytes",
+        "chunkCount",
+        "kind",
+        "nonce",
+        "page",
+        "schema"
+      ],
+      "page_chunk": [
+        "base64",
+        "bytes",
+        "chunkIndex",
+        "kind",
+        "nonce",
+        "pageIndex",
+        "schema",
+        "sha256"
+      ],
+      "manifest_start": [
+        "bytes",
+        "chunkBytes",
+        "chunkCount",
+        "kind",
+        "manifestDigest",
+        "nonce",
+        "pageCount",
+        "schema",
+        "sha256"
+      ],
+      "manifest_chunk": [
+        "base64",
+        "bytes",
+        "chunkIndex",
+        "kind",
+        "nonce",
+        "schema",
+        "sha256"
+      ],
+      "response_end": [
+        "exitCode",
+        "frameCount",
+        "kind",
+        "manifestBytes",
+        "manifestDigest",
+        "manifestSha256",
+        "nonce",
+        "outcome",
+        "pageCount",
+        "policy",
+        "schema",
+        "streamSha256",
+        "totalOutputBytes"
+      ],
+      "cancelled": [
+        "exitCode",
+        "kind",
+        "nonce",
+        "outcome",
+        "quiescence",
+        "schema"
+      ]
+    },
+    "identities": {
+      "frameSchema": "ambit.runtime-interface/docx-paginated-render-jsonl@1",
+      "nonce": "32-lowercase-hex-on-every-frame",
+      "nestedFields": {
+        "backendLineage": [
+          "canonicalBytesSha256",
+          "digest",
+          "ref",
+          "schemaRef"
+        ],
+        "interface": [
+          "digest",
+          "ref"
+        ],
+        "page": [
+          "bytes",
+          "filename",
+          "height",
+          "index",
+          "number",
+          "pixels",
+          "sha256",
+          "width"
+        ],
+        "policy": [
+          "digest",
+          "ref"
+        ],
+        "processIdentity": [
+          "pid",
+          "startTicks"
+        ]
+      },
+      "protocolSources": {
+        "renderer/ambit-render-document.mjs": "sha256:0991d6f51605a6cb53e49b674f6227771b613d6710fc405a6ed6ebc28b1eda4b",
+        "renderer/docx-package-admission.mjs": "sha256:f630d9ed3f31301be09f8cd0c3611deca5d9493c902eb229d8df46de145c49ae",
+        "renderer/framed-jsonl-protocol.mjs": "sha256:57cd24bfb468e851e15a321c0049b1dd4a14dabc302cd0910c799a82b2bdb5fb",
+        "renderer/libreoffice-subreaper.py": "sha256:a77a83ba58b623b339a8590cde69784e1322762bb7ba711efb22e029eb5a843b",
+        "renderer/process-group-execution.mjs": "sha256:44a63b53a1c0d7fda4eddae910b2c19081736bf2a1d4b5726b53c40fbc7f9f20",
+        "renderer/render-output-verification.mjs": "sha256:e7ea478e763b4902e1fb6fdfe6e8402c0cd45e38f840cc301f5966b196bd09ac"
+      },
+      "requestOrder": "ready;request_start;document_chunk[index=0..chunkCount-1];request_end",
+      "responseOrder": "page_start/page_chunk for page index 0..N-1;manifest_start;manifest_chunk;response_end",
+      "chunkCountEquation": "ceil(rawBytes/49152)",
+      "chunkDigestEquation": "sha256(decodedCanonicalBase64Chunk)",
+      "documentDigestEquation": "sha256(concat(document_chunk decoded bytes in index order))",
+      "pageDigestEquation": "sha256(concat(page_chunk decoded bytes in chunkIndex order))",
+      "manifestShaEquation": "sha256(concat(manifest_chunk decoded bytes in chunkIndex order))",
+      "streamDigestDomain": "sha256(exact canonical UTF-8 JSON plus LF bytes for every response frame before response_end)",
+      "successEquation": "exact response order and aggregates plus response_end outcome=passed exitCode=0 plus helper process exit=0",
+      "cancellationEquation": "exact nonce-bound cancel plus cancelled outcome=cancelled exitCode=130 after helper quiescence plus helper process exit=130"
+    },
+    "input": {
+      "backendLineageSchema": "exact:{schemaRef,ref,digest,canonicalBytesSha256}",
+      "document": "ordered-base64-chunks-bound-to-exact-docx-bytes",
+      "maximumBytes": 67108864,
+      "nonceBinding": "every-request-frame"
+    },
+    "interfaceRef": "ambit.runtime-interface/docx-paginated-render@1",
+    "output": {
+      "manifestSchema": "ambit.runtime-pack-paginated-render-manifest/v1",
+      "maximumBytesPerPage": 67108864,
+      "maximumTotalOutputBytes": 536870912,
+      "nonceBinding": "every-response-frame",
+      "partialOrExtraFrames": "discard-entire-response",
+      "roster": "every-page-dense-zero-based-manifest-last",
+      "success": "response_end-then-helper-exit-0"
+    },
+    "policy": {
+      "ref": "ambit.render-policy/core-document-paginated@1",
+      "digest": "sha256:60aebfd060c29db41e0e9830f0bec109d4c51239942b4803aa3d342ecb4d5987"
+    },
+    "roleRef": "ambit.runtime-component/document-renderer@1",
+    "runtime": {
+      "network": "none",
+      "pathAuthority": "none",
+      "processModel": "one-helper-and-one-bounded-libreoffice-process-group",
+      "rootFilesystem": "read-only",
+      "taskCache": "/tmp:tmpfs:uid=1000,gid=1000,mode=0700,bounded",
+      "workspaceScratch": "/workspace:tmpfs:uid=1000,gid=1000,mode=0700,bounded"
+    },
+    "schema": "ambit.runtime-interface-contract/v1",
+    "transport": {
+      "chunkBytes": 49152,
+      "encoding": "canonical-jsonl-with-canonical-base64-payloads",
+      "inputEcho": "forbidden",
+      "maximumLineBytes": 70000,
+      "medium": "raw-noecho-pty",
+      "providerLaunch": "stty raw -echo -onlcr; exec exact-helper --framed-jsonl --nonce exact-nonce",
+      "readyFrame": "required-before-request",
+      "stdinClosure": "request_end-frame-not-eof",
+      "stdoutClosure": "response_end-frame-then-helper-exit-0"
+    }
+  }
+}

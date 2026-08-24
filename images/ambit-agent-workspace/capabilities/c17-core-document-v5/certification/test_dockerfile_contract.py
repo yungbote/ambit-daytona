@@ -35,43 +35,59 @@ class DockerfileContractTests(unittest.TestCase):
             r"\b(?:apt-get\s+(?:install|update)|curl\s|npm\s|npx\s|wget\s)",
         )
 
-    def test_public_inputs_are_external_and_helper_is_a_required_secret(self) -> None:
+    def test_external_inputs_are_signed_frozen_and_helper_is_provider_owned(self) -> None:
         self.assertNotIn("FROM scratch AS public_inputs", self.source)
         self.assertIn("from=public_inputs", self.source)
+        self.assertIn("from=materializer_inputs", self.source)
         self.assertNotIn("AMBIT_CORE_DOCUMENT_V5_PUBLIC_READY", self.source)
         self.assertIn("sha256sum -c certification/source-contracts.sha256", self.source)
         self.assertIn("offline-public-artifacts.sha256", self.source)
         self.assertIn("offline-frozen-evidence.sha256", self.source)
         self.assertIn("find structural -type f -print", self.source)
+        self.assertIn("debian-index-artifacts.sha256", self.source)
+        self.assertIn("debian-source-artifacts.sha256", self.source)
+        self.assertIn("sqv --keyring debian/indexes/debian-archive-keyring.gpg", self.source)
+        self.assertIn("sqv --keyring node/release-key.asc", self.source)
+        self.assertNotIn("ambit_capture_helper_archive", self.source)
         self.assertIn(
-            "type=secret,id=ambit_capture_helper_archive,required=true",
+            "COPY --from=materializer_inputs /ambit-atomic-materialize",
             self.source,
         )
         self.assertNotIn("COPY helper", self.source)
 
-    def test_runtime_is_non_root_and_final_target_always_fails_dark(self) -> None:
+    def test_runtime_is_non_root_installer_free_and_candidate_executable(self) -> None:
         self.assertIn("USER 1000:1000", self.source)
-        self.assertIn("io.ambit.activation=\"forbidden\"", self.source)
-        self.assertIn("io.ambit.runtime-pack-authority=\"none\"", self.source)
+        self.assertIn("io.ambit.activation=\"requires-backend-registration\"", self.source)
+        self.assertIn("io.ambit.runtime-pack-authority=\"candidate-only\"", self.source)
         self.assertIn("FROM runtime_debian AS renderer_substrate", self.source)
         self.assertNotIn("FROM runtime_debian AS public_runtime", self.source)
-        removal = self.source.split("rm -f /usr/bin/apt", 1)[1].split(
+        removal = self.source.split("dpkg-query -L apt dpkg", 1)[1].split(
             "FROM runtime_debian AS renderer_substrate", 1
         )[0]
-        for installer in ("/usr/bin/apt-get", "/usr/bin/dpkg", "/usr/bin/dpkg-query"):
-            self.assertIn(installer, removal)
+        for mutable_state in (
+            "/etc/apt",
+            "/etc/dpkg",
+            "/usr/lib/apt",
+            "/usr/lib/dpkg",
+            "/var/cache/apt",
+            "/var/cache/debconf",
+            "/var/lib/apt",
+            "/var/lib/debconf",
+            "/var/lib/dpkg",
+        ):
+            self.assertIn(mutable_state, removal)
+        self.assertIn("test -x \"${path}\"", removal)
+        self.assertIn("find /tmp /workspace -xdev -mindepth 1 -delete", self.source)
+        self.assertIn('find /workspace -mindepth 1 -print -quit', self.source)
         for license_source in (
-            "/tmp/node-v24.19.0-linux-x64/LICENSE",
+            "/tmp/node/LICENSE",
             "/tmp/package/LICENSE",
             "NAPI-RS-CANVAS-LICENSE",
             "SKIA-LICENSE",
-            "/tmp/evidence/licenses/.",
         ):
             self.assertIn(license_source, self.source)
-        self.assertRegex(
-            self.source,
-            r"FROM structural_renderer_substrate AS core_document_v5[\s\S]+exit 64",
-        )
+        self.assertIn("bin/ambit-render-document", self.source)
+        self.assertNotIn("exit 64", self.source)
 
 
 if __name__ == "__main__":
