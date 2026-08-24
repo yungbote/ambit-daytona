@@ -4,9 +4,6 @@
 package controllers
 
 import (
-	"bytes"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -25,8 +22,8 @@ const maximumWorkingCopyCaptureRequestBytes = 128 * 1024
 //	@Tags			sandbox
 //	@Summary		Capture one stopped sandbox working-copy file
 //	@Description	Persist one host-admitted regular file from the exact stopped container generation.
-//	@Param			sandboxId	path		string					true	"Sandbox ID"
-//	@Param			body		body		workingcopy.CaptureBinding	true	"Exact capture binding"
+//	@Param			sandboxId	path	string						true	"Sandbox ID"
+//	@Param			body		body	workingcopy.CaptureBinding	true	"Exact capture binding"
 //	@Produce		json
 //	@Success		200	{object}	workingcopy.CaptureReceipt
 //	@Failure		400	{object}	common_errors.ErrorResponse
@@ -57,19 +54,19 @@ func CaptureWorkingCopy(ctx *gin.Context) {
 
 // ObserveWorkingCopyCapture godoc
 //
-//	@Tags			sandbox
-//	@Summary		Observe an exact working-copy capture
-//	@Param			sandboxId	path		string					true	"Sandbox ID"
-//	@Param			body		body		workingcopy.CaptureBinding	true	"Exact capture binding"
-//	@Produce		json
-//	@Success		200	{object}	workingcopy.CaptureObservation
-//	@Failure		400	{object}	common_errors.ErrorResponse
-//	@Failure		401	{object}	common_errors.ErrorResponse
-//	@Failure		409	{object}	common_errors.ErrorResponse
-//	@Failure		503	{object}	common_errors.ErrorResponse
-//	@Router			/sandboxes/{sandboxId}/working-copy-captures/observe [post]
+//	@Tags		sandbox
+//	@Summary	Observe an exact working-copy capture
+//	@Param		sandboxId	path	string						true	"Sandbox ID"
+//	@Param		body		body	workingcopy.CaptureBinding	true	"Exact capture binding"
+//	@Produce	json
+//	@Success	200	{object}	workingcopy.CaptureObservation
+//	@Failure	400	{object}	common_errors.ErrorResponse
+//	@Failure	401	{object}	common_errors.ErrorResponse
+//	@Failure	409	{object}	common_errors.ErrorResponse
+//	@Failure	503	{object}	common_errors.ErrorResponse
+//	@Router		/sandboxes/{sandboxId}/working-copy-captures/observe [post]
 //
-//	@id				ObserveWorkingCopyCapture
+//	@id			ObserveWorkingCopyCapture
 func ObserveWorkingCopyCapture(ctx *gin.Context) {
 	var binding workingcopy.CaptureBinding
 	if err := decodeExactCaptureBody(ctx, &binding); err != nil {
@@ -91,19 +88,19 @@ func ObserveWorkingCopyCapture(ctx *gin.Context) {
 
 // ReadWorkingCopyCapture godoc
 //
-//	@Tags			sandbox
-//	@Summary		Read an exact immutable working-copy capture
-//	@Param			sandboxId	path		string						true	"Sandbox ID"
-//	@Param			body		body		workingcopy.CaptureReadRequest	true	"Exact capture identity and read bounds"
-//	@Produce		json
-//	@Success		200	{object}	workingcopy.CaptureReadResponse
-//	@Failure		400	{object}	common_errors.ErrorResponse
-//	@Failure		401	{object}	common_errors.ErrorResponse
-//	@Failure		409	{object}	common_errors.ErrorResponse
-//	@Failure		503	{object}	common_errors.ErrorResponse
-//	@Router			/sandboxes/{sandboxId}/working-copy-captures/read [post]
+//	@Tags		sandbox
+//	@Summary	Read an exact immutable working-copy capture
+//	@Param		sandboxId	path	string							true	"Sandbox ID"
+//	@Param		body		body	workingcopy.CaptureReadRequest	true	"Exact capture identity and read bounds"
+//	@Produce	json
+//	@Success	200	{object}	workingcopy.CaptureReadResponse
+//	@Failure	400	{object}	common_errors.ErrorResponse
+//	@Failure	401	{object}	common_errors.ErrorResponse
+//	@Failure	409	{object}	common_errors.ErrorResponse
+//	@Failure	503	{object}	common_errors.ErrorResponse
+//	@Router		/sandboxes/{sandboxId}/working-copy-captures/read [post]
 //
-//	@id				ReadWorkingCopyCapture
+//	@id			ReadWorkingCopyCapture
 func ReadWorkingCopyCapture(ctx *gin.Context) {
 	var request workingcopy.CaptureReadRequest
 	if err := decodeExactCaptureBody(ctx, &request); err != nil {
@@ -115,30 +112,29 @@ func ReadWorkingCopyCapture(ctx *gin.Context) {
 		writeWorkingCopyCaptureError(ctx, err)
 		return
 	}
-	data, err := service.Read(ctx.Request.Context(), ctx.Param("sandboxId"), request)
+	response, err := service.Read(ctx.Request.Context(), ctx.Param("sandboxId"), request)
 	if err != nil {
 		writeWorkingCopyCaptureError(ctx, err)
 		return
 	}
-	ctx.JSON(http.StatusOK, workingcopy.CaptureReadResponse{
-		BytesBase64: base64.StdEncoding.EncodeToString(data),
-	})
+	ctx.JSON(http.StatusOK, response)
 }
 
 // DeleteWorkingCopyCapture godoc
 //
-//	@Tags			sandbox
-//	@Summary		Delete an exact private working-copy capture
-//	@Param			sandboxId	path		string						true	"Sandbox ID"
-//	@Param			body		body		workingcopy.CaptureIdentity	true	"Exact capture identity"
-//	@Success		204
-//	@Failure		400	{object}	common_errors.ErrorResponse
-//	@Failure		401	{object}	common_errors.ErrorResponse
-//	@Failure		409	{object}	common_errors.ErrorResponse
-//	@Failure		503	{object}	common_errors.ErrorResponse
-//	@Router			/sandboxes/{sandboxId}/working-copy-captures/delete [post]
+//	@Tags		sandbox
+//	@Summary	Delete an exact private working-copy capture
+//	@Param		sandboxId	path	string						true	"Sandbox ID"
+//	@Param		body		body	workingcopy.CaptureIdentity	true	"Exact capture identity"
+//	@Produce	json
+//	@Success	200	{object}	workingcopy.CaptureDeleteReceipt
+//	@Failure	400	{object}	common_errors.ErrorResponse
+//	@Failure	401	{object}	common_errors.ErrorResponse
+//	@Failure	409	{object}	common_errors.ErrorResponse
+//	@Failure	503	{object}	common_errors.ErrorResponse
+//	@Router		/sandboxes/{sandboxId}/working-copy-captures/delete [post]
 //
-//	@id				DeleteWorkingCopyCapture
+//	@id			DeleteWorkingCopyCapture
 func DeleteWorkingCopyCapture(ctx *gin.Context) {
 	var identity workingcopy.CaptureIdentity
 	if err := decodeExactCaptureBody(ctx, &identity); err != nil {
@@ -150,28 +146,29 @@ func DeleteWorkingCopyCapture(ctx *gin.Context) {
 		writeWorkingCopyCaptureError(ctx, err)
 		return
 	}
-	if err := service.Delete(ctx.Request.Context(), ctx.Param("sandboxId"), identity); err != nil {
+	receipt, err := service.Delete(ctx.Request.Context(), ctx.Param("sandboxId"), identity)
+	if err != nil {
 		writeWorkingCopyCaptureError(ctx, err)
 		return
 	}
-	ctx.Status(http.StatusNoContent)
+	ctx.JSON(http.StatusOK, receipt)
 }
 
 // WorkingCopyCaptureExists godoc
 //
-//	@Tags			sandbox
-//	@Summary		Check an exact private working-copy capture identity
-//	@Param			sandboxId	path		string						true	"Sandbox ID"
-//	@Param			body		body		workingcopy.CaptureIdentity	true	"Exact capture identity"
-//	@Produce		json
-//	@Success		200	{object}	workingcopy.CaptureExistsResponse
-//	@Failure		400	{object}	common_errors.ErrorResponse
-//	@Failure		401	{object}	common_errors.ErrorResponse
-//	@Failure		409	{object}	common_errors.ErrorResponse
-//	@Failure		503	{object}	common_errors.ErrorResponse
-//	@Router			/sandboxes/{sandboxId}/working-copy-captures/exists [post]
+//	@Tags		sandbox
+//	@Summary	Check an exact private working-copy capture identity
+//	@Param		sandboxId	path	string						true	"Sandbox ID"
+//	@Param		body		body	workingcopy.CaptureIdentity	true	"Exact capture identity"
+//	@Produce	json
+//	@Success	200	{object}	workingcopy.CaptureExistsResponse
+//	@Failure	400	{object}	common_errors.ErrorResponse
+//	@Failure	401	{object}	common_errors.ErrorResponse
+//	@Failure	409	{object}	common_errors.ErrorResponse
+//	@Failure	503	{object}	common_errors.ErrorResponse
+//	@Router		/sandboxes/{sandboxId}/working-copy-captures/exists [post]
 //
-//	@id				WorkingCopyCaptureExists
+//	@id			WorkingCopyCaptureExists
 func WorkingCopyCaptureExists(ctx *gin.Context) {
 	var identity workingcopy.CaptureIdentity
 	if err := decodeExactCaptureBody(ctx, &identity); err != nil {
@@ -183,12 +180,12 @@ func WorkingCopyCaptureExists(ctx *gin.Context) {
 		writeWorkingCopyCaptureError(ctx, err)
 		return
 	}
-	exists, err := service.Exists(ctx.Request.Context(), ctx.Param("sandboxId"), identity)
+	response, err := service.Exists(ctx.Request.Context(), ctx.Param("sandboxId"), identity)
 	if err != nil {
 		writeWorkingCopyCaptureError(ctx, err)
 		return
 	}
-	ctx.JSON(http.StatusOK, workingcopy.CaptureExistsResponse{Exists: exists})
+	ctx.JSON(http.StatusOK, response)
 }
 
 func workingCopyCaptureService() (*workingcopy.Service, error) {
@@ -206,14 +203,20 @@ func writeWorkingCopyCaptureError(ctx *gin.Context, err error) {
 	switch {
 	case errors.Is(err, workingcopy.ErrInvalidRequest):
 		ctx.Error(common_errors.NewBadRequestError(err))
-	case errors.Is(err, workingcopy.ErrConflict):
-		ctx.Error(common_errors.NewConflictError(err))
+	case errors.Is(err, workingcopy.ErrOutcomeUnknown):
+		ctx.Error(common_errors.NewCustomError(
+			http.StatusServiceUnavailable,
+			err.Error(),
+			"WORKING_COPY_CAPTURE_OUTCOME_UNKNOWN",
+		))
 	case errors.Is(err, workingcopy.ErrUnavailable):
 		ctx.Error(common_errors.NewCustomError(
 			http.StatusServiceUnavailable,
 			err.Error(),
 			"WORKING_COPY_CAPTURE_UNAVAILABLE",
 		))
+	case errors.Is(err, workingcopy.ErrConflict):
+		ctx.Error(common_errors.NewConflictError(err))
 	default:
 		ctx.Error(err)
 	}
@@ -227,13 +230,5 @@ func decodeExactCaptureBody(ctx *gin.Context, target any) error {
 	if len(data) == 0 || len(data) > maximumWorkingCopyCaptureRequestBytes {
 		return errors.New("request body is empty or exceeds the bounded capture envelope")
 	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return err
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return errors.New("request body contains trailing JSON data")
-	}
-	return nil
+	return workingcopy.DecodeExactJSON(data, target)
 }

@@ -40,6 +40,9 @@ type Config struct {
 	AWSAccessKeyId                     string        `envconfig:"AWS_ACCESS_KEY_ID"`
 	AWSSecretAccessKey                 string        `envconfig:"AWS_SECRET_ACCESS_KEY"`
 	AWSDefaultBucket                   string        `envconfig:"AWS_DEFAULT_BUCKET"`
+	WorkingCopyCaptureLineageRef       string        `envconfig:"AMBIT_WORKING_COPY_CAPTURE_LINEAGE_REF"`
+	WorkingCopyCaptureProtocolDigest   string        `envconfig:"AMBIT_WORKING_COPY_CAPTURE_PROTOCOL_DIGEST"`
+	WorkingCopyCaptureHelperDigest     string        `envconfig:"AMBIT_WORKING_COPY_CAPTURE_HELPER_DIGEST"`
 	ResourceLimitsDisabled             bool          `envconfig:"RESOURCE_LIMITS_DISABLED"`
 	DaemonStartTimeoutSec              int           `envconfig:"DAEMON_START_TIMEOUT_SEC"`
 	SandboxStartTimeoutSec             int           `envconfig:"SANDBOX_START_TIMEOUT_SEC"`

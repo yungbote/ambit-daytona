@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/daytonaio/runner/cmd/runner/config"
 	"github.com/daytonaio/runner/pkg/api/dto"
@@ -31,6 +33,8 @@ const (
 // androidDeviceLabel is set on containers created for sandboxes tagged as "android-device".
 // The Start path reads it to skip the daytona daemon exec/wait that regular sandboxes need.
 const androidDeviceLabel = "daytona.android_device"
+
+const providerAuthorityMetadataPrefix = "daytona.authority-label."
 
 // isAndroidDeviceContainer reports whether an already-created container was provisioned for
 // an android-device sandbox, based on the label written at create time.
@@ -130,6 +134,13 @@ func (d *DockerClient) getContainerCreateConfig(sandboxDto dto.CreateSandboxDTO,
 		if orgName, ok := sandboxDto.Metadata["organizationName"]; ok && orgName != "" {
 			labels["daytona.organization_name"] = orgName
 		}
+		authorityLabels, err := providerAuthorityLabels(sandboxDto.Metadata)
+		if err != nil {
+			return nil, err
+		}
+		for label, value := range authorityLabels {
+			labels[label] = value
+		}
 	}
 	if gpuIndex != nil {
 		labels[GpuIndexLabel] = strconv.Itoa(*gpuIndex)
@@ -187,6 +198,44 @@ func (d *DockerClient) getContainerCreateConfig(sandboxDto dto.CreateSandboxDTO,
 		AttachStdout: true,
 		AttachStderr: true,
 	}, nil
+}
+
+func providerAuthorityLabels(metadata map[string]string) (map[string]string, error) {
+	labels := make(map[string]string)
+	for metadataKey, value := range metadata {
+		if !strings.HasPrefix(metadataKey, providerAuthorityMetadataPrefix) {
+			continue
+		}
+		label := strings.TrimPrefix(metadataKey, providerAuthorityMetadataPrefix)
+		if !canonicalProviderAuthorityLabel(label, value) {
+			return nil, fmt.Errorf("invalid provider authority label projection %q", metadataKey)
+		}
+		labels[label] = value
+	}
+	return labels, nil
+}
+
+func canonicalProviderAuthorityLabel(label, value string) bool {
+	if len(label) < len("ambitA") || len(label) > 133 || !strings.HasPrefix(label, "ambit") ||
+		label[5] < 'A' || label[5] > 'Z' {
+		return false
+	}
+	for _, character := range label[6:] {
+		if !((character >= 'a' && character <= 'z') ||
+			(character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9')) {
+			return false
+		}
+	}
+	if value == "" || len(value) > 2048 || !utf8.ValidString(value) || strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, character := range value {
+		if character == 0 || unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
 }
 
 func (d *DockerClient) getContainerHostConfig(sandboxDto dto.CreateSandboxDTO, volumeMountPathBinds []string, gpuIndex *int) (*container.HostConfig, error) {

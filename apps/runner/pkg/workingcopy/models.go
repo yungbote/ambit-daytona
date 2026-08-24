@@ -3,59 +3,58 @@
 
 package workingcopy
 
-const MaximumCaptureBytes int64 = 64 * 1024 * 1024
+import "github.com/daytonaio/runner/pkg/generationstop"
+
+const (
+	MaximumCaptureBytes int64 = 64 * 1024 * 1024
+	MaximumReadBytes    int64 = 1 * 1024 * 1024
+)
 
 type CaptureAuthorityArtifact struct {
-	Ref    string `json:"ref"`
-	Digest string `json:"digest"`
+	Ref    string `json:"ref" validate:"required"`
+	Digest string `json:"digest" validate:"required"`
 }
 
 type CaptureAuthority struct {
-	AuthorityRef string                   `json:"authorityRef"`
-	RoleRef      string                   `json:"roleRef"`
-	Protocol     CaptureAuthorityArtifact `json:"protocol"`
-	Helper       CaptureAuthorityArtifact `json:"helper"`
+	AuthorityRef string                   `json:"authorityRef" validate:"required"`
+	LineageRef   string                   `json:"lineageRef" validate:"required"`
+	RoleRef      string                   `json:"roleRef" validate:"required"`
+	Protocol     CaptureAuthorityArtifact `json:"protocol" validate:"required"`
+	Helper       CaptureAuthorityArtifact `json:"helper" validate:"required"`
 }
 
-// SourceAddress is the exact provider-owned workspace generation address.
-// ExpectedRuntimeKind is intentionally explicit instead of inferred from the
-// profile so future provider profiles cannot silently widen this primitive.
-type SourceAddress struct {
-	ProviderResourceID  string `json:"providerResourceId"`
-	WorkspaceID         string `json:"workspaceId"`
-	TenantID            string `json:"tenantId"`
-	UserID              string `json:"userId"`
-	ExpectedProfile     string `json:"expectedProfile"`
-	ExpectedRuntimeKind string `json:"expectedRuntimeKind"`
-}
+type SourceAddress = generationstop.Source
+type CaptureOwner = generationstop.Owner
 
 type CaptureSelector struct {
-	SemanticZoneRef  string `json:"semanticZoneRef"`
-	ZoneRelativePath string `json:"zoneRelativePath"`
+	SemanticZoneRef  string `json:"semanticZoneRef" validate:"required"`
+	ZoneRelativePath string `json:"zoneRelativePath" validate:"required"`
 }
 
 type CaptureBinding struct {
-	ProviderName       string           `json:"providerName"`
-	RequestFingerprint string           `json:"requestFingerprint"`
-	Authority          CaptureAuthority `json:"authority"`
-	Source             SourceAddress    `json:"source"`
-	Selector           CaptureSelector  `json:"selector"`
+	ProviderName       string                       `json:"providerName" validate:"required"`
+	RequestFingerprint string                       `json:"requestFingerprint" validate:"required"`
+	Authority          CaptureAuthority             `json:"authority" validate:"required"`
+	Source             SourceAddress                `json:"source" validate:"required"`
+	Owner              CaptureOwner                 `json:"owner" validate:"required"`
+	StopAuthority      generationstop.StopAuthority `json:"stopAuthority" validate:"required"`
+	Selector           CaptureSelector              `json:"selector" validate:"required"`
 }
 
 type CaptureIdentity struct {
 	CaptureBinding
-	ProviderResourceID string `json:"providerResourceId"`
+	ProviderResourceID string `json:"providerResourceId" validate:"required"`
 }
 
 type CaptureReceipt struct {
 	CaptureIdentity
-	ByteLength           int64  `json:"byteLength"`
-	ProviderSHA256Digest string `json:"providerSha256Digest"`
-	CapturedAt           string `json:"capturedAt"`
+	TotalByteLength      int64  `json:"totalByteLength" validate:"required"`
+	ProviderSHA256Digest string `json:"providerSha256Digest" validate:"required"`
+	CapturedAt           string `json:"capturedAt" validate:"required"`
 }
 
 type CaptureObservation struct {
-	Status   string           `json:"status"`
+	Status   string           `json:"status" validate:"required"`
 	Binding  *CaptureBinding  `json:"binding,omitempty"`
 	Identity *CaptureIdentity `json:"identity,omitempty"`
 	Receipt  *CaptureReceipt  `json:"receipt,omitempty"`
@@ -63,14 +62,30 @@ type CaptureObservation struct {
 
 type CaptureReadRequest struct {
 	CaptureIdentity
-	ExpectedByteLength int64 `json:"expectedByteLength"`
-	MaximumBytes       int64 `json:"maximumBytes"`
+	ExpectedTotalByteLength      int64  `json:"expectedTotalByteLength" validate:"required"`
+	ExpectedProviderSHA256Digest string `json:"expectedProviderSha256Digest" validate:"required"`
+	Offset                       int64  `json:"offset" validate:"required"`
+	MaximumBytes                 int64  `json:"maximumBytes" validate:"required"`
 }
 
 type CaptureReadResponse struct {
-	BytesBase64 string `json:"bytesBase64"`
+	CaptureIdentity
+	TotalByteLength      int64  `json:"totalByteLength" validate:"required"`
+	ProviderSHA256Digest string `json:"providerSha256Digest" validate:"required"`
+	Offset               int64  `json:"offset" validate:"required"`
+	ByteLength           int64  `json:"byteLength"`
+	EOF                  bool   `json:"eof"`
+	BytesBase64          string `json:"bytesBase64"`
+}
+
+type CaptureDeleteReceipt struct {
+	CaptureIdentity
+	Outcome string `json:"outcome" validate:"required"`
 }
 
 type CaptureExistsResponse struct {
-	Exists bool `json:"exists"`
+	CaptureIdentity
+	Status  string          `json:"status" validate:"required"`
+	Exists  bool            `json:"exists"`
+	Receipt *CaptureReceipt `json:"receipt,omitempty"`
 }
