@@ -59,7 +59,12 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _metadata_identity(path: Path) -> tuple[str, str]:
+def _metadata_identity(
+    path: Path,
+    *,
+    expected_distribution: str,
+    expected_version: str,
+) -> tuple[str, str]:
     try:
         with zipfile.ZipFile(path) as archive:
             members = archive.namelist()
@@ -78,27 +83,41 @@ def _metadata_identity(path: Path) -> tuple[str, str]:
                 member
                 for member in members
                 if member.endswith(".dist-info/METADATA")
+                and len(PurePosixPath(member).parts) == 2
             ]
-            if len(metadata_members) != 1:
+            if not metadata_members:
                 raise WheelLockError(
-                    f"wheel {path.name!r} must contain exactly one METADATA file"
+                    f"wheel {path.name!r} must contain top-level distribution METADATA"
                 )
-            metadata = archive.read(metadata_members[0]).decode("utf-8")
+            metadata_documents = [
+                archive.read(member).decode("utf-8") for member in metadata_members
+            ]
     except zipfile.BadZipFile as error:
         raise WheelLockError(f"wheel {path.name!r} is not a valid ZIP archive") from error
 
-    fields: dict[str, str] = {}
-    for line in metadata.splitlines():
-        if not line:
-            break
-        if ": " not in line:
-            continue
-        name, value = line.split(": ", 1)
-        if name in {"Name", "Version"} and name not in fields:
-            fields[name] = value
-    if set(fields) != {"Name", "Version"}:
-        raise WheelLockError(f"wheel {path.name!r} has incomplete METADATA identity")
-    return _canonical_distribution(fields["Name"]), fields["Version"]
+    identities: list[tuple[str, str]] = []
+    for metadata in metadata_documents:
+        fields: dict[str, str] = {}
+        for line in metadata.splitlines():
+            if not line:
+                break
+            if ": " not in line:
+                continue
+            name, value = line.split(": ", 1)
+            if name in {"Name", "Version"} and name not in fields:
+                fields[name] = value
+        if set(fields) == {"Name", "Version"}:
+            identities.append((_canonical_distribution(fields["Name"]), fields["Version"]))
+    matches = [
+        identity
+        for identity in identities
+        if identity == (expected_distribution, expected_version)
+    ]
+    if len(matches) != 1:
+        raise WheelLockError(
+            f"wheel {path.name!r} must contain exactly one matching top-level METADATA identity"
+        )
+    return matches[0]
 
 
 def inspect_wheel(path: Path) -> WheelIdentity:
@@ -107,9 +126,13 @@ def inspect_wheel(path: Path) -> WheelIdentity:
     match = WHEEL_PATTERN.fullmatch(path.name)
     if not match:
         raise WheelLockError(f"invalid or non-wheel input filename: {path.name!r}")
-    metadata_distribution, metadata_version = _metadata_identity(path)
     filename_distribution = _canonical_distribution(match.group("distribution"))
     filename_version = match.group("version")
+    metadata_distribution, metadata_version = _metadata_identity(
+        path,
+        expected_distribution=filename_distribution,
+        expected_version=filename_version,
+    )
     if (metadata_distribution, metadata_version) != (
         filename_distribution,
         filename_version,

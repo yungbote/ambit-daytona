@@ -72,7 +72,7 @@ class WheelLockTests(unittest.TestCase):
         target = self.wheels / "alpha_pkg-1.2.3-py3-none-any.whl"
         target.unlink()
         self._wheel(target.name, "other", "1.2.3")
-        with self.assertRaisesRegex(WheelLockError, "disagree"):
+        with self.assertRaisesRegex(WheelLockError, "matching top-level METADATA"):
             self._lock()
         target.unlink()
         with zipfile.ZipFile(target, "w") as archive:
@@ -83,6 +83,20 @@ class WheelLockTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(WheelLockError, "unsafe"):
             self._lock()
+
+    def test_ignores_nested_vendored_distribution_metadata(self) -> None:
+        target = self.wheels / "alpha_pkg-1.2.3-py3-none-any.whl"
+        target.unlink()
+        with zipfile.ZipFile(target, "w") as archive:
+            archive.writestr(
+                "alpha_pkg-1.2.3.dist-info/METADATA",
+                "Name: alpha-pkg\nVersion: 1.2.3\n\n",
+            )
+            archive.writestr(
+                "alpha_pkg/_vendor/other-9.dist-info/METADATA",
+                "Name: other\nVersion: 9\n\n",
+            )
+        self.assertEqual(self._lock()["resolvedDistributionCount"], 2)
 
     def test_replay_fails_on_byte_or_lock_tampering(self) -> None:
         lock_path = self.root / "wheel.lock.json"
