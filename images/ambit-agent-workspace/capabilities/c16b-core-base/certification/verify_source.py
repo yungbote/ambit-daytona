@@ -272,20 +272,18 @@ def verify(root: Path) -> dict[str, object]:
             "platform",
             "platformManifestDigest",
             "sourceIdentitySha256",
+            "status",
         },
         "union overlay core parent",
     )
     _require(
         overlay_core["platform"] == "linux/amd64"
-        and overlay_core["platformManifestDigest"]
-        == "sha256:56a5c23d33a9b6ef2605d830605ec82bb9faa069a2d1dbe86d8662c8801fb419"
-        and overlay_core["configDigest"]
-        == "sha256:891b92f96814b8deeda10e8ecf4154562a5e9ff38f8665803cc937e9d89a537a"
-        and overlay_core["sourceIdentitySha256"]
-        == "sha256:39ee58cffe5a41c2124a09b135d7f79beedf8424eff018ffadb3ec553c160744"
-        and isinstance(overlay_core["orderedLayers"], list)
-        and len(overlay_core["orderedLayers"]) == 7,
-        "union overlay core identity differs from the qualified candidate",
+        and overlay_core["platformManifestDigest"] is None
+        and overlay_core["configDigest"] is None
+        and overlay_core["sourceIdentitySha256"] is None
+        and overlay_core["orderedLayers"] == []
+        and overlay_core["status"] == "pending-qualified-core-replacement",
+        "union overlay invented a replacement core identity before qualification",
     )
     overlay_union = overlay["union"]
     _require(
@@ -306,6 +304,8 @@ def verify(root: Path) -> dict[str, object]:
         "debian@sha256:38a76d01668772e381ad2826d876627c89e7133e2f8a0f5d567306798b0f2a16",
         "RUN --network=none",
         "COPY --from=source_identity /daytona-source.tar",
+        "FROM scratch AS core_base",
+        "COPY --from=core_rootfs / /",
         "USER 1000:1000",
         'io.ambit.runtime-base="ambit.runtime-base/debian-core@1"',
         'io.ambit.runtime-pack="ambit.runtime-pack/core@1"',
@@ -320,14 +320,53 @@ def verify(root: Path) -> dict[str, object]:
 
     conformance = (root / "conformance/verify.sh").read_text(encoding="utf-8")
     for fragment in (
+        'environment-name-roster-is-not-exact',
+        'supplementary-group-roster-is-not-exact',
+        'CapAmb:',
+        'CapBnd:',
         'CapEff:',
+        'CapInh:',
+        'CapPrm:',
         'NoNewPrivs:',
         '/sys/class/net',
-        '/tmp/ambit-core-rootfs-write-probe',
-        '/var/run/docker.sock',
-        'secret-shaped environment name',
+        '/proc/self/mountinfo',
+        'mountpoint-roster-is-not-exact',
+        'unix-socket-census-is-not-empty',
+        'runtime-installer-executable-payload-is-present',
     ):
         _require(fragment in conformance, f"conformance is missing {fragment!r}")
+
+    runtime_runner = (root / "certification/run_runtime_conformance.py").read_text(
+        encoding="utf-8"
+    )
+    for fragment in (
+        'sameUidAlternateSocket',
+        'alternate-host-socket-with-environment',
+        'GOOGLE_APPLICATION_CREDENTIALS',
+        'AWS_ACCESS_KEY_ID',
+        'DATABASE_URL',
+        'GITHUB_PAT',
+        'OPENAI_KEY',
+        'supplementary-group',
+        'added-capability',
+        'network-host',
+        'writable-root',
+    ):
+        _require(fragment in runtime_runner, f"runtime matrix is missing {fragment!r}")
+
+    candidate_builder = (root / "certification/build_candidate.py").read_text(
+        encoding="utf-8"
+    )
+    for fragment in (
+        '--no-cache',
+        'for ordinal in (1, 2)',
+        'build-{ordinal}.stdout',
+        'byteIdenticalCompleteOciArchives',
+        'layerPathManifestSha256',
+        'OCI layer retains installer executable payload',
+        'OCI layers do not contain exactly one materializer',
+    ):
+        _require(fragment in candidate_builder, f"candidate builder is missing {fragment!r}")
 
     package_lock = (root / "locks/base-installed-dpkg.lock").read_text(
         encoding="utf-8"
@@ -344,7 +383,7 @@ def verify(root: Path) -> dict[str, object]:
         "historicalCoreDocumentReusable": False,
         "promotionPerformed": False,
         "backendCompositionContractFrozen": False,
-        "descendantUnionOverlayContractFrozen": True,
+        "descendantUnionOverlayContractFrozen": False,
     }
 
 
