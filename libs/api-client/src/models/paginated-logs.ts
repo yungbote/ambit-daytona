@@ -35,3 +35,4 @@ export interface PaginatedLogs {
      */
     'totalPages': number;
 }
+

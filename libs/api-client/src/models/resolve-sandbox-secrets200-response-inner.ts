@@ -20,3 +20,4 @@ export interface ResolveSandboxSecrets200ResponseInner {
     'value'?: string;
     'hosts'?: Array<string>;
 }
+

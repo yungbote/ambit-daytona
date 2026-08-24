@@ -31,9 +31,9 @@ import type { WebhookInitializationStatus } from '../models';
 export const WebhooksApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         *
+         * 
          * @summary Get Svix Consumer App Portal access for an organization
-         * @param {string} organizationId
+         * @param {string} organizationId 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -75,9 +75,9 @@ export const WebhooksApiAxiosParamCreator = function (configuration?: Configurat
             };
         },
         /**
-         *
+         * 
          * @summary Get webhook initialization status for an organization
-         * @param {string} organizationId
+         * @param {string} organizationId 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -119,7 +119,7 @@ export const WebhooksApiAxiosParamCreator = function (configuration?: Configurat
             };
         },
         /**
-         *
+         * 
          * @summary Initialize webhooks for an organization
          * @param {string} organizationId Organization ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -163,9 +163,9 @@ export const WebhooksApiAxiosParamCreator = function (configuration?: Configurat
             };
         },
         /**
-         *
+         * 
          * @summary Refresh cached endpoint presence flag for an organization
-         * @param {string} organizationId
+         * @param {string} organizationId 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -215,9 +215,9 @@ export const WebhooksApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = WebhooksApiAxiosParamCreator(configuration)
     return {
         /**
-         *
+         * 
          * @summary Get Svix Consumer App Portal access for an organization
-         * @param {string} organizationId
+         * @param {string} organizationId 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -229,9 +229,9 @@ export const WebhooksApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get webhook initialization status for an organization
-         * @param {string} organizationId
+         * @param {string} organizationId 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -243,7 +243,7 @@ export const WebhooksApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Initialize webhooks for an organization
          * @param {string} organizationId Organization ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -257,9 +257,9 @@ export const WebhooksApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Refresh cached endpoint presence flag for an organization
-         * @param {string} organizationId
+         * @param {string} organizationId 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -280,9 +280,9 @@ export const WebhooksApiFactory = function (configuration?: Configuration, baseP
     const localVarFp = WebhooksApiFp(configuration)
     return {
         /**
-         *
+         * 
          * @summary Get Svix Consumer App Portal access for an organization
-         * @param {string} organizationId
+         * @param {string} organizationId 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -291,9 +291,9 @@ export const WebhooksApiFactory = function (configuration?: Configuration, baseP
             return localVarFp.webhookControllerGetAppPortalAccess(organizationId, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get webhook initialization status for an organization
-         * @param {string} organizationId
+         * @param {string} organizationId 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -302,7 +302,7 @@ export const WebhooksApiFactory = function (configuration?: Configuration, baseP
             return localVarFp.webhookControllerGetInitializationStatus(organizationId, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Initialize webhooks for an organization
          * @param {string} organizationId Organization ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -313,9 +313,9 @@ export const WebhooksApiFactory = function (configuration?: Configuration, baseP
             return localVarFp.webhookControllerInitializeWebhooks(organizationId, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Refresh cached endpoint presence flag for an organization
-         * @param {string} organizationId
+         * @param {string} organizationId 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -331,9 +331,9 @@ export const WebhooksApiFactory = function (configuration?: Configuration, baseP
  */
 export class WebhooksApi extends BaseAPI {
     /**
-     *
+     * 
      * @summary Get Svix Consumer App Portal access for an organization
-     * @param {string} organizationId
+     * @param {string} organizationId 
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -343,9 +343,9 @@ export class WebhooksApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Get webhook initialization status for an organization
-     * @param {string} organizationId
+     * @param {string} organizationId 
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -355,7 +355,7 @@ export class WebhooksApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Initialize webhooks for an organization
      * @param {string} organizationId Organization ID
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -367,9 +367,9 @@ export class WebhooksApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Refresh cached endpoint presence flag for an organization
-     * @param {string} organizationId
+     * @param {string} organizationId 
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -378,3 +378,4 @@ export class WebhooksApi extends BaseAPI {
         return WebhooksApiFp(this.configuration).webhookControllerRefreshEndpoints(organizationId, xDaytonaOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 }
+

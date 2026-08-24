@@ -18,3 +18,4 @@ export interface AccountProvider {
     'name': string;
     'displayName': string;
 }
+

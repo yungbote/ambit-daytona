@@ -24,3 +24,4 @@ export interface WebhookAppPortalAccess {
      */
     'url': string;
 }
+

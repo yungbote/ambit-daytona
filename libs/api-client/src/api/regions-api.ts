@@ -29,7 +29,7 @@ import type { Region } from '../models';
 export const RegionsApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         *
+         * 
          * @summary List all shared regions
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -68,7 +68,7 @@ export const RegionsApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = RegionsApiAxiosParamCreator(configuration)
     return {
         /**
-         *
+         * 
          * @summary List all shared regions
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -89,7 +89,7 @@ export const RegionsApiFactory = function (configuration?: Configuration, basePa
     const localVarFp = RegionsApiFp(configuration)
     return {
         /**
-         *
+         * 
          * @summary List all shared regions
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -105,7 +105,7 @@ export const RegionsApiFactory = function (configuration?: Configuration, basePa
  */
 export class RegionsApi extends BaseAPI {
     /**
-     *
+     * 
      * @summary List all shared regions
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -114,3 +114,4 @@ export class RegionsApi extends BaseAPI {
         return RegionsApiFp(this.configuration).listSharedRegions(options).then((request) => request(this.axios, this.basePath));
     }
 }
+

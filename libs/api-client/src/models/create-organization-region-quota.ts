@@ -35,3 +35,6 @@ export interface CreateOrganizationRegionQuota {
     'maxMemoryPerGpuSandbox'?: number | null;
     'maxDiskPerGpuSandbox'?: number | null;
 }
+
+
+

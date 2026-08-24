@@ -31,9 +31,9 @@ import type { VolumeDto } from '../models';
 export const VolumesApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         *
+         * 
          * @summary Create a new volume
-         * @param {CreateVolume} createVolume
+         * @param {CreateVolume} createVolume 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -76,7 +76,7 @@ export const VolumesApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Delete volume
          * @param {string} volumeId ID of the volume
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -119,7 +119,7 @@ export const VolumesApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Get volume details
          * @param {string} volumeId ID of the volume
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -163,7 +163,7 @@ export const VolumesApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Get volume details by name
          * @param {string} name Name of the volume
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -207,7 +207,7 @@ export const VolumesApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary List all volumes
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {boolean} [includeDeleted] Include deleted volumes in the response
@@ -261,9 +261,9 @@ export const VolumesApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = VolumesApiAxiosParamCreator(configuration)
     return {
         /**
-         *
+         * 
          * @summary Create a new volume
-         * @param {CreateVolume} createVolume
+         * @param {CreateVolume} createVolume 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -275,7 +275,7 @@ export const VolumesApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Delete volume
          * @param {string} volumeId ID of the volume
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -289,7 +289,7 @@ export const VolumesApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get volume details
          * @param {string} volumeId ID of the volume
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -303,7 +303,7 @@ export const VolumesApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get volume details by name
          * @param {string} name Name of the volume
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -317,7 +317,7 @@ export const VolumesApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary List all volumes
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {boolean} [includeDeleted] Include deleted volumes in the response
@@ -340,9 +340,9 @@ export const VolumesApiFactory = function (configuration?: Configuration, basePa
     const localVarFp = VolumesApiFp(configuration)
     return {
         /**
-         *
+         * 
          * @summary Create a new volume
-         * @param {CreateVolume} createVolume
+         * @param {CreateVolume} createVolume 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -351,7 +351,7 @@ export const VolumesApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.createVolume(createVolume, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Delete volume
          * @param {string} volumeId ID of the volume
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -362,7 +362,7 @@ export const VolumesApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.deleteVolume(volumeId, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get volume details
          * @param {string} volumeId ID of the volume
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -373,7 +373,7 @@ export const VolumesApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getVolume(volumeId, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get volume details by name
          * @param {string} name Name of the volume
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -384,7 +384,7 @@ export const VolumesApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getVolumeByName(name, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary List all volumes
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {boolean} [includeDeleted] Include deleted volumes in the response
@@ -402,9 +402,9 @@ export const VolumesApiFactory = function (configuration?: Configuration, basePa
  */
 export class VolumesApi extends BaseAPI {
     /**
-     *
+     * 
      * @summary Create a new volume
-     * @param {CreateVolume} createVolume
+     * @param {CreateVolume} createVolume 
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -414,7 +414,7 @@ export class VolumesApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Delete volume
      * @param {string} volumeId ID of the volume
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -426,7 +426,7 @@ export class VolumesApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Get volume details
      * @param {string} volumeId ID of the volume
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -438,7 +438,7 @@ export class VolumesApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Get volume details by name
      * @param {string} name Name of the volume
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -450,7 +450,7 @@ export class VolumesApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary List all volumes
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {boolean} [includeDeleted] Include deleted volumes in the response
@@ -461,3 +461,4 @@ export class VolumesApi extends BaseAPI {
         return VolumesApiFp(this.configuration).listVolumes(xDaytonaOrganizationID, includeDeleted, options).then((request) => request(this.axios, this.basePath));
     }
 }
+

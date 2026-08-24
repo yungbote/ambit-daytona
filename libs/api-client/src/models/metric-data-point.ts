@@ -24,3 +24,4 @@ export interface MetricDataPoint {
      */
     'value': number;
 }
+

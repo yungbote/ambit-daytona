@@ -28,3 +28,4 @@ export interface OrganizationSuspension {
      */
     'suspensionCleanupGracePeriodHours'?: number;
 }
+

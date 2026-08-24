@@ -23,3 +23,4 @@ export interface PaginatedSandboxesDeprecated {
     'page': number;
     'totalPages': number;
 }
+

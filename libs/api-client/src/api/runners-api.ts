@@ -39,9 +39,9 @@ import type { RunnerSnapshotDto } from '../models';
 export const RunnersApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         *
+         * 
          * @summary Create runner
-         * @param {CreateRunner} createRunner
+         * @param {CreateRunner} createRunner 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -84,7 +84,7 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Delete runner
          * @param {string} id Runner ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -127,7 +127,7 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Get info for authenticated runner
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -163,7 +163,7 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Get runner by ID
          * @param {string} id Runner ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -207,9 +207,9 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Get runner by sandbox ID
-         * @param {string} sandboxId
+         * @param {string} sandboxId 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -247,7 +247,7 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Get runner by ID
          * @param {string} id Runner ID
          * @param {*} [options] Override http request option.
@@ -287,7 +287,7 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Get runners by snapshot ref
          * @param {string} ref Snapshot ref
          * @param {*} [options] Override http request option.
@@ -330,7 +330,7 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary List all runners
          * @param {string} [regionId] Filter runners by region ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -377,7 +377,7 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
         /**
          * Endpoint for version 2 runners to send healthcheck and metrics. Updates lastChecked timestamp and runner metrics.
          * @summary Runner healthcheck
-         * @param {RunnerHealthcheck} runnerHealthcheck
+         * @param {RunnerHealthcheck} runnerHealthcheck 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -415,7 +415,7 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Update runner draining status
          * @param {string} id Runner ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -459,7 +459,7 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Update runner scheduling status
          * @param {string} id Runner ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -512,9 +512,9 @@ export const RunnersApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = RunnersApiAxiosParamCreator(configuration)
     return {
         /**
-         *
+         * 
          * @summary Create runner
-         * @param {CreateRunner} createRunner
+         * @param {CreateRunner} createRunner 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -526,7 +526,7 @@ export const RunnersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Delete runner
          * @param {string} id Runner ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -540,7 +540,7 @@ export const RunnersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get info for authenticated runner
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -552,7 +552,7 @@ export const RunnersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get runner by ID
          * @param {string} id Runner ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -566,9 +566,9 @@ export const RunnersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get runner by sandbox ID
-         * @param {string} sandboxId
+         * @param {string} sandboxId 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -579,7 +579,7 @@ export const RunnersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get runner by ID
          * @param {string} id Runner ID
          * @param {*} [options] Override http request option.
@@ -592,7 +592,7 @@ export const RunnersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get runners by snapshot ref
          * @param {string} ref Snapshot ref
          * @param {*} [options] Override http request option.
@@ -605,7 +605,7 @@ export const RunnersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary List all runners
          * @param {string} [regionId] Filter runners by region ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -621,7 +621,7 @@ export const RunnersApiFp = function(configuration?: Configuration) {
         /**
          * Endpoint for version 2 runners to send healthcheck and metrics. Updates lastChecked timestamp and runner metrics.
          * @summary Runner healthcheck
-         * @param {RunnerHealthcheck} runnerHealthcheck
+         * @param {RunnerHealthcheck} runnerHealthcheck 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -632,7 +632,7 @@ export const RunnersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Update runner draining status
          * @param {string} id Runner ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -646,7 +646,7 @@ export const RunnersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Update runner scheduling status
          * @param {string} id Runner ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -669,9 +669,9 @@ export const RunnersApiFactory = function (configuration?: Configuration, basePa
     const localVarFp = RunnersApiFp(configuration)
     return {
         /**
-         *
+         * 
          * @summary Create runner
-         * @param {CreateRunner} createRunner
+         * @param {CreateRunner} createRunner 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -680,7 +680,7 @@ export const RunnersApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.createRunner(createRunner, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Delete runner
          * @param {string} id Runner ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -691,7 +691,7 @@ export const RunnersApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.deleteRunner(id, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get info for authenticated runner
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -700,7 +700,7 @@ export const RunnersApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getInfoForAuthenticatedRunner(options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get runner by ID
          * @param {string} id Runner ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -711,9 +711,9 @@ export const RunnersApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getRunnerById(id, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get runner by sandbox ID
-         * @param {string} sandboxId
+         * @param {string} sandboxId 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -721,7 +721,7 @@ export const RunnersApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getRunnerBySandboxId(sandboxId, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get runner by ID
          * @param {string} id Runner ID
          * @param {*} [options] Override http request option.
@@ -731,7 +731,7 @@ export const RunnersApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getRunnerFullById(id, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get runners by snapshot ref
          * @param {string} ref Snapshot ref
          * @param {*} [options] Override http request option.
@@ -741,7 +741,7 @@ export const RunnersApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getRunnersBySnapshotRef(ref, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary List all runners
          * @param {string} [regionId] Filter runners by region ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -754,7 +754,7 @@ export const RunnersApiFactory = function (configuration?: Configuration, basePa
         /**
          * Endpoint for version 2 runners to send healthcheck and metrics. Updates lastChecked timestamp and runner metrics.
          * @summary Runner healthcheck
-         * @param {RunnerHealthcheck} runnerHealthcheck
+         * @param {RunnerHealthcheck} runnerHealthcheck 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -762,7 +762,7 @@ export const RunnersApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.runnerHealthcheck(runnerHealthcheck, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Update runner draining status
          * @param {string} id Runner ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -773,7 +773,7 @@ export const RunnersApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.updateRunnerDraining(id, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Update runner scheduling status
          * @param {string} id Runner ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -791,9 +791,9 @@ export const RunnersApiFactory = function (configuration?: Configuration, basePa
  */
 export class RunnersApi extends BaseAPI {
     /**
-     *
+     * 
      * @summary Create runner
-     * @param {CreateRunner} createRunner
+     * @param {CreateRunner} createRunner 
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -803,7 +803,7 @@ export class RunnersApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Delete runner
      * @param {string} id Runner ID
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -815,7 +815,7 @@ export class RunnersApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Get info for authenticated runner
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -825,7 +825,7 @@ export class RunnersApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Get runner by ID
      * @param {string} id Runner ID
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -837,9 +837,9 @@ export class RunnersApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Get runner by sandbox ID
-     * @param {string} sandboxId
+     * @param {string} sandboxId 
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -848,7 +848,7 @@ export class RunnersApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Get runner by ID
      * @param {string} id Runner ID
      * @param {*} [options] Override http request option.
@@ -859,7 +859,7 @@ export class RunnersApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Get runners by snapshot ref
      * @param {string} ref Snapshot ref
      * @param {*} [options] Override http request option.
@@ -870,7 +870,7 @@ export class RunnersApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary List all runners
      * @param {string} [regionId] Filter runners by region ID
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -884,7 +884,7 @@ export class RunnersApi extends BaseAPI {
     /**
      * Endpoint for version 2 runners to send healthcheck and metrics. Updates lastChecked timestamp and runner metrics.
      * @summary Runner healthcheck
-     * @param {RunnerHealthcheck} runnerHealthcheck
+     * @param {RunnerHealthcheck} runnerHealthcheck 
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -893,7 +893,7 @@ export class RunnersApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Update runner draining status
      * @param {string} id Runner ID
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -905,7 +905,7 @@ export class RunnersApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Update runner scheduling status
      * @param {string} id Runner ID
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -916,3 +916,4 @@ export class RunnersApi extends BaseAPI {
         return RunnersApiFp(this.configuration).updateRunnerScheduling(id, xDaytonaOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 }
+

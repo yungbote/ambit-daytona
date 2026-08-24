@@ -35,3 +35,6 @@ export interface UpdateOrganizationRegionQuota {
     'maxMemoryPerGpuSandbox'?: number | null;
     'maxDiskPerGpuSandbox'?: number | null;
 }
+
+
+

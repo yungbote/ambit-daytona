@@ -24,3 +24,6 @@ export const RunnerClass = {
 } as const;
 
 export type RunnerClass = typeof RunnerClass[keyof typeof RunnerClass];
+
+
+

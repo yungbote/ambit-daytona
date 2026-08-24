@@ -35,9 +35,9 @@ import type { UpdateDockerRegistry } from '../models';
 export const DockerRegistryApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         *
+         * 
          * @summary Create registry
-         * @param {CreateDockerRegistry} createDockerRegistry
+         * @param {CreateDockerRegistry} createDockerRegistry 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -80,7 +80,7 @@ export const DockerRegistryApiAxiosParamCreator = function (configuration?: Conf
             };
         },
         /**
-         *
+         * 
          * @summary Delete registry
          * @param {string} id ID of the docker registry
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -123,7 +123,7 @@ export const DockerRegistryApiAxiosParamCreator = function (configuration?: Conf
             };
         },
         /**
-         *
+         * 
          * @summary Get registry
          * @param {string} id ID of the docker registry
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -167,7 +167,7 @@ export const DockerRegistryApiAxiosParamCreator = function (configuration?: Conf
             };
         },
         /**
-         *
+         * 
          * @summary Get temporary registry access for pushing snapshots
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {string} [regionId] ID of the region where the snapshot will be available (defaults to organization default region)
@@ -212,7 +212,7 @@ export const DockerRegistryApiAxiosParamCreator = function (configuration?: Conf
             };
         },
         /**
-         *
+         * 
          * @summary List registries
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -252,10 +252,10 @@ export const DockerRegistryApiAxiosParamCreator = function (configuration?: Conf
             };
         },
         /**
-         *
+         * 
          * @summary Update registry
          * @param {string} id ID of the docker registry
-         * @param {UpdateDockerRegistry} updateDockerRegistry
+         * @param {UpdateDockerRegistry} updateDockerRegistry 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -310,9 +310,9 @@ export const DockerRegistryApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = DockerRegistryApiAxiosParamCreator(configuration)
     return {
         /**
-         *
+         * 
          * @summary Create registry
-         * @param {CreateDockerRegistry} createDockerRegistry
+         * @param {CreateDockerRegistry} createDockerRegistry 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -324,7 +324,7 @@ export const DockerRegistryApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Delete registry
          * @param {string} id ID of the docker registry
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -338,7 +338,7 @@ export const DockerRegistryApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get registry
          * @param {string} id ID of the docker registry
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -352,7 +352,7 @@ export const DockerRegistryApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get temporary registry access for pushing snapshots
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {string} [regionId] ID of the region where the snapshot will be available (defaults to organization default region)
@@ -366,7 +366,7 @@ export const DockerRegistryApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary List registries
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -379,10 +379,10 @@ export const DockerRegistryApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Update registry
          * @param {string} id ID of the docker registry
-         * @param {UpdateDockerRegistry} updateDockerRegistry
+         * @param {UpdateDockerRegistry} updateDockerRegistry 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -403,9 +403,9 @@ export const DockerRegistryApiFactory = function (configuration?: Configuration,
     const localVarFp = DockerRegistryApiFp(configuration)
     return {
         /**
-         *
+         * 
          * @summary Create registry
-         * @param {CreateDockerRegistry} createDockerRegistry
+         * @param {CreateDockerRegistry} createDockerRegistry 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -414,7 +414,7 @@ export const DockerRegistryApiFactory = function (configuration?: Configuration,
             return localVarFp.createRegistry(createDockerRegistry, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Delete registry
          * @param {string} id ID of the docker registry
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -425,7 +425,7 @@ export const DockerRegistryApiFactory = function (configuration?: Configuration,
             return localVarFp.deleteRegistry(id, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get registry
          * @param {string} id ID of the docker registry
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -436,7 +436,7 @@ export const DockerRegistryApiFactory = function (configuration?: Configuration,
             return localVarFp.getRegistry(id, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get temporary registry access for pushing snapshots
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {string} [regionId] ID of the region where the snapshot will be available (defaults to organization default region)
@@ -447,7 +447,7 @@ export const DockerRegistryApiFactory = function (configuration?: Configuration,
             return localVarFp.getTransientPushAccess(xDaytonaOrganizationID, regionId, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary List registries
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -457,10 +457,10 @@ export const DockerRegistryApiFactory = function (configuration?: Configuration,
             return localVarFp.listRegistries(xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Update registry
          * @param {string} id ID of the docker registry
-         * @param {UpdateDockerRegistry} updateDockerRegistry
+         * @param {UpdateDockerRegistry} updateDockerRegistry 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -476,9 +476,9 @@ export const DockerRegistryApiFactory = function (configuration?: Configuration,
  */
 export class DockerRegistryApi extends BaseAPI {
     /**
-     *
+     * 
      * @summary Create registry
-     * @param {CreateDockerRegistry} createDockerRegistry
+     * @param {CreateDockerRegistry} createDockerRegistry 
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -488,7 +488,7 @@ export class DockerRegistryApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Delete registry
      * @param {string} id ID of the docker registry
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -500,7 +500,7 @@ export class DockerRegistryApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Get registry
      * @param {string} id ID of the docker registry
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -512,7 +512,7 @@ export class DockerRegistryApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Get temporary registry access for pushing snapshots
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {string} [regionId] ID of the region where the snapshot will be available (defaults to organization default region)
@@ -524,7 +524,7 @@ export class DockerRegistryApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary List registries
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
@@ -535,10 +535,10 @@ export class DockerRegistryApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Update registry
      * @param {string} id ID of the docker registry
-     * @param {UpdateDockerRegistry} updateDockerRegistry
+     * @param {UpdateDockerRegistry} updateDockerRegistry 
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -547,3 +547,4 @@ export class DockerRegistryApi extends BaseAPI {
         return DockerRegistryApiFp(this.configuration).updateRegistry(id, updateDockerRegistry, xDaytonaOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 }
+

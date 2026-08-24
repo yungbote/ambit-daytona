@@ -31,3 +31,4 @@ export interface ListSecretsResponse {
      */
     'nextCursor': string | null;
 }
+

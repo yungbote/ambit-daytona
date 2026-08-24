@@ -44,3 +44,4 @@ export interface TraceSummary {
      */
     'statusCode'?: string;
 }
+

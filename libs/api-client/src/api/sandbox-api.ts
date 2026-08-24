@@ -109,9 +109,9 @@ import type { WorkingCopyCaptureReceipt } from '../models';
 export const SandboxApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         *
+         * 
          * @summary Archive sandbox
-         * @param {string} sandboxIdOrName
+         * @param {string} sandboxIdOrName 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -202,7 +202,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Create sandbox backup
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -246,9 +246,9 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Create a new sandbox
-         * @param {CreateSandbox} createSandbox
+         * @param {CreateSandbox} createSandbox 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -291,10 +291,10 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Create a snapshot from a sandbox
-         * @param {string} sandboxIdOrName
-         * @param {CreateSandboxSnapshot} createSandboxSnapshot
+         * @param {string} sandboxIdOrName 
+         * @param {CreateSandboxSnapshot} createSandboxSnapshot 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -340,7 +340,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Create SSH access for sandbox
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -389,7 +389,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Delete sandbox
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -482,7 +482,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Expire signed preview URL for a sandbox port
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {number} port Port number to expire signed preview URL for
@@ -533,10 +533,10 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Fork a sandbox
-         * @param {string} sandboxIdOrName
-         * @param {ForkSandbox} forkSandbox
+         * @param {string} sandboxIdOrName 
+         * @param {ForkSandbox} forkSandbox 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -631,7 +631,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Get build logs URL
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -675,7 +675,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Get organization by sandbox ID
          * @param {string} sandboxId ID of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -719,7 +719,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Get preview URL for a sandbox port
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {number} port Port number to get preview URL for
@@ -767,7 +767,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Get region quota by sandbox ID
          * @param {string} sandboxId ID of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -811,7 +811,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Get sandbox details
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -860,9 +860,9 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Get sandbox fork ancestor chain
-         * @param {string} sandboxIdOrName
+         * @param {string} sandboxIdOrName 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -904,11 +904,11 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Get sandbox fork children
-         * @param {string} sandboxIdOrName
+         * @param {string} sandboxIdOrName 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
-         * @param {boolean} [includeDestroyed]
+         * @param {boolean} [includeDestroyed] 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1102,9 +1102,9 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Get sandbox fork parent
-         * @param {string} sandboxIdOrName
+         * @param {string} sandboxIdOrName 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -1266,7 +1266,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Get sandboxes for the authenticated runner
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {string} [states] Comma-separated list of sandbox states to filter by
@@ -1316,7 +1316,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Get signed preview URL for a sandbox port
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {number} port Port number to get signed preview URL for
@@ -1369,7 +1369,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Get toolbox proxy URL for a sandbox
          * @param {string} sandboxId ID of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -1595,7 +1595,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] List all sandboxes paginated
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {number} [page] Page number of the results
@@ -1882,7 +1882,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Pause sandbox
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -1975,7 +1975,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Recover sandbox from error state
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -2024,10 +2024,10 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Replace sandbox labels
          * @param {string} sandboxIdOrName ID or name of the sandbox
-         * @param {SandboxLabels} sandboxLabels
+         * @param {SandboxLabels} sandboxLabels 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -2073,10 +2073,10 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Resize sandbox resources
          * @param {string} sandboxIdOrName ID or name of the sandbox
-         * @param {ResizeSandbox} resizeSandbox
+         * @param {ResizeSandbox} resizeSandbox 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -2122,7 +2122,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Resolve sandbox secrets
          * @param {string} sandboxId Sandbox ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -2166,7 +2166,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Revoke SSH access for sandbox
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -2264,7 +2264,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Set sandbox auto-archive interval
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {number} interval Auto-archive interval in minutes (0 means the maximum interval will be used)
@@ -2646,7 +2646,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Update sandbox last activity
          * @param {string} sandboxId ID of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -2692,7 +2692,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
          * Changes outbound network policy on the runner for a running sandbox (for example block all traffic, restore access, or set a CIDR allow list).
          * @summary Update sandbox network settings
          * @param {string} sandboxIdOrName ID or name of the sandbox
-         * @param {UpdateSandboxNetworkSettings} updateSandboxNetworkSettings
+         * @param {UpdateSandboxNetworkSettings} updateSandboxNetworkSettings 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -2738,7 +2738,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Update public status
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {boolean} isPublic Public status to set
@@ -2789,7 +2789,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
          * Replaces the set of vault secrets mounted in the sandbox. Attached, detached and rotated secrets take effect for outbound requests within seconds. New env vars become visible to processes spawned after the update; a sandbox created without any secrets must be restarted for newly attached secrets to work.
          * @summary Update sandbox secrets
          * @param {string} sandboxIdOrName ID or name of the sandbox
-         * @param {UpdateSandboxSecrets} updateSandboxSecrets
+         * @param {UpdateSandboxSecrets} updateSandboxSecrets 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -2835,10 +2835,10 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Update sandbox state
          * @param {string} sandboxId ID of the sandbox
-         * @param {UpdateSandboxStateDto} updateSandboxStateDto
+         * @param {UpdateSandboxStateDto} updateSandboxStateDto 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -2883,7 +2883,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         *
+         * 
          * @summary Validate SSH access for sandbox
          * @param {string} token SSH access token to validate
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -2939,9 +2939,9 @@ export const SandboxApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = SandboxApiAxiosParamCreator(configuration)
     return {
         /**
-         *
+         * 
          * @summary Archive sandbox
-         * @param {string} sandboxIdOrName
+         * @param {string} sandboxIdOrName 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -2968,7 +2968,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Create sandbox backup
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -2982,9 +2982,9 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Create a new sandbox
-         * @param {CreateSandbox} createSandbox
+         * @param {CreateSandbox} createSandbox 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -2996,10 +2996,10 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Create a snapshot from a sandbox
-         * @param {string} sandboxIdOrName
-         * @param {CreateSandboxSnapshot} createSandboxSnapshot
+         * @param {string} sandboxIdOrName 
+         * @param {CreateSandboxSnapshot} createSandboxSnapshot 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -3011,7 +3011,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Create SSH access for sandbox
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3026,7 +3026,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Delete sandbox
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3055,7 +3055,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Expire signed preview URL for a sandbox port
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {number} port Port number to expire signed preview URL for
@@ -3071,10 +3071,10 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Fork a sandbox
-         * @param {string} sandboxIdOrName
-         * @param {ForkSandbox} forkSandbox
+         * @param {string} sandboxIdOrName 
+         * @param {ForkSandbox} forkSandbox 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -3102,7 +3102,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get build logs URL
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3116,7 +3116,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get organization by sandbox ID
          * @param {string} sandboxId ID of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3130,7 +3130,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get preview URL for a sandbox port
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {number} port Port number to get preview URL for
@@ -3145,7 +3145,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get region quota by sandbox ID
          * @param {string} sandboxId ID of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3159,7 +3159,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get sandbox details
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3174,9 +3174,9 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get sandbox fork ancestor chain
-         * @param {string} sandboxIdOrName
+         * @param {string} sandboxIdOrName 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -3188,11 +3188,11 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get sandbox fork children
-         * @param {string} sandboxIdOrName
+         * @param {string} sandboxIdOrName 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
-         * @param {boolean} [includeDestroyed]
+         * @param {boolean} [includeDestroyed] 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -3240,9 +3240,9 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get sandbox fork parent
-         * @param {string} sandboxIdOrName
+         * @param {string} sandboxIdOrName 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -3287,7 +3287,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get sandboxes for the authenticated runner
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {string} [states] Comma-separated list of sandbox states to filter by
@@ -3302,7 +3302,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get signed preview URL for a sandbox port
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {number} port Port number to get signed preview URL for
@@ -3318,7 +3318,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Get toolbox proxy URL for a sandbox
          * @param {string} sandboxId ID of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3371,7 +3371,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] List all sandboxes paginated
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {number} [page] Page number of the results
@@ -3449,7 +3449,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Pause sandbox
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3478,7 +3478,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Recover sandbox from error state
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3493,10 +3493,10 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Replace sandbox labels
          * @param {string} sandboxIdOrName ID or name of the sandbox
-         * @param {SandboxLabels} sandboxLabels
+         * @param {SandboxLabels} sandboxLabels 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -3508,10 +3508,10 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Resize sandbox resources
          * @param {string} sandboxIdOrName ID or name of the sandbox
-         * @param {ResizeSandbox} resizeSandbox
+         * @param {ResizeSandbox} resizeSandbox 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -3523,7 +3523,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Resolve sandbox secrets
          * @param {string} sandboxId Sandbox ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3537,7 +3537,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Revoke SSH access for sandbox
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3567,7 +3567,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Set sandbox auto-archive interval
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {number} interval Auto-archive interval in minutes (0 means the maximum interval will be used)
@@ -3582,7 +3582,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Set sandbox auto-delete interval
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {number} interval Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping)
@@ -3597,7 +3597,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Set sandbox auto-pause interval
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {number} interval Auto-pause interval in minutes (0 to disable)
@@ -3612,7 +3612,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Set sandbox auto-stop interval
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {number} interval Auto-stop interval in minutes (0 to disable)
@@ -3656,7 +3656,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Stop sandbox
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3686,7 +3686,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Update sandbox last activity
          * @param {string} sandboxId ID of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3703,7 +3703,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
          * Changes outbound network policy on the runner for a running sandbox (for example block all traffic, restore access, or set a CIDR allow list).
          * @summary Update sandbox network settings
          * @param {string} sandboxIdOrName ID or name of the sandbox
-         * @param {UpdateSandboxNetworkSettings} updateSandboxNetworkSettings
+         * @param {UpdateSandboxNetworkSettings} updateSandboxNetworkSettings 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -3715,7 +3715,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Update public status
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {boolean} isPublic Public status to set
@@ -3733,7 +3733,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
          * Replaces the set of vault secrets mounted in the sandbox. Attached, detached and rotated secrets take effect for outbound requests within seconds. New env vars become visible to processes spawned after the update; a sandbox created without any secrets must be restarted for newly attached secrets to work.
          * @summary Update sandbox secrets
          * @param {string} sandboxIdOrName ID or name of the sandbox
-         * @param {UpdateSandboxSecrets} updateSandboxSecrets
+         * @param {UpdateSandboxSecrets} updateSandboxSecrets 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -3745,10 +3745,10 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Update sandbox state
          * @param {string} sandboxId ID of the sandbox
-         * @param {UpdateSandboxStateDto} updateSandboxStateDto
+         * @param {UpdateSandboxStateDto} updateSandboxStateDto 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -3760,7 +3760,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         *
+         * 
          * @summary Validate SSH access for sandbox
          * @param {string} token SSH access token to validate
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3783,9 +3783,9 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
     const localVarFp = SandboxApiFp(configuration)
     return {
         /**
-         *
+         * 
          * @summary Archive sandbox
-         * @param {string} sandboxIdOrName
+         * @param {string} sandboxIdOrName 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -3806,7 +3806,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.captureSandboxWorkingCopy(sandboxIdOrName, workingCopyCaptureBinding, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Create sandbox backup
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3817,9 +3817,9 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.createBackup(sandboxIdOrName, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Create a new sandbox
-         * @param {CreateSandbox} createSandbox
+         * @param {CreateSandbox} createSandbox 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -3828,10 +3828,10 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.createSandbox(createSandbox, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Create a snapshot from a sandbox
-         * @param {string} sandboxIdOrName
-         * @param {CreateSandboxSnapshot} createSandboxSnapshot
+         * @param {string} sandboxIdOrName 
+         * @param {CreateSandboxSnapshot} createSandboxSnapshot 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -3840,7 +3840,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.createSandboxSnapshot(sandboxIdOrName, createSandboxSnapshot, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Create SSH access for sandbox
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3852,7 +3852,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.createSshAccess(sandboxIdOrName, xDaytonaOrganizationID, expiresInMinutes, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Delete sandbox
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3875,7 +3875,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.deleteSandboxWorkingCopyCapture(sandboxIdOrName, workingCopyCaptureIdentity, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Expire signed preview URL for a sandbox port
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {number} port Port number to expire signed preview URL for
@@ -3888,10 +3888,10 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.expireSignedPortPreviewUrl(sandboxIdOrName, port, token, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Fork a sandbox
-         * @param {string} sandboxIdOrName
-         * @param {ForkSandbox} forkSandbox
+         * @param {string} sandboxIdOrName 
+         * @param {ForkSandbox} forkSandbox 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -3913,7 +3913,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getBuildLogs(sandboxIdOrName, xDaytonaOrganizationID, follow, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get build logs URL
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3924,7 +3924,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getBuildLogsUrl(sandboxIdOrName, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get organization by sandbox ID
          * @param {string} sandboxId ID of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3935,7 +3935,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getOrganizationBySandboxId(sandboxId, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get preview URL for a sandbox port
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {number} port Port number to get preview URL for
@@ -3947,7 +3947,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getPortPreviewUrl(sandboxIdOrName, port, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get region quota by sandbox ID
          * @param {string} sandboxId ID of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3958,7 +3958,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getRegionQuotaBySandboxId(sandboxId, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get sandbox details
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3970,9 +3970,9 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getSandbox(sandboxIdOrName, xDaytonaOrganizationID, verbose, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get sandbox fork ancestor chain
-         * @param {string} sandboxIdOrName
+         * @param {string} sandboxIdOrName 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -3981,11 +3981,11 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getSandboxAncestors(sandboxIdOrName, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get sandbox fork children
-         * @param {string} sandboxIdOrName
+         * @param {string} sandboxIdOrName 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
-         * @param {boolean} [includeDestroyed]
+         * @param {boolean} [includeDestroyed] 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -4024,9 +4024,9 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getSandboxMetrics(sandboxId, from, to, xDaytonaOrganizationID, metricNames, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get sandbox fork parent
-         * @param {string} sandboxIdOrName
+         * @param {string} sandboxIdOrName 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -4062,7 +4062,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getSandboxTraces(sandboxId, from, to, xDaytonaOrganizationID, page, limit, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get sandboxes for the authenticated runner
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {string} [states] Comma-separated list of sandbox states to filter by
@@ -4074,7 +4074,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getSandboxesForRunner(xDaytonaOrganizationID, states, skipReconcilingSandboxes, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get signed preview URL for a sandbox port
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {number} port Port number to get signed preview URL for
@@ -4087,7 +4087,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getSignedPortPreviewUrl(sandboxIdOrName, port, xDaytonaOrganizationID, expiresInSeconds, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Get toolbox proxy URL for a sandbox
          * @param {string} sandboxId ID of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -4134,7 +4134,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.listSandboxes(xDaytonaOrganizationID, cursor, limit, id, name, labels, includeErroredDeleted, states, snapshots, regionIds, sandboxClasses, minCpu, maxCpu, minMemoryGiB, maxMemoryGiB, minDiskGiB, maxDiskGiB, isPublic, isRecoverable, createdAtAfter, createdAtBefore, lastEventAfter, lastEventBefore, autoDestroyAtAfter, autoDestroyAtBefore, sort, order, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary [DEPRECATED] List all sandboxes paginated
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {number} [page] Page number of the results
@@ -4200,7 +4200,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.observeSandboxWorkingCopyCapture(sandboxIdOrName, workingCopyCaptureBinding, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Pause sandbox
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -4223,7 +4223,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.readSandboxWorkingCopyCapture(sandboxIdOrName, workingCopyCaptureRead, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Recover sandbox from error state
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -4235,10 +4235,10 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.recoverSandbox(sandboxIdOrName, xDaytonaOrganizationID, skipStart, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Replace sandbox labels
          * @param {string} sandboxIdOrName ID or name of the sandbox
-         * @param {SandboxLabels} sandboxLabels
+         * @param {SandboxLabels} sandboxLabels 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -4247,10 +4247,10 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.replaceLabels(sandboxIdOrName, sandboxLabels, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Resize sandbox resources
          * @param {string} sandboxIdOrName ID or name of the sandbox
-         * @param {ResizeSandbox} resizeSandbox
+         * @param {ResizeSandbox} resizeSandbox 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -4259,7 +4259,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.resizeSandbox(sandboxIdOrName, resizeSandbox, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Resolve sandbox secrets
          * @param {string} sandboxId Sandbox ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -4270,7 +4270,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.resolveSandboxSecrets(sandboxId, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Revoke SSH access for sandbox
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -4294,7 +4294,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.sandboxWorkingCopyCaptureExists(sandboxIdOrName, workingCopyCaptureIdentity, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Set sandbox auto-archive interval
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {number} interval Auto-archive interval in minutes (0 means the maximum interval will be used)
@@ -4306,7 +4306,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.setAutoArchiveInterval(sandboxIdOrName, interval, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Set sandbox auto-delete interval
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {number} interval Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping)
@@ -4318,7 +4318,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.setAutoDeleteInterval(sandboxIdOrName, interval, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Set sandbox auto-pause interval
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {number} interval Auto-pause interval in minutes (0 to disable)
@@ -4330,7 +4330,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.setAutoPauseInterval(sandboxIdOrName, interval, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Set sandbox auto-stop interval
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {number} interval Auto-stop interval in minutes (0 to disable)
@@ -4365,7 +4365,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.startSandbox(sandboxIdOrName, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Stop sandbox
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -4389,7 +4389,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.stopSandboxGenerationOnce(sandboxIdOrName, stopSandboxGenerationRequest, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Update sandbox last activity
          * @param {string} sandboxId ID of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -4403,7 +4403,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
          * Changes outbound network policy on the runner for a running sandbox (for example block all traffic, restore access, or set a CIDR allow list).
          * @summary Update sandbox network settings
          * @param {string} sandboxIdOrName ID or name of the sandbox
-         * @param {UpdateSandboxNetworkSettings} updateSandboxNetworkSettings
+         * @param {UpdateSandboxNetworkSettings} updateSandboxNetworkSettings 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -4412,7 +4412,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.updateNetworkSettings(sandboxIdOrName, updateSandboxNetworkSettings, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Update public status
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {boolean} isPublic Public status to set
@@ -4427,7 +4427,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
          * Replaces the set of vault secrets mounted in the sandbox. Attached, detached and rotated secrets take effect for outbound requests within seconds. New env vars become visible to processes spawned after the update; a sandbox created without any secrets must be restarted for newly attached secrets to work.
          * @summary Update sandbox secrets
          * @param {string} sandboxIdOrName ID or name of the sandbox
-         * @param {UpdateSandboxSecrets} updateSandboxSecrets
+         * @param {UpdateSandboxSecrets} updateSandboxSecrets 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -4436,10 +4436,10 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.updateSandboxSecrets(sandboxIdOrName, updateSandboxSecrets, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Update sandbox state
          * @param {string} sandboxId ID of the sandbox
-         * @param {UpdateSandboxStateDto} updateSandboxStateDto
+         * @param {UpdateSandboxStateDto} updateSandboxStateDto 
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -4448,7 +4448,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.updateSandboxState(sandboxId, updateSandboxStateDto, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         *
+         * 
          * @summary Validate SSH access for sandbox
          * @param {string} token SSH access token to validate
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -4466,9 +4466,9 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
  */
 export class SandboxApi extends BaseAPI {
     /**
-     *
+     * 
      * @summary Archive sandbox
-     * @param {string} sandboxIdOrName
+     * @param {string} sandboxIdOrName 
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -4491,7 +4491,7 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Create sandbox backup
      * @param {string} sandboxIdOrName ID or name of the sandbox
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -4503,9 +4503,9 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Create a new sandbox
-     * @param {CreateSandbox} createSandbox
+     * @param {CreateSandbox} createSandbox 
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -4515,10 +4515,10 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Create a snapshot from a sandbox
-     * @param {string} sandboxIdOrName
-     * @param {CreateSandboxSnapshot} createSandboxSnapshot
+     * @param {string} sandboxIdOrName 
+     * @param {CreateSandboxSnapshot} createSandboxSnapshot 
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -4528,7 +4528,7 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Create SSH access for sandbox
      * @param {string} sandboxIdOrName ID or name of the sandbox
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -4541,7 +4541,7 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Delete sandbox
      * @param {string} sandboxIdOrName ID or name of the sandbox
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -4566,7 +4566,7 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Expire signed preview URL for a sandbox port
      * @param {string} sandboxIdOrName ID or name of the sandbox
      * @param {number} port Port number to expire signed preview URL for
@@ -4580,10 +4580,10 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Fork a sandbox
-     * @param {string} sandboxIdOrName
-     * @param {ForkSandbox} forkSandbox
+     * @param {string} sandboxIdOrName 
+     * @param {ForkSandbox} forkSandbox 
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -4607,7 +4607,7 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Get build logs URL
      * @param {string} sandboxIdOrName ID or name of the sandbox
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -4619,7 +4619,7 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Get organization by sandbox ID
      * @param {string} sandboxId ID of the sandbox
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -4631,7 +4631,7 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Get preview URL for a sandbox port
      * @param {string} sandboxIdOrName ID or name of the sandbox
      * @param {number} port Port number to get preview URL for
@@ -4644,7 +4644,7 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Get region quota by sandbox ID
      * @param {string} sandboxId ID of the sandbox
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -4656,7 +4656,7 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Get sandbox details
      * @param {string} sandboxIdOrName ID or name of the sandbox
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -4669,9 +4669,9 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Get sandbox fork ancestor chain
-     * @param {string} sandboxIdOrName
+     * @param {string} sandboxIdOrName 
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -4681,11 +4681,11 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Get sandbox fork children
-     * @param {string} sandboxIdOrName
+     * @param {string} sandboxIdOrName 
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
-     * @param {boolean} [includeDestroyed]
+     * @param {boolean} [includeDestroyed] 
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -4727,9 +4727,9 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Get sandbox fork parent
-     * @param {string} sandboxIdOrName
+     * @param {string} sandboxIdOrName 
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -4768,7 +4768,7 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Get sandboxes for the authenticated runner
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {string} [states] Comma-separated list of sandbox states to filter by
@@ -4781,7 +4781,7 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Get signed preview URL for a sandbox port
      * @param {string} sandboxIdOrName ID or name of the sandbox
      * @param {number} port Port number to get signed preview URL for
@@ -4795,7 +4795,7 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Get toolbox proxy URL for a sandbox
      * @param {string} sandboxId ID of the sandbox
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -4844,7 +4844,7 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary [DEPRECATED] List all sandboxes paginated
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {number} [page] Page number of the results
@@ -4914,7 +4914,7 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Pause sandbox
      * @param {string} sandboxIdOrName ID or name of the sandbox
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -4939,7 +4939,7 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Recover sandbox from error state
      * @param {string} sandboxIdOrName ID or name of the sandbox
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -4952,10 +4952,10 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Replace sandbox labels
      * @param {string} sandboxIdOrName ID or name of the sandbox
-     * @param {SandboxLabels} sandboxLabels
+     * @param {SandboxLabels} sandboxLabels 
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -4965,10 +4965,10 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Resize sandbox resources
      * @param {string} sandboxIdOrName ID or name of the sandbox
-     * @param {ResizeSandbox} resizeSandbox
+     * @param {ResizeSandbox} resizeSandbox 
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -4978,7 +4978,7 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Resolve sandbox secrets
      * @param {string} sandboxId Sandbox ID
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -4990,7 +4990,7 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Revoke SSH access for sandbox
      * @param {string} sandboxIdOrName ID or name of the sandbox
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -5016,7 +5016,7 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Set sandbox auto-archive interval
      * @param {string} sandboxIdOrName ID or name of the sandbox
      * @param {number} interval Auto-archive interval in minutes (0 means the maximum interval will be used)
@@ -5029,7 +5029,7 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Set sandbox auto-delete interval
      * @param {string} sandboxIdOrName ID or name of the sandbox
      * @param {number} interval Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping)
@@ -5042,7 +5042,7 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Set sandbox auto-pause interval
      * @param {string} sandboxIdOrName ID or name of the sandbox
      * @param {number} interval Auto-pause interval in minutes (0 to disable)
@@ -5055,7 +5055,7 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Set sandbox auto-stop interval
      * @param {string} sandboxIdOrName ID or name of the sandbox
      * @param {number} interval Auto-stop interval in minutes (0 to disable)
@@ -5093,7 +5093,7 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Stop sandbox
      * @param {string} sandboxIdOrName ID or name of the sandbox
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -5119,7 +5119,7 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Update sandbox last activity
      * @param {string} sandboxId ID of the sandbox
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -5134,7 +5134,7 @@ export class SandboxApi extends BaseAPI {
      * Changes outbound network policy on the runner for a running sandbox (for example block all traffic, restore access, or set a CIDR allow list).
      * @summary Update sandbox network settings
      * @param {string} sandboxIdOrName ID or name of the sandbox
-     * @param {UpdateSandboxNetworkSettings} updateSandboxNetworkSettings
+     * @param {UpdateSandboxNetworkSettings} updateSandboxNetworkSettings 
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -5144,7 +5144,7 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Update public status
      * @param {string} sandboxIdOrName ID or name of the sandbox
      * @param {boolean} isPublic Public status to set
@@ -5160,7 +5160,7 @@ export class SandboxApi extends BaseAPI {
      * Replaces the set of vault secrets mounted in the sandbox. Attached, detached and rotated secrets take effect for outbound requests within seconds. New env vars become visible to processes spawned after the update; a sandbox created without any secrets must be restarted for newly attached secrets to work.
      * @summary Update sandbox secrets
      * @param {string} sandboxIdOrName ID or name of the sandbox
-     * @param {UpdateSandboxSecrets} updateSandboxSecrets
+     * @param {UpdateSandboxSecrets} updateSandboxSecrets 
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -5170,10 +5170,10 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Update sandbox state
      * @param {string} sandboxId ID of the sandbox
-     * @param {UpdateSandboxStateDto} updateSandboxStateDto
+     * @param {UpdateSandboxStateDto} updateSandboxStateDto 
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -5183,7 +5183,7 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     *
+     * 
      * @summary Validate SSH access for sandbox
      * @param {string} token SSH access token to validate
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID

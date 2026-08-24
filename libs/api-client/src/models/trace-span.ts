@@ -52,3 +52,4 @@ export interface TraceSpan {
      */
     'statusMessage'?: string;
 }
+

@@ -35,3 +35,4 @@ export interface PaginatedTraces {
      */
     'totalPages': number;
 }
+

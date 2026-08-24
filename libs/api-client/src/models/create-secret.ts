@@ -32,3 +32,4 @@ export interface CreateSecret {
      */
     'hosts'?: Array<string>;
 }
+

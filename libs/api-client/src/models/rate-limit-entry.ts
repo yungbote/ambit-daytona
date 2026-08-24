@@ -24,3 +24,4 @@ export interface RateLimitEntry {
      */
     'limit'?: number;
 }
+

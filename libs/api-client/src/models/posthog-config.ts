@@ -24,3 +24,4 @@ export interface PosthogConfig {
      */
     'host': string;
 }
+

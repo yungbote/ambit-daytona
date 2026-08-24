@@ -23,3 +23,4 @@ export interface HealthControllerCheck200Response {
     'error'?: { [key: string]: HealthControllerCheck200ResponseInfoValue; } | null;
     'details'?: { [key: string]: HealthControllerCheck200ResponseInfoValue; };
 }
+

@@ -28,3 +28,4 @@ export interface OidcConfig {
      */
     'audience': string;
 }
+

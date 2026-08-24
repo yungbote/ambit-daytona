@@ -29,7 +29,7 @@ import type { DaytonaConfiguration } from '../models';
 export const ConfigApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         *
+         * 
          * @summary Get config
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -68,7 +68,7 @@ export const ConfigApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = ConfigApiAxiosParamCreator(configuration)
     return {
         /**
-         *
+         * 
          * @summary Get config
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -89,7 +89,7 @@ export const ConfigApiFactory = function (configuration?: Configuration, basePat
     const localVarFp = ConfigApiFp(configuration)
     return {
         /**
-         *
+         * 
          * @summary Get config
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -105,7 +105,7 @@ export const ConfigApiFactory = function (configuration?: Configuration, basePat
  */
 export class ConfigApi extends BaseAPI {
     /**
-     *
+     * 
      * @summary Get config
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -114,3 +114,4 @@ export class ConfigApi extends BaseAPI {
         return ConfigApiFp(this.configuration).configControllerGetConfig(options).then((request) => request(this.axios, this.basePath));
     }
 }
+
