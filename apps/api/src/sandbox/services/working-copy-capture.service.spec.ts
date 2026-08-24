@@ -237,7 +237,7 @@ describe(WorkingCopyCaptureService.name, () => {
     expect(adapter.captureWorkingCopy).not.toHaveBeenCalled()
   })
 
-  it('fails closed on runtime manifest, runtime class, lifecycle, runner and direct-address drift', async () => {
+  it('fails closed on runtime manifest, runtime class, runner and direct-address drift', async () => {
     for (const manifestRef of ['', ' leading-space', 'x'.repeat(513), 'manifest\nref']) {
       const sandbox = validSandbox()
       sandbox.labels.ambitWorkspaceExecutionManifestRef = manifestRef
@@ -254,13 +254,6 @@ describe(WorkingCopyCaptureService.name, () => {
       ConflictException,
     )
 
-    const started = validSandbox()
-    started.state = SandboxState.STARTED
-    ;(sandboxService.findOneByIdOrName as jest.Mock).mockResolvedValueOnce(started)
-    await expect(service.capture('daytona-org-1', 'sandbox-1', validBinding())).rejects.toBeInstanceOf(
-      ConflictException,
-    )
-
     const noRunner = validSandbox()
     noRunner.runnerId = undefined
     ;(sandboxService.findOneByIdOrName as jest.Mock).mockResolvedValueOnce(noRunner)
@@ -272,6 +265,18 @@ describe(WorkingCopyCaptureService.name, () => {
       ServiceUnavailableException,
     )
     expect(adapter.captureWorkingCopy).not.toHaveBeenCalled()
+  })
+
+  it('uses the runner stop receipt rather than stale host lifecycle projection as capture authority', async () => {
+    const sandbox = validSandbox()
+    sandbox.state = SandboxState.STARTED
+    ;(sandboxService.findOneByIdOrName as jest.Mock).mockResolvedValueOnce(sandbox)
+    const binding = validBinding()
+    const receipt = validReceipt(binding)
+    adapter.captureWorkingCopy.mockResolvedValue(receipt)
+
+    await expect(service.capture('daytona-org-1', 'sandbox-1', binding)).resolves.toEqual(receipt)
+    expect(adapter.captureWorkingCopy).toHaveBeenCalledWith('sandbox-1', binding)
   })
 
   it('rejects an unadmitted runtime kind before sandbox lookup', async () => {
