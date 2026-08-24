@@ -285,7 +285,7 @@ export async function renderPagesToDirectory({
       policy,
       executionLineage,
     })
-    const manifestBytes = `${canonicalJson(manifest)}\n`
+    const manifestBytes = Buffer.from(`${canonicalJson(manifest)}\n`)
     await writeDurableOutput(output, OUTPUT_MANIFEST_NAME, manifestBytes)
     await reproveOutputDirectory(output.path, output.identity)
     return manifestBytes
@@ -337,6 +337,13 @@ export async function runInternalPageRenderChild(cwd = process.cwd()) {
     backendLineage: request.backendLineage,
     sourceDocument: request.sourceDocument,
   })
+  return createInternalPageRenderReceipt(manifestBytes)
+}
+
+export function createInternalPageRenderReceipt(manifestBytes) {
+  if (!Buffer.isBuffer(manifestBytes) || manifestBytes.byteLength === 0) {
+    throw new TypeError('Internal page-render manifest bytes are unavailable.')
+  }
   return Object.freeze({
     schema: INTERNAL_RENDER_SCHEMA,
     outcome: 'passed',
