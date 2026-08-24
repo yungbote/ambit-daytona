@@ -16,7 +16,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from public_preview import create_preview, encode_preview
+from public_preview import PublicPreviewError, create_preview, encode_preview
 from render_command import (
     EVIDENCE_MEDIA_TYPE,
     MAXIMUM_COMMAND_BYTES,
@@ -701,7 +701,16 @@ def main(pack_root: Path, argv: list[str] | None = None) -> int:
             failure={"code": error.code, "message": error.public_message},
         )
         return 1 if settled else 70
-    except Exception:
+    except Exception as error:
+        private_detail = (
+            str(error)
+            if isinstance(error, (PublicPreviewError, RenderCommandError))
+            else type(error).__name__
+        )
+        print(
+            "ambit-specialist-render: private failure " f"{private_detail}",
+            file=sys.stderr,
+        )
         settled = _settle_or_unknown(
             request,
             result_path,

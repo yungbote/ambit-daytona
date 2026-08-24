@@ -11,6 +11,13 @@ export XDG_CONFIG_HOME=${output_root}/config
 export XDG_RUNTIME_DIR=${output_root}/run
 mkdir -p "${HOME}" "${XDG_CACHE_HOME}" "${XDG_CONFIG_HOME}" "${XDG_RUNTIME_DIR}"
 chmod 0700 "${XDG_RUNTIME_DIR}"
+python3 "${pack_root}/conformance/render-probe.py" \
+  --name web-static-html \
+  --facet web_application \
+  --media-type text/html \
+  --source "${pack_root}/conformance/fixtures/static.html" \
+  --receipt "${output_root}/web-render-probe.json"
 node "${pack_root}/conformance/verify.mjs" "${output_root}"
 rm -rf "${HOME}" "${XDG_CACHE_HOME}" "${XDG_CONFIG_HOME}" "${XDG_RUNTIME_DIR}"
 test -s "${output_root}/conformance-receipt.json"
+test -s "${output_root}/web-render-probe.json"

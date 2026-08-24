@@ -63,7 +63,10 @@ function parseGuard(file) {
     uid: '1000',
     user: 'daytona',
   };
-  if (JSON.stringify(values) !== JSON.stringify(expected)) {
+  if (
+    Object.keys(values).sort().join('\0') !== Object.keys(expected).sort().join('\0')
+    || Object.entries(expected).some(([key, value]) => values[key] !== value)
+  ) {
     throw new Error(`runtime guard mismatch: ${JSON.stringify(values)}`);
   }
   return values;

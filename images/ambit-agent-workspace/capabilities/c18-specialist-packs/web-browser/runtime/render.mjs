@@ -142,7 +142,12 @@ try {
         await context.tracing.stop({ path: tracePath });
         await context.close();
         if (axe.violations.length !== 0) {
-          throw new Error(`${browserName}/${viewport.name} accessibility violations`);
+          throw new Error(
+            `${browserName}/${viewport.name} accessibility violations: ${axe.violations
+              .map(({ id }) => id)
+              .sort()
+              .join(',')}`,
+          );
         }
         if (consoleErrors.length !== 0) {
           throw new Error(`${browserName}/${viewport.name} console errors`);

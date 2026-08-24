@@ -12,6 +12,8 @@ from pathlib import Path
 
 
 MAXIMUM_LOG_BYTES = 16 * 1024 * 1024
+MAXIMUM_CHILD_FILE_BYTES = 512 * 1024 * 1024
+PROCESS_POLL_SECONDS = 0.05
 
 
 @dataclass(frozen=True)
@@ -36,9 +38,14 @@ def _limits(remaining: float) -> None:
     cpu_seconds = max(1, math.ceil(remaining))
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds + 1))
-    resource.setrlimit(resource.RLIMIT_FSIZE, (MAXIMUM_LOG_BYTES, MAXIMUM_LOG_BYTES))
-    resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
-    resource.setrlimit(resource.RLIMIT_NPROC, (512, 512))
+    resource.setrlimit(
+        resource.RLIMIT_FSIZE,
+        (MAXIMUM_CHILD_FILE_BYTES, MAXIMUM_CHILD_FILE_BYTES),
+    )
+    # Sandboxed multi-process browsers legitimately fan out descriptors across
+    # their broker, renderers, trace, fonts, and local service. Keep a finite
+    # per-process ceiling without imposing a single-process-sized 256 limit.
+    resource.setrlimit(resource.RLIMIT_NOFILE, (4_096, 4_096))
 
 
 def _terminate(process: subprocess.Popen[bytes]) -> None:
@@ -85,11 +92,22 @@ def run_bounded(
             start_new_session=True,
             preexec_fn=lambda: _limits(remaining),
         )
+        log_limit_exceeded = False
         try:
-            process.wait(timeout=remaining)
-        except subprocess.TimeoutExpired as error:
-            _terminate(process)
-            raise ProcessDeadlineExceeded from error
+            while process.poll() is None:
+                if (
+                    os.fstat(stdout_file.fileno()).st_size > MAXIMUM_LOG_BYTES
+                    or os.fstat(stderr_file.fileno()).st_size > MAXIMUM_LOG_BYTES
+                ):
+                    log_limit_exceeded = True
+                    _terminate(process)
+                    break
+                if time.monotonic() >= deadline:
+                    _terminate(process)
+                    raise ProcessDeadlineExceeded
+                time.sleep(
+                    min(PROCESS_POLL_SECONDS, max(0.0, deadline - time.monotonic()))
+                )
         except BaseException:
             _terminate(process)
             raise
@@ -101,7 +119,11 @@ def run_bounded(
             stdout=stdout_file.read(MAXIMUM_LOG_BYTES + 1),
             stderr=stderr_file.read(MAXIMUM_LOG_BYTES + 1),
         )
-    if len(result.stdout) > MAXIMUM_LOG_BYTES or len(result.stderr) > MAXIMUM_LOG_BYTES:
+    if (
+        log_limit_exceeded
+        or len(result.stdout) > MAXIMUM_LOG_BYTES
+        or len(result.stderr) > MAXIMUM_LOG_BYTES
+    ):
         raise ProcessFailure(
             ProcessResult(result.argv, 153, result.stdout[:MAXIMUM_LOG_BYTES], result.stderr[:MAXIMUM_LOG_BYTES])
         )

@@ -18,6 +18,7 @@
       "pptx-slide-theme-layout-chart-media-notes-structure",
       "pptx-overflow-collision-font-accessibility-and-render",
       "edit-preservation",
+      "render-command-protocol-and-artifact-evidence",
       "nonroot-installer-socket-and-secret-denial"
     ],
     "script": "conformance/verify.sh"

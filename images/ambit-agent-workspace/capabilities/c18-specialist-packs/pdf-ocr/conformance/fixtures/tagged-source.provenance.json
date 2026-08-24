@@ -1,0 +1,12 @@
+{
+  "generator": {
+    "conformanceReceiptDigest": "sha256:5abf0063d064e3b3353986cffefd72efecbf5b6b79fb2be8cc7ce1d81a71aa92",
+    "imageId": "sha256:e219e6d0f43d1646821573fbc76ee883ef9e6ffc25220b0191b614d0bd8e0940",
+    "packRevisionRef": "ambit.runtime-pack/office-authoring@1",
+    "sourceRevision": "cc8e402d0d3f0701626c3f11196a409628578ed9"
+  },
+  "nativeMicrosoftOfficeFidelity": "unsupported",
+  "purpose": "positive tagged PDF render-command conformance input",
+  "schema": "ambit.c18-generated-conformance-fixture-provenance/v1",
+  "sha256": "sha256:9ec6e602b8a95de3bd67545a3abb78cbe08f80bbbe66b892b4f9648bf6fe3975"
+}

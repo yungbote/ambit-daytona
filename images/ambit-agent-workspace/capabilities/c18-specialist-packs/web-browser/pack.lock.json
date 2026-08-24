@@ -17,6 +17,7 @@
       "viewport-color-locale-timezone-and-reduced-motion",
       "axe-accessibility-and-lighthouse-class-audit",
       "bounded-local-service-health-and-signed-preview-contract",
+      "render-command-protocol-and-artifact-evidence",
       "nonroot-installer-socket-egress-and-secret-denial"
     ],
     "script": "conformance/verify.sh"

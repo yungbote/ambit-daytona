@@ -39,13 +39,17 @@ pack's conformance, SBOM, provenance, signature, license, and vulnerability
 evidence. A standalone specialist image, copied rootfs, matching tool version,
 sorted layer set, or pack-only test cannot certify a composed runtime.
 
-The Playwright source image is Ubuntu-based while the qualified reusable core
-is Debian-based. It is therefore a build/extraction input to the web bundle,
-not a substitute runtime parent and not a separately layered "core" claim.
-The C16 union builder owns ABI closure and conflict resolution when it composes
-browser files over the exact core parent. Until that union receipt passes, the
-web pack remains a candidate even if its isolated source image conformance is
-green.
+The Playwright source image is Ubuntu-based while the reusable document/data
+core is Debian-based. Those roots are not ABI-compatible layers and must never
+be presented as one union. The browser pack is therefore a separate exact
+executor-image candidate whose profile must independently satisfy the stable
+core command/filesystem contract. A research closure selects the data and
+browser executors as two explicit jobs; it does not manufacture one mixed
+rootfs. The C16 composition authority may produce a literal core-prefix union
+for compatible Debian bundles and may select separately certified executor
+images for incompatible runtime families, but every selected image remains
+manifest-bound and conformance-gated. Until those receipts pass, the web pack
+remains a candidate even when its isolated MCR-based conformance is green.
 
 All runtime package installers are removed. OS packages and Python/Node
 dependencies are resolved during the image build from exact offline inputs.
@@ -75,6 +79,32 @@ python3 -B \
   images/ambit-agent-workspace/capabilities/c18-specialist-packs/certification/source_contracts.py \
   --source-root images/ambit-agent-workspace/capabilities/c18-specialist-packs
 ```
+
+Create and immediately reverify a canonical offline bundle from the exact
+Git-archive source and exact external inputs:
+
+```bash
+python3 -B certification/pack_bundle.py \
+  --source-root . \
+  --input-root /path/to/exact/pack-inputs \
+  --pack office-authoring \
+  --artifact-output /evidence/office-authoring.tar \
+  --manifest-output /evidence/office-authoring.json
+python3 -B certification/pack_bundle.py \
+  --source-root . \
+  --input-root /path/to/exact/pack-inputs \
+  --pack office-authoring \
+  --artifact-output /evidence/office-authoring.tar \
+  --manifest-output /evidence/office-authoring.json \
+  --verify
+```
+
+Runtime conformance mounts one empty task root at `/ambit`, writes ordinary
+conformance evidence beneath `/ambit/conformance`, and exercises the actual
+render command through `/ambit/inputs` and `/ambit/outputs`. The container must
+run with network disabled, all capabilities dropped, no-new-privileges,
+read-only rootfs, bounded PID/memory/CPU resources, private tmpfs scratch, and
+the exact rootless browser seccomp profile for `web-browser`.
 
 Wheel and Debian lock replay takes the independently held input directories;
 the large upstream artifacts are never committed to this repository.

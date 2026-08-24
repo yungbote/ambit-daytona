@@ -33,6 +33,7 @@ cp -a "${pack_source}/runtime/." "${pack_root}/runtime/"
 cp -a "${source_root}/protocol/." "${pack_root}/protocol/"
 cp -a "${source_root}/conformance/runtime-guard.sh" "${pack_root}/conformance/"
 cp -a "${source_root}/conformance/common.py" "${pack_root}/conformance/"
+cp -a "${source_root}/conformance/render-probe.py" "${pack_root}/conformance/"
 install -m 0555 "${source_root}/protocol/render_cli.py" \
   "${pack_root}/bin/ambit-specialist-render"
 
@@ -96,6 +97,20 @@ actual.pop("pip", None)
 assert actual == expected, (sorted(actual.items()), sorted(expected.items()))
 PY
 
+# The Python parent carries DejaVu compatibility fonts outside the exact C18
+# font-set authority. Keep one shared Noto/OpenSymbol roster across the
+# office, PDF, and data packs so rendering cannot depend on ambient base fonts.
+rm -rf /usr/share/fonts/truetype/dejavu
+fc-cache -f
+(
+  cd /
+  sha256sum -c "${pack_root}/locks/fonts/font-files.sha256"
+)
+fc-list -f '%{file}\t%{family}\t%{style}\n' | LC_ALL=C sort \
+  > /tmp/fontconfig-roster.actual
+cmp "${pack_root}/locks/fonts/fontconfig-roster.tsv" \
+  /tmp/fontconfig-roster.actual
+
 groupadd --gid 1000 daytona
 useradd --uid 1000 --gid 1000 --home-dir /workspace --shell /bin/bash daytona
 install -d -m 0700 -o daytona -g daytona /workspace
@@ -104,6 +119,7 @@ rm -rf \
   /etc/apt \
   /etc/dpkg \
   /root/.cache \
+  /tmp/fontconfig-roster.actual \
   /tmp/installed-dpkg.actual \
   /usr/local/lib/python3.14/ensurepip \
   /usr/local/lib/python3.14/site-packages/pip \

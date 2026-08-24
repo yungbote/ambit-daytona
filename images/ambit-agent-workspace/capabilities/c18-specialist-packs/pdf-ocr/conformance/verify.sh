@@ -65,7 +65,23 @@ if grep -F 'PDF/A processing aborted' \
 fi
 qpdf --check "${output_root}/checks/pdfa.pdf" \
   > "${output_root}/checks/pdfa.qpdf.txt" 2>&1
+python3 "${pack_root}/conformance/render-probe.py" \
+  --name pdf-ocr-scan \
+  --facet pdf \
+  --media-type image/x-portable-graymap \
+  --source "${output_root}/fixtures/scan.pgm" \
+  --receipt "${output_root}/pdf-ocr-render-probe.json"
+echo '9ec6e602b8a95de3bd67545a3abb78cbe08f80bbbe66b892b4f9648bf6fe3975  /opt/ambit/runtime-pack/pdf-ocr/conformance/fixtures/tagged-source.pdf' \
+  | sha256sum -c -
+python3 "${pack_root}/conformance/render-probe.py" \
+  --name pdf-document \
+  --facet pdf \
+  --media-type application/pdf \
+  --source "${pack_root}/conformance/fixtures/tagged-source.pdf" \
+  --receipt "${output_root}/pdf-document-render-probe.json"
 
 rm -rf "${HOME}" "${XDG_CACHE_HOME}" "${XDG_CONFIG_HOME}" "${XDG_RUNTIME_DIR}"
 python3 "${pack_root}/conformance/verify.py" finalize "${output_root}"
+test -s "${output_root}/pdf-ocr-render-probe.json"
+test -s "${output_root}/pdf-document-render-probe.json"
 test -s "${output_root}/conformance-receipt.json"
