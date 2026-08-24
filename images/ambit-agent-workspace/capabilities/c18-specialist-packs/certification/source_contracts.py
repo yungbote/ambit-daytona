@@ -479,6 +479,13 @@ def verify_source(root: Path, *, verify_hashes: bool = True) -> dict[str, object
     _require(runtime_policy["runtimeInstallers"]["disposition"] == "absent", "runtime installer policy is invalid")
     _require(runtime_policy["process"]["linuxCapabilities"] == [], "runtime capability policy is invalid")
     _require(runtime_policy["process"]["noNewPrivileges"] is True, "runtime no-new-privileges policy is invalid")
+    from render_browser_seccomp import RENDER_CONTROL_SYSCALLS
+
+    _require(
+        runtime_policy["process"]["requiredSyscalls"]
+        == list(RENDER_CONTROL_SYSCALLS),
+        "runtime render-control syscall policy is invalid",
+    )
     _require(
         runtime_policy.get("semanticJobRoots")
         == {

@@ -172,6 +172,20 @@ class SourceContractTests(unittest.TestCase):
             ):
                 verify_source(root, verify_hashes=False)
 
+    def test_rejects_render_control_syscall_policy_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "source"
+            shutil.copytree(SOURCE_ROOT, root)
+            policy_path = root / "policy/runtime-policy.json"
+            policy = json.loads(policy_path.read_text(encoding="utf-8"))
+            policy["process"]["requiredSyscalls"] = []
+            policy_path.write_text(json.dumps(policy), encoding="utf-8")
+            with self.assertRaisesRegex(
+                SourceContractError,
+                "render-control syscall policy",
+            ):
+                verify_source(root, verify_hashes=False)
+
 
 if __name__ == "__main__":
     unittest.main()

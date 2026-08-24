@@ -21,6 +21,9 @@
   "process": {
     "linuxCapabilities": [],
     "noNewPrivileges": true,
+    "requiredSyscalls": [
+      "openat2"
+    ],
     "seccomp": "provider-default-deny-escape"
   },
   "runtimeInstallers": {

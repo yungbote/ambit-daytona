@@ -6,7 +6,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from render_browser_seccomp import BrowserSeccompError, render_profile
+from render_browser_seccomp import (
+    RENDER_CONTROL_SYSCALLS,
+    ROOTLESS_BROWSER_SYSCALLS,
+    BrowserSeccompError,
+    render_profile,
+)
 
 
 SOURCE = Path(__file__).resolve().parents[1] / "policy/playwright-seccomp-v1.62.1.json"
@@ -20,12 +25,12 @@ class BrowserSeccompTests(unittest.TestCase):
         self.assertEqual(profile["defaultAction"], "SCMP_ACT_ERRNO")
         self.assertEqual(
             profile["syscalls"][0]["names"],
-            ["chroot", "clone", "setns", "unshare"],
+            list(ROOTLESS_BROWSER_SYSCALLS),
         )
         self.assertEqual(
             set(profile["syscalls"][0]["names"])
             - set(upstream["syscalls"][0]["names"]),
-            {"chroot"},
+            {"chroot", "clone3"},
         )
         self.assertEqual(
             profile["syscalls"][0]["args"], upstream["syscalls"][0]["args"]
@@ -36,10 +41,29 @@ class BrowserSeccompTests(unittest.TestCase):
         self.assertEqual(
             profile["syscalls"][0]["excludes"], upstream["syscalls"][0]["excludes"]
         )
-        self.assertEqual(profile["syscalls"][1:], upstream["syscalls"][1:])
+        common = profile["syscalls"][1]
+        upstream_common = upstream["syscalls"][1]
+        openat = upstream_common["names"].index("openat")
+        self.assertEqual(
+            common["names"],
+            [
+                *upstream_common["names"][: openat + 1],
+                *RENDER_CONTROL_SYSCALLS,
+                *upstream_common["names"][openat + 1 :],
+            ],
+        )
+        self.assertEqual(
+            set(common["names"]) - set(upstream_common["names"]),
+            set(RENDER_CONTROL_SYSCALLS),
+        )
+        self.assertEqual(
+            {key: value for key, value in common.items() if key != "names"},
+            {key: value for key, value in upstream_common.items() if key != "names"},
+        )
+        self.assertEqual(profile["syscalls"][2:], upstream["syscalls"][2:])
         self.assertEqual(
             hashlib.sha256(rendered).hexdigest(),
-            "4e893e9d976bf12cfb01912ed62b88079bb23ff9be5ebe3a2a264798908aec42",
+            "a3e0f70679f0f24036763f34c69df1255bde7556a715b347209925edf4ae2c4c",
         )
 
     def test_rejects_upstream_byte_or_rule_drift(self) -> None:

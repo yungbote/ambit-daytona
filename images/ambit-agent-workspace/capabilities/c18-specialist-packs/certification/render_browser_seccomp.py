@@ -14,6 +14,14 @@ UPSTREAM_SOURCE = (
     "26a9e470a7b3c7822084b09fb7f13902c5f37b51/"
     "utils/docker/seccomp_profile.json"
 )
+RENDER_CONTROL_SYSCALLS = ("openat2",)
+ROOTLESS_BROWSER_SYSCALLS = (
+    "chroot",
+    "clone",
+    "clone3",
+    "setns",
+    "unshare",
+)
 
 
 class BrowserSeccompError(ValueError):
@@ -56,10 +64,39 @@ def render_profile(source: Path) -> bytes:
     # Docker evaluates the later chroot rule against the container's initial
     # capability set and omits it after --cap-drop=ALL. Chromium needs chroot
     # only after entering its new user namespace, where the kernel grants the
-    # namespace-local capability. Permitting the syscall here grants no outer
-    # capability; the kernel still enforces the credential boundary.
-    rootless["comment"] = "Allow Chromium rootless user-namespace sandbox"
-    rootless["names"] = ["chroot", "clone", "setns", "unshare"]
+    # namespace-local capability. Node 24 uses clone3 for its bounded worker
+    # threads; the pinned upstream profile already admits equivalent clone
+    # operations. These syscall admissions grant no outer capability; the
+    # kernel still enforces the credential and namespace boundaries.
+    rootless["comment"] = "Allow C18 rootless browser executor and Chromium sandbox"
+    rootless["names"] = list(ROOTLESS_BROWSER_SYSCALLS)
+
+    common = syscalls[1] if len(syscalls) > 1 else None
+    if (
+        not isinstance(common, dict)
+        or common.get("action") != "SCMP_ACT_ALLOW"
+        or common.get("args") != []
+        or common.get("includes") != {}
+        or common.get("excludes") != {}
+    ):
+        raise BrowserSeccompError("Playwright common syscall rule drifted")
+    names = common.get("names")
+    if (
+        not isinstance(names, list)
+        or not all(isinstance(name, str) and name for name in names)
+        or len(names) != len(set(names))
+        or "openat" not in names
+        or any(name in names for name in RENDER_CONTROL_SYSCALLS)
+    ):
+        raise BrowserSeccompError("Playwright common syscall roster drifted")
+    insertion = names.index("openat") + 1
+    # Every C18 specialist command fails closed unless openat2 can anchor all
+    # control reads and output publication beneath the proved semantic root.
+    common["names"] = [
+        *names[:insertion],
+        *RENDER_CONTROL_SYSCALLS,
+        *names[insertion:],
+    ]
     return (json.dumps(profile, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
