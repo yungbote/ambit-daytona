@@ -1,63 +1,88 @@
 {
   "axeCore": {
-    "integrity": "sha512-RE3mdQ7P3FRSe7eqCWoeQ/Z9QXrtniSjp1wUjt5nRC3WIpz5rSCve6o3fsZ2aCpJtrZjSZgjwXAoTO5k4tEI0w==",
+    "integrity": "sha512-UzGt8zg7Ny8djbYMhxl2zuEevVa7r2gJjYY5Lwr1xM7+XU2nd6CkIWFTVcCIbAP63vSz71NaVyyuSk9lHKcy0A==",
     "license": "MPL-2.0",
     "licenseSha256": "sha256:af175b9d96ee93c21a036152e1b905b0b95304d4ae8c2c921c7609100ba8df7e",
-    "version": "4.10.2"
+    "version": "4.13.0"
   },
   "browserSourceImage": {
     "browsers": {
       "chromium": {
-        "revision": "1187",
-        "version": "140.0.7339.16"
+        "revision": "1234",
+        "version": "151.0.7922.34"
+      },
+      "chromiumHeadlessShell": {
+        "revision": "1234",
+        "version": "151.0.7922.34"
       },
       "firefox": {
-        "revision": "1490",
-        "version": "141.0"
+        "revision": "1538",
+        "version": "153.0"
       },
       "webkit": {
-        "revision": "2203",
-        "version": "playwright-2203"
+        "revision": "2336",
+        "version": "26.5"
       }
     },
+    "configDigest": "sha256:fee853fafa59550d162cef52bca02d907694b44ebf6ef9fb075bcc0c65d8dedb",
     "ffmpeg": "7.0.1-playwright-build-1011",
     "fontconfigRosterSha256": "sha256:25521a442b49645463c3e837845b51df7df8d8657292fb961afc2e9ba00b164e",
-    "image": "mcr.microsoft.com/playwright@sha256:ffc33305f7b4b04057ae4a0caa70aad4fde87454fb403a1a22e7f931707dfcf9",
+    "image": "mcr.microsoft.com/playwright@sha256:c091b21d9fae78c76e85cd4356431e9b018402f172a214fc7d7a5e9a7e29d8ac",
+    "indexDigest": "sha256:dcc5531e97840b9b5e794f2814476b21571c5124a3fca2267d73041f56e7580e",
     "installedDpkgClosure": {
       "entryCount": 514,
-      "sha256": "sha256:665b914f5a66911ec5e09880118623be005b51e9e9e8cdf81fd74efaf42fbc32"
+      "sha256": "sha256:4f50c7ff95dfa82e95aec1270a82225a879051e8a60fa74355cbc64202e45289"
     },
+    "layers": [
+      {"digest": "sha256:ca2678b20700c15185707964d9211b1a6406196114bf675f568b6025d37b3888", "size": 29735601},
+      {"digest": "sha256:43f9c849a2a2ed077cd3cb38f656ad9f09487ee778fab00f6e14f28be3ff5276", "size": 106888259},
+      {"digest": "sha256:dad65d3622fa1ce56a7f39dc0f4409caa5ec3f586892e61acea68b77306bd3c0", "size": 3064292},
+      {"digest": "sha256:00d16ab601f62bc6b0009d5f5cceeaa5ca6e4e9c1bb085a65f6fc41dca98a897", "size": 287087840},
+      {"digest": "sha256:4d796d6a81781a9c3c9bbaa6e641a37b96cab44f1854681bb160a619373e1697", "size": 296229610},
+      {"digest": "sha256:64112f4c67a22e08d1cb58235f61f32090e71513735bc1d9d8eb943ef08fd22c", "size": 116164404},
+      {"digest": "sha256:782c0a3f363f1fe1bfe2815ccea30eabeb14192d8736420971909a2b587fc0e5", "size": 110241108}
+    ],
+    "platformManifestDigest": "sha256:c091b21d9fae78c76e85cd4356431e9b018402f172a214fc7d7a5e9a7e29d8ac",
     "rootfsDiffIds": [
-      "sha256:cd9664b1462ea111a41bdadf65ce077582cdc77e28683a4f6996dd03afcc56f5",
-      "sha256:2577149f0c22ef148b1eeb23b90c3b809e53737c2e7255a8a894720cba3c8004",
-      "sha256:e00631b0ddaa83bf7cf8b4dae9ff56c7d4676cd04aec763164fd05e41d1ca062",
-      "sha256:0f59b7656641bc319d8616fd27072e55cdec22aeccba5eca49634ed2a2996353"
-    ]
+      "sha256:f103cd120fdd6cbc7f3d0e1d5bfb3e16290c32ead7b822d15c34460ecdf64b29",
+      "sha256:7977f86a68e25bf507c4e3faaedcba1ff90e851bf51e0dabc001bd862c207b89",
+      "sha256:5fef904f76c944dd8d1b43166f655548956154190c608e1c2aaf2ee8cd0e7c7b",
+      "sha256:9b7d8f2ce511d137301694fa020ceff796023cadef15c57367f2bad256391293",
+      "sha256:8f5233eb992fd10952c1b59538c63cea539156a06280947046bbd9d572b3dd31",
+      "sha256:04fb1229b6ff4c5ee1d9e490ff9c504413e3f6df17899de6f944a52517256a27",
+      "sha256:41509d6f4662d20641f4830fe3e2d6947ac95f28b8aec746049eef4f9d33cfa4"
+    ],
+    "source": {
+      "browsersJsonPath": "packages/playwright-core/browsers.json",
+      "browsersJsonSha256": "sha256:f306eed529599b1eaf2f8a85db9de2b23e1a3fe36c2b66434b7c9434fb627a99",
+      "commit": "26a9e470a7b3c7822084b09fb7f13902c5f37b51",
+      "tag": "v1.62.1"
+    }
   },
   "node": {
     "runtimeInstallerDisposition": "npm-npx-corepack-absent",
-    "version": "22.18.0"
+    "version": "24.18.1"
   },
   "packRef": "ambit.runtime-pack/web-browser@1",
   "performanceAudit": "owned-navigation-paint-layout-resource-timing-contract-v1",
   "playwright": {
-    "coreIntegrity": "sha512-GvZs4vU3U5ro2nZpeiwyb0zuFaqb9sUiAJuyrWpcGouD8y9/HLgGbNRjIph7zU9D3hnPaisMl9zG9CgFi/biIg==",
+    "coreIntegrity": "sha512-wPYSwEBJY9GHraISXqyqtx0na0LpO3XEX7jNDhntbex7tzUS7kLnZsOlFruFJB4Hi/rhDMjXGqHewDZ68nYZVw==",
     "license": "Apache-2.0",
     "licenseSha256": "sha256:45873d00a0dd243596deb4aa23b2493b3d1f0671921bf2538ea431d7380220eb",
-    "version": "1.55.0"
+    "version": "1.62.1"
   },
   "sandbox": {
     "chromiumSandboxRequired": true,
     "conformanceSeccompProfile": {
       "renderer": "../../certification/render_browser_seccomp.py",
       "renderedSha256": "sha256:4e893e9d976bf12cfb01912ed62b88079bb23ff9be5ebe3a2a264798908aec42",
-      "sourceCommit": "f992162f04ae0b0b5a0f4b6114b894215be98995",
-      "sourceUrl": "https://raw.githubusercontent.com/microsoft/playwright/f992162f04ae0b0b5a0f4b6114b894215be98995/utils/docker/seccomp_profile.json",
-      "tag": "v1.55.0",
-      "upstreamPath": "../../policy/playwright-seccomp-v1.55.0.json",
+      "sourceCommit": "26a9e470a7b3c7822084b09fb7f13902c5f37b51",
+      "sourceUrl": "https://raw.githubusercontent.com/microsoft/playwright/26a9e470a7b3c7822084b09fb7f13902c5f37b51/utils/docker/seccomp_profile.json",
+      "tag": "v1.62.1",
+      "upstreamPath": "../../policy/playwright-seccomp-v1.62.1.json",
       "upstreamSha256": "sha256:cc3e61cabda6bbc1e53e54d27ba4d55a9d3be829b6dd1a596f4a7b31b1cc7849"
     }
   },
-  "schema": "ambit.c18-toolchain-lock/v1",
+  "schema": "ambit.c18-toolchain-lock/v2",
   "state": "candidate"
 }

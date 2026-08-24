@@ -1,12 +1,12 @@
 {
   "capabilities": {
     "provides": [
-      "pdf_scan_ocr"
+      "pdf_scan_ocr",
+      "python"
     ],
     "requires": [
       "core",
-      "documents_publishing",
-      "python"
+      "documents_publishing"
     ]
   },
   "conformance": {

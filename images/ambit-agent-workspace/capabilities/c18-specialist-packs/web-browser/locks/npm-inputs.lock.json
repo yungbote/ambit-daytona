@@ -1,31 +1,81 @@
 {
   "archives": [
-    {
-      "bytes": 563470,
-      "filename": "axe-core-4.10.2.tgz",
-      "integrity": "sha512-RE3mdQ7P3FRSe7eqCWoeQ/Z9QXrtniSjp1wUjt5nRC3WIpz5rSCve6o3fsZ2aCpJtrZjSZgjwXAoTO5k4tEI0w==",
-      "license": "MPL-2.0",
-      "licenseSha256": "sha256:af175b9d96ee93c21a036152e1b905b0b95304d4ae8c2c921c7609100ba8df7e",
-      "name": "axe-core",
-      "sha256": "sha256:9ea2d2d6917da998122bdacfd3b473e31ead53f4b87146c716a12edf89158100",
-      "url": "https://registry.npmjs.org/axe-core/-/axe-core-4.10.2.tgz",
-      "version": "4.10.2"
-    },
-    {
-      "bytes": 1915434,
-      "filename": "playwright-core-1.55.0.tgz",
-      "integrity": "sha512-GvZs4vU3U5ro2nZpeiwyb0zuFaqb9sUiAJuyrWpcGouD8y9/HLgGbNRjIph7zU9D3hnPaisMl9zG9CgFi/biIg==",
-      "license": "Apache-2.0",
-      "licenseSha256": "sha256:45873d00a0dd243596deb4aa23b2493b3d1f0671921bf2538ea431d7380220eb",
-      "name": "playwright-core",
-      "sha256": "sha256:6b63fdf41725afb924880728d39cf560d770f785a861d18c15611e99dd3172bd",
-      "url": "https://registry.npmjs.org/playwright-core/-/playwright-core-1.55.0.tgz",
-      "version": "1.55.0"
+        {
+            "bytes": 627805,
+            "fileCount": 30,
+            "filename": "axe-core-4.13.0.tgz",
+            "integrity": "sha512-UzGt8zg7Ny8djbYMhxl2zuEevVa7r2gJjYY5Lwr1xM7+XU2nd6CkIWFTVcCIbAP63vSz71NaVyyuSk9lHKcy0A==",
+            "license": "MPL-2.0",
+            "licenseFiles": [
+                {
+                    "path": "LICENSE",
+                    "sha256": "sha256:af175b9d96ee93c21a036152e1b905b0b95304d4ae8c2c921c7609100ba8df7e"
+                },
+                {
+                    "path": "LICENSE-3RD-PARTY.txt",
+                    "sha256": "sha256:4f8563870d0fca38bbc3e00b6f670cb7fa9f380ba9f26a7f7d1184a6b18b1653"
+                }
+            ],
+            "name": "axe-core",
+            "registrySignatures": [
+                {
+                    "keyId": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+                    "signature": "MEQCIHCo6QjeFf7Aj0piptFIsKY58HX6i1wHrCyF7k5URfcOAiAL3LsrlKihId9bwpVf4MZySduirSTk4GbrKFHahbBLoQ=="
+                },
+                {
+                    "keyId": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+                    "signature": "MEUCIQCyTgQ+SgRsrdazwLRA4qYi88vOuxpfsJcNzfj49n6DUwIgNxYQD8GBUq8Dm5zQrdWbslsu8k7MMkP4u5y3EHdue7Y="
+                }
+            ],
+            "sha1": "f868ecb1bd61d982321760e51d841ab497ab86d0",
+            "sha256": "sha256:096912f6e77b4b695fc9304b7be65091db42d98de054da674ae222a11cb33f70",
+            "tarRosterSha256": "sha256:d9e148e62456f1532654c5171abae9a9cf1a2d8718f7f37305e0fe3c48fa199c",
+            "unpackedBytes": 3113323,
+            "url": "https://registry.npmjs.org/axe-core/-/axe-core-4.13.0.tgz",
+            "version": "4.13.0"
+        },
+        {
+            "bytes": 3070300,
+            "fileCount": 111,
+            "filename": "playwright-core-1.62.1.tgz",
+            "integrity": "sha512-wPYSwEBJY9GHraISXqyqtx0na0LpO3XEX7jNDhntbex7tzUS7kLnZsOlFruFJB4Hi/rhDMjXGqHewDZ68nYZVw==",
+            "license": "Apache-2.0",
+            "licenseFiles": [
+                {
+                    "path": "LICENSE",
+                    "sha256": "sha256:45873d00a0dd243596deb4aa23b2493b3d1f0671921bf2538ea431d7380220eb"
+                },
+                {
+                    "path": "NOTICE",
+                    "sha256": "sha256:6d602191187b35b9b01d2cffa01c8469c2c8d9de8a96f1bf868e0f264f51c81d"
+                },
+                {
+                    "path": "ThirdPartyNotices.txt",
+                    "sha256": "sha256:a549d329bad8806fe279f0ecae0fc0270dec7e7c2dc8ec10f90e394f7c32b144"
+                }
+            ],
+            "name": "playwright-core",
+            "registrySignatures": [
+                {
+                    "keyId": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+                    "signature": "MEUCIBSYhMp4S92Nyx75YDk9Xw36ElkiXuQ0oR2UEzaSZhjdAiEAm7bb2MosdhFgxbqIPZgaHGukafQl5CpWHQJ6NNoivbc="
+                },
+                {
+                    "keyId": "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U",
+                    "signature": "MEUCIQClPMPcSveTLxQaG6bk8n6bjW3jDIAUf4GXYbfytPGi4QIgYgRq1//uL8+d7USsqfy/ZKa9L3kpxJwjAA+J3zkpiBE="
+                }
+            ],
+            "sha1": "120f67a19181bfd183c60fa903c0d99330b56785",
+            "sha256": "sha256:954be1e183d0ddb9748fe0d2d08b0b66a9210c74dd75c397aeb70303b9f08a00",
+            "tarRosterSha256": "sha256:fbafaad59a5b364b2f8e39f943cf62af880a35385939a9563d522059621dfee5",
+            "unpackedBytes": 13442086,
+            "url": "https://registry.npmjs.org/playwright-core/-/playwright-core-1.62.1.tgz",
+            "version": "1.62.1"
     }
   ],
   "installScripts": "forbidden",
   "packRef": "ambit.runtime-pack/web-browser@1",
   "registry": "https://registry.npmjs.org/",
   "runtimeInstaller": "absent",
-  "schema": "ambit.c18-npm-input-lock/v1"
+    "schema": "ambit.c18-npm-input-lock/v2"
 }

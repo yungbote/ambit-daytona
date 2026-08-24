@@ -11,7 +11,7 @@ from typing import Any
 UPSTREAM_SHA256 = "cc3e61cabda6bbc1e53e54d27ba4d55a9d3be829b6dd1a596f4a7b31b1cc7849"
 UPSTREAM_SOURCE = (
     "https://raw.githubusercontent.com/microsoft/playwright/"
-    "f992162f04ae0b0b5a0f4b6114b894215be98995/"
+    "26a9e470a7b3c7822084b09fb7f13902c5f37b51/"
     "utils/docker/seccomp_profile.json"
 )
 

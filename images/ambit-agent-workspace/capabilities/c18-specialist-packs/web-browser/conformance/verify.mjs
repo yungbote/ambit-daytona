@@ -159,9 +159,9 @@ const origin = `http://127.0.0.1:${address.port}`;
 
 const axeSource = fs.readFileSync(path.join(PACK_ROOT, 'node_modules/axe-core/axe.min.js'), 'utf8');
 const browserTypes = [
-  ['chromium', chromium, '140.0.7339.16'],
-  ['firefox', firefox, '141.0'],
-  ['webkit', webkit, null],
+  ['chromium', chromium, '151.0.7922.34'],
+  ['firefox', firefox, '153.0'],
+  ['webkit', webkit, '26.5'],
 ];
 const viewports = [
   { name: 'mobile', width: 375, height: 812, colorScheme: 'light', reducedMotion: 'reduce' },

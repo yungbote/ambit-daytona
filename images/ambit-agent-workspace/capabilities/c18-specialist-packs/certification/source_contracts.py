@@ -15,20 +15,20 @@ from wheel_lock import requirements_from_lock
 PACKS = {
     "office-authoring": {
         "ref": "ambit.runtime-pack/office-authoring@1",
-        "provides": ["presentations_design", "spreadsheets"],
-        "requires": ["core", "documents_publishing", "python"],
+        "provides": ["presentations_design", "python", "spreadsheets"],
+        "requires": ["core", "documents_publishing"],
         "directPython": ["openpyxl", "python-pptx", "xlsxwriter"],
     },
     "pdf-ocr": {
         "ref": "ambit.runtime-pack/pdf-ocr@1",
-        "provides": ["pdf_scan_ocr"],
-        "requires": ["core", "documents_publishing", "python"],
+        "provides": ["pdf_scan_ocr", "python"],
+        "requires": ["core", "documents_publishing"],
         "directPython": ["pikepdf", "pillow", "pypdf", "reportlab"],
     },
     "data-research": {
         "ref": "ambit.runtime-pack/data-research@1",
-        "provides": ["data_local_query", "research_scientific"],
-        "requires": ["core", "python"],
+        "provides": ["data_local_query", "python", "research_scientific"],
+        "requires": ["core"],
         "directPython": [
             "duckdb",
             "ipykernel",
@@ -58,7 +58,10 @@ FACETS = {
         "ambit.runtime-pack/data-research@1",
         "ambit.runtime-pack/web-browser@1",
     ],
-    "C18_SPREADSHEETS": ["ambit.runtime-pack/office-authoring@1"],
+    "C18_SPREADSHEETS": [
+        "ambit.runtime-pack/data-research@1",
+        "ambit.runtime-pack/office-authoring@1",
+    ],
     "C18_WEB_APPLICATION": ["ambit.runtime-pack/web-browser@1"],
 }
 PYTHON_BASE = (
@@ -67,7 +70,7 @@ PYTHON_BASE = (
 )
 WEB_BASE = (
     "mcr.microsoft.com/playwright@sha256:"
-    "ffc33305f7b4b04057ae4a0caa70aad4fde87454fb403a1a22e7f931707dfcf9"
+    "c091b21d9fae78c76e85cd4356431e9b018402f172a214fc7d7a5e9a7e29d8ac"
 )
 SHA256_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 SOURCE_LINE_PATTERN = re.compile(r"^(?P<digest>[0-9a-f]{64})  (?P<path>[^\n]+)$")
@@ -210,6 +213,38 @@ def _verify_web_pack(root: Path) -> None:
     toolchain = _load_json(lock_root / "toolchain.lock.json")
     image = toolchain.get("browserSourceImage")
     _require(isinstance(image, dict) and image.get("image") == WEB_BASE, "web browser base image is not exact")
+    _require(
+        image.get("indexDigest")
+        == "sha256:dcc5531e97840b9b5e794f2814476b21571c5124a3fca2267d73041f56e7580e"
+        and image.get("platformManifestDigest")
+        == "sha256:c091b21d9fae78c76e85cd4356431e9b018402f172a214fc7d7a5e9a7e29d8ac"
+        and image.get("configDigest")
+        == "sha256:fee853fafa59550d162cef52bca02d907694b44ebf6ef9fb075bcc0c65d8dedb",
+        "web browser OCI identity is invalid",
+    )
+    _require(
+        image.get("source")
+        == {
+            "browsersJsonPath": "packages/playwright-core/browsers.json",
+            "browsersJsonSha256": "sha256:f306eed529599b1eaf2f8a85db9de2b23e1a3fe36c2b66434b7c9434fb627a99",
+            "commit": "26a9e470a7b3c7822084b09fb7f13902c5f37b51",
+            "tag": "v1.62.1",
+        },
+        "web browser upstream source identity is invalid",
+    )
+    _require(
+        image.get("browsers")
+        == {
+            "chromium": {"revision": "1234", "version": "151.0.7922.34"},
+            "chromiumHeadlessShell": {
+                "revision": "1234",
+                "version": "151.0.7922.34",
+            },
+            "firefox": {"revision": "1538", "version": "153.0"},
+            "webkit": {"revision": "2336", "version": "26.5"},
+        },
+        "web browser revision roster is invalid",
+    )
     _require(image.get("installedDpkgClosure", {}).get("entryCount") == 514, "web browser dpkg count mismatch")
     _require(
         image.get("installedDpkgClosure", {}).get("sha256")
@@ -219,6 +254,13 @@ def _verify_web_pack(root: Path) -> None:
     _require(
         image.get("fontconfigRosterSha256") == f"sha256:{_sha256(lock_root / 'fontconfig-roster.lock')}",
         "web browser font roster digest mismatch",
+    )
+    _require(
+        toolchain.get("node")
+        == {"runtimeInstallerDisposition": "npm-npx-corepack-absent", "version": "24.18.1"}
+        and toolchain.get("playwright", {}).get("version") == "1.62.1"
+        and toolchain.get("axeCore", {}).get("version") == "4.13.0",
+        "web JavaScript toolchain version is invalid",
     )
     sandbox = toolchain.get("sandbox")
     _require(
@@ -230,23 +272,23 @@ def _verify_web_pack(root: Path) -> None:
     _require(
         isinstance(seccomp, dict)
         and seccomp.get("upstreamPath")
-        == "../../policy/playwright-seccomp-v1.55.0.json"
+        == "../../policy/playwright-seccomp-v1.62.1.json"
         and seccomp.get("sourceCommit")
-        == "f992162f04ae0b0b5a0f4b6114b894215be98995"
+        == "26a9e470a7b3c7822084b09fb7f13902c5f37b51"
         and seccomp.get("sourceUrl")
         == (
             "https://raw.githubusercontent.com/microsoft/playwright/"
-            "f992162f04ae0b0b5a0f4b6114b894215be98995/"
+            "26a9e470a7b3c7822084b09fb7f13902c5f37b51/"
             "utils/docker/seccomp_profile.json"
         )
-        and seccomp.get("tag") == "v1.55.0"
+        and seccomp.get("tag") == "v1.62.1"
         and seccomp.get("upstreamSha256")
-        == f"sha256:{_sha256(root / 'policy/playwright-seccomp-v1.55.0.json')}",
+        == f"sha256:{_sha256(root / 'policy/playwright-seccomp-v1.62.1.json')}",
         "web seccomp profile identity is invalid",
     )
     from render_browser_seccomp import render_profile
 
-    rendered = render_profile(root / "policy/playwright-seccomp-v1.55.0.json")
+    rendered = render_profile(root / "policy/playwright-seccomp-v1.62.1.json")
     _require(
         seccomp.get("renderer") == "../../certification/render_browser_seccomp.py"
         and seccomp.get("renderedSha256")
@@ -254,11 +296,16 @@ def _verify_web_pack(root: Path) -> None:
         "web rendered seccomp profile identity is invalid",
     )
     npm = _load_json(lock_root / "npm-inputs.lock.json")
-    _require(npm.get("schema") == "ambit.c18-npm-input-lock/v1", "web npm schema is invalid")
+    _require(npm.get("schema") == "ambit.c18-npm-input-lock/v2", "web npm schema is invalid")
     _require(npm.get("packRef") == PACKS["web-browser"]["ref"], "web npm pack ref mismatch")
     _require(npm.get("installScripts") == "forbidden" and npm.get("runtimeInstaller") == "absent", "web npm installer policy is invalid")
     archives = npm.get("archives")
-    _require(isinstance(archives, list) and [item["name"] for item in archives] == ["axe-core", "playwright-core"], "web npm archive roster is invalid")
+    _require(
+        isinstance(archives, list)
+        and [(item["name"], item["version"]) for item in archives]
+        == [("axe-core", "4.13.0"), ("playwright-core", "1.62.1")],
+        "web npm archive roster is invalid",
+    )
     expected_manifest = [
         (f"npm/{entry['filename']}", str(entry["sha256"]).removeprefix("sha256:"))
         for entry in archives
@@ -341,7 +388,12 @@ def verify_source(root: Path, *, verify_hashes: bool = True) -> dict[str, object
         )
         _require((root / pack_id / str(pack["conformance"]["script"])).is_file(), f"{pack_id} conformance script is absent")
         toolchain = _load_json(root / pack_id / str(pack["toolchainLock"]))
-        _require(toolchain.get("schema") == "ambit.c18-toolchain-lock/v1", f"{pack_id} toolchain schema is invalid")
+        expected_toolchain_schema = (
+            "ambit.c18-toolchain-lock/v2"
+            if pack_id == "web-browser"
+            else "ambit.c18-toolchain-lock/v1"
+        )
+        _require(toolchain.get("schema") == expected_toolchain_schema, f"{pack_id} toolchain schema is invalid")
         _require(toolchain.get("packRef") == expected["ref"], f"{pack_id} toolchain ref mismatch")
         _verify_dockerfile(root, pack_id, expected)
         if pack_id != "web-browser":
