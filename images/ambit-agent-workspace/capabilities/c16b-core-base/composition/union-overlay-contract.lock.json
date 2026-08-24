@@ -5,40 +5,12 @@
     "status": "pending-equality-deleting-successor-contract"
   },
   "coreParent": {
-    "configDigest": "sha256:891b92f96814b8deeda10e8ecf4154562a5e9ff38f8665803cc937e9d89a537a",
-    "orderedLayers": [
-      {
-        "digest": "sha256:26c307b5e35a59ce911f5fde5b9458120ec8734e831ea2da5649a9ad14abfd3d",
-        "size": 29780765
-      },
-      {
-        "digest": "sha256:880cb2dd3f17ed78087daf821dd69eb977f47cf529e1633ef9cddcc35850c891",
-        "size": 955
-      },
-      {
-        "digest": "sha256:52419918fd68de67a5302198b9d4d8979b686561b5345602e99cdae00b279f76",
-        "size": 1138729
-      },
-      {
-        "digest": "sha256:1734bf10acf286c213882c05c87339e058d0748481ef8f34b8b0f4fb48b54c7a",
-        "size": 556
-      },
-      {
-        "digest": "sha256:2d16cb0e10f19ab0c23413dee007067ea53ddcabf8be75b1999c509b4f57f2ff",
-        "size": 603
-      },
-      {
-        "digest": "sha256:208612380c05eeec6516fedcc539bd05edcd6ba2c6bea2d227142943efe168bd",
-        "size": 1143081
-      },
-      {
-        "digest": "sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1",
-        "size": 32
-      }
-    ],
+    "configDigest": null,
+    "orderedLayers": [],
     "platform": "linux/amd64",
-    "platformManifestDigest": "sha256:56a5c23d33a9b6ef2605d830605ec82bb9faa069a2d1dbe86d8662c8801fb419",
-    "sourceIdentitySha256": "sha256:39ee58cffe5a41c2124a09b135d7f79beedf8424eff018ffadb3ec553c160744"
+    "platformManifestDigest": null,
+    "sourceIdentitySha256": null,
+    "status": "pending-qualified-core-replacement"
   },
   "finalRuntime": {
     "forbiddenInstallerCommands": [
