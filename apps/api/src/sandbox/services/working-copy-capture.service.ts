@@ -27,7 +27,6 @@ import {
   WorkingCopyCaptureReceiptDto,
 } from '../dto/working-copy-capture.dto'
 import { assertStopAuthority as assertGenerationStopAuthority } from '../dto/sandbox-generation-stop.contract'
-import { SandboxState } from '../enums/sandbox-state.enum'
 import { RunnerApiError } from '../errors/runner-api-error'
 import { SandboxExecutionAuthorityService } from './sandbox-execution-authority.service'
 
@@ -51,9 +50,6 @@ export class WorkingCopyCaptureService {
       binding.owner,
       binding.stopAuthority.fence,
     )
-    if (sandbox.state !== SandboxState.STOPPED) {
-      throw new ConflictException('The sandbox must be stopped before working-copy capture.')
-    }
     try {
       const receipt = await adapter.captureWorkingCopy(sandbox.id, binding)
       assertReceipt(receipt, binding)
