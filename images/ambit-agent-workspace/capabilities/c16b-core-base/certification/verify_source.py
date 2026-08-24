@@ -65,6 +65,7 @@ def verify(root: Path) -> dict[str, object]:
             "composition",
             "historicalInput",
             "promotion",
+            "qualification",
             "rollback",
             "schema",
             "state",
@@ -73,8 +74,8 @@ def verify(root: Path) -> dict[str, object]:
     )
     _require(baseline["schema"] == "ambit.runtime-core-baseline/v2", "schema drift")
     _require(
-        baseline["state"] == "source-ready-contract-pending-unbuilt",
-        "source must remain unbuilt with backend composition pending",
+        baseline["state"] == "locally-qualified-contract-pending-external-gates",
+        "source must retain exact local qualification and open external gates",
     )
 
     artifact = _exact(
@@ -213,6 +214,70 @@ def verify(root: Path) -> dict[str, object]:
         "promotion gate roster is incomplete",
     )
 
+    qualification = _exact(
+        baseline["qualification"],
+        {
+            "buildReceipt",
+            "byteIdenticalOciArchives",
+            "configDigest",
+            "externalGitAdmission",
+            "ociArchiveBytes",
+            "ociArchiveSha256",
+            "orderedLayers",
+            "platformManifestDigest",
+            "productionEvidence",
+            "reproducibleBuildCount",
+            "runtimeConformanceReceipt",
+            "sourceIdentitySha256",
+            "sourceRevision",
+            "sourceSubtree",
+            "sourceTree",
+            "state",
+        },
+        "local core qualification",
+    )
+    _require(
+        qualification["state"] == "qualified-local-candidate"
+        and qualification["byteIdenticalOciArchives"] is True
+        and qualification["reproducibleBuildCount"] == 2
+        and qualification["externalGitAdmission"] == "pending"
+        and qualification["productionEvidence"] == "pending",
+        "local qualification overstates promotion or lacks reproducibility",
+    )
+    for field in ("sourceRevision", "sourceTree", "sourceSubtree"):
+        _require(
+            isinstance(qualification[field], str)
+            and re.fullmatch(r"[0-9a-f]{40}", qualification[field]),
+            f"qualification {field} is invalid",
+        )
+    for field in (
+        "sourceIdentitySha256",
+        "ociArchiveSha256",
+        "platformManifestDigest",
+        "configDigest",
+    ):
+        _require(
+            isinstance(qualification[field], str)
+            and SHA256.fullmatch(qualification[field]),
+            f"qualification {field} is invalid",
+        )
+    _require(
+        qualification["ociArchiveBytes"] == 28_264_448,
+        "qualified OCI archive byte size changed",
+    )
+    for field in ("buildReceipt", "runtimeConformanceReceipt"):
+        receipt = _exact(qualification[field], {"digest", "ref"}, field)
+        _require(
+            isinstance(receipt["ref"], str)
+            and receipt["ref"]
+            and isinstance(receipt["digest"], str)
+            and SHA256.fullmatch(receipt["digest"]),
+            f"qualification {field} is invalid",
+        )
+    qualified_layers = _qualified_layers(
+        qualification["orderedLayers"], "qualified core layers"
+    )
+
     rollback = _exact(
         baseline["rollback"],
         {
@@ -278,12 +343,15 @@ def verify(root: Path) -> dict[str, object]:
     )
     _require(
         overlay_core["platform"] == "linux/amd64"
-        and overlay_core["platformManifestDigest"] is None
-        and overlay_core["configDigest"] is None
-        and overlay_core["sourceIdentitySha256"] is None
-        and overlay_core["orderedLayers"] == []
-        and overlay_core["status"] == "pending-qualified-core-replacement",
-        "union overlay invented a replacement core identity before qualification",
+        and overlay_core["platformManifestDigest"]
+        == qualification["platformManifestDigest"]
+        and overlay_core["configDigest"] == qualification["configDigest"]
+        and overlay_core["sourceIdentitySha256"]
+        == qualification["sourceIdentitySha256"]
+        and _qualified_layers(overlay_core["orderedLayers"], "overlay core layers")
+        == qualified_layers
+        and overlay_core["status"] == "qualified-local-candidate",
+        "union overlay does not bind the exact locally qualified core",
     )
     overlay_union = overlay["union"]
     _require(
@@ -383,8 +451,36 @@ def verify(root: Path) -> dict[str, object]:
         "historicalCoreDocumentReusable": False,
         "promotionPerformed": False,
         "backendCompositionContractFrozen": False,
-        "descendantUnionOverlayContractFrozen": False,
+        "descendantUnionOverlayContractFrozen": True,
     }
+
+
+def _qualified_layers(value: object, name: str) -> list[dict[str, object]]:
+    _require(isinstance(value, list) and value, f"{name} must be nonempty")
+    result: list[dict[str, object]] = []
+    for index, candidate in enumerate(value):
+        layer = _exact(
+            candidate,
+            {"digest", "mediaType", "size"},
+            f"{name}[{index}]",
+        )
+        _require(
+            isinstance(layer["digest"], str) and SHA256.fullmatch(layer["digest"]),
+            f"{name}[{index}] digest is invalid",
+        )
+        _require(
+            layer["mediaType"]
+            == "application/vnd.oci.image.layer.v1.tar+gzip",
+            f"{name}[{index}] media type is invalid",
+        )
+        _require(
+            isinstance(layer["size"], int)
+            and not isinstance(layer["size"], bool)
+            and layer["size"] > 0,
+            f"{name}[{index}] size is invalid",
+        )
+        result.append(dict(layer))
+    return result
 
 
 def main() -> int:

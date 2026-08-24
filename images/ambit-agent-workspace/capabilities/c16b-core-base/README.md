@@ -65,7 +65,8 @@ image is simply the one-bundle case of the same mechanism.
 
 `composition/union-overlay-contract.lock.json` freezes the core parent and
 receipt obligations. `certification/verify_union_overlay.py` verifies the
-literal seven-layer core prefix, selected-bundle closure, pre/post global
+literal three-descriptor core prefix (including repeated content-addressed
+empty layers), selected-bundle closure, pre/post global
 state, conflict and ownership receipts, the exact overlay suffix, protected
 core paths, final installer absence, and full runtime/pack conformance. The
 backend authority discriminator intentionally remains null until its matching
