@@ -29,11 +29,23 @@ context supplies every named native/source/license artifact. Missing evidence
 cannot be replaced with a build argument, mutable tag, runtime download, or
 consumer-produced archive.
 
-Promotion additionally requires one exact full-image binding. That receipt
-must bind the complete selected pack set, immutable OCI identity, non-root
-runtime configuration, complete rootfs probe, offline conformance receipts,
-SBOM, provenance, signature, license report, and vulnerability report. A
-payload-only or pack-only test cannot certify the composed runtime.
+Promotion additionally requires the C16-owned exact union-overlay receipt.
+C18 emits one closed offline artifact/installer bundle per specialist pack;
+the composition authority must resolve the complete selected bundle set before
+installation, prove one-owner-or-byte-identical-shared path ownership, inherit
+the literal qualified core OCI layer prefix, add one closed conflict-resolved
+overlay, and bind the resulting manifest to non-root probes, every selected
+pack's conformance, SBOM, provenance, signature, license, and vulnerability
+evidence. A standalone specialist image, copied rootfs, matching tool version,
+sorted layer set, or pack-only test cannot certify a composed runtime.
+
+The Playwright source image is Ubuntu-based while the qualified reusable core
+is Debian-based. It is therefore a build/extraction input to the web bundle,
+not a substitute runtime parent and not a separately layered "core" claim.
+The C16 union builder owns ABI closure and conflict resolution when it composes
+browser files over the exact core parent. Until that union receipt passes, the
+web pack remains a candidate even if its isolated source image conformance is
+green.
 
 All runtime package installers are removed. OS packages and Python/Node
 dependencies are resolved during the image build from exact offline inputs.

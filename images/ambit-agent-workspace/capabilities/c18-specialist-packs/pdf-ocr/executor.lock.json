@@ -1,0 +1,8 @@
+{
+  "digest": "sha256:f9a39dcd632bb879798ce8b801225d103d7778e10f6b1c8073627bae9fb3264e",
+  "facets": [
+    "pdf"
+  ],
+  "ref": "ambit://specialist-render-executors/pdf-ocr@1",
+  "schema": "ambit.c18-specialist-render-executor-lock/v1"
+}

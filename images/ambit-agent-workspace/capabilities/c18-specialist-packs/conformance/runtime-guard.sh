@@ -16,6 +16,8 @@ esac
 test "$(id -u)" = 1000
 test "$(id -g)" = 1000
 test "$(id -un)" = daytona
+test "$(id -G)" = 1000
+test "$(id -Gn)" = daytona
 test -d "${pack_root}"
 test ! -w "${pack_root}"
 test -d "${output_root}"
@@ -45,6 +47,12 @@ for socket in \
   test ! -e "${socket}"
 done
 
+for state_path in \
+  /etc/apt /etc/dpkg /usr/lib/apt /usr/lib/dpkg /usr/libexec/dpkg \
+  /usr/share/apt /usr/share/dpkg /var/lib/apt /var/lib/dpkg; do
+  test ! -e "${state_path}"
+done
+
 for installer in \
   apk apt apt-get conda corepack dpkg dpkg-deb mamba micromamba npm npx pip pip3 pnpm uv yarn; do
   if command -v "${installer}" >/dev/null 2>&1; then
@@ -70,6 +78,7 @@ fi
   printf 'no_new_privileges\t%s\n' "${no_new_privileges}"
   printf 'pack\t%s\n' "${pack_id}"
   printf 'root_filesystem\tread_only\n'
+  printf 'supplementary_groups\tnone\n'
   printf 'runtime_installers\tabsent\n'
   printf 'seccomp_mode\t%s\n' "${seccomp_mode}"
   printf 'uid\t%s\n' "$(id -u)"

@@ -28,6 +28,10 @@ for pdf in "${output_root}"/fixtures/*.pdf; do
   pdftotext -layout "${pdf}" "${output_root}/checks/${stem}.txt"
   pdftoppm -f 1 -singlefile -png -r 96 "${pdf}" \
     "${output_root}/checks/${stem}-1" >/dev/null 2>&1
+  pdftoppm -f 2 -singlefile -png -r 96 "${pdf}" \
+    "${output_root}/checks/${stem}-2" >/dev/null 2>&1
+  qpdf --qdf --object-streams=disable "${pdf}" \
+    "${output_root}/checks/${stem}.qdf.pdf"
 done
 qpdf --check "${output_root}/checks/ocr.pdf" > "${output_root}/checks/ocr.qpdf.txt" 2>&1
 pdftotext -layout "${output_root}/checks/ocr.pdf" "${output_root}/checks/ocr-pdf.txt"
@@ -45,11 +49,20 @@ grep -Fi 'does not contain any signatures' \
   "${output_root}/checks/signature-inspection.txt" >/dev/null
 exiftool -j "${output_root}/fixtures/metadata-edited.pdf" \
   > "${output_root}/checks/metadata.json"
-gs -dPDFA=2 -dBATCH -dNOPAUSE -dSAFER \
-  -sColorConversionStrategy=RGB -sDEVICE=pdfwrite -dPDFACompatibilityPolicy=1 \
-  -sOutputFile="${output_root}/checks/pdfa.pdf" \
-  /usr/share/ghostscript/10.05.1/lib/PDFA_def.ps \
-  "${output_root}/fixtures/redacted.pdf" >/dev/null 2>&1
+(
+  cd /usr/share/color/icc/ghostscript
+  gs --permit-file-read=srgb.icc -dPDFA=2 -dBATCH -dNOPAUSE -dSAFER \
+    -sColorConversionStrategy=RGB -sDEVICE=pdfwrite -dPDFACompatibilityPolicy=1 \
+    -sOutputFile="${output_root}/checks/pdfa.pdf" \
+    /usr/share/ghostscript/10.05.1/lib/PDFA_def.ps \
+    "${output_root}/fixtures/redacted.pdf" \
+    > "${output_root}/checks/pdfa.ghostscript.txt" 2>&1
+)
+if grep -F 'PDF/A processing aborted' \
+  "${output_root}/checks/pdfa.ghostscript.txt" >/dev/null; then
+  echo "Ghostscript aborted PDF/A processing" >&2
+  exit 1
+fi
 qpdf --check "${output_root}/checks/pdfa.pdf" \
   > "${output_root}/checks/pdfa.qpdf.txt" 2>&1
 

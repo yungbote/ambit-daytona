@@ -9,14 +9,22 @@ pack_root=/opt/ambit/runtime-pack/web-browser
 test "$(node --version)" = "v24.18.1"
 install -d -m 0555 \
   "${pack_root}/locks" \
+  "${pack_root}/bin" \
   "${pack_root}/conformance" \
+  "${pack_root}/protocol" \
+  "${pack_root}/runtime" \
   "${pack_root}/node_modules/playwright-core" \
   "${pack_root}/node_modules/axe-core" \
   "${pack_root}/licenses"
 install -m 0444 "${pack_source}/pack.lock.json" "${pack_root}/pack.lock.json"
+install -m 0444 "${pack_source}/executor.lock.json" "${pack_root}/executor.lock.json"
 cp -a "${pack_source}/locks/." "${pack_root}/locks/"
 cp -a "${pack_source}/conformance/." "${pack_root}/conformance/"
+cp -a "${pack_source}/runtime/." "${pack_root}/runtime/"
+cp -a "${source_root}/protocol/." "${pack_root}/protocol/"
 cp -a "${source_root}/conformance/runtime-guard.sh" "${pack_root}/conformance/"
+install -m 0555 "${source_root}/protocol/render_cli.py" \
+  "${pack_root}/bin/ambit-specialist-render"
 tar -xzf "${input_root}/npm/playwright-core-1.62.1.tgz" \
   -C "${pack_root}/node_modules/playwright-core" --strip-components=1
 tar -xzf "${input_root}/npm/axe-core-4.13.0.tgz" \
@@ -50,6 +58,10 @@ JS
 dpkg-query -W -f='${binary:Package}=${Version}\n' | LC_ALL=C sort \
   > /tmp/base-installed-dpkg.actual
 cmp "${pack_root}/locks/base-installed-dpkg.lock" /tmp/base-installed-dpkg.actual
+dpkg-query -W -f='${binary:Package}\n' \
+  | grep -E '^(apt|dpkg|libapt-pkg)' \
+  | xargs -r dpkg-query -L \
+  | LC_ALL=C sort -u > /tmp/package-manager-files
 fc-list : family style file | LC_ALL=C sort > /tmp/fontconfig-roster.actual
 cmp "${pack_root}/locks/fontconfig-roster.lock" /tmp/fontconfig-roster.actual
 test "$(/ms-playwright/chromium-1234/chrome-linux64/chrome --version)" = \
@@ -66,9 +78,14 @@ if id pwuser >/dev/null 2>&1; then
 fi
 groupmod --new-name daytona ubuntu
 usermod --login daytona --home /workspace --move-home ubuntu
+usermod --groups '' daytona
 install -d -m 0700 -o daytona -g daytona /workspace
+test "$(id -G daytona)" = 1000
+test "$(id -Gn daytona)" = daytona
 
 rm -rf \
+  /etc/apt \
+  /etc/dpkg \
   /home/pwuser \
   /root/.cache \
   /tmp/base-installed-dpkg.actual \
@@ -76,8 +93,17 @@ rm -rf \
       /usr/lib/node_modules/corepack \
       /usr/lib/node_modules/npm \
       /usr/lib/node_modules/yarn \
-  /var/cache/apt/* \
-  /var/lib/apt/lists/*
+  /usr/lib/apt \
+  /usr/lib/dpkg \
+  /usr/libexec/dpkg \
+  /usr/share/apt \
+  /usr/share/dpkg \
+  /var/cache/apt \
+  /var/cache/debconf \
+  /var/lib/apt \
+  /var/lib/debconf \
+  /var/lib/dpkg \
+  /var/log/apt
 rm -f \
   /usr/bin/apk \
   /usr/bin/apt \
@@ -86,6 +112,7 @@ rm -f \
   /usr/bin/corepack \
   /usr/bin/dpkg \
   /usr/bin/dpkg-* \
+  /usr/bin/debconf-apt-progress \
   /usr/bin/ldd \
   /usr/bin/npm \
   /usr/bin/npx \
@@ -95,9 +122,16 @@ rm -f \
   /usr/local/bin/npx \
   /usr/local/bin/pnpm \
   /usr/local/bin/yarn
+while IFS= read -r path; do
+  if [[ -L ${path} || -f ${path} ]]; then
+    rm -f -- "${path}"
+  fi
+done < /tmp/package-manager-files
+rm -f /tmp/package-manager-files
 find "${pack_root}" -type d -exec chmod 0555 '{}' +
 find "${pack_root}" -type f -exec chmod a-w,go+r '{}' +
 find "${pack_root}/conformance" -type f -name '*.sh' -exec chmod 0555 '{}' +
+chmod 0555 "${pack_root}/bin/ambit-specialist-render"
 
 hash -r
 for installer in apk apt apt-get dpkg dpkg-deb pip pip3 uv npm npx pnpm yarn corepack conda mamba micromamba; do

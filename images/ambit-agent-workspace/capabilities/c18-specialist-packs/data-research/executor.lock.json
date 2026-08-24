@@ -1,0 +1,9 @@
+{
+  "digest": "sha256:369d842bf2f5cbd87cb42de9b469a9525033193c63c75b9fe5e24c9b7d5c5295",
+  "facets": [
+    "data_analysis",
+    "research"
+  ],
+  "ref": "ambit://specialist-render-executors/data-research@1",
+  "schema": "ambit.c18-specialist-render-executor-lock/v1"
+}

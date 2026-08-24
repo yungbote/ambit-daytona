@@ -6,13 +6,35 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from source_contracts import SourceContractError, verify_source
+from source_contracts import (
+    SourceContractError,
+    refresh_source_manifest,
+    render_source_manifest,
+    verify_source,
+)
 
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 
 
 class SourceContractTests(unittest.TestCase):
+    def test_manifest_renderer_is_stable_and_self_excluding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "a.txt").write_text("a\n", encoding="utf-8")
+            (root / "z.txt").write_text("z\n", encoding="utf-8")
+            (root / "source-contracts.sha256").write_text(
+                "stale\n", encoding="utf-8"
+            )
+            first = render_source_manifest(root)
+            refresh_source_manifest(root)
+            self.assertEqual((root / "source-contracts.sha256").read_bytes(), first)
+            self.assertEqual(render_source_manifest(root), first)
+            self.assertEqual(
+                [line.split("  ", 1)[1] for line in first.decode().splitlines()],
+                ["a.txt", "z.txt"],
+            )
+
     def test_current_source_is_closed_and_exact(self) -> None:
         receipt = verify_source(SOURCE_ROOT)
         self.assertEqual(receipt["outcome"], "passed")

@@ -1,0 +1,35 @@
+{
+  "schema": "ambit.runtime-pack-font-license-inventory/v1",
+  "state": "candidate-ready",
+  "fontManifestSha256": "sha256:c7ec7091409a9ec8bf390cf0b6effb72985659da46dbb6722d0569e8c75d00b1",
+  "packages": [
+    {
+      "package": "fonts-noto-cjk",
+      "fontFiles": 4,
+      "runtimeLicense": "OFL-1.1",
+      "copyrightPath": "/usr/share/doc/fonts-noto-cjk/copyright",
+      "copyrightSha256": "sha256:849f4ea9c214fa4ac3593b770c699f387534b11ce671264c1b10d85bdcb5997b"
+    },
+    {
+      "package": "fonts-noto-core",
+      "fontFiles": 268,
+      "runtimeLicense": "OFL-1.1",
+      "copyrightPath": "/usr/share/doc/fonts-noto-core/copyright",
+      "copyrightSha256": "sha256:075f91382875da1c4b491f1facf2586f55448705133264d98ce15cab6211b125"
+    },
+    {
+      "package": "fonts-noto-mono",
+      "fontFiles": 3,
+      "runtimeLicense": "OFL-1.1",
+      "copyrightPath": "/usr/share/doc/fonts-noto-mono/copyright",
+      "copyrightSha256": "sha256:075f91382875da1c4b491f1facf2586f55448705133264d98ce15cab6211b125"
+    },
+    {
+      "package": "fonts-opensymbol",
+      "fontFiles": 1,
+      "runtimeLicense": "MPL-2.0",
+      "copyrightPath": "/usr/share/doc/fonts-opensymbol/copyright",
+      "copyrightSha256": "sha256:cf9d0e2a977145750723bf71705e3fc829d5fc396376587ba546febbf9eebda3"
+    }
+  ]
+}

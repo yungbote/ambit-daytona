@@ -1,0 +1,35 @@
+{
+  "contract": "ambit.c18-specialist-artifact-preview-goldens/v1",
+  "goldens": [
+    {
+      "facet": "data_analysis",
+      "bytesDigest": "sha256:0641558ee3bd102f5ec21001c1267808be700ff899e52dca21a9396c11865863",
+      "canonicalJson": "{\"contract\":\"ambit.c18-specialist-artifact-preview/v1\",\"digest\":\"sha256:3726121b0514f2ee71aad8111af21d1105858902ca49d55216995719d610fc72\",\"facet\":\"data_analysis\",\"facts\":[{\"key\":\"view_count\",\"label\":\"Views\",\"value\":\"1\"}],\"limitations\":[],\"schemaVersion\":1,\"summary\":\"One safe text view for the data analysis specialist artifact.\",\"title\":\"Data analysis preview\",\"validation\":[{\"check\":\"safe_preview_encoding\",\"label\":\"Safe preview encoding\",\"status\":\"passed\"}],\"views\":[{\"body\":\"data analysis preview\\n\",\"byteLength\":22,\"digest\":\"sha256:eda8e3df5e384f927418ed3165bceccc62b88a6336a9de263309c37d72dfc0cc\",\"kind\":\"text\",\"label\":\"Preview\",\"mediaType\":\"text/plain\",\"ordinal\":1}]}"
+    },
+    {
+      "facet": "pdf",
+      "bytesDigest": "sha256:81a6dc4b0c9c8c89a9f49fa3e0e9bbff3eb563994ab2196bb99984c99f118279",
+      "canonicalJson": "{\"contract\":\"ambit.c18-specialist-artifact-preview/v1\",\"digest\":\"sha256:ed4a095b8025ac350374be5c5fb2d2e0fd6e6f107606e797d1eb591c1edf7299\",\"facet\":\"pdf\",\"facts\":[{\"key\":\"view_count\",\"label\":\"Views\",\"value\":\"1\"}],\"limitations\":[],\"schemaVersion\":1,\"summary\":\"One safe text view for the pdf specialist artifact.\",\"title\":\"PDF preview\",\"validation\":[{\"check\":\"safe_preview_encoding\",\"label\":\"Safe preview encoding\",\"status\":\"passed\"}],\"views\":[{\"body\":\"pdf preview\\n\",\"byteLength\":12,\"digest\":\"sha256:06662c84d03e4bcdd1b1ddcbb3b9f61a67f7d30a3ec42c2103073d8335ff6a8d\",\"kind\":\"text\",\"label\":\"Preview\",\"mediaType\":\"text/plain\",\"ordinal\":1}]}"
+    },
+    {
+      "facet": "presentation",
+      "bytesDigest": "sha256:0083de424dc2e5ce1bb7c7e8c4915d4d074a8b0d59c0d8fd889c4f792b020f2e",
+      "canonicalJson": "{\"contract\":\"ambit.c18-specialist-artifact-preview/v1\",\"digest\":\"sha256:444bcd343a0707591a6918a158a108af7838eb114963aa2a64615af841aea223\",\"facet\":\"presentation\",\"facts\":[{\"key\":\"view_count\",\"label\":\"Views\",\"value\":\"1\"}],\"limitations\":[],\"schemaVersion\":1,\"summary\":\"One safe text view for the presentation specialist artifact.\",\"title\":\"Presentation preview\",\"validation\":[{\"check\":\"safe_preview_encoding\",\"label\":\"Safe preview encoding\",\"status\":\"passed\"}],\"views\":[{\"body\":\"presentation preview\\n\",\"byteLength\":21,\"digest\":\"sha256:2017f7c1dc87ef0cfd6fd8172bcbb8f3ab9905b9384f8504aa7acc71ed573c8d\",\"kind\":\"text\",\"label\":\"Preview\",\"mediaType\":\"text/plain\",\"ordinal\":1}]}"
+    },
+    {
+      "facet": "research",
+      "bytesDigest": "sha256:6e6b015c15b3a8886e713f2d9af48dae12569c2b5dbac5cd62045f975f74229d",
+      "canonicalJson": "{\"contract\":\"ambit.c18-specialist-artifact-preview/v1\",\"digest\":\"sha256:ad6f5a320d4a2efbacb9ada2b40e55656090a38d606cf4ea5ff9dc5988c0b27b\",\"facet\":\"research\",\"facts\":[{\"key\":\"view_count\",\"label\":\"Views\",\"value\":\"1\"}],\"limitations\":[],\"schemaVersion\":1,\"summary\":\"One safe text view for the research specialist artifact.\",\"title\":\"Research preview\",\"validation\":[{\"check\":\"safe_preview_encoding\",\"label\":\"Safe preview encoding\",\"status\":\"passed\"}],\"views\":[{\"body\":\"research preview\\n\",\"byteLength\":17,\"digest\":\"sha256:7844f5dedc9047a9898d0c9c119c81d540d50e47637b1b4a582f0907f6cb8871\",\"kind\":\"text\",\"label\":\"Preview\",\"mediaType\":\"text/plain\",\"ordinal\":1}]}"
+    },
+    {
+      "facet": "spreadsheet",
+      "bytesDigest": "sha256:d1b789231b2bb539318fe851dec3f43dfb2a0c5cac34cae7f882fabca0f0e701",
+      "canonicalJson": "{\"contract\":\"ambit.c18-specialist-artifact-preview/v1\",\"digest\":\"sha256:121f82d5b02bb5e1a05c4ab74d0d4bba77a353898b6be7a54d1a542f52482e71\",\"facet\":\"spreadsheet\",\"facts\":[{\"key\":\"view_count\",\"label\":\"Views\",\"value\":\"1\"}],\"limitations\":[],\"schemaVersion\":1,\"summary\":\"One safe text view for the spreadsheet specialist artifact.\",\"title\":\"Spreadsheet preview\",\"validation\":[{\"check\":\"safe_preview_encoding\",\"label\":\"Safe preview encoding\",\"status\":\"passed\"}],\"views\":[{\"body\":\"spreadsheet preview\\n\",\"byteLength\":20,\"digest\":\"sha256:8f6e4a5fffe50a3ee47347d9d9229a6924704ed2f794b3b9500e8c40effb54a1\",\"kind\":\"text\",\"label\":\"Preview\",\"mediaType\":\"text/plain\",\"ordinal\":1}]}"
+    },
+    {
+      "facet": "web_application",
+      "bytesDigest": "sha256:f47bfbee6246d1fdb6b5e3a5b1f0e5679b0b0d90e2e1a9440e98e28e04b25405",
+      "canonicalJson": "{\"contract\":\"ambit.c18-specialist-artifact-preview/v1\",\"digest\":\"sha256:90f74dc28fc8bf738dfa67e824dabcc7061a8e03d86e5c21788644026969d4b3\",\"facet\":\"web_application\",\"facts\":[{\"key\":\"view_count\",\"label\":\"Views\",\"value\":\"1\"}],\"limitations\":[],\"schemaVersion\":1,\"summary\":\"One safe PNG view for the web application specialist artifact.\",\"title\":\"Web application preview\",\"validation\":[{\"check\":\"safe_preview_encoding\",\"label\":\"Safe preview encoding\",\"status\":\"passed\"}],\"views\":[{\"altText\":\"One pixel web application protocol preview.\",\"bodyBase64\":\"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZFP8AAAAASUVORK5CYII=\",\"byteLength\":68,\"digest\":\"sha256:750356141b80416bd24feeb90b51d918a4debceda56f8512af2e90d2bfe10200\",\"height\":1,\"kind\":\"image\",\"label\":\"Preview\",\"mediaType\":\"image/png\",\"ordinal\":1,\"width\":1}]}"
+    }
+  ]
+}

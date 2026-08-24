@@ -59,6 +59,7 @@ function parseGuard(file) {
     root_filesystem: 'read_only',
     runtime_installers: 'absent',
     seccomp_mode: '2',
+    supplementary_groups: 'none',
     uid: '1000',
     user: 'daytona',
   };

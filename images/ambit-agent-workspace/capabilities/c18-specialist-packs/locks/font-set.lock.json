@@ -1,13 +1,20 @@
 {
   "fontFiles": {
     "entryCount": 276,
+    "manifestPath": "fonts/font-files.sha256",
     "manifestSha256": "sha256:c7ec7091409a9ec8bf390cf0b6effb72985659da46dbb6722d0569e8c75d00b1"
   },
+  "fontLicenseInventory": {
+    "manifestPath": "fonts/font-license-inventory.json",
+    "manifestSha256": "sha256:dc23ac022e617fd2923aa5d09ad7fa6aa6759742a68f8c6c7bcb7517d4c81a00"
+  },
   "fontPackageOwnership": {
+    "manifestPath": "fonts/font-package-ownership.tsv",
     "manifestSha256": "sha256:089d85edcda076de89e9619be3547b8e6c9e8793a1963fccad6fdcebb959af13"
   },
   "fontconfigRoster": {
     "entryCount": 302,
+    "manifestPath": "fonts/fontconfig-roster.tsv",
     "manifestSha256": "sha256:3dc4c2f8f322d0f43a01cc9f9b2228177dc6032e03cc80f199225a16fefb0fca"
   },
   "packages": [
@@ -17,9 +24,10 @@
     "fonts-opensymbol=4:102.12+LibO25.2.3-2+deb13u6"
   ],
   "packageCopyrightRoster": {
+    "manifestPath": "fonts/package-copyright.tsv",
     "manifestSha256": "sha256:98c4deafd298b2ad5966698091943f0d8b0e2a3982bb10ee5d59697a5a4830ce"
   },
-  "schema": "ambit.c18-font-set-input-lock/v1",
+  "schema": "ambit.c18-font-set-input-lock/v2",
   "sourceDisposition": "external-exact-input",
   "sourceRef": "ambit.font-set/noto-core-mono-cjk-opensymbol@1"
 }

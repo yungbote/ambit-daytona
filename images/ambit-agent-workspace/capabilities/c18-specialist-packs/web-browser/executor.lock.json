@@ -1,0 +1,8 @@
+{
+  "digest": "sha256:869f6292cbbdae6ef4f07152089e98535dec1dcf48cfbb80b1d3915d6b30fad8",
+  "facets": [
+    "web_application"
+  ],
+  "ref": "ambit://specialist-render-executors/web-browser@1",
+  "schema": "ambit.c18-specialist-render-executor-lock/v1"
+}

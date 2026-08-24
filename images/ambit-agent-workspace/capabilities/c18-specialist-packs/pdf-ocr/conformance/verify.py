@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Literal
 
 import pikepdf
 import pypdf
@@ -18,7 +19,11 @@ PACK_REF = "ambit.runtime-pack/pdf-ocr@1"
 SECRET_MARKER = "AMB1T-REDACT-ME-7421"
 
 
-def create_pdf(path: Path, *, include_secret: bool) -> None:
+def create_pdf(
+    path: Path,
+    *,
+    redaction_state: Literal["source", "visual-cover", "removed"],
+) -> None:
     document = canvas.Canvas(
         str(path),
         pagesize=LETTER,
@@ -34,12 +39,13 @@ def create_pdf(path: Path, *, include_secret: bool) -> None:
     document.drawString(72, 720, "PDF validation fixture")
     document.setFont("Helvetica", 12)
     document.drawString(72, 690, "Visible approved content: quarterly statement")
-    if include_secret:
+    if redaction_state in {"source", "visual-cover"}:
         document.drawString(72, 660, SECRET_MARKER)
-    else:
+    if redaction_state in {"visual-cover", "removed"}:
         document.setFillColorRGB(0.1, 0.1, 0.1)
         document.rect(72, 650, 220, 22, fill=1, stroke=0)
         document.setFillColorRGB(0, 0, 0)
+    if redaction_state == "removed":
         document.drawString(72, 625, "Sensitive content removed, not merely covered")
     document.showPage()
     document.setFont("Helvetica", 12)
@@ -68,11 +74,13 @@ def create_scan(path: Path) -> None:
 def generate(output: Path) -> None:
     output.mkdir(parents=True, exist_ok=False)
     source = output / "source-with-secret.pdf"
+    covered = output / "visual-cover-only.pdf"
     redacted = output / "redacted.pdf"
     edited = output / "metadata-edited.pdf"
     scan = output / "scan.pgm"
-    create_pdf(source, include_secret=True)
-    create_pdf(redacted, include_secret=False)
+    create_pdf(source, redaction_state="source")
+    create_pdf(covered, redaction_state="visual-cover")
+    create_pdf(redacted, redaction_state="removed")
     create_scan(scan)
     with pikepdf.open(redacted) as document:
         document.docinfo["/Subject"] = "Metadata edit preserves rendered pages"
@@ -87,6 +95,7 @@ def generate(output: Path) -> None:
             "packRef": PACK_REF,
             "expectedOcrText": ["AMBIT OCR 2026", "North", "120", "130"],
             "redactedMarker": SECRET_MARKER,
+            "redactionAuthoring": "not-claimed-candidate-validation-only",
             "files": file_receipts(output),
         },
     )
@@ -96,12 +105,24 @@ def finalize(output: Path) -> None:
     fixtures = output / "fixtures"
     checks = output / "checks"
     source_text = (checks / "source-with-secret.txt").read_text(encoding="utf-8")
+    covered_text = (checks / "visual-cover-only.txt").read_text(encoding="utf-8")
     redacted_text = (checks / "redacted.txt").read_text(encoding="utf-8")
     edited_text = (checks / "metadata-edited.txt").read_text(encoding="utf-8")
     assert SECRET_MARKER in source_text
+    assert SECRET_MARKER in covered_text
     assert SECRET_MARKER not in redacted_text
     assert SECRET_MARKER not in edited_text
     assert "Sensitive content removed" in redacted_text
+    assert SECRET_MARKER in (checks / "source-with-secret.qdf.pdf").read_bytes().decode(
+        "latin-1"
+    )
+    assert SECRET_MARKER in (checks / "visual-cover-only.qdf.pdf").read_bytes().decode(
+        "latin-1"
+    )
+    assert SECRET_MARKER not in (checks / "redacted.qdf.pdf").read_bytes().decode("latin-1")
+    assert SECRET_MARKER.encode() not in (fixtures / "redacted.pdf").read_bytes()
+    _assert_deep_marker_absence(fixtures / "redacted.pdf")
+    _assert_deep_marker_absence(fixtures / "metadata-edited.pdf")
     ocr_text = (checks / "ocr.txt").read_text(encoding="utf-8")
     for expected in ("AMBIT OCR 2026", "North", "120", "130"):
         assert expected in ocr_text, expected
@@ -112,7 +133,26 @@ def finalize(output: Path) -> None:
     edited_page = Image.open(checks / "metadata-edited-1.png").convert("RGB")
     difference = ImageChops.difference(redacted_page, edited_page)
     assert difference.getbbox() is None
-    assert (checks / "pdfa.pdf").read_bytes().startswith(b"%PDF-")
+    source_page_two = Image.open(checks / "source-with-secret-2.png").convert("RGB")
+    redacted_page_two = Image.open(checks / "redacted-2.png").convert("RGB")
+    assert ImageChops.difference(source_page_two, redacted_page_two).getbbox() is None
+    with pikepdf.open(checks / "pdfa.pdf") as pdfa:
+        metadata = pdfa.open_metadata()
+        assert metadata.get("pdfaid:part") == "2"
+        assert metadata.get("pdfaid:conformance") == "B"
+        output_intents = pdfa.Root.get("/OutputIntents")
+        assert output_intents is not None and len(output_intents) == 1
+        output_intent = output_intents[0]
+        assert output_intent.get("/S") == pikepdf.Name("/GTS_PDFA1")
+        assert output_intent.get("/OutputConditionIdentifier") == "sRGB"
+        profile = output_intent.get("/DestOutputProfile")
+        assert profile is not None and profile.get("/N") == 3
+    pdfa_log = (checks / "pdfa.ghostscript.txt").read_text(encoding="utf-8")
+    assert "PDF/A processing aborted" not in pdfa_log
+    metadata_report = json.loads((checks / "metadata.json").read_text(encoding="utf-8"))
+    assert len(metadata_report) == 1
+    assert metadata_report[0]["Subject"] == "Metadata edit preserves rendered pages"
+    assert SECRET_MARKER not in json.dumps(metadata_report, sort_keys=True)
     assert "does not contain any signatures" in (
         checks / "signature-inspection.txt"
     ).read_text(encoding="utf-8").lower()
@@ -135,8 +175,53 @@ def finalize(output: Path) -> None:
                 "privateKeyInRuntime": False,
                 "effectBoundary": "external-approved-action-only",
             },
+            "redactionValidation": {
+                "authoring": "not-claimed-candidate-validation-only",
+                "sourceDigest": _file_sha256(fixtures / "source-with-secret.pdf"),
+                "candidateDigest": _file_sha256(fixtures / "redacted.pdf"),
+                "visualCoverNegativeRejected": True,
+                "rawBytesScanned": True,
+                "decodedObjectStreamsScanned": True,
+                "qdfDecodedBytesScanned": True,
+                "metadataAndXmpScanned": True,
+                "attachmentsAnnotationsFormsAndOutlinesScanned": True,
+                "nonTargetPagePixelPreserved": True,
+            },
         },
     )
+
+
+def _file_sha256(path: Path) -> str:
+    import hashlib
+
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _assert_deep_marker_absence(path: Path) -> None:
+    marker = SECRET_MARKER.encode()
+    with pikepdf.open(path) as document:
+        metadata = document.open_metadata()
+        assert SECRET_MARKER not in json.dumps(dict(metadata), sort_keys=True)
+        assert SECRET_MARKER not in str(document.docinfo)
+        assert SECRET_MARKER not in str(document.Root.get("/AcroForm"))
+        assert SECRET_MARKER not in str(document.Root.get("/Names"))
+        assert SECRET_MARKER not in str(document.Root.get("/Outlines"))
+        for item in document.objects:
+            if isinstance(item, pikepdf.Stream):
+                try:
+                    payload = item.read_bytes()
+                except pikepdf.PdfError:
+                    payload = item.read_raw_bytes()
+                assert marker not in payload
+            else:
+                assert SECRET_MARKER not in str(item)
+    reader = pypdf.PdfReader(str(path))
+    assert not reader.get_fields()
+    assert not reader.attachments
+    assert SECRET_MARKER not in str(reader.outline)
+    for page in reader.pages:
+        assert SECRET_MARKER not in (page.extract_text() or "")
+        assert SECRET_MARKER not in str(page.get("/Annots"))
 
 
 def main() -> int:

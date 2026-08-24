@@ -40,7 +40,7 @@ def canonicalize_zip(path: Path) -> None:
     temporary.replace(path)
 
 
-def create_workbook(path: Path, *, revised: bool) -> None:
+def create_workbook(path: Path) -> None:
     workbook = Workbook()
     workbook.properties.title = "Quarterly revenue model"
     workbook.properties.subject = "Accessible deterministic spreadsheet conformance"
@@ -52,7 +52,7 @@ def create_workbook(path: Path, *, revised: bool) -> None:
     sheet.sheet_properties.pageSetUpPr.fitToPage = True
     rows = [
         ("Region", "Q1", "Q2", "Total"),
-        ("North", 120, 130 if not revised else 135, "=SUM(B2:C2)"),
+        ("North", 120, 130, "=SUM(B2:C2)"),
         ("South", 90, 110, "=SUM(B3:C3)"),
         ("West", 80, 95, "=SUM(B4:C4)"),
         ("Grand total", "=SUM(B2:B4)", "=SUM(C2:C4)", "=SUM(D2:D4)"),
@@ -92,6 +92,15 @@ def create_workbook(path: Path, *, revised: bool) -> None:
     canonicalize_zip(path)
 
 
+def revise_workbook(source: Path, target: Path) -> None:
+    workbook = load_workbook(source)
+    sheet = workbook["Revenue"]
+    sheet["C2"] = 135
+    workbook.properties.modified = FIXED_TIME
+    workbook.save(target)
+    canonicalize_zip(target)
+
+
 def _set_description(shape: object, description: str) -> None:
     elements = shape._element.xpath(".//*[local-name()='cNvPr']")  # type: ignore[attr-defined]
     if not elements:
@@ -99,7 +108,7 @@ def _set_description(shape: object, description: str) -> None:
     elements[0].set("descr", description)
 
 
-def create_presentation(path: Path, *, revised: bool) -> None:
+def create_presentation(path: Path) -> None:
     presentation = Presentation()
     presentation.slide_width = Inches(13.333333)
     presentation.slide_height = Inches(7.5)
@@ -118,11 +127,11 @@ def create_presentation(path: Path, *, revised: bool) -> None:
     title_notes.text = "Introduce the source and explain the units."
 
     slide = presentation.slides.add_slide(presentation.slide_layouts[5])
-    slide.shapes.title.text = "Revenue by region" if not revised else "Revenue by region — revised"
+    slide.shapes.title.text = "Revenue by region"
     chart_data = ChartData()
     chart_data.categories = ["North", "South", "West"]
     chart_data.add_series("Q1", (120, 90, 80))
-    chart_data.add_series("Q2", (130 if not revised else 135, 110, 95))
+    chart_data.add_series("Q2", (130, 110, 95))
     chart = slide.shapes.add_chart(
         XL_CHART_TYPE.COLUMN_CLUSTERED,
         Inches(0.8),
@@ -150,6 +159,14 @@ def create_presentation(path: Path, *, revised: bool) -> None:
     notes.text = "Call out the revised North Q2 value when present."
     presentation.save(path)
     canonicalize_zip(path)
+
+
+def revise_presentation(source: Path, target: Path) -> None:
+    presentation = Presentation(source)
+    presentation.slides[1].shapes.title.text = "Revenue by region — revised"
+    presentation.core_properties.modified = FIXED_TIME
+    presentation.save(target)
+    canonicalize_zip(target)
 
 
 def _validate_workbook(path: Path, *, revised: bool) -> dict[str, object]:
@@ -217,20 +234,23 @@ def _validate_presentation(path: Path, *, revised: bool) -> dict[str, object]:
 
 def generate(output: Path) -> None:
     output.mkdir(parents=True, exist_ok=False)
-    files = {
-        "spreadsheet-v1.xlsx": lambda path: create_workbook(path, revised=False),
-        "spreadsheet-v2.xlsx": lambda path: create_workbook(path, revised=True),
-        "presentation-v1.pptx": lambda path: create_presentation(path, revised=False),
-        "presentation-v2.pptx": lambda path: create_presentation(path, revised=True),
-    }
+    spreadsheet_v1 = output / "spreadsheet-v1.xlsx"
+    spreadsheet_v2 = output / "spreadsheet-v2.xlsx"
+    presentation_v1 = output / "presentation-v1.pptx"
+    presentation_v2 = output / "presentation-v2.pptx"
+    create_workbook(spreadsheet_v1)
+    revise_workbook(spreadsheet_v1, spreadsheet_v2)
+    create_presentation(presentation_v1)
+    revise_presentation(presentation_v1, presentation_v2)
     structures: dict[str, object] = {}
-    for name, create in files.items():
-        path = output / name
-        create(path)
+    for path in (spreadsheet_v1, spreadsheet_v2, presentation_v1, presentation_v2):
+        name = path.name
         if path.suffix == ".xlsx":
             structures[name] = _validate_workbook(path, revised="v2" in name)
         else:
             structures[name] = _validate_presentation(path, revised="v2" in name)
+    assert structures["spreadsheet-v1.xlsx"] == structures["spreadsheet-v2.xlsx"]
+    assert structures["presentation-v1.pptx"] == structures["presentation-v2.pptx"]
     canonical_json(
         output / "fixture-manifest.json",
         {
@@ -257,6 +277,13 @@ def finalize(output: Path) -> None:
             assert needle in text, (name, needle)
     pngs = sorted(rendered.glob("*.png"))
     assert len(pngs) >= 6
+    for font_receipt in sorted(rendered.glob("*.pdffonts.txt")):
+        rows = font_receipt.read_text(encoding="utf-8").splitlines()[2:]
+        assert rows
+        for row in rows:
+            columns = row.split()
+            assert "Noto" in columns[0]
+            assert columns[-5:-2] == ["yes", "yes", "yes"]
     guard = runtime_guard(output / "runtime-guard.tsv")
     assert guard["pack"] == "office-authoring"
     checks = json.loads((Path(__file__).resolve().parents[1] / "pack.lock.json").read_text())[
