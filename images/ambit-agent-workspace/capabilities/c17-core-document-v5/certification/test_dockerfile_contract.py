@@ -41,6 +41,8 @@ class DockerfileContractTests(unittest.TestCase):
         self.assertNotIn("AMBIT_CORE_DOCUMENT_V5_PUBLIC_READY", self.source)
         self.assertIn("sha256sum -c certification/source-contracts.sha256", self.source)
         self.assertIn("offline-public-artifacts.sha256", self.source)
+        self.assertIn("offline-frozen-evidence.sha256", self.source)
+        self.assertIn("find structural -type f -print", self.source)
         self.assertIn(
             "type=secret,id=ambit_capture_helper_archive,required=true",
             self.source,
@@ -68,7 +70,7 @@ class DockerfileContractTests(unittest.TestCase):
             self.assertIn(license_source, self.source)
         self.assertRegex(
             self.source,
-            r"FROM renderer_substrate AS core_document_v5[\s\S]+exit 64",
+            r"FROM structural_renderer_substrate AS core_document_v5[\s\S]+exit 64",
         )
 
 

@@ -158,6 +158,54 @@ class SourceContractTests(unittest.TestCase):
             ),
         )
 
+    def test_structural_archive_and_materializer_authority_cannot_self_promote(self) -> None:
+        self.assert_rejected(
+            "locks/structural-compatibility-input.lock.json",
+            lambda value: value["structuralRuntimeArchive"].__setitem__(
+                "sha256", f"sha256:{'0' * 64}"
+            ),
+        )
+        shutil.rmtree(self.root)
+        shutil.copytree(ROOT, self.root)
+        self.assert_rejected(
+            "locks/structural-compatibility-input.lock.json",
+            lambda value: value["atomicMaterializer"].__setitem__(
+                "publisherAuthentication", "self-attested"
+            ),
+        )
+
+    def test_frozen_evidence_manifest_cannot_substitute_the_archive(self) -> None:
+        path = self.root / "locks/offline-frozen-evidence.sha256"
+        lines = path.read_text(encoding="utf-8").splitlines()
+        lines[0] = f"{'0' * 64}  structural/core-document-v4-structural-runtime.tar"
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        self.refresh_manifest_digest("locks/offline-frozen-evidence.sha256")
+        with self.assertRaisesRegex(ValueError, "offline frozen SHA roster"):
+            verify(self.root)
+
+    def test_structural_conformance_must_preserve_explicit_open_gaps(self) -> None:
+        conformance = self.root / "locks/structural-runtime-conformance.json"
+        value = json.loads(conformance.read_text(encoding="utf-8"))
+        value["notProved"].remove("final-image-composition")
+        conformance.write_text(
+            json.dumps(value, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        self.refresh_manifest_digest("locks/structural-runtime-conformance.json")
+
+        compatibility = self.root / "locks/structural-compatibility-input.lock.json"
+        lock = json.loads(compatibility.read_text(encoding="utf-8"))
+        lock["debianCompatibilityConformance"]["sha256"] = (
+            f"sha256:{hashlib.sha256(conformance.read_bytes()).hexdigest()}"
+        )
+        compatibility.write_text(
+            json.dumps(lock, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        self.refresh_manifest_digest("locks/structural-compatibility-input.lock.json")
+        with self.assertRaisesRegex(ValueError, "open gaps"):
+            verify(self.root)
+
     def test_refreshed_manifest_cannot_authorize_unknown_nested_field(self) -> None:
         self.assert_rejected(
             "locks/pdfjs-input.lock.json",

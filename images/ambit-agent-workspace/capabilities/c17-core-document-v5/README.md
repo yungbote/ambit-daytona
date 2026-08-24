@@ -22,6 +22,16 @@ The current source tree is deliberately **unavailable**, not a runnable image:
   excluded;
 - Noto Core/Mono/CJK are selected, but their exact archive, file, fontconfig,
   source, and license rosters still have to be frozen from the signed snapshot;
+- an externally extracted, canonical raw-byte-pinned structural Python runtime
+  from the separately frozen `core-document@4` candidate is compatibility-
+  probed under the Debian base with a private ELF loader and no host-library
+  fallback. It is curated file input, not `@4` layer inheritance or authority,
+  and remains unavailable until its wheel/native source-license closure and
+  independent publisher authentication are complete;
+- the atomic materializer is accepted only through separately mounted,
+  exact-byte-pinned source and binary secrets. Its offline conformance result
+  is evidence, not publisher authority; promotion remains blocked until that
+  authority and real Daytona XFS conformance exist;
 - the proprietary `UNLICENSED` working-copy capture helper must arrive as an
   independently supplied, raw-byte-pinned and publisher-signed backend archive.
   Daytona never manufactures, fetches, or duplicates that source.
@@ -67,10 +77,11 @@ installed-engine, backend-lineage, and helper artifact remains in
 The final runtime removes apt and dpkg executables, runs as UID 1000, and
 retains actual Node/PDF.js/Canvas/Skia and supplied closure license bytes.
 
-This substrate is not `core-document@5` image authority. It deliberately lacks
-the existing `@4` structural Python/atomic-materializer composition and the
-independently admitted capture helper. The default final target exits dark even
-if someone supplies the secret.
+This substrate is not `core-document@5` image authority. It composes only the
+explicit external structural compatibility archive and separately mounted
+materializer bytes; it never inherits the `@4` image or reads its source tree at
+build time. The independently admitted capture helper is still absent. The
+default final target exits dark even if every current secret is supplied.
 
 ## Intended narrow runtime
 

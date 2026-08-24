@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+
+runtime_root=/opt/ambit/structural-runtime
+
+exec env -i \
+  HOME=/workspace \
+  LANG=C.UTF-8 \
+  LC_ALL=C.UTF-8 \
+  PATH=/usr/bin:/bin \
+  PYTHONDONTWRITEBYTECODE=1 \
+  PYTHONHASHSEED=0 \
+  PYTHONHOME="${runtime_root}" \
+  PYTHONNOUSERSITE=1 \
+  PYTHONSAFEPATH=1 \
+  TZ=UTC \
+  "${runtime_root}/lib/ld-linux-x86-64.so.2" \
+  --inhibit-cache \
+  --library-path "${runtime_root}/lib" \
+  "${runtime_root}/bin/python3.14" \
+  "$@"

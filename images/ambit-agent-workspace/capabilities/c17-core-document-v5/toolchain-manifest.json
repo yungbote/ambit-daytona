@@ -13,6 +13,7 @@
   "nodeInputLock": "locks/node-input.lock.json",
   "canvasInputLock": "locks/canvas-input.lock.json",
   "offlineBuildInputLock": "locks/offline-build-input.lock.json",
+  "structuralCompatibilityInputLock": "locks/structural-compatibility-input.lock.json",
   "captureHelperInputLock": "locks/capture-helper-input.lock.json",
   "libreOffice": {
     "package": "libreoffice-writer-nogui",
@@ -51,6 +52,13 @@
       "exact-font-manifest-lock"
     ]
   },
+  "structuralCompatibility": {
+    "state": "unavailable",
+    "runtimeArchive": "pinned-reproducible-private-elf-runtime",
+    "documentConformance": "passed-offline-debian-nonroot",
+    "atomicMaterializerConformance": "passed-offline-debian-tmpfs",
+    "composition": "external-curated-files-not-core-document-v4-layer"
+  },
   "runtime": {
     "user": "daytona",
     "uid": 1000,
@@ -64,6 +72,9 @@
     "capture-helper-external-authority-unavailable",
     "debian-binary-source-and-license-closure-unfrozen",
     "font-file-fontconfig-and-license-rosters-unfrozen",
+    "structural-wheel-native-source-and-license-closure-incomplete",
+    "atomic-materializer-publisher-authentication-unavailable",
+    "real-daytona-xfs-structural-conformance-unavailable",
     "node-release-dynamic-license-and-vulnerability-evidence-incomplete",
     "pdfjs-canvas-native-source-license-and-vulnerability-evidence-incomplete",
     "per-page-pixel-conformance-unproved",

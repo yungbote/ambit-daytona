@@ -63,7 +63,35 @@
   ],
   "publicArtifactSha256Manifest": "offline-public-artifacts.sha256",
   "publicArtifactByteManifest": "offline-public-artifacts.bytes",
-  "frozenEvidence": [],
+  "frozenEvidenceSha256Manifest": "offline-frozen-evidence.sha256",
+  "frozenEvidenceByteManifest": "offline-frozen-evidence.bytes",
+  "frozenEvidence": [
+    {
+      "path": "structural/core-document-v4-structural-runtime.tar",
+      "bytes": 68464640,
+      "sha256": "sha256:89f4f0fdcb0376e5079922a3bfb6dcc3a0262ab5a0e2449813f2b658ea94641c"
+    },
+    {
+      "path": "structural/conformance/artifact-receipt.json",
+      "bytes": 2609,
+      "sha256": "sha256:0386b60eaf89dc4ce94dd1900082703ee8c15d83006b3843159d3c2ae11376b7"
+    },
+    {
+      "path": "structural/conformance/artifact_conformance.py",
+      "bytes": 20297,
+      "sha256": "sha256:8a8610e13ad11cff0b0953a66731eb65a088688efae8129477fccc4f325e98fe"
+    },
+    {
+      "path": "structural/conformance/materializer-receipt.json",
+      "bytes": 2101,
+      "sha256": "sha256:b704260254fdeb936d995ca8ba8e52a1658e422fad792ce47b5afd7a54805d0a"
+    },
+    {
+      "path": "structural/conformance/materializer_conformance.py",
+      "bytes": 30016,
+      "sha256": "sha256:b831597c8230810ed87a7eb4f871f281adfdb4bf04c6597e29bad702e13be0d5"
+    }
+  ],
   "requiredUnfrozenEvidence": [
     "canvas/complete-native-source-license.lock.json",
     "debian/copyright-files.sha256",
@@ -74,8 +102,23 @@
     "fonts/font-license-inventory.json",
     "fonts/fontconfig-roster.json",
     "lineage/installed-render-engine-lineage.json",
-    "node/release-keyring-verification.json"
+    "materializer/publisher-authentication.json",
+    "node/release-keyring-verification.json",
+    "structural/daytona-xfs-conformance.json",
+    "structural/native-source-license.lock.json",
+    "structural/original-wheel-archives.sha256"
   ],
+  "atomicMaterializer": {
+    "state": "unavailable",
+    "sourceArchiveSecretId": "ambit_atomic_materializer_source_archive",
+    "sourceArchiveBytes": 184320,
+    "sourceArchiveSha256": "sha256:af8db17dc5d7b2266444efc4911661659fdaf23035b7dde0172f29d9e55374ca",
+    "binarySecretId": "ambit_atomic_materializer_binary",
+    "binaryBytes": 2568340,
+    "binarySha256": "sha256:8d4405a1bd8f5d9d65be0860e52cab75cc9b7f5f659e510b4932347e0c6008e5",
+    "includedInNamedContext": false,
+    "publisherAuthentication": "unavailable"
+  },
   "proprietaryHelper": {
     "transport": "required-buildkit-secret",
     "secretId": "ambit_capture_helper_archive",
@@ -89,10 +132,12 @@
   "missing": [
     "exact-debian-runtime-binary-source-license-closure",
     "exact-font-file-fontconfig-license-rosters",
-    "exact-pdfjs-retained-file-roster",
     "verified-node-release-keyring-and-runtime-closure",
     "complete-canvas-skia-cargo-source-license-vulnerability-closure",
     "root-owned-installed-engine-lineage",
+    "structural-wheel-and-native-source-license-closure",
+    "publisher-authenticated-atomic-materializer",
+    "real-daytona-xfs-structural-materializer-conformance",
     "independently-anchored-backend-capture-helper"
   ]
 }
