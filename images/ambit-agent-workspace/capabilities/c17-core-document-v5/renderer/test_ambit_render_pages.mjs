@@ -5,6 +5,7 @@ import test from 'node:test'
 import { deflateSync } from 'node:zlib'
 
 import {
+  admitExactRenderEvidence,
   admitRenderExecutionLineage,
   admitPngPageEvidence,
   admitRenderPolicy,
@@ -250,6 +251,59 @@ test('rejects reordered pages and substituted engine lineage', () => {
       }),
     /not canonical or exact/,
   )
+})
+
+test('shares exact source, PDF, page, and aggregate evidence bounds', () => {
+  const page = admitPngPageEvidence(
+    { index: 0, number: 1, width: 10, height: 20, pixels: 200 },
+    testPng(10, 20),
+  )
+  const base = {
+    sourceDocument: {
+      format: 'docx',
+      sha256: `sha256:${'1'.repeat(64)}`,
+      bytes: policy.input.maximumBytes,
+    },
+    intermediatePdfBytes: policy.libreOffice.maximumPdfBytes,
+    pages: [page],
+    policy,
+  }
+  const admitted = admitExactRenderEvidence(base)
+  assert.equal(admitted.pages[0].pixels, 200)
+  assert.equal(admitted.pageCount, 1)
+
+  assert.throws(
+    () =>
+      admitExactRenderEvidence({
+        ...base,
+        sourceDocument: {
+          ...base.sourceDocument,
+          bytes: policy.input.maximumBytes + 1,
+        },
+      }),
+    /source or intermediate PDF exceeds/,
+  )
+  assert.throws(
+    () =>
+      admitExactRenderEvidence({
+        ...base,
+        intermediatePdfBytes: policy.libreOffice.maximumPdfBytes + 1,
+      }),
+    /source or intermediate PDF exceeds/,
+  )
+  for (const mutation of [
+    { ...page, pixels: page.pixels + 1 },
+    { ...page, number: 2 },
+    { ...page, filename: '../page-0001.png' },
+    { ...page, width: policy.pages.maximumWidthPixels + 1 },
+    { ...page, height: policy.pages.maximumHeightPixels + 1 },
+    { ...page, bytes: policy.pages.maximumBytesPerPage + 1 },
+  ]) {
+    assert.throws(
+      () => admitExactRenderEvidence({ ...base, pages: [mutation] }),
+      /page order or identity, dimensions, or bounds/,
+    )
+  }
 })
 
 test('binds opaque backend-lineage substitutions into execution identity', () => {

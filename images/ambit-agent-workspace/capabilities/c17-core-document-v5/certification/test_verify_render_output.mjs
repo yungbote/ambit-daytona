@@ -142,3 +142,23 @@ test('rejects substituted page bytes and extra output files', async () => {
     await rm(extraOutput, { recursive: true, force: true })
   }
 })
+
+test('admits manifest filenames and evidence before any path lookup', async () => {
+  const output = await fixture()
+  const escaped = join(dirname(output), 'escaped.png')
+  try {
+    const manifestPath = join(output, 'render-manifest.json')
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+    manifest.pages[0].filename = '../escaped.png'
+    await chmod(manifestPath, 0o644)
+    await writeFile(manifestPath, `${canonicalJson(manifest)}\n`)
+    await chmod(manifestPath, 0o444)
+    await assert.rejects(
+      verifyRenderOutput({ packRoot: PACK_ROOT, output }),
+      /page order or identity, dimensions, or bounds/,
+    )
+    await assert.rejects(readFile(escaped), /ENOENT/)
+  } finally {
+    await rm(output, { recursive: true, force: true })
+  }
+})
