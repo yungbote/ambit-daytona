@@ -209,7 +209,7 @@ def verify(root: Path) -> dict[str, object]:
     )
     _require(
         isinstance(promotion["requiredBeforePromotion"], list)
-        and len(promotion["requiredBeforePromotion"]) == 6,
+        and len(promotion["requiredBeforePromotion"]) == 7,
         "promotion gate roster is incomplete",
     )
 
@@ -249,6 +249,7 @@ def verify(root: Path) -> dict[str, object]:
         "USER 1000:1000",
         'io.ambit.runtime-base="ambit.runtime-base/debian-core@1"',
         'io.ambit.runtime-pack="ambit.runtime-pack/core@1"',
+        'io.ambit.source-identity-meaning="bound-claim-external-git-admission-required"',
         "/opt/ambit/runtime-pack/core-document/bin/ambit-atomic-materialize",
         "/etc/apt /etc/dpkg",
     )

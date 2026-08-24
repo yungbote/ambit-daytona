@@ -31,9 +31,9 @@ COPY locks/materializer-input.lock.json /inputs/materializer-input.lock.json
 COPY --from=materializer_inputs /ambit-atomic-materialize /inputs/ambit-atomic-materialize
 COPY --from=materializer_inputs /backend-atomic-materializer-source.tar /inputs/backend-atomic-materializer-source.tar
 RUN --network=none set -eu; \
-    printf '%s\\n' "${BUILD_SOURCE_REVISION}" | grep -Eq '^[0-9a-f]{40}$'; \
-    printf '%s\\n' "${BUILD_SOURCE_TREE}" | grep -Eq '^[0-9a-f]{40}$'; \
-    printf '%s\\n' "${BUILD_SOURCE_SUBTREE}" | grep -Eq '^[0-9a-f]{40}$'; \
+    printf '%s\n' "${BUILD_SOURCE_REVISION}" | grep -Eq '^[0-9a-f]{40}$'; \
+    printf '%s\n' "${BUILD_SOURCE_TREE}" | grep -Eq '^[0-9a-f]{40}$'; \
+    printf '%s\n' "${BUILD_SOURCE_SUBTREE}" | grep -Eq '^[0-9a-f]{40}$'; \
     case "${SOURCE_DATE_EPOCH}" in ''|*[!0-9]*|0) exit 44 ;; esac; \
     for digest in \
       "${BUILD_SOURCE_ARCHIVE_SHA256}" \
@@ -41,7 +41,7 @@ RUN --network=none set -eu; \
       "${BUILD_SOURCE_FILES_SHA256}" \
       "${BUILD_SOURCE_MODES_SHA256}" \
       "${BUILD_SOURCE_IDENTITY_SHA256}"; do \
-      printf '%s\\n' "${digest}" | grep -Eq '^sha256:[0-9a-f]{64}$'; \
+      printf '%s\n' "${digest}" | grep -Eq '^sha256:[0-9a-f]{64}$'; \
     done; \
     test "$(find /source-identity -maxdepth 1 -type f | wc -l)" = 4; \
     test -z "$(find /source-identity -mindepth 1 ! -type f -print -quit)"; \
@@ -162,6 +162,7 @@ LABEL org.opencontainers.image.title="ambit-c16b-core-base" \
       io.ambit.source-files-sha256="${BUILD_SOURCE_FILES_SHA256}" \
       io.ambit.source-modes-sha256="${BUILD_SOURCE_MODES_SHA256}" \
       io.ambit.source-identity-sha256="${BUILD_SOURCE_IDENTITY_SHA256}" \
+      io.ambit.source-identity-meaning="bound-claim-external-git-admission-required" \
       io.ambit.runtime-base="ambit.runtime-base/debian-core@1" \
       io.ambit.runtime-pack="ambit.runtime-pack/core@1" \
       io.ambit.runtime-pack-authority="candidate-only" \
