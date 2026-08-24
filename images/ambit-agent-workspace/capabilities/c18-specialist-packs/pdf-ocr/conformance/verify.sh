@@ -16,9 +16,9 @@ chmod 0700 "${XDG_RUNTIME_DIR}"
 python3 "${pack_root}/conformance/verify.py" generate "${output_root}/fixtures"
 unpaper --overwrite "${output_root}/fixtures/scan.pgm" "${output_root}/checks/cleaned.pgm" \
   >/dev/null 2>&1
-tesseract "${output_root}/checks/cleaned.pgm" stdout --psm 6 \
+tesseract "${output_root}/checks/cleaned.pgm" stdout --psm 3 \
   > "${output_root}/checks/ocr.txt" 2>/dev/null
-tesseract "${output_root}/checks/cleaned.pgm" "${output_root}/checks/ocr" pdf --psm 6 \
+tesseract "${output_root}/checks/cleaned.pgm" "${output_root}/checks/ocr" pdf --psm 3 \
   >/dev/null 2>&1
 
 for pdf in "${output_root}"/fixtures/*.pdf; do
