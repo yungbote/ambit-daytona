@@ -5,12 +5,28 @@
     "status": "pending-equality-deleting-successor-contract"
   },
   "coreParent": {
-    "configDigest": null,
-    "orderedLayers": [],
+    "configDigest": "sha256:3e609a4df9b53cc4022d70a73d342d387e3bd06bdfa43ad3443f17d8dcfddcbe",
+    "orderedLayers": [
+      {
+        "digest": "sha256:a32e473fab3e33bc66148a3e0734b5ad33dbeaf4ef4ef1c92b035de4ac6aeeea",
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "size": 28248810
+      },
+      {
+        "digest": "sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1",
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "size": 32
+      },
+      {
+        "digest": "sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1",
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+        "size": 32
+      }
+    ],
     "platform": "linux/amd64",
-    "platformManifestDigest": null,
-    "sourceIdentitySha256": null,
-    "status": "pending-qualified-core-replacement"
+    "platformManifestDigest": "sha256:ebedd4a1dbca59499468595db8f3aba140234eeb2b2fdcd4fcc0c8f99a5dda94",
+    "sourceIdentitySha256": "sha256:4f36259ba173bcae67c80c6b4d3178890cad02198f7e2ca6831c13a9ca0ee835",
+    "status": "qualified-local-candidate"
   },
   "finalRuntime": {
     "forbiddenInstallerCommands": [

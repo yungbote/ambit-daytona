@@ -19,7 +19,7 @@ class CoreBaselineSourceTests(unittest.TestCase):
         self.assertFalse(receipt["historicalCoreDocumentReusable"])
         self.assertFalse(receipt["promotionPerformed"])
         self.assertFalse(receipt["backendCompositionContractFrozen"])
-        self.assertFalse(receipt["descendantUnionOverlayContractFrozen"])
+        self.assertTrue(receipt["descendantUnionOverlayContractFrozen"])
 
     def test_rejects_document_capability_smuggled_into_core(self) -> None:
         with self._copy() as root:
