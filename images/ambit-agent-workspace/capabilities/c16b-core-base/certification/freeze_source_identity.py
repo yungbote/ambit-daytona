@@ -16,7 +16,7 @@ SOURCE_PATH = "images/ambit-agent-workspace/capabilities/c16b-core-base"
 
 
 class SourceIdentityError(ValueError):
-    """The Git source cannot become an exact frontend authority."""
+    """The Git source cannot become an exact frontend byte-binding context."""
 
 
 def sha256(data: bytes) -> str:
