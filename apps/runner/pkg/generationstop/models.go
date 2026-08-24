@@ -83,9 +83,8 @@ type ExpectedGeneration struct {
 }
 
 // StopRequest is the full authority captured before any container effect.
-// RequestFingerprint is an upstream domain idempotency authority.  The runner
-// validates its shape but does not attempt to recompute a second authority
-// from the narrower provider-visible fields.
+// RequestFingerprint is the frozen cross-layer idempotency authority and must
+// equal ComputeRequestFingerprint for these exact fields and purpose variant.
 type StopRequest struct {
 	OperationID        string             `json:"operationId"`
 	RequestFingerprint string             `json:"requestFingerprint"`
