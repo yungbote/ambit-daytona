@@ -10,6 +10,9 @@ ad8c291675f38ec1e96a509391860a634619dcc114371fcb5d3028466273bec6  debian/dirmngr
 09794b188e042c90b4a89fcb5afeb276bc231b74ddf8a3efbbc7dfb6f0eac4cb  debian/fontconfig_2.15.0-2.3_amd64.deb
 86635b3d25b3655fc11cb3ecc3af59f0bf19643b02b94f2de48bd10253cdba12  debian/fonts-dejavu-core_2.37-8_all.deb
 3003e98a5debfdeadc7040a7f715fe9fe6fb67f68deacf6049b54e30f07fc014  debian/fonts-dejavu-mono_2.37-8_all.deb
+f5dc28a754e17327d99f0a612134d92c8dd6187314ae967cb77f25df60860139  debian/fonts-noto-cjk_1%3a20240730+repack1-1_all.deb
+97978d09b68445fcf85342b106cd2e812d7813e3d5626f9884a5f344c3a55973  debian/fonts-noto-core_20201225-2_all.deb
+7636f002caeb4a4082f69e2d9b8eb89da6c50b9c67f55db84e68638049b06006  debian/fonts-noto-mono_20201225-2_all.deb
 9bf3b5927d2bcec59482b7a0aaf2e6c60fffeeecb47939fc5bfd18a8f815a5a0  debian/fonts-opensymbol_4%3a102.12+LibO25.2.3-2+deb13u6_all.deb
 65c0b5b06123f81f08cfa9b0be313cbc9cf6255c550d70eabd8b175ce8928a35  debian/gnupg-l10n_2.4.7-21+deb13u1_all.deb
 e68f0fd24a7a62f1112ae3e442564e134f21040492f11d1aefa7b18de93ebf6e  debian/gnupg_2.4.7-21+deb13u1_all.deb
@@ -162,6 +165,7 @@ c8e5a745ca3afaa079b01e0c00d80a241101d1ab840407fcd4bb423de3326160  debian/libxslt
 3aab45838e94a6bd3e78a9ec6adf53e5235ccc3bc6739329b89c7edcef94d8f5  debian/libzmf-0.0-0_0.0.2-1+b9_amd64.deb
 7b7cfa06f02436b628e8c8a561d6bcf33debeaf25ff30bf48e761600e475282d  debian/libzxcvbn0_2.5+dfsg-2+b2_amd64.deb
 aed82cd9cc92b8a37f1332f951737f549595a3126aa609e632f9205d95405efc  debian/pinentry-curses_1.3.1-2_amd64.deb
+7b5bb3607e7fa078e002420d4e5129d7b83c5684ca6f88d229a40af3e76a7b02  debian/poppler-utils_25.03.0-5+deb13u4_amd64.deb
 4db90bb6776772fc52585d6b1fbfc52ec2a85480e1b4363b743fbb2ffa2a5375  debian/procps_2%3a4.0.4-9_amd64.deb
 f77e8aa0bf0de618f11cb0b21658a4ed60f177d63b3cf26d7fc3706b6d0eaaa9  debian/readline-common_8.2-6_all.deb
 873a9b73c3478cc3148cdbf5cc2084949a0a8e4fa16131d1cbc895d2f1f3470e  debian/sensible-utils_0.0.25_all.deb

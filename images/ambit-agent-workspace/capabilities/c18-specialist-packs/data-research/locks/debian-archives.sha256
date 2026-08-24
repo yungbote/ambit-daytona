@@ -2,6 +2,10 @@
 09794b188e042c90b4a89fcb5afeb276bc231b74ddf8a3efbbc7dfb6f0eac4cb  debian/fontconfig_2.15.0-2.3_amd64.deb
 86635b3d25b3655fc11cb3ecc3af59f0bf19643b02b94f2de48bd10253cdba12  debian/fonts-dejavu-core_2.37-8_all.deb
 3003e98a5debfdeadc7040a7f715fe9fe6fb67f68deacf6049b54e30f07fc014  debian/fonts-dejavu-mono_2.37-8_all.deb
+f5dc28a754e17327d99f0a612134d92c8dd6187314ae967cb77f25df60860139  debian/fonts-noto-cjk_1%3a20240730+repack1-1_all.deb
+97978d09b68445fcf85342b106cd2e812d7813e3d5626f9884a5f344c3a55973  debian/fonts-noto-core_20201225-2_all.deb
+7636f002caeb4a4082f69e2d9b8eb89da6c50b9c67f55db84e68638049b06006  debian/fonts-noto-mono_20201225-2_all.deb
+9bf3b5927d2bcec59482b7a0aaf2e6c60fffeeecb47939fc5bfd18a8f815a5a0  debian/fonts-opensymbol_4%3a102.12+LibO25.2.3-2+deb13u6_all.deb
 21cb13d6e9b514edde8d8a8efee9e3b350bb1c9d9c87ab60b4592ff69f23e625  debian/graphviz_2.42.4-3_amd64.deb
 78c6d7692890990a27cb1d5bbd95b7bfe47a4183ffafec5b30f689f9b58ec6f7  debian/libabsl20240722_20240722.0-4_amd64.deb
 13c419c0daec7733adaa92efeb24b6cf52c9e7722e2cfe81f2b1a9464e4fc94c  debian/libann0_1.1.2+doc-9+b1_amd64.deb

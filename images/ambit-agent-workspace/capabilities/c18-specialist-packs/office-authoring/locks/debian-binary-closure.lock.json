@@ -1,5 +1,5 @@
 {
-  "archiveCount": 170,
+  "archiveCount": 174,
   "archives": [
     {
       "architecture": "all",
@@ -168,6 +168,48 @@
         }
       ],
       "version": "2.37-8"
+    },
+    {
+      "architecture": "all",
+      "bytes": 56674044,
+      "localFilename": "fonts-noto-cjk_1%3a20240730+repack1-1_all.deb",
+      "package": "fonts-noto-cjk",
+      "sha256": "sha256:f5dc28a754e17327d99f0a612134d92c8dd6187314ae967cb77f25df60860139",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/f/fonts-noto-cjk/fonts-noto-cjk_20240730+repack1-1_all.deb"
+        }
+      ],
+      "version": "1:20240730+repack1-1"
+    },
+    {
+      "architecture": "all",
+      "bytes": 12188336,
+      "localFilename": "fonts-noto-core_20201225-2_all.deb",
+      "package": "fonts-noto-core",
+      "sha256": "sha256:97978d09b68445fcf85342b106cd2e812d7813e3d5626f9884a5f344c3a55973",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/f/fonts-noto/fonts-noto-core_20201225-2_all.deb"
+        }
+      ],
+      "version": "20201225-2"
+    },
+    {
+      "architecture": "all",
+      "bytes": 397580,
+      "localFilename": "fonts-noto-mono_20201225-2_all.deb",
+      "package": "fonts-noto-mono",
+      "sha256": "sha256:7636f002caeb4a4082f69e2d9b8eb89da6c50b9c67f55db84e68638049b06006",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/f/fonts-noto/fonts-noto-mono_20201225-2_all.deb"
+        }
+      ],
+      "version": "20201225-2"
     },
     {
       "architecture": "all",
@@ -2355,6 +2397,20 @@
     },
     {
       "architecture": "amd64",
+      "bytes": 213460,
+      "localFilename": "poppler-utils_25.03.0-5+deb13u4_amd64.deb",
+      "package": "poppler-utils",
+      "sha256": "sha256:7b5bb3607e7fa078e002420d4e5129d7b83c5684ca6f88d229a40af3e76a7b02",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/p/poppler/poppler-utils_25.03.0-5+deb13u4_amd64.deb"
+        }
+      ],
+      "version": "25.03.0-5+deb13u4"
+    },
+    {
+      "architecture": "amd64",
       "bytes": 882088,
       "localFilename": "procps_2%3a4.0.4-9_amd64.deb",
       "package": "procps",
@@ -2440,14 +2496,18 @@
   ],
   "baseImage": "docker.io/library/python@sha256:d6e0850f13fda0e2305d4c3c1c2f7930fe1042d34ddd958e49bba6ef685d0bb2",
   "installedClosure": {
-    "entryCount": 252,
-    "sha256": "sha256:cd2f0547e50861b258c1d251b4afaa916f902859477866c5f4c810516eae0c26"
+    "entryCount": 256,
+    "sha256": "sha256:a5d94749d2f1589c7e18ce941423e8bcb2d2311577f014069f613775e8f9e52f"
   },
   "packRef": "ambit.runtime-pack/office-authoring@1",
   "platform": "linux/amd64",
   "requestedPackages": [
+    "fonts-noto-cjk=1:20240730+repack1-1",
+    "fonts-noto-core=20201225-2",
+    "fonts-noto-mono=20201225-2",
     "libreoffice-calc-nogui=4:25.2.3-2+deb13u6",
-    "libreoffice-impress-nogui=4:25.2.3-2+deb13u6"
+    "libreoffice-impress-nogui=4:25.2.3-2+deb13u6",
+    "poppler-utils=25.03.0-5+deb13u4"
   ],
   "resolution": {
     "installRecommends": false,
@@ -2472,5 +2532,5 @@
       "url": "https://snapshot.debian.org/archive/debian-security/20260802T121235Z/"
     }
   },
-  "transitiveGraphDigest": "sha256:c355889b3bd30b84982fbf1bd0dc700d9b2b9bada40e9f353ed2407aa0611e40"
+  "transitiveGraphDigest": "sha256:612e185eb78831f88deaa77c22f1ee5ed7bb5718d746c98614b939e1c4a8c921"
 }
