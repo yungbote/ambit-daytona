@@ -52,7 +52,7 @@ def create_scan(path: Path) -> None:
     draw = ImageDraw.Draw(image)
     font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 64)
     small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 42)
-    draw.text((70, 55), "AMB1T OCR 2026", font=font, fill=0)
+    draw.text((70, 55), "AMBIT OCR 2026", font=font, fill=0)
     draw.rectangle((70, 180, 1320, 430), outline=0, width=4)
     for x in (470, 870):
         draw.line((x, 180, x, 430), fill=0, width=3)
@@ -85,7 +85,7 @@ def generate(output: Path) -> None:
         {
             "schema": "ambit.c18-pdf-ocr-fixture-manifest/v1",
             "packRef": PACK_REF,
-            "expectedOcrText": ["AMB1T OCR 2026", "North", "120", "130"],
+            "expectedOcrText": ["AMBIT OCR 2026", "North", "120", "130"],
             "redactedMarker": SECRET_MARKER,
             "files": file_receipts(output),
         },
@@ -103,10 +103,10 @@ def finalize(output: Path) -> None:
     assert SECRET_MARKER not in edited_text
     assert "Sensitive content removed" in redacted_text
     ocr_text = (checks / "ocr.txt").read_text(encoding="utf-8")
-    for expected in ("AMB1T OCR 2026", "North", "120", "130"):
+    for expected in ("AMBIT OCR 2026", "North", "120", "130"):
         assert expected in ocr_text, expected
     ocr_pdf_text = (checks / "ocr-pdf.txt").read_text(encoding="utf-8")
-    assert "AMB1T OCR 2026" in ocr_pdf_text
+    assert "AMBIT OCR 2026" in ocr_pdf_text
 
     redacted_page = Image.open(checks / "redacted-1.png").convert("RGB")
     edited_page = Image.open(checks / "metadata-edited-1.png").convert("RGB")
