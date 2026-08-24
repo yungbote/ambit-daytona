@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 
@@ -90,4 +93,70 @@ test('subreaper retains and reaps descendants after their leader exits', async (
     ...OUTPUT_LIMITS,
   })
   assert.equal(result.stdout.toString(), 'leader-exited')
+})
+
+test('subreaper repeatedly kills adopted setsid late-fork descendants', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ambit-subreaper-hostile-'))
+  const roster = join(root, 'pids')
+  const source = [
+    'import os, signal, sys, time',
+    'roster = sys.argv[1]',
+    'worker = os.fork()',
+    'if worker == 0:',
+    '  os.setsid()',
+    '  signal.signal(signal.SIGTERM, signal.SIG_IGN)',
+    '  while True:',
+    '    child = os.fork()',
+    '    if child == 0:',
+    '      signal.signal(signal.SIGTERM, signal.SIG_IGN)',
+    "      with open(roster, 'a', encoding='ascii') as stream: stream.write(f'{os.getpid()}\\n')",
+    '      time.sleep(30)',
+    '      os._exit(0)',
+    "    with open(roster, 'a', encoding='ascii') as stream: stream.write(f'{child}\\n')",
+    '    time.sleep(0.002)',
+    'time.sleep(30)',
+  ].join('\n')
+  const controller = new AbortController()
+  try {
+    const running = executeBoundedProcessGroup({
+      executable: '/usr/bin/python3',
+      arguments: [SUBREAPER, '/usr/bin/python3', '-c', source, roster],
+      cwd: root,
+      env: { PATH: '/usr/bin:/bin' },
+      maximumWallMilliseconds: 5_000,
+      ...OUTPUT_LIMITS,
+      signal: controller.signal,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    controller.abort(new Error('hostile setsid cancellation'))
+    await assert.rejects(running, /hostile setsid cancellation/)
+    const pids = [
+      ...new Set(
+        (await readFile(roster, 'ascii'))
+          .trim()
+          .split('\n')
+          .map(Number),
+      ),
+    ]
+    assert.ok(pids.length >= 5)
+    const survivors = pids.filter((pid) => {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch (error) {
+        if (error?.code === 'ESRCH') return false
+        throw error
+      }
+    })
+    for (const pid of survivors) {
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch (error) {
+        if (error?.code !== 'ESRCH') throw error
+      }
+    }
+    assert.deepEqual(survivors, [])
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })

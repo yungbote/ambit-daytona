@@ -513,11 +513,28 @@ def _verify_candidate_evidence(
         "maximumTerminalWriteMilliseconds",
         "maximumCleanupMilliseconds",
         "all-render-process-groups-settled-and-private-roots-removed",
+        "removePrivateMountContents",
+        "mount.handle.sync()",
     ):
         if required not in render_document_source:
             raise ValueError(f"whole-pipeline render control is absent: {required}")
     if "renderPagesToDirectory({" in render_document_source:
         raise ValueError("PDF.js/native rendering is not process-group isolated")
+    pdfjs_renderer_source = (
+        root / "renderer/pdfjs-page-renderer.mjs"
+    ).read_text(encoding="utf-8")
+    if (
+        "pdfBytes.byteLength > admittedPolicy.libreOffice.maximumPdfBytes"
+        not in pdfjs_renderer_source
+        or "pdfBytes.byteLength > admittedPolicy.input.maximumBytes"
+        in pdfjs_renderer_source
+    ):
+        raise ValueError("PDF.js renderer does not enforce the intermediate PDF bound")
+    subreaper_source = (
+        root / "renderer/process-group-subreaper.py"
+    ).read_text(encoding="utf-8")
+    if "if forced:\n            for pid in members:" not in subreaper_source:
+        raise ValueError("subreaper does not repeatedly kill late adopted descendants")
     protocol_source = (root / "renderer/framed-jsonl-protocol.mjs").read_text(
         encoding="utf-8"
     )
@@ -642,6 +659,11 @@ def _verify_candidate_evidence(
         contract["cancellation"]["quiescence"],
         "all-render-process-groups-settled-and-private-roots-removed",
         "interface cancellation quiescence",
+    )
+    _expect(
+        contract["cancellation"]["privateRootCustody"],
+        "held-empty-workspace-and-cache-mount-authorities-cleaned-to-closed-empty-rosters-before-terminal",
+        "interface private-root custody",
     )
     _expect(
         contract["cancellation"]["successCommit"],

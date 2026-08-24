@@ -153,6 +153,43 @@ test('rejects an excessive document before fetching any page', async () => {
   assert.equal(destroyed, 1)
 })
 
+test('uses the PDF bound rather than the smaller DOCX transport bound', async () => {
+  let admittedBytes = 0
+  let getDocumentCalls = 0
+  const pdfjs = fakePdfjs({ pageCount: 1 })
+  const getDocument = pdfjs.getDocument
+  pdfjs.getDocument = (input) => {
+    getDocumentCalls += 1
+    admittedBytes = input.data.byteLength
+    return getDocument(input)
+  }
+  const aboveDocxBound = Buffer.allocUnsafe(policy.input.maximumBytes + 1)
+  const pages = await renderPdfBytes({
+    pdfBytes: aboveDocxBound,
+    policy,
+    pdfjs,
+    canvas: fakeCanvas(),
+    canvasPackage,
+    sink: async () => {},
+  })
+  assert.equal(pages.length, 1)
+  assert.equal(admittedBytes, policy.input.maximumBytes + 1)
+  assert.equal(getDocumentCalls, 1)
+
+  await assert.rejects(
+    renderPdfBytes({
+      pdfBytes: Buffer.allocUnsafe(policy.libreOffice.maximumPdfBytes + 1),
+      policy,
+      pdfjs,
+      canvas: fakeCanvas(),
+      canvasPackage,
+      sink: async () => {},
+    }),
+    /intermediate PDF policy/,
+  )
+  assert.equal(getDocumentCalls, 1)
+})
+
 test('streams pages sequentially and retains only immutable evidence', async () => {
   const cleanupCounts = new Map()
   let destroyed = 0
