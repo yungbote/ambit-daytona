@@ -118,6 +118,7 @@ class UnionOverlayTests(unittest.TestCase):
                 "baseInput": contract["union"]["builderBaseInput"],
                 "network": "none",
                 "offline": True,
+                "overlayBuilder": contract["union"]["overlayBuilder"],
                 "packageManagersAvailableOnlyHere": True,
             },
             "unionResolution": {
