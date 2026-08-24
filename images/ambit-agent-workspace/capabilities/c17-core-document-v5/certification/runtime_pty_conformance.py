@@ -358,7 +358,11 @@ def run_case(
         code = process.wait(30)
         if mode == "success":
             if code != 0:
-                raise ValueError(f"successful PTY render exited {code}")
+                kinds = [decode_frame(raw).get("kind") for raw in lines]
+                raise ValueError(
+                    f"successful PTY render exited {code}; frames={kinds}; "
+                    f"pending={bytes(process.pending)!r}"
+                )
             validate_success(lines, nonce)
         elif mode == "cancel":
             frames = [decode_frame(raw) for raw in lines]

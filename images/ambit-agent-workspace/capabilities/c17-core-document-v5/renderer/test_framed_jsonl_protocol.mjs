@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { Readable } from 'node:stream'
+import { PassThrough, Readable } from 'node:stream'
 import test from 'node:test'
 
 import {
@@ -9,6 +9,7 @@ import {
   FRAMED_JSONL_SCHEMA,
   RAW_CHUNK_BYTES,
   readRenderRequest,
+  RenderControlAdmissionClosed,
   RenderRequestCollector,
   RenderProtocolCancellation,
 } from './framed-jsonl-protocol.mjs'
@@ -157,4 +158,14 @@ test('rejects normalized-but-nonidentical UTF-8 bytes for every inbound kind', (
       )
     }
   }
+})
+
+test('preserves the success-commit close reason across iterator rejection', async () => {
+  const input = new PassThrough()
+  const reader = new FramedJsonlLineReader(input)
+  const pending = reader.readLine()
+  await new Promise((resolve) => setImmediate(resolve))
+  const reason = new RenderControlAdmissionClosed()
+  reader.close(reason)
+  await assert.rejects(pending, (error) => error === reason)
 })
