@@ -41,9 +41,15 @@ class PackBundleTests(unittest.TestCase):
                 '"baseImage":"registry.test/base@sha256:' + "1" * 64 + '"}\n'
             )
             (inputs / "python/dependency.whl").write_bytes(b"wheel")
-            from pack_bundle import PACKS
+            import hashlib
+
+            (source / "fixture/locks/python-wheels.sha256").write_text(
+                f"{hashlib.sha256(b'wheel').hexdigest()}  python/dependency.whl\n"
+            )
+            from pack_bundle import INPUT_MANIFESTS, PACKS
 
             PACKS["fixture"] = "ambit.runtime-pack/fixture@1"
+            INPUT_MANIFESTS["fixture"] = ("python-wheels.sha256",)
             try:
                 artifact = root / "fixture.tar"
                 write_artifact(source, inputs, "fixture", artifact)
@@ -60,6 +66,7 @@ class PackBundleTests(unittest.TestCase):
                     verify_manifest(source, inputs, "fixture", artifact, manifest)
             finally:
                 del PACKS["fixture"]
+                del INPUT_MANIFESTS["fixture"]
 
     def test_rejects_external_symlinks(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
