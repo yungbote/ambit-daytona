@@ -9,7 +9,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -82,6 +84,34 @@ func TestPrivateObjectMinIOConditionalChecksumRangeAndDelete(t *testing.T) {
 	}
 	if _, err := storage.StatPrivateObject(ctx, key); !errors.Is(err, ErrPrivateObjectNotFound) {
 		t.Fatalf("deleted object is not absent: %v", err)
+	}
+
+	streamKey := "private/integration/stream/list/open.bin"
+	_ = storage.DeletePrivateObject(ctx, streamKey)
+	t.Cleanup(func() { _ = storage.DeletePrivateObject(context.Background(), streamKey) })
+	if err := storage.CreatePrivateObjectStream(
+		ctx,
+		streamKey,
+		strings.NewReader(string(payload)),
+		int64(len(payload)),
+		"application/octet-stream",
+		map[string]string{"sha256": canonicalTestSHA256(payload)},
+	); err != nil {
+		t.Fatalf("create streamed private object: %v", err)
+	}
+	stream, streamInfo, err := storage.OpenPrivateObject(ctx, streamKey)
+	if err != nil {
+		t.Fatalf("open streamed private object: %v", err)
+	}
+	streamed, readErr := io.ReadAll(stream)
+	closeErr := stream.Close()
+	if readErr != nil || closeErr != nil || string(streamed) != string(payload) ||
+		streamInfo.Size != int64(len(payload)) || streamInfo.UserMetadata["sha256"] != canonicalTestSHA256(payload) {
+		t.Fatalf("streamed private object differs: info=%#v read=%v close=%v", streamInfo, readErr, closeErr)
+	}
+	listed, err := storage.ListPrivateObjects(ctx, "private/integration/stream/", 8)
+	if err != nil || len(listed) != 1 || listed[0] != streamKey {
+		t.Fatalf("bounded private object list differs: %#v, %v", listed, err)
 	}
 
 	concurrentKey := "private/integration/concurrent-conditional-create.bin"
