@@ -111,7 +111,7 @@ class SourceContractTests(unittest.TestCase):
             shutil.copytree(SOURCE_ROOT, root)
             toolchain_path = root / "web-browser/locks/toolchain.lock.json"
             toolchain = json.loads(toolchain_path.read_text())
-            toolchain["sandbox"]["conformanceSeccompProfile"]["sha256"] = (
+            toolchain["sandbox"]["conformanceSeccompProfile"]["upstreamSha256"] = (
                 "sha256:" + "0" * 64
             )
             toolchain_path.write_text(json.dumps(toolchain), encoding="utf-8")
