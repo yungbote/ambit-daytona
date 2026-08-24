@@ -3,6 +3,7 @@ import { Readable } from 'node:stream'
 import test from 'node:test'
 
 import {
+  canonicalFrameLine,
   encodeRenderRequestLines,
   FramedJsonlLineReader,
   FRAMED_JSONL_SCHEMA,
@@ -110,4 +111,50 @@ test('admits cancellation only from the exact nonce-bound protocol peer', () => 
       ),
     /cancel identity is invalid/,
   )
+})
+
+test('rejects normalized-but-nonidentical UTF-8 bytes for every inbound kind', () => {
+  const request = encodeRenderRequestLines({
+    backendLineage: LINEAGE,
+    document: Buffer.from('exact document bytes'),
+    nonce: NONCE,
+  }).map((line) => line.subarray(0, -1))
+  const cancel = canonicalFrameLine({
+    schema: FRAMED_JSONL_SCHEMA,
+    kind: 'cancel',
+    nonce: NONCE,
+  }).subarray(0, -1)
+  const cases = [
+    { name: 'request_start', line: request[0], prefix: [] },
+    { name: 'document_chunk', line: request[1], prefix: [request[0]] },
+    {
+      name: 'request_end',
+      line: request[2],
+      prefix: [request[0], request[1]],
+    },
+    { name: 'cancel', line: cancel, prefix: [] },
+  ]
+  for (const { name, line, prefix } of cases) {
+    const parsed = JSON.parse(line)
+    const reversed = Buffer.from(
+      JSON.stringify(Object.fromEntries(Object.entries(parsed).reverse())),
+    )
+    const escapedSlash = Buffer.from(line.toString('utf8').replace('/', '\\/'))
+    const mutants = [
+      Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), line]),
+      Buffer.concat([Buffer.from(' '), line]),
+      Buffer.concat([line, Buffer.from(' ')]),
+      reversed,
+      escapedSlash,
+    ]
+    for (const [index, mutant] of mutants.entries()) {
+      const collector = new RenderRequestCollector(1024, NONCE)
+      for (const admitted of prefix) collector.accept(admitted)
+      assert.throws(
+        () => collector.accept(mutant),
+        /canonical JSON|not JSON/,
+        `${name} mutant ${index}`,
+      )
+    }
+  }
 })

@@ -16,6 +16,7 @@ import {
   realpath,
   rm,
   stat,
+  unlink,
 } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -23,7 +24,6 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   loadRenderPolicy,
   readRegularNoFollow,
-  renderPagesToDirectory,
 } from './ambit-render-pages.mjs'
 import { admitDocxPackage } from './docx-package-admission.mjs'
 import {
@@ -35,6 +35,7 @@ import {
   payloadChunkCount,
   RAW_CHUNK_BYTES,
   readRenderRequest,
+  RenderControlAdmissionClosed,
   RenderProtocolCancellation,
   watchRenderCancellation,
 } from './framed-jsonl-protocol.mjs'
@@ -42,6 +43,7 @@ import { executeBoundedProcessGroup } from './process-group-execution.mjs'
 import { inspectRenderOutput } from './render-output-verification.mjs'
 import { canonicalJson } from './render-contracts.mjs'
 import { CORE_DOCUMENT_V5_PACK_ROOT } from './pdfjs-page-renderer.mjs'
+import { RenderTerminalArbiter } from './render-terminal-arbiter.mjs'
 
 const STRUCTURAL_PYTHON_PATH = join(
   CORE_DOCUMENT_V5_PACK_ROOT,
@@ -49,16 +51,20 @@ const STRUCTURAL_PYTHON_PATH = join(
 )
 const LIBREOFFICE_SUBREAPER_PATH = join(
   CORE_DOCUMENT_V5_PACK_ROOT,
-  'renderer/libreoffice-subreaper.py',
+  'renderer/process-group-subreaper.py',
 )
 const LIBREOFFICE_PATH = '/usr/bin/libreoffice'
+const NODE_PATH = join(CORE_DOCUMENT_V5_PACK_ROOT, 'bin/node')
+const PAGE_RENDERER_PATH = join(
+  CORE_DOCUMENT_V5_PACK_ROOT,
+  'renderer/ambit-render-pages.mjs',
+)
 const INTERFACE_LOCK_PATH = join(
   CORE_DOCUMENT_V5_PACK_ROOT,
   'locks/document-render-interface.lock.json',
 )
 const DEFAULT_WORKSPACE_ROOT = '/workspace'
 const DEFAULT_CACHE_ROOT = '/tmp'
-const MAXIMUM_PROCESS_OUTPUT_BYTES = 64 * 1024
 const MAXIMUM_INTERFACE_LOCK_BYTES = 1024 * 1024
 const CANCELLATION_EXIT_CODE = 130
 const NONCE = /^[0-9a-f]{32}$/
@@ -216,7 +222,8 @@ export async function convertDocxToPdf({
         XDG_CONFIG_HOME: join(privateCacheRoot, 'config'),
       },
       maximumWallMilliseconds: policy.libreOffice.maximumWallMilliseconds,
-      maximumOutputBytes: MAXIMUM_PROCESS_OUTPUT_BYTES,
+      maximumStdoutBytes: policy.execution.maximumChildStdoutBytes,
+      maximumStderrBytes: policy.execution.maximumChildStderrBytes,
       signal,
     })
     const names = await readdir(convertedOutput)
@@ -239,7 +246,14 @@ export async function convertDocxToPdf({
     ) {
       throw new TypeError('LibreOffice output is not one bounded PDF document.')
     }
-    return Object.freeze({ pdfBytes, operationRoot, dispose })
+    await unlink(input)
+    return Object.freeze({
+      pdfBytes,
+      pdfPath,
+      operationRoot,
+      privateCacheRoot,
+      dispose,
+    })
   } catch (error) {
     await dispose()
     throw error
@@ -259,20 +273,89 @@ export async function renderDocumentRequest(request, options = {}) {
   try {
     const outputPath = join(converted.operationRoot, 'rendered')
     await mkdir(outputPath, { mode: 0o700 })
-    await renderPagesToDirectory({
-      pdfBytes: converted.pdfBytes,
-      outputPath,
-      backendLineage: request.backendLineage,
-      sourceDocument: {
-        format: 'docx',
-        sha256: request.documentSha256,
-        bytes: request.document.byteLength,
-      },
+    const sourceDocument = Object.freeze({
+      format: 'docx',
+      sha256: request.documentSha256,
+      bytes: request.document.byteLength,
     })
+    const childRequest = Buffer.from(
+      `${canonicalJson({
+        schema: 'ambit.runtime-pack-internal-page-render/v1',
+        backendLineage: request.backendLineage,
+        sourceDocument,
+      })}\n`,
+    )
+    await writePrivateImmutable(
+      join(converted.operationRoot, 'render-request.json'),
+      childRequest,
+    )
+    const executeRenderer =
+      options.executeRenderer ?? options.execute ?? executeBoundedProcessGroup
+    const child = await executeRenderer({
+      executable: STRUCTURAL_PYTHON_PATH,
+      arguments: [
+        LIBREOFFICE_SUBREAPER_PATH,
+        NODE_PATH,
+        PAGE_RENDERER_PATH,
+        '--internal-render-child',
+      ],
+      cwd: converted.operationRoot,
+      env: {
+        HOME: converted.privateCacheRoot,
+        LANG: 'C.UTF-8',
+        LC_ALL: 'C.UTF-8',
+        PATH: `${join(CORE_DOCUMENT_V5_PACK_ROOT, 'bin')}:/usr/bin:/bin`,
+        TMPDIR: converted.privateCacheRoot,
+        TZ: 'UTC',
+        XDG_CACHE_HOME: join(converted.privateCacheRoot, 'page-cache'),
+        XDG_CONFIG_HOME: join(converted.privateCacheRoot, 'page-config'),
+      },
+      maximumWallMilliseconds:
+        loaded.policy.execution.maximumPipelineWallMilliseconds,
+      maximumStdoutBytes: loaded.policy.execution.maximumChildStdoutBytes,
+      maximumStderrBytes: loaded.policy.execution.maximumChildStderrBytes,
+      signal: options.signal,
+    })
+    if (!Buffer.isBuffer(child.stdout) || !Buffer.isBuffer(child.stderr)) {
+      throw new TypeError('Internal page-render process receipt is unavailable.')
+    }
+    if (child.stderr.byteLength !== 0) {
+      throw new TypeError('Internal page-render process emitted stderr on success.')
+    }
+    let childReceipt
+    try {
+      childReceipt = JSON.parse(child.stdout.toString('utf8'))
+    } catch (error) {
+      throw new TypeError('Internal page-render process receipt is not JSON.', {
+        cause: error,
+      })
+    }
+    if (
+      child.stdout.byteLength === 0 ||
+      !child.stdout.equals(Buffer.from(`${canonicalJson(childReceipt)}\n`)) ||
+      childReceipt?.schema !== 'ambit.runtime-pack-internal-page-render/v1' ||
+      childReceipt?.outcome !== 'passed' ||
+      !Number.isSafeInteger(childReceipt?.manifestBytes) ||
+      childReceipt.manifestBytes <= 0 ||
+      typeof childReceipt?.manifestSha256 !== 'string' ||
+      !/^sha256:[0-9a-f]{64}$/.test(childReceipt.manifestSha256) ||
+      Object.keys(childReceipt).sort().join('\n') !==
+        ['manifestBytes', 'manifestSha256', 'outcome', 'schema']
+          .sort()
+          .join('\n')
+    ) {
+      throw new TypeError('Internal page-render process receipt is invalid.')
+    }
     const inspection = await inspectRenderOutput({
       packRoot: CORE_DOCUMENT_V5_PACK_ROOT,
       output: outputPath,
     })
+    if (
+      childReceipt.manifestBytes !== inspection.manifestBytes.byteLength ||
+      childReceipt.manifestSha256 !== sha256(inspection.manifestBytes)
+    ) {
+      throw new TypeError('Internal page-render receipt differs from sealed output.')
+    }
     return Object.freeze({
       ...inspection,
       outputPath,
@@ -284,9 +367,27 @@ export async function renderDocumentRequest(request, options = {}) {
   }
 }
 
-async function writeLine(writable, line) {
+async function writeLine(writable, line, signal) {
+  if (signal?.aborted) throw signal.reason
   await new Promise((resolve, reject) => {
-    writable.write(line, (error) => (error ? reject(error) : resolve()))
+    let settled = false
+    const finish = (error) => {
+      if (settled) return
+      settled = true
+      signal?.removeEventListener('abort', abort)
+      if (error) reject(error)
+      else resolve()
+    }
+    const abort = () => {
+      writable.destroy?.()
+      finish(signal.reason ?? new Error('Render transport write was aborted.'))
+    }
+    signal?.addEventListener('abort', abort, { once: true })
+    try {
+      writable.write(line, (error) => finish(error))
+    } catch (error) {
+      finish(error)
+    }
   })
 }
 
@@ -348,7 +449,7 @@ async function emitImmutablePageChunks({ path, page, emit, nonce, signal }) {
   }
 }
 
-export async function streamSealedResponse({
+export async function streamSealedResponseBody({
   sealed,
   nonce,
   writable,
@@ -361,7 +462,7 @@ export async function streamSealedResponse({
     const line = canonicalFrameLine(value)
     streamDigest.update(line)
     frameCount += 1
-    await writeLine(writable, line)
+    await writeLine(writable, line, signal)
   }
   for (const page of sealed.manifest.pages) {
     await emitImmutablePageChunks({
@@ -416,7 +517,12 @@ export async function streamSealedResponse({
     policy: sealed.manifest.policy,
     streamSha256: `sha256:${streamDigest.digest('hex')}`,
   })
-  await writeLine(writable, canonicalFrameLine(terminal))
+  return terminal
+}
+
+export async function streamSealedResponse(args) {
+  const terminal = await streamSealedResponseBody(args)
+  await writeLine(args.writable, canonicalFrameLine(terminal), args.signal)
   return terminal
 }
 
@@ -491,17 +597,116 @@ function signalAbortController() {
   })
 }
 
+function deadlineController(milliseconds, message) {
+  if (!Number.isSafeInteger(milliseconds) || milliseconds <= 0) {
+    throw new TypeError('Render deadline must be a positive safe integer.')
+  }
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(new Error(message)), milliseconds)
+  timer.unref?.()
+  return Object.freeze({
+    controller,
+    dispose() {
+      clearTimeout(timer)
+    },
+  })
+}
+
+function combineAbortSignals(signals) {
+  const controller = new AbortController()
+  const admitted = signals.filter((signal) => signal !== undefined)
+  const listeners = admitted.map((signal) => {
+    const abort = () => {
+      if (!controller.signal.aborted) {
+        controller.abort(signal.reason ?? new Error('Render execution was aborted.'))
+      }
+    }
+    if (signal.aborted) abort()
+    else signal.addEventListener('abort', abort, { once: true })
+    return { signal, abort }
+  })
+  return Object.freeze({
+    signal: controller.signal,
+    dispose() {
+      for (const listener of listeners) {
+        listener.signal.removeEventListener('abort', listener.abort)
+      }
+    },
+  })
+}
+
+async function awaitWithAbort(operation, signal) {
+  if (signal.aborted) throw signal.reason
+  let abort
+  const rejected = new Promise((resolve, reject) => {
+    abort = () => reject(signal.reason ?? new Error('Render operation was aborted.'))
+    signal.addEventListener('abort', abort, { once: true })
+  })
+  try {
+    return await Promise.race([Promise.resolve().then(operation), rejected])
+  } finally {
+    signal.removeEventListener('abort', abort)
+  }
+}
+
+async function disposeWithDeadline(dispose, milliseconds) {
+  const deadline = deadlineController(
+    milliseconds,
+    'Private render cleanup exceeded its deadline.',
+  )
+  try {
+    await awaitWithAbort(dispose, deadline.controller.signal)
+  } finally {
+    deadline.dispose()
+  }
+}
+
+async function writeTerminalWithDeadline({
+  writable,
+  frame,
+  milliseconds,
+  signals = [],
+}) {
+  const deadline = deadlineController(
+    milliseconds,
+    'Render terminal write exceeded its deadline.',
+  )
+  const combined = combineAbortSignals([deadline.controller.signal, ...signals])
+  try {
+    await writeLine(writable, canonicalFrameLine(frame), combined.signal)
+  } finally {
+    combined.dispose()
+    deadline.dispose()
+  }
+}
+
 async function main() {
   const { nonce } = parseArguments(process.argv.slice(2))
   const loadedPolicy = await loadRenderPolicy()
   const interfaceIdentity = await loadInterfaceIdentity()
   const signals = signalAbortController()
+  const pipelineDeadline = deadlineController(
+    loadedPolicy.policy.execution.maximumPipelineWallMilliseconds,
+    'Document render exceeded its whole-pipeline deadline.',
+  )
+  const arbiter = new RenderTerminalArbiter()
+  const external = combineAbortSignals([
+    signals.controller.signal,
+    pipelineDeadline.controller.signal,
+  ])
+  const onExternalAbort = () => {
+    arbiter.fail(
+      external.signal.reason ?? new Error('Document render was externally aborted.'),
+    )
+  }
+  if (external.signal.aborted) onExternalAbort()
+  else external.signal.addEventListener('abort', onExternalAbort, { once: true })
   const lineReader = new FramedJsonlLineReader(process.stdin)
   let sealed
   let controlWatcher
-  let finished = false
   let failure = null
   let cleanupFailure = null
+  let successTerminal = null
   try {
     await writeLine(
       process.stdout,
@@ -518,39 +723,67 @@ async function main() {
         },
         processIdentity: processIdentity(),
       }),
+      arbiter.signal,
     )
     const request = await readRenderRequest(
       lineReader,
       loadedPolicy.policy.input.maximumBytes,
       nonce,
-      signals.controller.signal,
+      arbiter.signal,
     )
-    controlWatcher = watchRenderCancellation(lineReader, nonce).catch(
-      (error) => {
-        if (!finished && !signals.controller.signal.aborted) {
-          signals.controller.abort(error)
-        }
-      },
-    )
+    controlWatcher = watchRenderCancellation(lineReader, nonce).catch((error) => {
+      if (
+        error instanceof RenderControlAdmissionClosed &&
+        ['success-committed', 'succeeded'].includes(arbiter.state)
+      ) {
+        return
+      }
+      if (error instanceof RenderProtocolCancellation) arbiter.cancel(error)
+      else arbiter.fail(error)
+    })
     sealed = await renderDocumentRequest(request, {
       loadedPolicy,
-      signal: signals.controller.signal,
+      signal: arbiter.signal,
     })
-    await streamSealedResponse({
+    successTerminal = await streamSealedResponseBody({
       sealed,
       nonce,
       writable: process.stdout,
-      signal: signals.controller.signal,
+      signal: arbiter.signal,
     })
-    finished = true
+    await disposeWithDeadline(
+      sealed.dispose,
+      loadedPolicy.policy.execution.maximumCleanupMilliseconds,
+    )
+    sealed = null
+    if (!arbiter.commitSuccess()) {
+      throw arbiter.reason ?? new Error('Render success lost terminal arbitration.')
+    }
+    lineReader.close(new RenderControlAdmissionClosed())
+    await controlWatcher
+    await writeTerminalWithDeadline({
+      writable: process.stdout,
+      frame: successTerminal,
+      milliseconds:
+        loadedPolicy.policy.execution.maximumTerminalWriteMilliseconds,
+      signals: [arbiter.signal],
+    })
+    arbiter.completeSuccess()
   } catch (error) {
     failure = error
+    if (error instanceof RenderProtocolCancellation) arbiter.cancel(error)
+    else arbiter.fail(error)
   } finally {
-    signals.dispose()
     try {
-      if (sealed) await sealed.dispose()
+      if (sealed) {
+        await disposeWithDeadline(
+          sealed.dispose,
+          loadedPolicy.policy.execution.maximumCleanupMilliseconds,
+        )
+      }
     } catch (cleanupError) {
       cleanupFailure = cleanupError
+      arbiter.fail(cleanupError)
       failure = failure
         ? new AggregateError(
             [failure, cleanupError],
@@ -559,30 +792,42 @@ async function main() {
           )
         : cleanupError
     }
-    finished = true
     lineReader.close()
     await controlWatcher
+    external.signal.removeEventListener('abort', onExternalAbort)
+    external.dispose()
+    pipelineDeadline.dispose()
+    signals.dispose()
   }
   const protocolCancellation =
     cleanupFailure === null &&
-    (failure instanceof RenderProtocolCancellation ||
-      signals.controller.signal.reason instanceof RenderProtocolCancellation)
+    arbiter.state === 'cancelled' &&
+    arbiter.reason instanceof RenderProtocolCancellation
   if (protocolCancellation) {
-    await writeLine(
-      process.stdout,
-      canonicalFrameLine({
+    try {
+      await writeTerminalWithDeadline({
+        writable: process.stdout,
+        frame: {
         schema: FRAMED_JSONL_SCHEMA,
         kind: 'cancelled',
         nonce,
         outcome: 'cancelled',
         exitCode: CANCELLATION_EXIT_CODE,
         quiescence: 'libreoffice-process-group-settled-and-private-roots-removed',
-      }),
-    )
+        },
+        milliseconds:
+          loadedPolicy.policy.execution.maximumTerminalWriteMilliseconds,
+        signals: [signals.controller.signal],
+      })
+    } catch (terminalError) {
+      arbiter.fail(terminalError)
+      throw terminalError
+    }
     process.exitCode = CANCELLATION_EXIT_CODE
     return
   }
-  if (failure) throw failure
+  if (arbiter.state === 'succeeded') return
+  throw failure ?? arbiter.reason ?? new Error('Document render failed closed.')
 }
 
 function invokedAsProgram() {
@@ -594,8 +839,7 @@ function invokedAsProgram() {
 }
 
 if (invokedAsProgram()) {
-  main().catch((error) => {
-    process.stderr.write(`core-document@5 framed render failed: ${error.message}\n`)
+  main().catch(() => {
     process.exitCode = 1
   })
 }
