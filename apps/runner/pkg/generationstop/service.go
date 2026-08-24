@@ -167,6 +167,12 @@ func (s *Service) ObserveCurrent(
 // observing the exact exited generation and publishing the same logical
 // receipt.  If the provider response is ambiguous, a replay may reissue the
 // exact idempotent stop; it can never widen the effect to another generation.
+// Two runner processes can therefore emit duplicate stop transport calls after
+// both prove the same running epoch: preventing that with a permanent claim
+// owner would make an owner crash before the effect unrecoverable. They still
+// represent one logical state transition because every call carries and
+// re-proves the same immutable container generation/fence, and all callers
+// converge on one conditional immutable receipt.
 func (s *Service) StopOnce(ctx context.Context, request StopRequest) (Receipt, error) {
 	request = cloneStopRequest(request)
 	if err := validateStopRequest(request); err != nil {
@@ -300,16 +306,16 @@ func (s *Service) RequireCurrentReceipt(
 	authority StopAuthority,
 ) (Receipt, error) {
 	expectedPurpose = clonePurpose(expectedPurpose)
-	if err := validateSource(expectedSource); err != nil {
+	if err := ValidateSource(expectedSource); err != nil {
 		return Receipt{}, err
 	}
-	if err := validateOwner(expectedOwner); err != nil {
+	if err := ValidateOwner(expectedOwner); err != nil {
 		return Receipt{}, err
 	}
 	if err := validatePurpose(expectedPurpose); err != nil {
 		return Receipt{}, err
 	}
-	if err := validateStopAuthority(authority); err != nil {
+	if err := ValidateStopAuthority(authority); err != nil {
 		return Receipt{}, err
 	}
 
@@ -479,6 +485,12 @@ func (s *Service) publishReceipt(
 			createErr,
 		)
 	}
+	if winner.TerminalGeneration != receipt.TerminalGeneration {
+		return Receipt{}, fmt.Errorf(
+			"%w: concurrent terminal observations disagree for the same claimed generation",
+			ErrConflict,
+		)
+	}
 	return winner, nil
 }
 
@@ -546,10 +558,10 @@ func validateStopRequestFields(request StopRequest) error {
 	if !canonicalUUID(request.OperationID) {
 		return invalidf("operationId must be a non-nil canonical UUID")
 	}
-	if err := validateSource(request.Source); err != nil {
+	if err := ValidateSource(request.Source); err != nil {
 		return err
 	}
-	if err := validateOwner(request.Owner); err != nil {
+	if err := ValidateOwner(request.Owner); err != nil {
 		return err
 	}
 	if !boundedRef(request.Fence.WorkspaceExecutionManifestRef, 2048) {
@@ -603,10 +615,10 @@ func ComputeRequestFingerprint(request StopRequest) (string, error) {
 }
 
 func validateGenerationObservationRequest(request GenerationObservationRequest) error {
-	if err := validateSource(request.Source); err != nil {
+	if err := ValidateSource(request.Source); err != nil {
 		return err
 	}
-	if err := validateOwner(request.Owner); err != nil {
+	if err := ValidateOwner(request.Owner); err != nil {
 		return err
 	}
 	if !boundedRef(request.Fence.WorkspaceExecutionManifestRef, 2048) {
@@ -615,7 +627,9 @@ func validateGenerationObservationRequest(request GenerationObservationRequest) 
 	return nil
 }
 
-func validateStopAuthority(authority StopAuthority) error {
+// ValidateStopAuthority validates the complete compact durable authority
+// without reading storage or requiring the sandbox to remain stopped.
+func ValidateStopAuthority(authority StopAuthority) error {
 	if !canonicalUUID(authority.OperationID) {
 		return invalidf("stop authority operationId must be a non-nil canonical UUID")
 	}
@@ -639,7 +653,8 @@ func validateStopAuthority(authority StopAuthority) error {
 	return nil
 }
 
-func validateSource(source Source) error {
+// ValidateSource validates the exact provider address without provider I/O.
+func ValidateSource(source Source) error {
 	if !boundedRef(source.ProviderResourceID, 512) ||
 		!boundedRef(source.ExpectedProfile, 128) ||
 		!boundedRef(source.ExpectedRuntimeKind, 128) {
@@ -648,7 +663,8 @@ func validateSource(source Source) error {
 	return nil
 }
 
-func validateOwner(owner Owner) error {
+// ValidateOwner validates the complete product owner without provider I/O.
+func ValidateOwner(owner Owner) error {
 	if !canonicalUUID(owner.TenantID) ||
 		!canonicalUUID(owner.UserID) ||
 		!canonicalUUID(owner.WorkspaceID) ||
@@ -658,6 +674,21 @@ func validateOwner(owner Owner) error {
 		return invalidf("owner must contain six non-nil canonical UUIDs")
 	}
 	return nil
+}
+
+// ValidateBinding is the pure syntax boundary for downstream identities that
+// carry a source, owner, and compact stopped-generation authority. Capture can
+// call RequireCurrentReceipt afterward when it needs live stopped-state proof;
+// observe/read/delete paths can validate durable identity without pretending
+// the sandbox must still be stopped.
+func ValidateBinding(source Source, owner Owner, authority StopAuthority) error {
+	if err := ValidateSource(source); err != nil {
+		return err
+	}
+	if err := ValidateOwner(owner); err != nil {
+		return err
+	}
+	return ValidateStopAuthority(authority)
 }
 
 func validatePurpose(purpose Purpose) error {
@@ -877,23 +908,15 @@ func hashHex(value string) string {
 }
 
 func strictJSON(data []byte, target any) error {
-	if !utf8.Valid(data) {
-		return errors.New("JSON is not valid UTF-8")
-	}
-	if err := rejectDuplicateJSONKeys(data); err != nil {
+	if err := DecodeExactJSON(data, target); err != nil {
 		return err
 	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return err
+	exact, err := json.Marshal(target)
+	if err != nil {
+		return fmt.Errorf("re-encode exact durable JSON: %w", err)
 	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		if err == nil {
-			return errors.New("multiple JSON values")
-		}
-		return err
+	if !bytes.Equal(data, exact) {
+		return errors.New("durable JSON is not the exact canonical contract encoding")
 	}
 	return nil
 }

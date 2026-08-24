@@ -59,6 +59,10 @@ func canonicalJSON(value any) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return canonicalizeRawJSON(raw)
+}
+
+func canonicalizeRawJSON(raw []byte) ([]byte, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	var tree any
@@ -73,6 +77,108 @@ func canonicalJSON(value any) ([]byte, error) {
 		return nil, err
 	}
 	return output.Bytes(), nil
+}
+
+// DecodeExactJSON decodes an external JSON envelope while enforcing the exact
+// declared nested schema. It rejects invalid UTF-8, duplicate keys at any
+// depth, unknown or case-aliased keys, missing required zero-valued fields,
+// explicit nulls for omitted variant fields, and trailing values. Object key
+// order and insignificant whitespace remain wire-irrelevant.
+func DecodeExactJSON(data []byte, target any) error {
+	if !utf8.Valid(data) {
+		return fmt.Errorf("JSON is not valid UTF-8")
+	}
+	if err := rejectUnpairedSurrogateEscapes(data); err != nil {
+		return err
+	}
+	if err := rejectDuplicateJSONKeys(data); err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if err := ensureJSONEOF(decoder); err != nil {
+		return err
+	}
+	actual, err := canonicalizeRawJSON(data)
+	if err != nil {
+		return err
+	}
+	expected, err := canonicalJSON(target)
+	if err != nil {
+		return fmt.Errorf("re-encode exact JSON contract: %w", err)
+	}
+	if !bytes.Equal(actual, expected) {
+		return fmt.Errorf("JSON does not match the exact declared nested contract")
+	}
+	return nil
+}
+
+// rejectUnpairedSurrogateEscapes closes encoding/json's deliberate replacement
+// behavior for lone UTF-16 surrogate escapes. Exact authority wires must not
+// allow multiple invalid code-unit sequences to collapse to the same U+FFFD
+// string. Valid adjacent high+low pairs remain admitted.
+func rejectUnpairedSurrogateEscapes(data []byte) error {
+	inString := false
+	for index := 0; index < len(data); index++ {
+		switch data[index] {
+		case '"':
+			inString = !inString
+		case '\\':
+			if !inString {
+				continue
+			}
+			if index+1 >= len(data) {
+				return fmt.Errorf("truncated JSON escape")
+			}
+			if data[index+1] != 'u' {
+				index++
+				continue
+			}
+			codeUnit, ok := decodeHexCodeUnit(data[index+2:])
+			if !ok {
+				return fmt.Errorf("invalid JSON Unicode escape")
+			}
+			index += 5
+			switch {
+			case codeUnit >= 0xd800 && codeUnit <= 0xdbff:
+				if index+6 >= len(data) || data[index+1] != '\\' || data[index+2] != 'u' {
+					return fmt.Errorf("unpaired high-surrogate JSON escape")
+				}
+				low, ok := decodeHexCodeUnit(data[index+3:])
+				if !ok || low < 0xdc00 || low > 0xdfff {
+					return fmt.Errorf("high-surrogate JSON escape is not followed by a low surrogate")
+				}
+				index += 6
+			case codeUnit >= 0xdc00 && codeUnit <= 0xdfff:
+				return fmt.Errorf("unpaired low-surrogate JSON escape")
+			}
+		}
+	}
+	return nil
+}
+
+func decodeHexCodeUnit(data []byte) (uint16, bool) {
+	if len(data) < 4 {
+		return 0, false
+	}
+	var value uint16
+	for _, character := range data[:4] {
+		value <<= 4
+		switch {
+		case character >= '0' && character <= '9':
+			value |= uint16(character - '0')
+		case character >= 'a' && character <= 'f':
+			value |= uint16(character-'a') + 10
+		case character >= 'A' && character <= 'F':
+			value |= uint16(character-'A') + 10
+		default:
+			return 0, false
+		}
+	}
+	return value, true
 }
 
 func ensureJSONEOF(decoder *json.Decoder) error {
