@@ -121,6 +121,62 @@ async function writePrivateImmutable(path, bytes) {
   }
 }
 
+async function sealAndReadConvertedPdf(output, filename, maximumBytes) {
+  if (filename !== 'document.pdf') {
+    throw new TypeError('Converted PDF filename is not canonical.')
+  }
+  const heldPath = join(`/proc/self/fd/${output.handle.fd}`, filename)
+  const handle = await open(
+    heldPath,
+    fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_CLOEXEC,
+  )
+  try {
+    const before = await handle.stat({ bigint: true })
+    if (
+      !before.isFile() ||
+      before.nlink !== 1n ||
+      before.dev !== output.identity.dev ||
+      before.uid !== BigInt(process.getuid()) ||
+      before.size <= 0n ||
+      before.size > BigInt(maximumBytes)
+    ) {
+      throw new TypeError('Converted PDF is not one bounded owned regular file.')
+    }
+    await handle.chmod(0o444)
+    await handle.sync()
+    const sealed = await handle.stat({ bigint: true })
+    if (
+      !sealed.isFile() ||
+      sealed.nlink !== 1n ||
+      sealed.dev !== before.dev ||
+      sealed.ino !== before.ino ||
+      sealed.uid !== before.uid ||
+      sealed.gid !== before.gid ||
+      sealed.size !== before.size ||
+      (sealed.mode & 0o777n) !== 0o444n
+    ) {
+      throw new TypeError('Converted PDF could not be sealed on its exact inode.')
+    }
+    const bytes = await handle.readFile()
+    const after = await handle.stat({ bigint: true })
+    const linked = await lstat(heldPath, { bigint: true })
+    if (
+      bytes.byteLength !== Number(sealed.size) ||
+      !sameFileIdentity(sealed, after) ||
+      !linked.isFile() ||
+      linked.isSymbolicLink() ||
+      linked.dev !== sealed.dev ||
+      linked.ino !== sealed.ino ||
+      (linked.mode & 0o777n) !== 0o444n
+    ) {
+      throw new TypeError('Converted PDF identity changed while it was sealed.')
+    }
+    return bytes
+  } finally {
+    await handle.close()
+  }
+}
+
 async function admitPrivateMountRoot(path, label) {
   if (!isAbsolute(path)) {
     throw new TypeError(`${label} must be one absolute real path.`)
@@ -318,9 +374,9 @@ export async function convertDocxToPdf({
       if (names.length !== 1 || names[0] !== 'document.pdf') {
         throw new TypeError('LibreOffice did not produce one exact PDF output.')
       }
-      await chmod(join(heldOutput, 'document.pdf'), 0o444)
-      pdfBytes = await readRegularNoFollow(
-        join(heldOutput, 'document.pdf'),
+      pdfBytes = await sealAndReadConvertedPdf(
+        outputDirectory,
+        'document.pdf',
         policy.libreOffice.maximumPdfBytes,
       )
       await reproveOutputDirectory(convertedOutput, outputDirectory.identity)
