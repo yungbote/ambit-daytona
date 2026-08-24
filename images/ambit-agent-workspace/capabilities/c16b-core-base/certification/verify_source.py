@@ -365,7 +365,7 @@ def verify(root: Path) -> dict[str, object]:
         and overlay_union.get("overlayBuilder")
         == {
             "ref": "images/ambit-agent-workspace/runtime-composition/build_union_overlay.py",
-            "digest": "sha256:65573a7b6d903a8faf8f51d20609f91071336b61c46128a40615f20ff71820c8",
+            "digest": "sha256:f0a6e3a09d31f718809387fc666a2bc4af42b988995819dc3f0b00bb7d496307",
         }
         and isinstance(overlay_union.get("requiredReceipts"), list)
         and len(overlay_union["requiredReceipts"]) == 11,

@@ -175,8 +175,8 @@ RUN --network=none \
     echo 'af8db17dc5d7b2266444efc4911661659fdaf23035b7dde0172f29d9e55374ca  /materializer-inputs/backend-atomic-materializer-source.tar' | sha256sum -c -; \
     test "$(wc -c < /materializer-inputs/ambit-atomic-materialize)" = 2568340; \
     echo '8d4405a1bd8f5d9d65be0860e52cab75cc9b7f5f659e510b4932347e0c6008e5  /materializer-inputs/ambit-atomic-materialize' | sha256sum -c -; \
-    echo '65573a7b6d903a8faf8f51d20609f91071336b61c46128a40615f20ff71820c8  /composition-source/runtime-composition/build_union_overlay.py' | sha256sum -c -; \
-    echo 'bdd2c891a3481b29834d8fd482e262051bc564bdf3e802b92730e0c973870ca8  /composition-source/capabilities/c16b-core-base/composition/union-overlay-contract.lock.json' | sha256sum -c -
+    echo 'f0a6e3a09d31f718809387fc666a2bc4af42b988995819dc3f0b00bb7d496307  /composition-source/runtime-composition/build_union_overlay.py' | sha256sum -c -; \
+    echo 'd8baba084c98d04e860b0ca11c614adee82336b8cc9261476bb139712b70f46f  /composition-source/capabilities/c16b-core-base/composition/union-overlay-contract.lock.json' | sha256sum -c -
 
 FROM ${BASE_IMAGE} AS runtime_debian
 COPY --from=input_guard /etc/debian_version /tmp/input-guard
@@ -448,7 +448,7 @@ COPY --from=document_target /opt/ambit/runtime-pack/core-document-v5/bin/ambit-s
 COPY --from=composition_source /runtime-composition/build_union_overlay.py \
   /tmp/build_union_overlay.py
 RUN --network=none set -eu; \
-    echo '65573a7b6d903a8faf8f51d20609f91071336b61c46128a40615f20ff71820c8  /tmp/build_union_overlay.py' | sha256sum -c -; \
+    echo 'f0a6e3a09d31f718809387fc666a2bc4af42b988995819dc3f0b00bb7d496307  /tmp/build_union_overlay.py' | sha256sum -c -; \
     /usr/local/bin/ambit-union-python /tmp/build_union_overlay.py \
       --core-root /core-root \
       --target-root /target-root \
@@ -456,7 +456,8 @@ RUN --network=none set -eu; \
       --protected-path /opt/ambit/runtime-base/core/lineage/base-installed-dpkg.lock \
       --protected-path /opt/ambit/runtime-pack/core-document/bin/ambit-atomic-materialize \
       --protected-path /usr/share/licenses/ambit-atomic-materialize/ATOMIC-MATERIALIZER-LICENSE.md \
-      --protected-path /usr/share/licenses/ambit-atomic-materialize/atomic-materializer-license.lock.json; \
+      --protected-path /usr/share/licenses/ambit-atomic-materialize/atomic-materializer-license.lock.json \
+      --timestamp 1787551756; \
     test -s /union/overlay-build-receipt.json; \
     test -s /union/overlay-entry-manifest.jsonl; \
     test -z "$(find /union/overlay \( -type s -o -type b -o -type c -o -type p \) -print -quit)"

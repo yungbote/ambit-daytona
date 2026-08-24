@@ -3,11 +3,11 @@
   "state": "qualified-local-candidate",
   "builder": {
     "path": "images/ambit-agent-workspace/runtime-composition/build_union_overlay.py",
-    "sha256": "sha256:65573a7b6d903a8faf8f51d20609f91071336b61c46128a40615f20ff71820c8"
+    "sha256": "sha256:f0a6e3a09d31f718809387fc666a2bc4af42b988995819dc3f0b00bb7d496307"
   },
   "coreContract": {
     "path": "images/ambit-agent-workspace/capabilities/c16b-core-base/composition/union-overlay-contract.lock.json",
-    "sha256": "sha256:bdd2c891a3481b29834d8fd482e262051bc564bdf3e802b92730e0c973870ca8"
+    "sha256": "sha256:d8baba084c98d04e860b0ca11c614adee82336b8cc9261476bb139712b70f46f"
   },
   "coreParent": {
     "packRevisionRef": "ambit.runtime-pack/core@1",
