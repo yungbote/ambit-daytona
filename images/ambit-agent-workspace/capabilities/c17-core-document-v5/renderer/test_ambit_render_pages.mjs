@@ -4,6 +4,8 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { deflateSync } from 'node:zlib'
 
+import { createInternalPageRenderReceipt } from './ambit-render-pages.mjs'
+
 import {
   admitExactRenderEvidence,
   admitRenderExecutionLineage,
@@ -20,6 +22,17 @@ const policy = admitRenderPolicy(
     await readFile(new URL('../policy/render-policy.json', import.meta.url)),
   ),
 )
+
+test('binds the internal child receipt to exact manifest bytes', () => {
+  const bytes = Buffer.from('{"exact":true}\n')
+  const receipt = createInternalPageRenderReceipt(bytes)
+  assert.equal(receipt.manifestBytes, bytes.byteLength)
+  assert.equal(receipt.manifestSha256, `sha256:${createHash('sha256').update(bytes).digest('hex')}`)
+  assert.throws(
+    () => createInternalPageRenderReceipt(bytes.toString('utf8')),
+    /manifest bytes are unavailable/,
+  )
+})
 
 function crc32(bytes) {
   let crc = 0xffffffff

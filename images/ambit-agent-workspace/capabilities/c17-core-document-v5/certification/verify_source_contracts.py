@@ -15,6 +15,7 @@ SOURCE_CONTRACT_PATHS = (
     "Dockerfile",
     "README.md",
     "certification/audit_offline_inputs.py",
+    "certification/runtime_pty_conformance.py",
     "certification/verify_render_output.mjs",
     "certification/verify_signed_debian_snapshot.py",
     "certification/verify_source_contracts.py",
@@ -81,6 +82,7 @@ SOURCE_CONTRACT_PATHS = (
 PROTOCOL_SOURCE_PATHS = (
     "Dockerfile",
     "certification/audit_offline_inputs.py",
+    "certification/runtime_pty_conformance.py",
     "certification/verify_render_output.mjs",
     "certification/verify_signed_debian_snapshot.py",
     "certification/verify_source_contracts.py",
@@ -532,6 +534,16 @@ def _verify_candidate_evidence(
     ):
         if required not in dockerfile_source:
             raise ValueError(f"runtime image omits transitive behavior owner: {required}")
+    pty_source = (root / "certification/runtime_pty_conformance.py").read_text(
+        encoding="utf-8"
+    )
+    for required in (
+        "size=800m,uid=1000,gid=1000,mode=0700",
+        "all-render-process-groups-settled-and-private-roots-removed",
+        '("success", "cancel", "error", "backpressure")',
+    ):
+        if required not in pty_source:
+            raise ValueError(f"real PTY conformance coverage is absent: {required}")
     _expect(contract["input"]["maximumBytes"], 67108864, "interface DOCX bytes")
     _expect(
         contract["input"]["metadataXmlBounds"],
