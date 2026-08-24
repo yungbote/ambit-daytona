@@ -2312,7 +2312,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * 
+         *
          * @summary Set sandbox auto-delete interval
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {number} interval Auto-delete interval in minutes (negative value means disabled, 0 means delete immediately upon stopping)
@@ -2360,7 +2360,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * 
+         *
          * @summary Set sandbox auto-pause interval
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {number} interval Auto-pause interval in minutes (0 to disable)
@@ -2408,7 +2408,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * 
+         *
          * @summary Set sandbox auto-stop interval
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {number} interval Auto-stop interval in minutes (0 to disable)
@@ -2548,7 +2548,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * 
+         *
          * @summary Stop sandbox
          * @param {string} sandboxIdOrName ID or name of the sandbox
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
