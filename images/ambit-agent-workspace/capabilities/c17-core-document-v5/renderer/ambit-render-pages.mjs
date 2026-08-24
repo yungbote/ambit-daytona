@@ -8,7 +8,7 @@ import {
 } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { isAbsolute, join } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { pathToFileURL } from 'node:url'
 
 import {
   admitBackendComponentLineageEnvelope,
@@ -217,39 +217,31 @@ async function loadExactEngine() {
   return { pdfjs, canvas, canvasPackage }
 }
 
-export function parseArguments(argv) {
-  if (
-    argv.length !== 6 ||
-    argv[0] !== '--input' ||
-    argv[2] !== '--output' ||
-    argv[4] !== '--backend-lineage'
-  ) {
-    throw new TypeError(
-      'Expected --input PATH --output DIRECTORY --backend-lineage PATH.',
-    )
-  }
-  return { input: argv[1], output: argv[3], backendLineage: argv[5] }
-}
-
-async function main() {
-  const args = parseArguments(process.argv.slice(2))
+export async function loadRenderPolicy() {
   const policyBytes = await readRegularNoFollow(POLICY_PATH, 1048576)
   const policy = admitRenderPolicy(JSON.parse(policyBytes.toString('utf8')))
+  return Object.freeze({ policyBytes, policy })
+}
+
+export async function renderPagesToDirectory({
+  pdfBytes,
+  outputPath,
+  backendLineage,
+  sourceDocument,
+}) {
+  const { policyBytes, policy } = await loadRenderPolicy()
   if (policy.pdfjs.executionState !== 'available') {
     throw new TypeError('The exact PDF.js execution evidence remains unavailable.')
   }
-  const pdfBytes = await readRegularNoFollow(
-    args.input,
-    policy.input.maximumBytes,
-  )
-  const backendLineageBytes = await readRegularNoFollow(
-    args.backendLineage,
-    1048576,
-  )
-  const backendComponentLineage = readCanonicalInput(
-    backendLineageBytes,
-    admitBackendComponentLineageEnvelope,
-    'Backend component lineage envelope',
+  if (
+    !Buffer.isBuffer(pdfBytes) ||
+    pdfBytes.byteLength === 0 ||
+    pdfBytes.byteLength > policy.libreOffice.maximumPdfBytes
+  ) {
+    throw new TypeError('Intermediate PDF bytes are unavailable or exceed policy.')
+  }
+  const backendComponentLineage = admitBackendComponentLineageEnvelope(
+    backendLineage,
   )
   const installedEngineBytes = await readRegularNoFollow(
     ENGINE_LINEAGE_PATH,
@@ -264,7 +256,7 @@ async function main() {
     backendComponentLineage,
     installedEngineLineage,
   })
-  const output = await admitEmptyOutputDirectory(args.output)
+  const output = await admitEmptyOutputDirectory(outputPath)
   try {
     const { pdfjs, canvas, canvasPackage } = await loadExactEngine()
     const pages = await renderPdfBytes({
@@ -277,7 +269,7 @@ async function main() {
         writeDurableOutput(output, page.evidence.filename, page.bytes),
     })
     const manifest = createRenderManifest({
-      intermediatePdfSha256: sha256(pdfBytes),
+      sourceDocument,
       intermediatePdfBytes: pdfBytes.byteLength,
       policySha256: sha256(policyBytes),
       pages,
@@ -287,15 +279,8 @@ async function main() {
     const manifestBytes = `${canonicalJson(manifest)}\n`
     await writeDurableOutput(output, OUTPUT_MANIFEST_NAME, manifestBytes)
     await reproveOutputDirectory(output.path, output.identity)
-    process.stdout.write(manifestBytes)
+    return manifestBytes
   } finally {
     await output.handle.close()
   }
-}
-
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  main().catch((error) => {
-    process.stderr.write(`core-document@5 render unavailable: ${error.message}\n`)
-    process.exitCode = 1
-  })
 }

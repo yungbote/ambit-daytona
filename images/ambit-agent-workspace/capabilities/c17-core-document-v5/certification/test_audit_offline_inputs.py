@@ -13,13 +13,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class OfflineInputAuditTests(unittest.TestCase):
-    def test_current_input_contract_is_explicitly_unavailable(self) -> None:
+    def test_candidate_requires_every_exact_external_input(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             result = audit(ROOT, Path(directory))
         self.assertEqual(result["outcome"], "unavailable")
-        self.assertEqual(result["sourceState"], "unavailable")
+        self.assertEqual(result["sourceState"], "candidate-ready")
         self.assertEqual(result["networkOperations"], "none")
-        self.assertGreater(len(result["missing"]), 10)
+        self.assertEqual(len(result["missing"]), 14)
         lock = json.loads(
             (ROOT / "locks/offline-build-input.lock.json").read_text(
                 encoding="utf-8"
@@ -31,7 +31,7 @@ class OfflineInputAuditTests(unittest.TestCase):
             lock["frozenEvidence"][0]["sha256"],
             "sha256:89f4f0fdcb0376e5079922a3bfb6dcc3a0262ab5a0e2449813f2b658ea94641c",
         )
-        self.assertGreater(len(lock["requiredUnfrozenEvidence"]), 5)
+        self.assertEqual(lock["requiredUnfrozenEvidence"], [])
         for artifact in lock["publicArtifacts"]:
             self.assertGreater(artifact["bytes"], 0)
             self.assertRegex(artifact["sha256"], r"^sha256:[0-9a-f]{64}$")

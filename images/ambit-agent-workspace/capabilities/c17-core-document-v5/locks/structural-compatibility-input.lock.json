@@ -1,6 +1,6 @@
 {
   "schema": "ambit.runtime-pack-structural-compatibility-input-lock/v1",
-  "state": "unavailable",
+  "state": "candidate-ready",
   "composition": "external-curated-files-not-oci-layer-inheritance",
   "sourceCandidate": {
     "pack": "ambit.runtime-pack/core-document@4",

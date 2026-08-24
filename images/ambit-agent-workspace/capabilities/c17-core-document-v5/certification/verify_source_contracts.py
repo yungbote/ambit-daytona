@@ -13,7 +13,9 @@ SHA512 = re.compile(r"^sha512:[0-9a-f]{128}$")
 SOURCE_CONTRACT_LINE = re.compile(r"^([0-9a-f]{64})  ([A-Za-z0-9][A-Za-z0-9./_-]*)$")
 SOURCE_CONTRACT_PATHS = (
     "Dockerfile",
+    "README.md",
     "certification/audit_offline_inputs.py",
+    "certification/verify_render_output.mjs",
     "certification/verify_signed_debian_snapshot.py",
     "certification/verify_source_contracts.py",
     "certification/verify_structural_contracts.py",
@@ -21,6 +23,7 @@ SOURCE_CONTRACT_PATHS = (
     "locks/backend-lineage-input.lock.json",
     "locks/base-oci.lock.json",
     "locks/canvas-input.lock.json",
+    "locks/canvas-native-runtime-input.lock.json",
     "locks/capture-helper-input.lock.json",
     "locks/debian-copyright-files.sha256",
     "locks/debian-index-artifacts.bytes",
@@ -31,11 +34,17 @@ SOURCE_CONTRACT_PATHS = (
     "locks/debian-runtime-dpkg.lock",
     "locks/debian-source-artifacts.bytes",
     "locks/debian-source-artifacts.sha256",
+    "locks/document-render-interface.lock.json",
     "locks/font-files.sha256",
+    "locks/font-license-inventory.json",
     "locks/font-package-ownership.tsv",
     "locks/fontconfig-roster.tsv",
+    "locks/installed-render-engine-lineage.json",
     "locks/node-input.lock.json",
+    "locks/node-release-keyring-verification.json",
     "locks/offline-build-input.lock.json",
+    "locks/offline-build-tools.bytes",
+    "locks/offline-build-tools.sha256",
     "locks/offline-frozen-evidence.bytes",
     "locks/offline-frozen-evidence.sha256",
     "locks/offline-public-artifacts.bytes",
@@ -43,6 +52,7 @@ SOURCE_CONTRACT_PATHS = (
     "locks/pdfjs-input.lock.json",
     "locks/pdfjs-static-files.sha256",
     "locks/package-copyright.tsv",
+    "locks/runtime-cancellation-authority.lock.json",
     "locks/structural-compatibility-input.lock.json",
     "locks/structural-runtime-conformance.json",
     "locks/structural-runtime-files.sha256",
@@ -52,8 +62,14 @@ SOURCE_CONTRACT_PATHS = (
     "policy/license-policy.json",
     "policy/render-policy.json",
     "policy/runtime-policy.json",
+    "renderer/ambit-render-document.mjs",
     "renderer/ambit-render-pages.mjs",
+    "renderer/docx-package-admission.mjs",
+    "renderer/framed-jsonl-protocol.mjs",
+    "renderer/libreoffice-subreaper.py",
     "renderer/pdfjs-page-renderer.mjs",
+    "renderer/process-group-execution.mjs",
+    "renderer/render-output-verification.mjs",
     "renderer/render-contracts.mjs",
     "structural/ambit-structural-python",
     "structural/verify_private_elf.py",
@@ -178,6 +194,359 @@ def _verify_offline_public_manifests(
     _expect(observed_bytes, expected_bytes, "offline public byte roster")
 
 
+def _raw_sha256(path: Path) -> str:
+    return f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
+
+
+def _verify_candidate_evidence(
+    root: Path,
+    *,
+    node: dict[str, Any],
+    canvas: dict[str, Any],
+    pdfjs: dict[str, Any],
+) -> None:
+    node_release = _read(root / "locks/node-release-keyring-verification.json")
+    _keys(
+        node_release,
+        {
+            "artifacts",
+            "release",
+            "releaseKeysRepository",
+            "schema",
+            "signedManifest",
+            "state",
+        },
+        "Node release verification",
+    )
+    _expect(
+        node_release["schema"],
+        "ambit.runtime-pack-node-release-verification/v1",
+        "Node release verification schema",
+    )
+    _expect(node_release["state"], "candidate-ready", "Node release evidence state")
+    _expect(node_release["release"], f"v{node['version']}", "Node release evidence")
+    _expect(
+        node_release["releaseKeysRepository"]["fingerprint"],
+        node["releaseAuthority"]["signerFingerprint"],
+        "Node release signer",
+    )
+    _expect(
+        node_release["signedManifest"]["sha256"],
+        node["releaseAuthority"]["shasumsSha256"],
+        "Node signed manifest",
+    )
+    _expect(
+        node_release["signedManifest"]["signatureSha256"],
+        node["releaseAuthority"]["signatureSha256"],
+        "Node release signature",
+    )
+    _expect(
+        [(entry["bytes"], entry["sha256"]) for entry in node_release["artifacts"]],
+        [
+            (node["binary"]["archiveBytes"], node["binary"]["archiveSha256"]),
+            (node["source"]["archiveBytes"], node["source"]["archiveSha256"]),
+        ],
+        "Node signed artifact roster",
+    )
+
+    native = _read(root / "locks/canvas-native-runtime-input.lock.json")
+    _keys(
+        native,
+        {
+            "package",
+            "promotionBlockers",
+            "runtimeBinary",
+            "runtimeDynamicLibraries",
+            "schema",
+            "sourceInputs",
+            "state",
+        },
+        "Canvas native runtime input",
+    )
+    _expect(
+        native["schema"],
+        "ambit.runtime-pack-canvas-native-runtime-input/v1",
+        "Canvas native runtime schema",
+    )
+    _expect(native["state"], "candidate-ready", "Canvas native runtime state")
+    _expect(
+        native["runtimeBinary"]["sha256"],
+        canvas["platformArchive"]["nativeSha256"],
+        "Canvas native runtime binary",
+    )
+    _expect(
+        native["runtimeDynamicLibraries"],
+        canvas["dynamicLibraries"],
+        "Canvas dynamic library roster",
+    )
+    _expect(
+        [(entry["bytes"], entry["sha256"]) for entry in native["sourceInputs"]],
+        [
+            (
+                canvas["implementation"]["sourceArchiveBytes"],
+                canvas["implementation"]["sourceArchiveSha256"],
+            ),
+            (68583095, canvas["nativeLineage"]["skiaSourceArchiveSha256"]),
+        ],
+        "Canvas native source roster",
+    )
+
+    font_inventory = _read(root / "locks/font-license-inventory.json")
+    _keys(
+        font_inventory,
+        {"fontManifestSha256", "packages", "schema", "state"},
+        "font license inventory",
+    )
+    _expect(
+        font_inventory["schema"],
+        "ambit.runtime-pack-font-license-inventory/v1",
+        "font inventory schema",
+    )
+    _expect(font_inventory["state"], "candidate-ready", "font inventory state")
+    _expect(
+        font_inventory["fontManifestSha256"],
+        _raw_sha256(root / "locks/font-files.sha256"),
+        "font manifest digest",
+    )
+    if sum(entry["fontFiles"] for entry in font_inventory["packages"]) != 276:
+        raise ValueError("font inventory count differs")
+    copyright_rows = {
+        row.split("\t")[0]: row.split("\t")[3]
+        for row in (root / "locks/package-copyright.tsv")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    }
+    for entry in font_inventory["packages"]:
+        _keys(
+            entry,
+            {
+                "copyrightPath",
+                "copyrightSha256",
+                "fontFiles",
+                "package",
+                "runtimeLicense",
+            },
+            "font package inventory",
+        )
+        _expect(
+            entry["copyrightSha256"],
+            f"sha256:{copyright_rows[entry['package']]}",
+            f"{entry['package']} copyright",
+        )
+
+    installed = _read(root / "locks/installed-render-engine-lineage.json")
+    canonical = json.dumps(installed, sort_keys=True, separators=(",", ":")) + "\n"
+    _expect(
+        (root / "locks/installed-render-engine-lineage.json").read_text(
+            encoding="utf-8"
+        ),
+        canonical,
+        "installed engine canonical bytes",
+    )
+    _keys(
+        installed,
+        {
+            "canvasNative",
+            "canvasSource",
+            "fontManifest",
+            "libreOfficeClosure",
+            "nodeBinary",
+            "pdfjsRoster",
+            "schema",
+        },
+        "installed render engine lineage",
+    )
+    _expect(
+        installed["schema"],
+        "ambit.runtime-pack-installed-render-engine-lineage/v1",
+        "installed engine schema",
+    )
+    expected_digests = {
+        "canvasNative": canvas["platformArchive"]["nativeSha256"],
+        "canvasSource": canvas["implementation"]["sourceArchiveSha256"],
+        "fontManifest": _raw_sha256(root / "locks/font-files.sha256"),
+        "libreOfficeClosure": _raw_sha256(root / "locks/debian-runtime-dpkg.lock"),
+        "nodeBinary": node["binary"]["nodeSha256"],
+        "pdfjsRoster": pdfjs["extractedRoster"]["lockSha256"],
+    }
+    for name, expected in expected_digests.items():
+        _keys(installed[name], {"digest", "ref"}, f"installed engine {name}")
+        _expect(installed[name]["digest"], expected, f"installed engine {name}")
+
+    render_interface = _read(root / "locks/document-render-interface.lock.json")
+    _keys(
+        render_interface,
+        {"contract", "digest", "schema", "state"},
+        "document render interface lock",
+    )
+    _expect(
+        render_interface["schema"],
+        "ambit.runtime-interface-lock/v1",
+        "document render interface schema",
+    )
+    _expect(
+        render_interface["state"],
+        "candidate-ready",
+        "document render interface state",
+    )
+    contract_bytes = json.dumps(
+        render_interface["contract"], sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    _expect(
+        render_interface["digest"],
+        f"sha256:{hashlib.sha256(contract_bytes).hexdigest()}",
+        "document render interface digest",
+    )
+    _expect(
+        render_interface["contract"]["roleRef"],
+        "ambit.runtime-component/document-renderer@1",
+        "document renderer role",
+    )
+    _expect(
+        render_interface["contract"]["interfaceRef"],
+        "ambit.runtime-interface/docx-paginated-render@1",
+        "document renderer interface",
+    )
+    contract = render_interface["contract"]
+    _keys(
+        contract,
+        {
+            "arguments",
+            "authority",
+            "cancellation",
+            "executable",
+            "frames",
+            "identities",
+            "input",
+            "interfaceRef",
+            "output",
+            "policy",
+            "roleRef",
+            "runtime",
+            "schema",
+            "transport",
+        },
+        "document render interface contract",
+    )
+    _expect(
+        contract["arguments"],
+        ["--framed-jsonl", "--nonce", "LOWERCASE_128_BIT_HEX"],
+        "document render arguments",
+    )
+    _expect(contract["runtime"]["pathAuthority"], "none", "render path authority")
+    _expect(contract["transport"]["medium"], "raw-noecho-pty", "render transport")
+    _expect(contract["transport"]["chunkBytes"], 49152, "render chunk bytes")
+    _expect(contract["transport"]["maximumLineBytes"], 70000, "render line bytes")
+    _expect(
+        contract["identities"]["protocolSources"],
+        {
+            relative: _raw_sha256(root / relative)
+            for relative in (
+                "renderer/ambit-render-document.mjs",
+                "renderer/docx-package-admission.mjs",
+                "renderer/framed-jsonl-protocol.mjs",
+                "renderer/libreoffice-subreaper.py",
+                "renderer/process-group-execution.mjs",
+                "renderer/render-output-verification.mjs",
+            )
+        },
+        "document render protocol source roster",
+    )
+    _expect(contract["input"]["maximumBytes"], 67108864, "interface DOCX bytes")
+    _expect(
+        contract["output"]["maximumBytesPerPage"],
+        67108864,
+        "interface page bytes",
+    )
+    _expect(
+        contract["output"]["maximumTotalOutputBytes"],
+        536870912,
+        "interface total output bytes",
+    )
+    _expect(
+        contract["policy"],
+        {
+            "ref": "ambit.render-policy/core-document-paginated@1",
+            "digest": _raw_sha256(root / "policy/render-policy.json"),
+        },
+        "interface render policy",
+    )
+
+    cancellation = _read(root / "locks/runtime-cancellation-authority.lock.json")
+    _keys(
+        cancellation,
+        {"hardTransportFailure", "helperProtocol", "schema", "state"},
+        "runtime cancellation authority",
+    )
+    _expect(
+        cancellation["schema"],
+        "ambit.runtime-pack-cancellation-authority-lock/v1",
+        "runtime cancellation schema",
+    )
+    _expect(
+        cancellation["state"],
+        "candidate-ready-local-xfs",
+        "runtime cancellation state",
+    )
+    _expect(cancellation["helperProtocol"]["exitCode"], 130, "cancel exit code")
+    hard_failure = cancellation["hardTransportFailure"]
+    _expect(
+        hard_failure["typedCancelledWithoutProviderReceipt"],
+        "forbidden",
+        "hard transport cancellation outcome",
+    )
+    _expect(
+        hard_failure["requiredAuthority"],
+        "ambit.runtime-provider-quiescence-receipt/v1",
+        "provider quiescence authority",
+    )
+    local_xfs = hard_failure["localXfsAdapter"]
+    local_xfs_contract = local_xfs["interfaceContract"]
+    local_xfs_bytes = json.dumps(
+        local_xfs_contract, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    _expect(
+        local_xfs["interfaceRef"],
+        "ambit.runtime-provider-quiescence/local-xfs-isolated-docker@1",
+        "local XFS cancellation interface",
+    )
+    _expect(
+        local_xfs["interfaceDigest"],
+        f"sha256:{hashlib.sha256(local_xfs_bytes).hexdigest()}",
+        "local XFS cancellation interface digest",
+    )
+    _expect(
+        local_xfs_contract["sourceCommit"],
+        "b0efa08fb744c94cec5e074a6fc34ae340a4e177",
+        "local XFS cancellation source",
+    )
+    _expect(
+        local_xfs_contract["supervisor"]["sha256"],
+        "sha256:8a5f11cafb228b5f79a3d0a468bc35d5e5a9b32d4f800e6baec135801613be1f",
+        "local XFS supervisor source",
+    )
+    _expect(
+        local_xfs_contract["launcher"]["sha256"],
+        "sha256:a8eba1b974859aecb6423daa1babbce27fb6ca10314fdd0da59c862b014a0a09",
+        "local XFS stop launcher source",
+    )
+    _expect(
+        local_xfs_contract["receipt"]["schema"],
+        "ambit.local-daytona-isolated-docker-stop/v2",
+        "local XFS stop receipt",
+    )
+    _expect(
+        contract["cancellation"]["authorityLock"],
+        {
+            "ref": "locks/runtime-cancellation-authority.lock.json",
+            "digest": _raw_sha256(
+                root / "locks/runtime-cancellation-authority.lock.json"
+            ),
+        },
+        "interface cancellation authority",
+    )
+
+
 def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
     root = root.resolve(strict=True)
     _verify_source_manifest(root)
@@ -193,6 +562,8 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
     runtime = _read(root / "policy/runtime-policy.json")
     render = _read(root / "policy/render-policy.json")
     license_policy = _read(root / "policy/license-policy.json")
+
+    _verify_candidate_evidence(root, node=node, canvas=canvas, pdfjs=pdfjs)
 
     _keys(
         backend_lineage,
@@ -304,7 +675,7 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
         node,
         {
             "binary",
-            "missing",
+            "promotionBlockers",
             "releaseAuthority",
             "removedRuntimePaths",
             "retainedRuntimePaths",
@@ -364,7 +735,7 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
         "Node runtime ABI",
     )
     _expect(node["schema"], "ambit.runtime-pack-node-input-lock/v1", "Node schema")
-    _expect(node["state"], "unavailable", "Node state")
+    _expect(node["state"], "candidate-ready", "Node state")
     _expect(node["version"], "24.19.0", "Node version")
     for key in ("archiveSha256",):
         _sha256(node["source"][key], f"Node source {key}")
@@ -374,7 +745,7 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
         _sha256(node["releaseAuthority"][key], f"Node release {key}")
     _expect(
         node["releaseAuthority"]["verificationState"],
-        "unavailable",
+        "verified",
         "Node release signature state",
     )
     _expect(node["runtimeAbi"]["modules"], "137", "Node module ABI")
@@ -419,7 +790,7 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
             "forbiddenAlternatives",
             "implementation",
             "javascriptArchive",
-            "missing",
+            "promotionBlockers",
             "nativeLineage",
             "platformArchive",
             "requiredInterface",
@@ -486,7 +857,7 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
         "ambit.runtime-pack-pdfjs-canvas-input-lock/v1",
         "Canvas schema",
     )
-    _expect(canvas["state"], "unavailable", "Canvas state")
+    _expect(canvas["state"], "candidate-ready", "Canvas state")
     _expect(canvas["implementation"]["version"], "1.0.7", "Canvas version")
     _expect(
         set(canvas["requiredInterface"].values()),
@@ -548,6 +919,7 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
             "frozenEvidenceByteManifest",
             "frozenEvidenceSha256Manifest",
             "missing",
+            "materializerNamedBuildContext",
             "namedBuildContext",
             "networkDuringBuild",
             "platform",
@@ -601,7 +973,7 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
         "ambit.runtime-pack-offline-build-input-lock/v1",
         "offline build schema",
     )
-    _expect(offline["state"], "unavailable", "offline build state")
+    _expect(offline["state"], "candidate-ready", "offline build state")
     _expect(offline["platform"], "linux/amd64", "offline build platform")
     _expect(offline["networkDuringBuild"], "none", "offline build network")
     _expect(
@@ -626,22 +998,22 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
     )
     _expect(
         offline["proprietaryHelper"]["state"],
-        "unavailable",
+        "provider-external",
         "offline helper state",
     )
     _expect(
         offline["atomicMaterializer"]["state"],
-        "unavailable",
+        "candidate-ready",
         "offline atomic materializer state",
     )
     _expect(
         offline["atomicMaterializer"]["includedInNamedContext"],
-        False,
-        "atomic materializer public-context exclusion",
+        True,
+        "atomic materializer named-context inclusion",
     )
     _expect(
         offline["atomicMaterializer"]["publisherAuthentication"],
-        "unavailable",
+        "local-content-binding-only",
         "atomic materializer publisher authentication",
     )
     _sha256(
@@ -651,6 +1023,11 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
     _sha256(
         offline["atomicMaterializer"]["binarySha256"],
         "atomic materializer binary",
+    )
+    _expect(
+        offline["materializerNamedBuildContext"],
+        "materializer_inputs",
+        "materializer named build context",
     )
     expected_public_artifacts = [
         {
@@ -710,8 +1087,11 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
         expected_public_artifacts,
         "offline public artifact roster",
     )
-    if not offline["requiredUnfrozenEvidence"]:
-        raise ValueError("unavailable offline build must name its evidence gaps")
+    _expect(
+        offline["requiredUnfrozenEvidence"],
+        [],
+        "candidate build missing input roster",
+    )
     _expect(
         offline["publicArtifactSha256Manifest"],
         "offline-public-artifacts.sha256",
@@ -781,7 +1161,7 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
         {"installRecommends", "missing", "requiredClosureLock", "state"},
         "Debian resolution",
     )
-    _expect(debian["resolution"]["state"], "unavailable", "Debian closure state")
+    _expect(debian["resolution"]["state"], "candidate-ready", "Debian closure state")
     if len(debian["archives"]) != 2:
         raise ValueError("Debian archive roster must contain exactly two archives")
     for archive in debian["archives"]:
@@ -853,7 +1233,7 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
     _expect(pdfjs["version"], "6.2.108", "PDF.js version")
     _sha256(pdfjs["archive"]["sha256"], "PDF.js archive")
     _sha512(pdfjs["archive"]["sha512"], "PDF.js archive SHA-512")
-    _expect(pdfjs["execution"]["state"], "unavailable", "PDF.js execution state")
+    _expect(pdfjs["execution"]["state"], "candidate-ready", "PDF.js execution state")
     _expect(pdfjs["extractedRoster"]["state"], "pinned", "PDF.js roster state")
     _sha256(pdfjs["extractedRoster"]["lockSha256"], "PDF.js roster lock")
     _verify_pdfjs_roster(root, pdfjs["extractedRoster"])
@@ -966,6 +1346,7 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
             "canvasInputLock",
             "captureHelperInputLock",
             "debianInputLock",
+            "documentRenderInterfaceLock",
             "fonts",
             "knownBlockers",
             "installedEngineLineage",
@@ -977,6 +1358,7 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
             "pdfjsInputLock",
             "platform",
             "runtime",
+            "runtimeCancellationAuthorityLock",
             "schema",
             "state",
             "structuralCompatibility",
@@ -1037,13 +1419,13 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
     )
     _expect(toolchain["schema"], "ambit.runtime-pack-toolchain/v3", "toolchain schema")
     _expect(toolchain["pack"], "ambit.runtime-pack/core-document@5", "pack ref")
-    _expect(toolchain["state"], "unavailable", "toolchain state")
+    _expect(toolchain["state"], "candidate-ready", "toolchain state")
     _expect(toolchain["platform"], {"os": "linux", "architecture": "amd64"}, "platform")
     _expect(toolchain["pdfjs"]["runtimeNode"], "24.19.0", "runtime Node")
     _expect(toolchain["pdfjs"]["runtimeNpm"], "absent", "runtime npm")
     _expect(
         toolchain["pdfjs"]["nativeCanvas"],
-        "@napi-rs/canvas-linux-x64-gnu@1.0.7-unavailable",
+        "@napi-rs/canvas-linux-x64-gnu@1.0.7",
         "native Canvas",
     )
     _expect(
@@ -1060,10 +1442,10 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
         ],
         "toolchain and Debian font rosters",
     )
-    _expect(toolchain["activation"], "forbidden", "activation")
+    _expect(toolchain["activation"], "candidate-only", "activation")
     _expect(
         toolchain["installedEngineLineage"]["state"],
-        "unavailable",
+        "candidate-ready",
         "installed engine lineage state",
     )
     _expect(
@@ -1121,9 +1503,14 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
         render["input"],
         {
             "externalLinks",
+            "formats",
             "localImmutableBytesOnly",
             "macros",
             "maximumBytes",
+            "maximumEntryBytes",
+            "maximumPackageEntries",
+            "maximumRelationshipBytes",
+            "maximumUncompressedBytes",
             "passwordProtected",
             "remoteUrls",
         },
@@ -1133,8 +1520,10 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
         render["libreOffice"],
         {
             "headless",
+            "maximumPdfBytes",
             "maximumWallMilliseconds",
             "nodefault",
+            "nolockcheck",
             "nologo",
             "norestore",
             "privateUserProfile",
@@ -1148,6 +1537,7 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
         {
             "exactPngSha256Required",
             "background",
+            "maximumBytesPerPage",
             "maximumCount",
             "maximumHeightPixels",
             "maximumPixelsPerPage",
@@ -1205,8 +1595,31 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
     _expect(runtime["network"], "provider-enforced-none", "runtime network")
     _expect(runtime["runtimePackageInstallers"], "absent", "runtime installers")
     _expect(render["pdfjs"]["popplerFallback"], "forbidden", "Poppler fallback")
-    _expect(render["pdfjs"]["executionState"], "unavailable", "render execution")
+    _expect(render["pdfjs"]["executionState"], "available", "render execution")
+    _expect(render["input"]["maximumBytes"], 67108864, "DOCX transport bytes")
+    _expect(render["input"]["maximumEntryBytes"], 67108864, "DOCX entry bytes")
+    _expect(render["input"]["maximumPackageEntries"], 2048, "DOCX entry count")
+    _expect(
+        render["input"]["maximumRelationshipBytes"],
+        4194304,
+        "DOCX relationship bytes",
+    )
+    _expect(
+        render["input"]["maximumUncompressedBytes"],
+        268435456,
+        "DOCX uncompressed bytes",
+    )
+    _expect(
+        render["libreOffice"]["maximumPdfBytes"],
+        268435456,
+        "intermediate PDF bytes",
+    )
     _expect(render["pages"]["maximumTotalPixels"], 536870912, "total pixels")
+    _expect(
+        render["pages"]["maximumBytesPerPage"],
+        67108864,
+        "per-page output bytes",
+    )
     _expect(
         render["pages"]["maximumTotalOutputBytes"],
         536870912,
@@ -1226,10 +1639,10 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
     )
     _expect(render["canonicalArtifactBoundary"], "external-commit-only", "commit boundary")
     _expect(render["renderOutputGrantsCanonicalAuthority"], False, "render authority")
-    _expect(license_policy["state"], "unavailable", "license policy state")
+    _expect(license_policy["state"], "candidate-ready", "license policy state")
     _expect(
         license_policy["nativeCanvas"]["disposition"],
-        "unavailable",
+        "candidate-only",
         "native Canvas license closure",
     )
     _expect(

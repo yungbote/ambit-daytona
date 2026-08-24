@@ -303,7 +303,7 @@ def verify(root: Path, offline: dict[str, Any]) -> dict[str, Any]:
         "ambit.runtime-pack-structural-compatibility-input-lock/v1",
         "structural compatibility schema",
     )
-    _expect(structural["state"], "unavailable", "structural compatibility state")
+    _expect(structural["state"], "candidate-ready", "structural compatibility state")
     _expect(
         structural["composition"],
         "external-curated-files-not-oci-layer-inheritance",

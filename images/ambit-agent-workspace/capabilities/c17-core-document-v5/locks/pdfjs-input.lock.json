@@ -42,10 +42,10 @@
     "wasm/quickjs-eval.wasm"
   ],
   "execution": {
-    "state": "unavailable",
+    "state": "candidate-ready",
     "nodeInputLock": "node-input.lock.json",
     "canvasInputLock": "canvas-input.lock.json",
-    "reason": "exact-node-and-canvas-evidence-closures-incomplete",
+    "reason": "exact-node-canvas-and-static-rosters-candidate-verified",
     "forbiddenSubstitutions": [
       "browser-cdn",
       "poppler",

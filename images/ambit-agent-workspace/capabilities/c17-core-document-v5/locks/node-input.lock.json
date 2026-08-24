@@ -1,6 +1,6 @@
 {
   "schema": "ambit.runtime-pack-node-input-lock/v1",
-  "state": "unavailable",
+  "state": "candidate-ready",
   "version": "24.19.0",
   "source": {
     "repository": "https://github.com/nodejs/node",
@@ -30,7 +30,7 @@
     "signatureBytes": 119,
     "signatureSha256": "sha256:801534e2d4c769c087e2e3eec89e879032872357e64e82336f86f03e72ece630",
     "signerFingerprint": "5BE8A3F6C8A5C01D106C0AD820B1A390B168D356",
-    "verificationState": "unavailable"
+    "verificationState": "verified"
   },
   "runtimeAbi": {
     "modules": "137",
@@ -59,8 +59,7 @@
     "lib/node_modules/corepack",
     "lib/node_modules/npm"
   ],
-  "missing": [
-    "independent-node-release-keyring-verification",
+  "promotionBlockers": [
     "exact-debian-dynamic-library-closure-reproof",
     "node-binary-and-source-vulnerability-policy-pass",
     "retained-node-license-and-third-party-notice-roster"
