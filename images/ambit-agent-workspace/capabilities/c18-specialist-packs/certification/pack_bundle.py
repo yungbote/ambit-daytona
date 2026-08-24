@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import stat
 import sys
 import tarfile
@@ -17,6 +18,13 @@ PACKS = {
     "pdf-ocr": "ambit.runtime-pack/pdf-ocr@1",
     "web-browser": "ambit.runtime-pack/web-browser@1",
 }
+INPUT_MANIFESTS = {
+    "data-research": ("debian-archives.sha256", "python-wheels.sha256"),
+    "office-authoring": ("debian-archives.sha256", "python-wheels.sha256"),
+    "pdf-ocr": ("debian-archives.sha256", "python-wheels.sha256"),
+    "web-browser": ("npm-archives.sha256",),
+}
+MANIFEST_LINE = re.compile(r"^(?P<digest>[0-9a-f]{64})  (?P<path>[^\n]+)$")
 SHARED_SOURCE_ROOTS = (
     "build",
     "conformance",
@@ -120,6 +128,22 @@ def _entries(
     entries = sorted([*source_entries, *input_entries], key=lambda item: (item["scope"], item["path"]))
     if len({(item["scope"], item["path"]) for item in entries}) != len(entries):
         raise PackBundleError("bundle material path is duplicated")
+    expected_external: list[tuple[str, str]] = []
+    for manifest_name in INPUT_MANIFESTS[pack_id]:
+        manifest = source_root / pack_id / "locks" / manifest_name
+        for line in manifest.read_text(encoding="utf-8").splitlines():
+            match = MANIFEST_LINE.fullmatch(line)
+            if match is None:
+                raise PackBundleError("pack input manifest line is invalid")
+            expected_external.append(
+                (match.group("path"), "sha256:" + match.group("digest"))
+            )
+    expected_external.sort()
+    actual_external = sorted(
+        (str(entry["path"]), str(entry["sha256"])) for entry in input_entries
+    )
+    if actual_external != expected_external:
+        raise PackBundleError("external input set differs from the exact pack locks")
     return entries, len(source_entries), len(input_entries)
 
 
