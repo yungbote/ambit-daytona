@@ -22,8 +22,10 @@ import { isAbsolute, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import {
+  admitEmptyOutputDirectory,
   loadRenderPolicy,
   readRegularNoFollow,
+  reproveOutputDirectory,
 } from './ambit-render-pages.mjs'
 import { admitDocxPackage } from './docx-package-admission.mjs'
 import {
@@ -192,50 +194,57 @@ export async function convertDocxToPdf({
     await mkdir(convertedOutput, { mode: 0o700 })
     await mkdir(profile, { mode: 0o700 })
     await writePrivateImmutable(input, documentBytes)
-    await execute({
-      executable: STRUCTURAL_PYTHON_PATH,
-      arguments: [
-        LIBREOFFICE_SUBREAPER_PATH,
-        LIBREOFFICE_PATH,
-        '--headless',
-        '--nologo',
-        '--nodefault',
-        '--norestore',
-        '--nolockcheck',
-        `-env:UserInstallation=${pathToFileURL(profile).href}`,
-        '--convert-to',
-        'pdf:writer_pdf_Export',
-        '--outdir',
-        convertedOutput,
-        input,
-      ],
-      cwd: operationRoot,
-      env: {
-        HOME: privateCacheRoot,
-        LANG: 'C.UTF-8',
-        LC_ALL: 'C.UTF-8',
-        PATH: '/usr/bin:/bin',
-        SAL_USE_VCLPLUGIN: 'svp',
-        TMPDIR: privateCacheRoot,
-        TZ: 'UTC',
-        XDG_CACHE_HOME: join(privateCacheRoot, 'cache'),
-        XDG_CONFIG_HOME: join(privateCacheRoot, 'config'),
-      },
-      maximumWallMilliseconds: policy.libreOffice.maximumWallMilliseconds,
-      maximumStdoutBytes: policy.execution.maximumChildStdoutBytes,
-      maximumStderrBytes: policy.execution.maximumChildStderrBytes,
-      signal,
-    })
-    const names = await readdir(convertedOutput)
-    if (names.length !== 1 || names[0] !== 'document.pdf') {
-      throw new TypeError('LibreOffice did not produce one exact PDF output.')
+    const outputDirectory = await admitEmptyOutputDirectory(convertedOutput)
+    let pdfBytes
+    try {
+      await execute({
+        executable: STRUCTURAL_PYTHON_PATH,
+        arguments: [
+          LIBREOFFICE_SUBREAPER_PATH,
+          LIBREOFFICE_PATH,
+          '--headless',
+          '--nologo',
+          '--nodefault',
+          '--norestore',
+          '--nolockcheck',
+          `-env:UserInstallation=${pathToFileURL(profile).href}`,
+          '--convert-to',
+          'pdf:writer_pdf_Export',
+          '--outdir',
+          convertedOutput,
+          input,
+        ],
+        cwd: operationRoot,
+        env: {
+          HOME: privateCacheRoot,
+          LANG: 'C.UTF-8',
+          LC_ALL: 'C.UTF-8',
+          PATH: '/usr/bin:/bin',
+          SAL_USE_VCLPLUGIN: 'svp',
+          TMPDIR: privateCacheRoot,
+          TZ: 'UTC',
+          XDG_CACHE_HOME: join(privateCacheRoot, 'cache'),
+          XDG_CONFIG_HOME: join(privateCacheRoot, 'config'),
+        },
+        maximumWallMilliseconds: policy.libreOffice.maximumWallMilliseconds,
+        maximumStdoutBytes: policy.execution.maximumChildStdoutBytes,
+        maximumStderrBytes: policy.execution.maximumChildStderrBytes,
+        signal,
+      })
+      const heldOutput = `/proc/self/fd/${outputDirectory.handle.fd}`
+      const names = await readdir(heldOutput)
+      if (names.length !== 1 || names[0] !== 'document.pdf') {
+        throw new TypeError('LibreOffice did not produce one exact PDF output.')
+      }
+      await chmod(join(heldOutput, 'document.pdf'), 0o444)
+      pdfBytes = await readRegularNoFollow(
+        join(heldOutput, 'document.pdf'),
+        policy.libreOffice.maximumPdfBytes,
+      )
+      await reproveOutputDirectory(convertedOutput, outputDirectory.identity)
+    } finally {
+      await outputDirectory.handle.close()
     }
-    const pdfPath = join(convertedOutput, names[0])
-    await chmod(pdfPath, 0o444)
-    const pdfBytes = await readRegularNoFollow(
-      pdfPath,
-      policy.libreOffice.maximumPdfBytes,
-    )
     if (
       pdfBytes.byteLength < 8 ||
       !pdfBytes.subarray(0, 5).equals(Buffer.from('%PDF-')) ||
@@ -247,6 +256,7 @@ export async function convertDocxToPdf({
       throw new TypeError('LibreOffice output is not one bounded PDF document.')
     }
     await unlink(input)
+    const pdfPath = join(convertedOutput, 'document.pdf')
     return Object.freeze({
       pdfBytes,
       pdfPath,
@@ -813,7 +823,8 @@ async function main() {
         nonce,
         outcome: 'cancelled',
         exitCode: CANCELLATION_EXIT_CODE,
-        quiescence: 'libreoffice-process-group-settled-and-private-roots-removed',
+        quiescence:
+          'all-render-process-groups-settled-and-private-roots-removed',
         },
         milliseconds:
           loadedPolicy.policy.execution.maximumTerminalWriteMilliseconds,

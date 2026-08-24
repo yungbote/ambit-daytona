@@ -7,7 +7,7 @@
     "exitCode": 130,
     "typedOutcomeRequires": [
       "exact-nonce-match",
-      "libreoffice-process-group-empty",
+      "all-render-process-groups-empty",
       "private-workspace-root-removed",
       "private-cache-root-removed"
     ]

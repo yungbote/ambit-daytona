@@ -31,7 +31,7 @@ The stable component contract is:
 - role: `ambit.runtime-component/document-renderer@1`;
 - interface: `ambit.runtime-interface/docx-paginated-render@1`;
 - digest:
-  `sha256:72a319d24d3d973aedf7dfbb46452281aab7dcd62c8f2ccbffd363b5c655aa05`;
+  `sha256:e7589cd273e3fe7a31e1aea5d49867a3d818d35f7fee7f28317801fa37bb56d0`;
 - exact preimage: `locks/document-render-interface.lock.json`.
 
 There are no caller-supplied file paths. The provider opens one raw, no-echo
@@ -44,9 +44,9 @@ reprove that lineage before and after the render.
 
 Every frame and nested field roster, discriminator, ordering rule, digest
 equation, success equation, and cancellation equation is frozen in the
-interface lock. That lock also binds the raw implementation digests, so a wire
-change cannot pass source verification while retaining the old interface
-digest.
+interface lock. That lock content-binds every transitive behavior owner, the
+Dockerfile, toolchain manifest, and certification tools, so a wire, render,
+custody, or build change cannot retain the old interface digest.
 
 Before LibreOffice receives process authority, the wrapper admits one ordinary
 single-disk OOXML ZIP with at most 2,048 parts, 64 MiB per part, 256 MiB total
@@ -58,8 +58,12 @@ boundary instead of relying on converter judgment.
 
 The container must run with network disabled and a read-only root filesystem.
 It requires bounded, container-private, UID/GID 1000, mode-0700 tmpfs mounts at
-`/workspace` and `/tmp`. The latter is LibreOffice's private Unix-pipe/cache
-boundary; it is part of the interface rather than an ambient host assumption.
+`/workspace` and `/tmp`. The exact workspace requirement is 800 MiB:
+`max(64 MiB DOCX + 256 MiB PDF, 256 MiB PDF + 512 MiB pages) + 32 MiB`
+of bounded manifest/filesystem overhead. The source DOCX is unlinked after
+conversion, making the 800 MiB render peak the actual controlling branch. The
+private cache requirement is 64 MiB. These derived values are frozen in policy
+and the interface rather than relying on an ambient provider default.
 The final filesystem contains neither apt/dpkg executables nor their mutable
 configuration, cache, or package databases, and both writable mountpoints are
 empty in the image before the provider supplies task-private tmpfs mounts.
@@ -95,9 +99,14 @@ to commit an artifact.
 output without following links, verifies PNG structure and digest, proves the
 closed file roster, and recreates the manifest identity before framing begins.
 
-An exact nonce-bound `cancel` causes the helper to kill and reap its detached
-LibreOffice process group, remove both private roots, emit `cancelled`, and
-exit 130. A lost PTY cannot be called a successful cancellation. It requires a
+An exact nonce-bound `cancel` aborts the whole-pipeline deadline, kills and
+reaps the detached LibreOffice group or the separately isolated PDF.js/native
+renderer group, bounds cleanup and every PTY write, removes both private roots,
+and only then emits `cancelled` and exits 130. One terminal arbiter makes either
+cancel win or atomically closes control admission before `response_end`; both
+terminals await their transport write. The top helper never writes plaintext
+diagnostics to the merged PTY. A lost PTY cannot be called a successful
+cancellation. It requires a
 provider quiescence receipt; the local adapter is pinned by
 `locks/runtime-cancellation-authority.lock.json` to the reviewed XFS supervisor
 and its exact stop-v2 all-authorities-removed receipt. Cloud provider
@@ -159,7 +168,7 @@ A hardened provider launch uses a raw PTY and no input/output bind mounts:
 ```bash
 docker run --rm -it --network none --read-only --cap-drop ALL \
   --security-opt no-new-privileges \
-  --tmpfs /workspace:rw,noexec,nosuid,nodev,size=256m,uid=1000,gid=1000,mode=0700 \
+  --tmpfs /workspace:rw,noexec,nosuid,nodev,size=800m,uid=1000,gid=1000,mode=0700 \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m,uid=1000,gid=1000,mode=0700 \
   --entrypoint /bin/sh ambit-c17-core-document-v5:candidate -c \
   'stty raw -echo -onlcr && exec /opt/ambit/runtime-pack/core-document-v5/bin/ambit-render-document --framed-jsonl --nonce 0123456789abcdef0123456789abcdef'
