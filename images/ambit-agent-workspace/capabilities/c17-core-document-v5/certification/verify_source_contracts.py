@@ -648,6 +648,7 @@ def _verify_candidate_evidence(
         "FROM qualified_core_parent AS core_document_v5",
         "COPY --from=source_identity /daytona-source.tar",
         "BUILD_SOURCE_IDENTITY_SHA256",
+        "BUILD_SOURCE_DATE_EPOCH",
         "io.ambit.source-identity-meaning",
     ):
         if required not in dockerfile_source:
