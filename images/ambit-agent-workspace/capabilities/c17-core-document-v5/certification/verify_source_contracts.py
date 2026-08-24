@@ -515,11 +515,15 @@ def _verify_candidate_evidence(
         "all-render-process-groups-settled-and-private-roots-removed",
         "removePrivateMountContents",
         "mount.handle.sync()",
+        "sealAndReadConvertedPdf",
+        "handle.chmod(0o444)",
     ):
         if required not in render_document_source:
             raise ValueError(f"whole-pipeline render control is absent: {required}")
     if "renderPagesToDirectory({" in render_document_source:
         raise ValueError("PDF.js/native rendering is not process-group isolated")
+    if "chmod(join(heldOutput, 'document.pdf')" in render_document_source:
+        raise ValueError("converted PDF is mutated before no-follow inode admission")
     pdfjs_renderer_source = (
         root / "renderer/pdfjs-page-renderer.mjs"
     ).read_text(encoding="utf-8")

@@ -1,7 +1,7 @@
 {
   "schema": "ambit.runtime-interface-lock/v1",
   "state": "candidate-ready",
-  "digest": "sha256:5fdd5b18ac0d29429b3dd2cb5345909ed922550407f3bdfa6c25ce7c754eec86",
+  "digest": "sha256:18d756d512666d8f481005dd2df106430212ba68a2c30b534fcefb871d9d82e3",
   "contract": {
     "arguments": [
       "--framed-jsonl",
@@ -179,10 +179,10 @@
         "certification/runtime_pty_conformance.py": "sha256:bf591d8fe55c50a612886a3dcd5cbb4765a9bea1a027f61806a3ff528ace8dab",
         "certification/verify_render_output.mjs": "sha256:c3c9e0ea4469f48fb6cfb8f129ea18a769d851f68ec7ca2e2e06e34aff6d4814",
         "certification/verify_signed_debian_snapshot.py": "sha256:c9b36f28f14b639709f840836c8c5c36af3bd8935f9464e1ed44ccfb8a671899",
-        "certification/verify_source_contracts.py": "sha256:a06f3b7a8c00305bf4c9c3465e133cf839723b14f06c9481cdfc79adbd7093fe",
+        "certification/verify_source_contracts.py": "sha256:cc6d61d928e3cce4132847005fa1a91c84e6adf67291d5ab2c2033cf9640fb08",
         "certification/verify_structural_contracts.py": "sha256:539ca505c9952e01ec213e606fb2823457aaa4acfce27278aae52eb307abb2da",
         "certification/verify_structural_runtime_archive.py": "sha256:73f247ceb6dd82087aaac68004888d66ee31884745d475cdda6cbde8d3e19401",
-        "renderer/ambit-render-document.mjs": "sha256:6d5fc68ca6fb3281cdff63e264c56407a2843a47e36d9acac7131a1f01431333",
+        "renderer/ambit-render-document.mjs": "sha256:46bc4bc0eb7df610ce4b8d68dcaaafc95d36a359b18ea8859ebf1589c26acf17",
         "renderer/ambit-render-pages.mjs": "sha256:5e888d07416c9fd8e65643df3fc0329df3bc3ac1fb3c6296cca1b5bf18a7fc8a",
         "renderer/docx-package-admission.mjs": "sha256:4e44b9c281b6ee95cf819abfd08fc14c9545ce1bc434648ca2baa0bdbf47063a",
         "renderer/framed-jsonl-protocol.mjs": "sha256:366c4141e9b73805460c3db96f57ca55f8a58a5d07b2e8c5051d152a77cce17d",
