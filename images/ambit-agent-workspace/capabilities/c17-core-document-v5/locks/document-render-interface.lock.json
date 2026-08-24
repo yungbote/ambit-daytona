@@ -1,7 +1,7 @@
 {
   "schema": "ambit.runtime-interface-lock/v1",
   "state": "candidate-ready",
-  "digest": "sha256:b57c0815bf3cf5e808ba96c6ea0dbe34b2f379685d32c500b30a01b404431892",
+  "digest": "sha256:e7589cd273e3fe7a31e1aea5d49867a3d818d35f7fee7f28317801fa37bb56d0",
   "contract": {
     "arguments": [
       "--framed-jsonl",
@@ -16,13 +16,22 @@
     "cancellation": {
       "authorityLock": {
         "ref": "locks/runtime-cancellation-authority.lock.json",
-        "digest": "sha256:180dd5515c733c3f02834d1d2e9f52d6fe7276ff98f3e23069f5f069359225ee"
+        "digest": "sha256:0dfdbe918f3647d06ad4b90ad843b56c866372c2c1061394c130670a2a4c61ad"
       },
       "explicitFrame": "cancel",
       "helperTerminalFrame": "cancelled",
       "helperExitCode": 130,
       "hardTransportFailure": "requires-provider-runtime-quiescence-receipt-v1",
+      "quiescence": "all-render-process-groups-settled-and-private-roots-removed",
+      "successCommit": "control-admission-atomically-closed-before-awaited-response_end-write",
       "typedCancelledWithoutTerminalOrProviderReceipt": "forbidden"
+    },
+    "execution": {
+      "maximumChildStderrBytes": 65536,
+      "maximumChildStdoutBytes": 16384,
+      "maximumCleanupMilliseconds": 10000,
+      "maximumPipelineWallMilliseconds": 180000,
+      "maximumTerminalWriteMilliseconds": 5000
     },
     "executable": "/opt/ambit/runtime-pack/core-document-v5/bin/ambit-render-document",
     "frames": {
@@ -164,12 +173,26 @@
         ]
       },
       "protocolSources": {
-        "renderer/ambit-render-document.mjs": "sha256:0991d6f51605a6cb53e49b674f6227771b613d6710fc405a6ed6ebc28b1eda4b",
-        "renderer/docx-package-admission.mjs": "sha256:f630d9ed3f31301be09f8cd0c3611deca5d9493c902eb229d8df46de145c49ae",
-        "renderer/framed-jsonl-protocol.mjs": "sha256:57cd24bfb468e851e15a321c0049b1dd4a14dabc302cd0910c799a82b2bdb5fb",
-        "renderer/libreoffice-subreaper.py": "sha256:a77a83ba58b623b339a8590cde69784e1322762bb7ba711efb22e029eb5a843b",
-        "renderer/process-group-execution.mjs": "sha256:44a63b53a1c0d7fda4eddae910b2c19081736bf2a1d4b5726b53c40fbc7f9f20",
-        "renderer/render-output-verification.mjs": "sha256:e7ea478e763b4902e1fb6fdfe6e8402c0cd45e38f840cc301f5966b196bd09ac"
+        "Dockerfile": "sha256:1deaada5c7c6232ac58421400d30b6bfefa8169c6dad79c6c1dd5d24405b0177",
+        "certification/audit_offline_inputs.py": "sha256:fa3a8ffb13201dba092d9dbeab5cad52f86a0775e50b91c2a5499141e4848192",
+        "certification/verify_render_output.mjs": "sha256:c3c9e0ea4469f48fb6cfb8f129ea18a769d851f68ec7ca2e2e06e34aff6d4814",
+        "certification/verify_signed_debian_snapshot.py": "sha256:c9b36f28f14b639709f840836c8c5c36af3bd8935f9464e1ed44ccfb8a671899",
+        "certification/verify_source_contracts.py": "sha256:589d2cd929fb39d77fa7dc98550f1651c213261f746ef3ec01baceb352cd7195",
+        "certification/verify_structural_contracts.py": "sha256:539ca505c9952e01ec213e606fb2823457aaa4acfce27278aae52eb307abb2da",
+        "certification/verify_structural_runtime_archive.py": "sha256:73f247ceb6dd82087aaac68004888d66ee31884745d475cdda6cbde8d3e19401",
+        "renderer/ambit-render-document.mjs": "sha256:d1b83560d5a4d7745ada579953d27031e5951674cfceb8df1d1728565da22b56",
+        "renderer/ambit-render-pages.mjs": "sha256:7592721853510f5510882a805fc337c47e0ddce50fec0ac58609b58589e26098",
+        "renderer/docx-package-admission.mjs": "sha256:4e44b9c281b6ee95cf819abfd08fc14c9545ce1bc434648ca2baa0bdbf47063a",
+        "renderer/framed-jsonl-protocol.mjs": "sha256:9301e7c387a93d58d078c8a0b9832248ad3b4395502b5505771f568a2e907f30",
+        "renderer/pdfjs-page-renderer.mjs": "sha256:484bfb981a89e81109ae1c0d13ac767c8afba5c9982a996975ae59f2d14c14d3",
+        "renderer/process-group-execution.mjs": "sha256:e3fca9cfbb69f2e3001e1aa9e59f8da2742f0b315cb295c7c92d92eb1b3e6d53",
+        "renderer/process-group-subreaper.py": "sha256:511c31746eb3c4359ed388d40cf7c5296c627360b6c8f912773e186692b5967c",
+        "renderer/render-contracts.mjs": "sha256:025634b13d56e6ea89ebc8293dd0e5576d7c0b77ee7db0c4692db24e64b3076c",
+        "renderer/render-output-verification.mjs": "sha256:4fadaea237d94446e408b97c546fc99b0cd8c8b7cd1df7510160bacb154e04b5",
+        "renderer/render-terminal-arbiter.mjs": "sha256:2f57b599f1e6f55072dd6d2294034804cf77aa5aee2c4d74679719f649345078",
+        "renderer/restricted-xml.mjs": "sha256:e3e6737a62fa2f46ce37227b1b331ea46648827159adebd62b594f6919cee48e",
+        "structural/ambit-structural-python": "sha256:d971cbf56e92e2d73d038183e4c726cbaa872a177ebf1f1495e714c5bd22c099",
+        "toolchain-manifest.json": "sha256:72eb9d2da5a5ce05232a1a7138507ed49f757379f8cc92ee45e92618040bdf09"
       },
       "requestOrder": "ready;request_start;document_chunk[index=0..chunkCount-1];request_end",
       "responseOrder": "page_start/page_chunk for page index 0..N-1;manifest_start;manifest_chunk;response_end",
@@ -179,13 +202,14 @@
       "pageDigestEquation": "sha256(concat(page_chunk decoded bytes in chunkIndex order))",
       "manifestShaEquation": "sha256(concat(manifest_chunk decoded bytes in chunkIndex order))",
       "streamDigestDomain": "sha256(exact canonical UTF-8 JSON plus LF bytes for every response frame before response_end)",
-      "successEquation": "exact response order and aggregates plus response_end outcome=passed exitCode=0 plus helper process exit=0",
-      "cancellationEquation": "exact nonce-bound cancel plus cancelled outcome=cancelled exitCode=130 after helper quiescence plus helper process exit=130"
+      "successEquation": "exact response order and aggregates plus atomic control-admission close before awaited response_end outcome=passed exitCode=0 plus helper process exit=0",
+      "cancellationEquation": "exact nonce-bound cancel wins before success commit plus all render process groups settled plus private roots removed plus awaited cancelled outcome=cancelled exitCode=130 plus helper process exit=130"
     },
     "input": {
       "backendLineageSchema": "exact:{schemaRef,ref,digest,canonicalBytesSha256}",
       "document": "ordered-base64-chunks-bound-to-exact-docx-bytes",
       "maximumBytes": 67108864,
+      "metadataXmlBounds": "bytes=4194304,nodes=65536,depth=64,attributes-per-element=64,attribute-bytes=1048576,entities=65536,decoded-text-bytes=4194304",
       "nonceBinding": "every-request-frame"
     },
     "interfaceRef": "ambit.runtime-interface/docx-paginated-render@1",
@@ -193,6 +217,7 @@
       "manifestSchema": "ambit.runtime-pack-paginated-render-manifest/v1",
       "maximumBytesPerPage": 67108864,
       "maximumTotalOutputBytes": 536870912,
+      "evidenceInvariant": "source<=input-max;pdf<=pdf-max;dense-exact-page-identity;width*height=pixels;png-dimensions-and-digest;per-page-and-aggregate-bounds",
       "nonceBinding": "every-response-frame",
       "partialOrExtraFrames": "discard-entire-response",
       "roster": "every-page-dense-zero-based-manifest-last",
@@ -200,22 +225,38 @@
     },
     "policy": {
       "ref": "ambit.render-policy/core-document-paginated@1",
-      "digest": "sha256:60aebfd060c29db41e0e9830f0bec109d4c51239942b4803aa3d342ecb4d5987"
+      "digest": "sha256:185acb700f6ac0ddaa1fdd4a04212ff3d4fff51463defe37b1ad73d9fd5125d3"
     },
     "roleRef": "ambit.runtime-component/document-renderer@1",
     "runtime": {
       "network": "none",
       "pathAuthority": "none",
-      "processModel": "one-helper-and-one-bounded-libreoffice-process-group",
+      "processModel": "one-helper-with-separate-bounded-libreoffice-and-pdfjs-native-process-groups",
       "rootFilesystem": "read-only",
-      "taskCache": "/tmp:tmpfs:uid=1000,gid=1000,mode=0700,bounded",
-      "workspaceScratch": "/workspace:tmpfs:uid=1000,gid=1000,mode=0700,bounded"
+      "taskCache": {
+        "path": "/tmp",
+        "filesystem": "task-private-tmpfs",
+        "requiredBytes": 67108864,
+        "uid": 1000,
+        "gid": 1000,
+        "mode": "0700"
+      },
+      "workspaceScratch": {
+        "path": "/workspace",
+        "filesystem": "task-private-tmpfs",
+        "requiredBytes": 838860800,
+        "derivation": "max(input-docx+intermediate-pdf,intermediate-pdf+page-output)+33554432-bounded-overhead",
+        "uid": 1000,
+        "gid": 1000,
+        "mode": "0700"
+      }
     },
     "schema": "ambit.runtime-interface-contract/v1",
     "transport": {
       "chunkBytes": 49152,
       "encoding": "canonical-jsonl-with-canonical-base64-payloads",
       "inputEcho": "forbidden",
+      "plaintextHelperStderr": "forbidden",
       "maximumLineBytes": 70000,
       "medium": "raw-noecho-pty",
       "providerLaunch": "stty raw -echo -onlcr && exec exact-helper --framed-jsonl --nonce exact-nonce",
