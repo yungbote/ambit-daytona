@@ -36,4 +36,3 @@ export interface UpdateDockerRegistry {
      */
     'project'?: string;
 }
-

@@ -31,6 +31,3 @@ export interface UpdateJobStatus {
      */
     'resultMetadata'?: string;
 }
-
-
-

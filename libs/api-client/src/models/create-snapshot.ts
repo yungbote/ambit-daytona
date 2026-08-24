@@ -69,6 +69,3 @@ export interface CreateSnapshot {
      */
     'sandboxClass'?: SandboxClass;
 }
-
-
-

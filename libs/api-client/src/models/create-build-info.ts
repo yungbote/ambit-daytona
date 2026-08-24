@@ -24,4 +24,3 @@ export interface CreateBuildInfo {
      */
     'contextHashes'?: Array<string>;
 }
-

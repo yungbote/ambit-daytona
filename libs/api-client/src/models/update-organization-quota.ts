@@ -41,4 +41,3 @@ export interface UpdateOrganizationQuota {
      */
     'maxConcurrentSnapshotProcessing': number | null;
 }
-

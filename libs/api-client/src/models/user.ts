@@ -39,4 +39,3 @@ export interface User {
      */
     'createdAt': Date;
 }
-

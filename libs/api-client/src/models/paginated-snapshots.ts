@@ -23,4 +23,3 @@ export interface PaginatedSnapshots {
     'page': number;
     'totalPages': number;
 }
-

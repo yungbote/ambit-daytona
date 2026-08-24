@@ -28,4 +28,3 @@ export interface AdminCreateOrganization {
      */
     'defaultRegionId': string;
 }
-

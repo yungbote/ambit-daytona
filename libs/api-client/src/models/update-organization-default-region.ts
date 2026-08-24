@@ -20,4 +20,3 @@ export interface UpdateOrganizationDefaultRegion {
      */
     'defaultRegionId': string;
 }
-

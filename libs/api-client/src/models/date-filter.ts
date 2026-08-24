@@ -32,4 +32,3 @@ export interface DateFilter {
      */
     'lt'?: Date;
 }
-

@@ -71,5 +71,3 @@ export const JobResourceTypeEnum = {
 } as const;
 
 export type JobResourceTypeEnum = typeof JobResourceTypeEnum[keyof typeof JobResourceTypeEnum];
-
-

@@ -24,4 +24,3 @@ export interface Announcement {
      */
     'learnMoreUrl'?: string;
 }
-

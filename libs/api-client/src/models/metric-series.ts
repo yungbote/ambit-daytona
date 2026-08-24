@@ -27,4 +27,3 @@ export interface MetricSeries {
      */
     'dataPoints': Array<MetricDataPoint>;
 }
-

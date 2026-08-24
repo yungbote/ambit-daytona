@@ -80,5 +80,3 @@ export const OrganizationInvitationRoleEnum = {
 } as const;
 
 export type OrganizationInvitationRoleEnum = typeof OrganizationInvitationRoleEnum[keyof typeof OrganizationInvitationRoleEnum];
-
-

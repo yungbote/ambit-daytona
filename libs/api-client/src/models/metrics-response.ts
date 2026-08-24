@@ -23,4 +23,3 @@ export interface MetricsResponse {
      */
     'series': Array<MetricSeries>;
 }
-

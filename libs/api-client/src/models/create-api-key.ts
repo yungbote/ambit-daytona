@@ -52,5 +52,3 @@ export const CreateApiKeyPermissionsEnum = {
 } as const;
 
 export type CreateApiKeyPermissionsEnum = typeof CreateApiKeyPermissionsEnum[keyof typeof CreateApiKeyPermissionsEnum];
-
-

@@ -24,4 +24,3 @@ export interface CreateLinkedAccount {
      */
     'userId': string;
 }
-

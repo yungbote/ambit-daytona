@@ -35,7 +35,7 @@ import type { StringFilter } from '../models';
 export const AuditApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         * 
+         *
          * @summary Get audit logs for organization
          * @param {string} organizationId Organization ID
          * @param {number} [page] Page number of the results
@@ -183,7 +183,7 @@ export const AuditApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = AuditApiAxiosParamCreator(configuration)
     return {
         /**
-         * 
+         *
          * @summary Get audit logs for organization
          * @param {string} organizationId Organization ID
          * @param {number} [page] Page number of the results
@@ -220,7 +220,7 @@ export const AuditApiFactory = function (configuration?: Configuration, basePath
     const localVarFp = AuditApiFp(configuration)
     return {
         /**
-         * 
+         *
          * @summary Get audit logs for organization
          * @param {string} organizationId Organization ID
          * @param {number} [page] Page number of the results
@@ -252,7 +252,7 @@ export const AuditApiFactory = function (configuration?: Configuration, basePath
  */
 export class AuditApi extends BaseAPI {
     /**
-     * 
+     *
      * @summary Get audit logs for organization
      * @param {string} organizationId Organization ID
      * @param {number} [page] Page number of the results
@@ -277,4 +277,3 @@ export class AuditApi extends BaseAPI {
         return AuditApiFp(this.configuration).getOrganizationAuditLogs(organizationId, page, limit, from, to, nextToken, id, actorId, actorEmail, actorApiKeyPrefix, actorApiKeySuffix, action, targetType, targetId, statusCode, createdAt, options).then((request) => request(this.axios, this.basePath));
     }
 }
-

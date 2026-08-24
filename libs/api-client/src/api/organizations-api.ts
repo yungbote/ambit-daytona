@@ -77,7 +77,7 @@ import type { UpdateRegion } from '../models';
 export const OrganizationsApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         * 
+         *
          * @summary Accept organization invitation
          * @param {string} invitationId Invitation ID
          * @param {*} [options] Override http request option.
@@ -117,7 +117,7 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Cancel organization invitation
          * @param {string} organizationId Organization ID
          * @param {string} invitationId Invitation ID
@@ -160,9 +160,9 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Create organization
-         * @param {CreateOrganization} createOrganization 
+         * @param {CreateOrganization} createOrganization
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -201,10 +201,10 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Create organization invitation
          * @param {string} organizationId Organization ID
-         * @param {CreateOrganizationInvitation} createOrganizationInvitation 
+         * @param {CreateOrganizationInvitation} createOrganizationInvitation
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -246,10 +246,10 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Create organization role
          * @param {string} organizationId Organization ID
-         * @param {CreateOrganizationRole} createOrganizationRole 
+         * @param {CreateOrganizationRole} createOrganizationRole
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -291,9 +291,9 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Create a new region
-         * @param {CreateRegion} createRegion 
+         * @param {CreateRegion} createRegion
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -336,7 +336,7 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Decline organization invitation
          * @param {string} invitationId Invitation ID
          * @param {*} [options] Override http request option.
@@ -375,7 +375,7 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Delete organization
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -414,7 +414,7 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Delete organization member
          * @param {string} organizationId Organization ID
          * @param {string} userId User ID
@@ -457,7 +457,7 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Delete organization OpenTelemetry configuration
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -496,7 +496,7 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Delete organization role
          * @param {string} organizationId Organization ID
          * @param {string} roleId Role ID
@@ -539,7 +539,7 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Delete a region
          * @param {string} id Region ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -582,7 +582,7 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Get organization by ID
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -622,7 +622,7 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Get count of organization invitations for authenticated user
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -658,7 +658,7 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Get organization OTEL config by organization ID
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -698,7 +698,7 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Get organization OTEL config by sandbox auth token
          * @param {string} authToken Sandbox Auth Token
          * @param {*} [options] Override http request option.
@@ -738,7 +738,7 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Get organization current usage overview
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -778,7 +778,7 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Get region by ID
          * @param {string} id Region ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -822,7 +822,7 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Leave organization
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -861,7 +861,7 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary List all available regions for the organization
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -901,7 +901,7 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary List available sandbox classes for organization
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -941,7 +941,7 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary List pending organization invitations
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -981,7 +981,7 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary List organization invitations for authenticated user
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -1017,7 +1017,7 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary List organization members
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -1057,7 +1057,7 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary List organization roles
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -1097,7 +1097,7 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary List organizations
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -1133,7 +1133,7 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Regenerate proxy API key for a region
          * @param {string} id Region ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -1177,7 +1177,7 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Regenerate snapshot manager credentials for a region
          * @param {string} id Region ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -1221,7 +1221,7 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Regenerate SSH gateway API key for a region
          * @param {string} id Region ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -1265,10 +1265,10 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Set default region for organization
          * @param {string} organizationId Organization ID
-         * @param {UpdateOrganizationDefaultRegion} updateOrganizationDefaultRegion 
+         * @param {UpdateOrganizationDefaultRegion} updateOrganizationDefaultRegion
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1309,10 +1309,10 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Suspend organization
          * @param {string} organizationId Organization ID
-         * @param {OrganizationSuspension} [organizationSuspension] 
+         * @param {OrganizationSuspension} [organizationSuspension]
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1351,7 +1351,7 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Unsuspend organization
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -1390,11 +1390,11 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Update access for organization member
          * @param {string} organizationId Organization ID
          * @param {string} userId User ID
-         * @param {UpdateOrganizationMemberAccess} updateOrganizationMemberAccess 
+         * @param {UpdateOrganizationMemberAccess} updateOrganizationMemberAccess
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1439,7 +1439,7 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Update experimental configuration
          * @param {string} organizationId Organization ID
          * @param {{ [key: string]: any; }} [requestBody] Experimental configuration as a JSON object. Set to null to clear the configuration.
@@ -1481,11 +1481,11 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Update organization invitation
          * @param {string} organizationId Organization ID
          * @param {string} invitationId Invitation ID
-         * @param {UpdateOrganizationInvitation} updateOrganizationInvitation 
+         * @param {UpdateOrganizationInvitation} updateOrganizationInvitation
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1530,10 +1530,10 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Update organization OpenTelemetry configuration
          * @param {string} organizationId Organization ID
-         * @param {OtelConfig} otelConfig 
+         * @param {OtelConfig} otelConfig
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1574,10 +1574,10 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Update organization preview warning
          * @param {string} organizationId Organization ID
-         * @param {OrganizationPreviewWarning} organizationPreviewWarning 
+         * @param {OrganizationPreviewWarning} organizationPreviewWarning
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1618,10 +1618,10 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Update organization quota
          * @param {string} organizationId Organization ID
-         * @param {UpdateOrganizationQuota} updateOrganizationQuota 
+         * @param {UpdateOrganizationQuota} updateOrganizationQuota
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1662,11 +1662,11 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Update organization region quota
          * @param {string} organizationId Organization ID
          * @param {string} regionId ID of the region where the updated quota will be applied
-         * @param {UpdateOrganizationRegionQuota} updateOrganizationRegionQuota 
+         * @param {UpdateOrganizationRegionQuota} updateOrganizationRegionQuota
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1710,11 +1710,11 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Update organization role
          * @param {string} organizationId Organization ID
          * @param {string} roleId Role ID
-         * @param {UpdateOrganizationRole} updateOrganizationRole 
+         * @param {UpdateOrganizationRole} updateOrganizationRole
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1759,10 +1759,10 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Update region configuration
          * @param {string} id Region ID
-         * @param {UpdateRegion} updateRegion 
+         * @param {UpdateRegion} updateRegion
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -1807,10 +1807,10 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
             };
         },
         /**
-         * 
+         *
          * @summary Update sandbox default limited network egress
          * @param {string} organizationId Organization ID
-         * @param {OrganizationSandboxDefaultLimitedNetworkEgress} organizationSandboxDefaultLimitedNetworkEgress 
+         * @param {OrganizationSandboxDefaultLimitedNetworkEgress} organizationSandboxDefaultLimitedNetworkEgress
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1860,7 +1860,7 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = OrganizationsApiAxiosParamCreator(configuration)
     return {
         /**
-         * 
+         *
          * @summary Accept organization invitation
          * @param {string} invitationId Invitation ID
          * @param {*} [options] Override http request option.
@@ -1873,7 +1873,7 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Cancel organization invitation
          * @param {string} organizationId Organization ID
          * @param {string} invitationId Invitation ID
@@ -1887,9 +1887,9 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Create organization
-         * @param {CreateOrganization} createOrganization 
+         * @param {CreateOrganization} createOrganization
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1900,10 +1900,10 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Create organization invitation
          * @param {string} organizationId Organization ID
-         * @param {CreateOrganizationInvitation} createOrganizationInvitation 
+         * @param {CreateOrganizationInvitation} createOrganizationInvitation
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1914,10 +1914,10 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Create organization role
          * @param {string} organizationId Organization ID
-         * @param {CreateOrganizationRole} createOrganizationRole 
+         * @param {CreateOrganizationRole} createOrganizationRole
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1928,9 +1928,9 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Create a new region
-         * @param {CreateRegion} createRegion 
+         * @param {CreateRegion} createRegion
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -1942,7 +1942,7 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Decline organization invitation
          * @param {string} invitationId Invitation ID
          * @param {*} [options] Override http request option.
@@ -1955,7 +1955,7 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Delete organization
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -1968,7 +1968,7 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Delete organization member
          * @param {string} organizationId Organization ID
          * @param {string} userId User ID
@@ -1982,7 +1982,7 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Delete organization OpenTelemetry configuration
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -1995,7 +1995,7 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Delete organization role
          * @param {string} organizationId Organization ID
          * @param {string} roleId Role ID
@@ -2009,7 +2009,7 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Delete a region
          * @param {string} id Region ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -2023,7 +2023,7 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Get organization by ID
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -2036,7 +2036,7 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Get count of organization invitations for authenticated user
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -2048,7 +2048,7 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Get organization OTEL config by organization ID
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -2061,7 +2061,7 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Get organization OTEL config by sandbox auth token
          * @param {string} authToken Sandbox Auth Token
          * @param {*} [options] Override http request option.
@@ -2074,7 +2074,7 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Get organization current usage overview
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -2087,7 +2087,7 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Get region by ID
          * @param {string} id Region ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -2101,7 +2101,7 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Leave organization
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -2114,7 +2114,7 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary List all available regions for the organization
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -2127,7 +2127,7 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary List available sandbox classes for organization
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -2140,7 +2140,7 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary List pending organization invitations
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -2153,7 +2153,7 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary List organization invitations for authenticated user
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -2165,7 +2165,7 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary List organization members
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -2178,7 +2178,7 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary List organization roles
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -2191,7 +2191,7 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary List organizations
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -2203,7 +2203,7 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Regenerate proxy API key for a region
          * @param {string} id Region ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -2217,7 +2217,7 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Regenerate snapshot manager credentials for a region
          * @param {string} id Region ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -2231,7 +2231,7 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Regenerate SSH gateway API key for a region
          * @param {string} id Region ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -2245,10 +2245,10 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Set default region for organization
          * @param {string} organizationId Organization ID
-         * @param {UpdateOrganizationDefaultRegion} updateOrganizationDefaultRegion 
+         * @param {UpdateOrganizationDefaultRegion} updateOrganizationDefaultRegion
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -2259,10 +2259,10 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Suspend organization
          * @param {string} organizationId Organization ID
-         * @param {OrganizationSuspension} [organizationSuspension] 
+         * @param {OrganizationSuspension} [organizationSuspension]
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -2273,7 +2273,7 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Unsuspend organization
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -2286,11 +2286,11 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Update access for organization member
          * @param {string} organizationId Organization ID
          * @param {string} userId User ID
-         * @param {UpdateOrganizationMemberAccess} updateOrganizationMemberAccess 
+         * @param {UpdateOrganizationMemberAccess} updateOrganizationMemberAccess
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -2301,7 +2301,7 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Update experimental configuration
          * @param {string} organizationId Organization ID
          * @param {{ [key: string]: any; }} [requestBody] Experimental configuration as a JSON object. Set to null to clear the configuration.
@@ -2315,11 +2315,11 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Update organization invitation
          * @param {string} organizationId Organization ID
          * @param {string} invitationId Invitation ID
-         * @param {UpdateOrganizationInvitation} updateOrganizationInvitation 
+         * @param {UpdateOrganizationInvitation} updateOrganizationInvitation
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -2330,10 +2330,10 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Update organization OpenTelemetry configuration
          * @param {string} organizationId Organization ID
-         * @param {OtelConfig} otelConfig 
+         * @param {OtelConfig} otelConfig
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -2344,10 +2344,10 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Update organization preview warning
          * @param {string} organizationId Organization ID
-         * @param {OrganizationPreviewWarning} organizationPreviewWarning 
+         * @param {OrganizationPreviewWarning} organizationPreviewWarning
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -2358,10 +2358,10 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Update organization quota
          * @param {string} organizationId Organization ID
-         * @param {UpdateOrganizationQuota} updateOrganizationQuota 
+         * @param {UpdateOrganizationQuota} updateOrganizationQuota
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -2372,11 +2372,11 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Update organization region quota
          * @param {string} organizationId Organization ID
          * @param {string} regionId ID of the region where the updated quota will be applied
-         * @param {UpdateOrganizationRegionQuota} updateOrganizationRegionQuota 
+         * @param {UpdateOrganizationRegionQuota} updateOrganizationRegionQuota
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -2387,11 +2387,11 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Update organization role
          * @param {string} organizationId Organization ID
          * @param {string} roleId Role ID
-         * @param {UpdateOrganizationRole} updateOrganizationRole 
+         * @param {UpdateOrganizationRole} updateOrganizationRole
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -2402,10 +2402,10 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Update region configuration
          * @param {string} id Region ID
-         * @param {UpdateRegion} updateRegion 
+         * @param {UpdateRegion} updateRegion
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -2417,10 +2417,10 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Update sandbox default limited network egress
          * @param {string} organizationId Organization ID
-         * @param {OrganizationSandboxDefaultLimitedNetworkEgress} organizationSandboxDefaultLimitedNetworkEgress 
+         * @param {OrganizationSandboxDefaultLimitedNetworkEgress} organizationSandboxDefaultLimitedNetworkEgress
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -2440,7 +2440,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
     const localVarFp = OrganizationsApiFp(configuration)
     return {
         /**
-         * 
+         *
          * @summary Accept organization invitation
          * @param {string} invitationId Invitation ID
          * @param {*} [options] Override http request option.
@@ -2450,7 +2450,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.acceptOrganizationInvitation(invitationId, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Cancel organization invitation
          * @param {string} organizationId Organization ID
          * @param {string} invitationId Invitation ID
@@ -2461,9 +2461,9 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.cancelOrganizationInvitation(organizationId, invitationId, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Create organization
-         * @param {CreateOrganization} createOrganization 
+         * @param {CreateOrganization} createOrganization
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -2471,10 +2471,10 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.createOrganization(createOrganization, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Create organization invitation
          * @param {string} organizationId Organization ID
-         * @param {CreateOrganizationInvitation} createOrganizationInvitation 
+         * @param {CreateOrganizationInvitation} createOrganizationInvitation
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -2482,10 +2482,10 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.createOrganizationInvitation(organizationId, createOrganizationInvitation, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Create organization role
          * @param {string} organizationId Organization ID
-         * @param {CreateOrganizationRole} createOrganizationRole 
+         * @param {CreateOrganizationRole} createOrganizationRole
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -2493,9 +2493,9 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.createOrganizationRole(organizationId, createOrganizationRole, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Create a new region
-         * @param {CreateRegion} createRegion 
+         * @param {CreateRegion} createRegion
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -2504,7 +2504,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.createRegion(createRegion, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Decline organization invitation
          * @param {string} invitationId Invitation ID
          * @param {*} [options] Override http request option.
@@ -2514,7 +2514,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.declineOrganizationInvitation(invitationId, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Delete organization
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -2524,7 +2524,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.deleteOrganization(organizationId, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Delete organization member
          * @param {string} organizationId Organization ID
          * @param {string} userId User ID
@@ -2535,7 +2535,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.deleteOrganizationMember(organizationId, userId, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Delete organization OpenTelemetry configuration
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -2545,7 +2545,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.deleteOrganizationOtelConfig(organizationId, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Delete organization role
          * @param {string} organizationId Organization ID
          * @param {string} roleId Role ID
@@ -2556,7 +2556,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.deleteOrganizationRole(organizationId, roleId, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Delete a region
          * @param {string} id Region ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -2567,7 +2567,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.deleteRegion(id, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Get organization by ID
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -2577,7 +2577,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.getOrganization(organizationId, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Get count of organization invitations for authenticated user
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -2586,7 +2586,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.getOrganizationInvitationsCountForAuthenticatedUser(options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Get organization OTEL config by organization ID
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -2596,7 +2596,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.getOrganizationOtelConfig(organizationId, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Get organization OTEL config by sandbox auth token
          * @param {string} authToken Sandbox Auth Token
          * @param {*} [options] Override http request option.
@@ -2606,7 +2606,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.getOrganizationOtelConfigBySandboxAuthToken(authToken, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Get organization current usage overview
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -2616,7 +2616,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.getOrganizationUsageOverview(organizationId, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Get region by ID
          * @param {string} id Region ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -2627,7 +2627,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.getRegionById(id, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Leave organization
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -2637,7 +2637,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.leaveOrganization(organizationId, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary List all available regions for the organization
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -2647,7 +2647,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.listAvailableRegions(xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary List available sandbox classes for organization
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -2657,7 +2657,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.listAvailableSandboxClasses(organizationId, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary List pending organization invitations
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -2667,7 +2667,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.listOrganizationInvitations(organizationId, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary List organization invitations for authenticated user
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -2676,7 +2676,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.listOrganizationInvitationsForAuthenticatedUser(options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary List organization members
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -2686,7 +2686,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.listOrganizationMembers(organizationId, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary List organization roles
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -2696,7 +2696,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.listOrganizationRoles(organizationId, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary List organizations
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -2705,7 +2705,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.listOrganizations(options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Regenerate proxy API key for a region
          * @param {string} id Region ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -2716,7 +2716,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.regenerateProxyApiKey(id, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Regenerate snapshot manager credentials for a region
          * @param {string} id Region ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -2727,7 +2727,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.regenerateSnapshotManagerCredentials(id, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Regenerate SSH gateway API key for a region
          * @param {string} id Region ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -2738,10 +2738,10 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.regenerateSshGatewayApiKey(id, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Set default region for organization
          * @param {string} organizationId Organization ID
-         * @param {UpdateOrganizationDefaultRegion} updateOrganizationDefaultRegion 
+         * @param {UpdateOrganizationDefaultRegion} updateOrganizationDefaultRegion
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -2749,10 +2749,10 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.setOrganizationDefaultRegion(organizationId, updateOrganizationDefaultRegion, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Suspend organization
          * @param {string} organizationId Organization ID
-         * @param {OrganizationSuspension} [organizationSuspension] 
+         * @param {OrganizationSuspension} [organizationSuspension]
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -2760,7 +2760,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.suspendOrganization(organizationId, organizationSuspension, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Unsuspend organization
          * @param {string} organizationId Organization ID
          * @param {*} [options] Override http request option.
@@ -2770,11 +2770,11 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.unsuspendOrganization(organizationId, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Update access for organization member
          * @param {string} organizationId Organization ID
          * @param {string} userId User ID
-         * @param {UpdateOrganizationMemberAccess} updateOrganizationMemberAccess 
+         * @param {UpdateOrganizationMemberAccess} updateOrganizationMemberAccess
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -2782,7 +2782,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.updateAccessForOrganizationMember(organizationId, userId, updateOrganizationMemberAccess, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Update experimental configuration
          * @param {string} organizationId Organization ID
          * @param {{ [key: string]: any; }} [requestBody] Experimental configuration as a JSON object. Set to null to clear the configuration.
@@ -2793,11 +2793,11 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.updateExperimentalConfig(organizationId, requestBody, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Update organization invitation
          * @param {string} organizationId Organization ID
          * @param {string} invitationId Invitation ID
-         * @param {UpdateOrganizationInvitation} updateOrganizationInvitation 
+         * @param {UpdateOrganizationInvitation} updateOrganizationInvitation
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -2805,10 +2805,10 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.updateOrganizationInvitation(organizationId, invitationId, updateOrganizationInvitation, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Update organization OpenTelemetry configuration
          * @param {string} organizationId Organization ID
-         * @param {OtelConfig} otelConfig 
+         * @param {OtelConfig} otelConfig
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -2816,10 +2816,10 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.updateOrganizationOtelConfig(organizationId, otelConfig, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Update organization preview warning
          * @param {string} organizationId Organization ID
-         * @param {OrganizationPreviewWarning} organizationPreviewWarning 
+         * @param {OrganizationPreviewWarning} organizationPreviewWarning
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -2827,10 +2827,10 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.updateOrganizationPreviewWarning(organizationId, organizationPreviewWarning, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Update organization quota
          * @param {string} organizationId Organization ID
-         * @param {UpdateOrganizationQuota} updateOrganizationQuota 
+         * @param {UpdateOrganizationQuota} updateOrganizationQuota
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -2838,11 +2838,11 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.updateOrganizationQuota(organizationId, updateOrganizationQuota, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Update organization region quota
          * @param {string} organizationId Organization ID
          * @param {string} regionId ID of the region where the updated quota will be applied
-         * @param {UpdateOrganizationRegionQuota} updateOrganizationRegionQuota 
+         * @param {UpdateOrganizationRegionQuota} updateOrganizationRegionQuota
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -2850,11 +2850,11 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.updateOrganizationRegionQuota(organizationId, regionId, updateOrganizationRegionQuota, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Update organization role
          * @param {string} organizationId Organization ID
          * @param {string} roleId Role ID
-         * @param {UpdateOrganizationRole} updateOrganizationRole 
+         * @param {UpdateOrganizationRole} updateOrganizationRole
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -2862,10 +2862,10 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.updateOrganizationRole(organizationId, roleId, updateOrganizationRole, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Update region configuration
          * @param {string} id Region ID
-         * @param {UpdateRegion} updateRegion 
+         * @param {UpdateRegion} updateRegion
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -2874,10 +2874,10 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
             return localVarFp.updateRegion(id, updateRegion, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Update sandbox default limited network egress
          * @param {string} organizationId Organization ID
-         * @param {OrganizationSandboxDefaultLimitedNetworkEgress} organizationSandboxDefaultLimitedNetworkEgress 
+         * @param {OrganizationSandboxDefaultLimitedNetworkEgress} organizationSandboxDefaultLimitedNetworkEgress
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -2892,7 +2892,7 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
  */
 export class OrganizationsApi extends BaseAPI {
     /**
-     * 
+     *
      * @summary Accept organization invitation
      * @param {string} invitationId Invitation ID
      * @param {*} [options] Override http request option.
@@ -2903,7 +2903,7 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Cancel organization invitation
      * @param {string} organizationId Organization ID
      * @param {string} invitationId Invitation ID
@@ -2915,9 +2915,9 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Create organization
-     * @param {CreateOrganization} createOrganization 
+     * @param {CreateOrganization} createOrganization
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -2926,10 +2926,10 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Create organization invitation
      * @param {string} organizationId Organization ID
-     * @param {CreateOrganizationInvitation} createOrganizationInvitation 
+     * @param {CreateOrganizationInvitation} createOrganizationInvitation
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -2938,10 +2938,10 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Create organization role
      * @param {string} organizationId Organization ID
-     * @param {CreateOrganizationRole} createOrganizationRole 
+     * @param {CreateOrganizationRole} createOrganizationRole
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -2950,9 +2950,9 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Create a new region
-     * @param {CreateRegion} createRegion 
+     * @param {CreateRegion} createRegion
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -2962,7 +2962,7 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Decline organization invitation
      * @param {string} invitationId Invitation ID
      * @param {*} [options] Override http request option.
@@ -2973,7 +2973,7 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Delete organization
      * @param {string} organizationId Organization ID
      * @param {*} [options] Override http request option.
@@ -2984,7 +2984,7 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Delete organization member
      * @param {string} organizationId Organization ID
      * @param {string} userId User ID
@@ -2996,7 +2996,7 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Delete organization OpenTelemetry configuration
      * @param {string} organizationId Organization ID
      * @param {*} [options] Override http request option.
@@ -3007,7 +3007,7 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Delete organization role
      * @param {string} organizationId Organization ID
      * @param {string} roleId Role ID
@@ -3019,7 +3019,7 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Delete a region
      * @param {string} id Region ID
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3031,7 +3031,7 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Get organization by ID
      * @param {string} organizationId Organization ID
      * @param {*} [options] Override http request option.
@@ -3042,7 +3042,7 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Get count of organization invitations for authenticated user
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -3052,7 +3052,7 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Get organization OTEL config by organization ID
      * @param {string} organizationId Organization ID
      * @param {*} [options] Override http request option.
@@ -3063,7 +3063,7 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Get organization OTEL config by sandbox auth token
      * @param {string} authToken Sandbox Auth Token
      * @param {*} [options] Override http request option.
@@ -3074,7 +3074,7 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Get organization current usage overview
      * @param {string} organizationId Organization ID
      * @param {*} [options] Override http request option.
@@ -3085,7 +3085,7 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Get region by ID
      * @param {string} id Region ID
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3097,7 +3097,7 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Leave organization
      * @param {string} organizationId Organization ID
      * @param {*} [options] Override http request option.
@@ -3108,7 +3108,7 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary List all available regions for the organization
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
@@ -3119,7 +3119,7 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary List available sandbox classes for organization
      * @param {string} organizationId Organization ID
      * @param {*} [options] Override http request option.
@@ -3130,7 +3130,7 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary List pending organization invitations
      * @param {string} organizationId Organization ID
      * @param {*} [options] Override http request option.
@@ -3141,7 +3141,7 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary List organization invitations for authenticated user
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -3151,7 +3151,7 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary List organization members
      * @param {string} organizationId Organization ID
      * @param {*} [options] Override http request option.
@@ -3162,7 +3162,7 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary List organization roles
      * @param {string} organizationId Organization ID
      * @param {*} [options] Override http request option.
@@ -3173,7 +3173,7 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary List organizations
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -3183,7 +3183,7 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Regenerate proxy API key for a region
      * @param {string} id Region ID
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3195,7 +3195,7 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Regenerate snapshot manager credentials for a region
      * @param {string} id Region ID
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3207,7 +3207,7 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Regenerate SSH gateway API key for a region
      * @param {string} id Region ID
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3219,10 +3219,10 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Set default region for organization
      * @param {string} organizationId Organization ID
-     * @param {UpdateOrganizationDefaultRegion} updateOrganizationDefaultRegion 
+     * @param {UpdateOrganizationDefaultRegion} updateOrganizationDefaultRegion
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -3231,10 +3231,10 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Suspend organization
      * @param {string} organizationId Organization ID
-     * @param {OrganizationSuspension} [organizationSuspension] 
+     * @param {OrganizationSuspension} [organizationSuspension]
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -3243,7 +3243,7 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Unsuspend organization
      * @param {string} organizationId Organization ID
      * @param {*} [options] Override http request option.
@@ -3254,11 +3254,11 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Update access for organization member
      * @param {string} organizationId Organization ID
      * @param {string} userId User ID
-     * @param {UpdateOrganizationMemberAccess} updateOrganizationMemberAccess 
+     * @param {UpdateOrganizationMemberAccess} updateOrganizationMemberAccess
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -3267,7 +3267,7 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Update experimental configuration
      * @param {string} organizationId Organization ID
      * @param {{ [key: string]: any; }} [requestBody] Experimental configuration as a JSON object. Set to null to clear the configuration.
@@ -3279,11 +3279,11 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Update organization invitation
      * @param {string} organizationId Organization ID
      * @param {string} invitationId Invitation ID
-     * @param {UpdateOrganizationInvitation} updateOrganizationInvitation 
+     * @param {UpdateOrganizationInvitation} updateOrganizationInvitation
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -3292,10 +3292,10 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Update organization OpenTelemetry configuration
      * @param {string} organizationId Organization ID
-     * @param {OtelConfig} otelConfig 
+     * @param {OtelConfig} otelConfig
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -3304,10 +3304,10 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Update organization preview warning
      * @param {string} organizationId Organization ID
-     * @param {OrganizationPreviewWarning} organizationPreviewWarning 
+     * @param {OrganizationPreviewWarning} organizationPreviewWarning
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -3316,10 +3316,10 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Update organization quota
      * @param {string} organizationId Organization ID
-     * @param {UpdateOrganizationQuota} updateOrganizationQuota 
+     * @param {UpdateOrganizationQuota} updateOrganizationQuota
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -3328,11 +3328,11 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Update organization region quota
      * @param {string} organizationId Organization ID
      * @param {string} regionId ID of the region where the updated quota will be applied
-     * @param {UpdateOrganizationRegionQuota} updateOrganizationRegionQuota 
+     * @param {UpdateOrganizationRegionQuota} updateOrganizationRegionQuota
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -3341,11 +3341,11 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Update organization role
      * @param {string} organizationId Organization ID
      * @param {string} roleId Role ID
-     * @param {UpdateOrganizationRole} updateOrganizationRole 
+     * @param {UpdateOrganizationRole} updateOrganizationRole
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -3354,10 +3354,10 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Update region configuration
      * @param {string} id Region ID
-     * @param {UpdateRegion} updateRegion 
+     * @param {UpdateRegion} updateRegion
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -3367,10 +3367,10 @@ export class OrganizationsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Update sandbox default limited network egress
      * @param {string} organizationId Organization ID
-     * @param {OrganizationSandboxDefaultLimitedNetworkEgress} organizationSandboxDefaultLimitedNetworkEgress 
+     * @param {OrganizationSandboxDefaultLimitedNetworkEgress} organizationSandboxDefaultLimitedNetworkEgress
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -3378,4 +3378,3 @@ export class OrganizationsApi extends BaseAPI {
         return OrganizationsApiFp(this.configuration).updateSandboxDefaultLimitedNetworkEgress(organizationId, organizationSandboxDefaultLimitedNetworkEgress, options).then((request) => request(this.axios, this.basePath));
     }
 }
-

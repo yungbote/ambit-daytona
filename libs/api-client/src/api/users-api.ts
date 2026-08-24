@@ -33,7 +33,7 @@ import type { User } from '../models';
 export const UsersApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         * 
+         *
          * @summary Enroll in SMS MFA
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -69,7 +69,7 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * 
+         *
          * @summary Get authenticated user
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -105,7 +105,7 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * 
+         *
          * @summary Get available account providers
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -141,9 +141,9 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * 
+         *
          * @summary Link account
-         * @param {CreateLinkedAccount} createLinkedAccount 
+         * @param {CreateLinkedAccount} createLinkedAccount
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -181,10 +181,10 @@ export const UsersApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * 
+         *
          * @summary Unlink account
-         * @param {string} provider 
-         * @param {string} providerUserId 
+         * @param {string} provider
+         * @param {string} providerUserId
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -233,7 +233,7 @@ export const UsersApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = UsersApiAxiosParamCreator(configuration)
     return {
         /**
-         * 
+         *
          * @summary Enroll in SMS MFA
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -245,7 +245,7 @@ export const UsersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Get authenticated user
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -257,7 +257,7 @@ export const UsersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Get available account providers
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -269,9 +269,9 @@ export const UsersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Link account
-         * @param {CreateLinkedAccount} createLinkedAccount 
+         * @param {CreateLinkedAccount} createLinkedAccount
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -282,10 +282,10 @@ export const UsersApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Unlink account
-         * @param {string} provider 
-         * @param {string} providerUserId 
+         * @param {string} provider
+         * @param {string} providerUserId
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -305,7 +305,7 @@ export const UsersApiFactory = function (configuration?: Configuration, basePath
     const localVarFp = UsersApiFp(configuration)
     return {
         /**
-         * 
+         *
          * @summary Enroll in SMS MFA
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -314,7 +314,7 @@ export const UsersApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.enrollInSmsMfa(options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Get authenticated user
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -323,7 +323,7 @@ export const UsersApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.getAuthenticatedUser(options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Get available account providers
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -332,9 +332,9 @@ export const UsersApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.getAvailableAccountProviders(options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Link account
-         * @param {CreateLinkedAccount} createLinkedAccount 
+         * @param {CreateLinkedAccount} createLinkedAccount
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -342,10 +342,10 @@ export const UsersApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.linkAccount(createLinkedAccount, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Unlink account
-         * @param {string} provider 
-         * @param {string} providerUserId 
+         * @param {string} provider
+         * @param {string} providerUserId
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -360,7 +360,7 @@ export const UsersApiFactory = function (configuration?: Configuration, basePath
  */
 export class UsersApi extends BaseAPI {
     /**
-     * 
+     *
      * @summary Enroll in SMS MFA
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -370,7 +370,7 @@ export class UsersApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Get authenticated user
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -380,7 +380,7 @@ export class UsersApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Get available account providers
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -390,9 +390,9 @@ export class UsersApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Link account
-     * @param {CreateLinkedAccount} createLinkedAccount 
+     * @param {CreateLinkedAccount} createLinkedAccount
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -401,10 +401,10 @@ export class UsersApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Unlink account
-     * @param {string} provider 
-     * @param {string} providerUserId 
+     * @param {string} provider
+     * @param {string} providerUserId
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -412,4 +412,3 @@ export class UsersApi extends BaseAPI {
         return UsersApiFp(this.configuration).unlinkAccount(provider, providerUserId, options).then((request) => request(this.axios, this.basePath));
     }
 }
-

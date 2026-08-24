@@ -51,6 +51,3 @@ export interface VolumeDto {
      */
     'errorReason': string | null;
 }
-
-
-

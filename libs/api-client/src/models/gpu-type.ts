@@ -25,6 +25,3 @@ export const GpuType = {
 } as const;
 
 export type GpuType = typeof GpuType[keyof typeof GpuType];
-
-
-

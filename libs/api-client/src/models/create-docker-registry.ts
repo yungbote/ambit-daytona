@@ -36,4 +36,3 @@ export interface CreateDockerRegistry {
      */
     'project'?: string;
 }
-

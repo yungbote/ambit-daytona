@@ -58,5 +58,3 @@ export const DockerRegistryRegistryTypeEnum = {
 } as const;
 
 export type DockerRegistryRegistryTypeEnum = typeof DockerRegistryRegistryTypeEnum[keyof typeof DockerRegistryRegistryTypeEnum];
-
-

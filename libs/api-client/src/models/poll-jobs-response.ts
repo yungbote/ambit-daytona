@@ -23,4 +23,3 @@ export interface PollJobsResponse {
      */
     'jobs': Array<Job>;
 }
-

@@ -71,7 +71,7 @@ import type { User } from '../models';
 export const AdminApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         * 
+         *
          * @summary Check if an image can be cleaned up
          * @param {string} imageName Image name with tag to check
          * @param {*} [options] Override http request option.
@@ -114,9 +114,9 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * 
+         *
          * @summary Create organization for user
-         * @param {AdminCreateOrganization} adminCreateOrganization 
+         * @param {AdminCreateOrganization} adminCreateOrganization
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -155,11 +155,11 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * 
+         *
          * @summary Create organization region quota
          * @param {string} organizationId Organization ID
          * @param {string} regionId ID of the region the new quota applies to
-         * @param {CreateOrganizationRegionQuota} createOrganizationRegionQuota 
+         * @param {CreateOrganizationRegionQuota} createOrganizationRegionQuota
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -204,9 +204,9 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * 
+         *
          * @summary Create runner
-         * @param {AdminCreateRunner} adminCreateRunner 
+         * @param {AdminCreateRunner} adminCreateRunner
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -245,9 +245,9 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * 
+         *
          * @summary Create user
-         * @param {CreateUser} createUser 
+         * @param {CreateUser} createUser
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -285,7 +285,7 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * 
+         *
          * @summary Delete organization region quota
          * @param {string} organizationId Organization ID
          * @param {string} regionId Region ID
@@ -332,7 +332,7 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * 
+         *
          * @summary Delete runner
          * @param {string} id Runner ID
          * @param {*} [options] Override http request option.
@@ -371,7 +371,7 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * 
+         *
          * @summary Get all audit logs
          * @param {number} [page] Page number of the results
          * @param {number} [limit] Number of results per page
@@ -506,10 +506,10 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * 
+         *
          * @summary Get delivery attempts for a webhook message
-         * @param {string} organizationId 
-         * @param {string} messageId 
+         * @param {string} organizationId
+         * @param {string} messageId
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -550,7 +550,7 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * 
+         *
          * @summary Get organization region quota
          * @param {string} organizationId Organization ID
          * @param {string} regionId Region ID
@@ -598,7 +598,7 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * 
+         *
          * @summary Get runner by ID
          * @param {string} id Runner ID
          * @param {*} [options] Override http request option.
@@ -638,9 +638,9 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * 
+         *
          * @summary Get user by ID
-         * @param {string} id 
+         * @param {string} id
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -678,7 +678,7 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * 
+         *
          * @summary Get webhook service status
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -714,9 +714,9 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * 
+         *
          * @summary Initialize webhooks for an organization
-         * @param {string} organizationId 
+         * @param {string} organizationId
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -753,7 +753,7 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * 
+         *
          * @summary List all runners
          * @param {string} [regionId] Filter runners by region ID
          * @param {*} [options] Override http request option.
@@ -794,7 +794,7 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * 
+         *
          * @summary List all users
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -829,7 +829,7 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * 
+         *
          * @summary Recover sandbox from error state as an admin
          * @param {string} sandboxId ID of the sandbox
          * @param {*} [options] Override http request option.
@@ -869,9 +869,9 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * 
+         *
          * @summary Regenerate user key pair
-         * @param {string} id 
+         * @param {string} id
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -908,10 +908,10 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * 
+         *
          * @summary Send a webhook message to an organization
-         * @param {string} organizationId 
-         * @param {SendWebhookDto} sendWebhookDto 
+         * @param {string} organizationId
+         * @param {SendWebhookDto} sendWebhookDto
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -952,7 +952,7 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * 
+         *
          * @summary Set default registry
          * @param {string} id ID of the docker registry
          * @param {*} [options] Override http request option.
@@ -992,10 +992,10 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * 
+         *
          * @summary Set snapshot general status
          * @param {string} id Snapshot ID
-         * @param {SetSnapshotGeneralStatusDto} setSnapshotGeneralStatusDto 
+         * @param {SetSnapshotGeneralStatusDto} setSnapshotGeneralStatusDto
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1037,10 +1037,10 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * 
+         *
          * @summary Update organization preview warning
          * @param {string} organizationId Organization ID
-         * @param {OrganizationPreviewWarning} organizationPreviewWarning 
+         * @param {OrganizationPreviewWarning} organizationPreviewWarning
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1081,11 +1081,11 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * 
+         *
          * @summary Update organization region quota
          * @param {string} organizationId Organization ID
          * @param {string} regionId Region ID
-         * @param {UpdateOrganizationRegionQuota} updateOrganizationRegionQuota 
+         * @param {UpdateOrganizationRegionQuota} updateOrganizationRegionQuota
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1129,9 +1129,9 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             };
         },
         /**
-         * 
+         *
          * @summary Update runner scheduling status
-         * @param {string} id 
+         * @param {string} id
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1177,7 +1177,7 @@ export const AdminApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = AdminApiAxiosParamCreator(configuration)
     return {
         /**
-         * 
+         *
          * @summary Check if an image can be cleaned up
          * @param {string} imageName Image name with tag to check
          * @param {*} [options] Override http request option.
@@ -1190,9 +1190,9 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Create organization for user
-         * @param {AdminCreateOrganization} adminCreateOrganization 
+         * @param {AdminCreateOrganization} adminCreateOrganization
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1203,11 +1203,11 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Create organization region quota
          * @param {string} organizationId Organization ID
          * @param {string} regionId ID of the region the new quota applies to
-         * @param {CreateOrganizationRegionQuota} createOrganizationRegionQuota 
+         * @param {CreateOrganizationRegionQuota} createOrganizationRegionQuota
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1218,9 +1218,9 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Create runner
-         * @param {AdminCreateRunner} adminCreateRunner 
+         * @param {AdminCreateRunner} adminCreateRunner
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1231,9 +1231,9 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Create user
-         * @param {CreateUser} createUser 
+         * @param {CreateUser} createUser
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1244,7 +1244,7 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Delete organization region quota
          * @param {string} organizationId Organization ID
          * @param {string} regionId Region ID
@@ -1259,7 +1259,7 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Delete runner
          * @param {string} id Runner ID
          * @param {*} [options] Override http request option.
@@ -1272,7 +1272,7 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Get all audit logs
          * @param {number} [page] Page number of the results
          * @param {number} [limit] Number of results per page
@@ -1299,10 +1299,10 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Get delivery attempts for a webhook message
-         * @param {string} organizationId 
-         * @param {string} messageId 
+         * @param {string} organizationId
+         * @param {string} messageId
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1313,7 +1313,7 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Get organization region quota
          * @param {string} organizationId Organization ID
          * @param {string} regionId Region ID
@@ -1328,7 +1328,7 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Get runner by ID
          * @param {string} id Runner ID
          * @param {*} [options] Override http request option.
@@ -1341,9 +1341,9 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Get user by ID
-         * @param {string} id 
+         * @param {string} id
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1354,7 +1354,7 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Get webhook service status
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -1366,9 +1366,9 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Initialize webhooks for an organization
-         * @param {string} organizationId 
+         * @param {string} organizationId
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1379,7 +1379,7 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary List all runners
          * @param {string} [regionId] Filter runners by region ID
          * @param {*} [options] Override http request option.
@@ -1392,7 +1392,7 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary List all users
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -1404,7 +1404,7 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Recover sandbox from error state as an admin
          * @param {string} sandboxId ID of the sandbox
          * @param {*} [options] Override http request option.
@@ -1417,9 +1417,9 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Regenerate user key pair
-         * @param {string} id 
+         * @param {string} id
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1430,10 +1430,10 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Send a webhook message to an organization
-         * @param {string} organizationId 
-         * @param {SendWebhookDto} sendWebhookDto 
+         * @param {string} organizationId
+         * @param {SendWebhookDto} sendWebhookDto
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1444,7 +1444,7 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Set default registry
          * @param {string} id ID of the docker registry
          * @param {*} [options] Override http request option.
@@ -1457,10 +1457,10 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Set snapshot general status
          * @param {string} id Snapshot ID
-         * @param {SetSnapshotGeneralStatusDto} setSnapshotGeneralStatusDto 
+         * @param {SetSnapshotGeneralStatusDto} setSnapshotGeneralStatusDto
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1471,10 +1471,10 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Update organization preview warning
          * @param {string} organizationId Organization ID
-         * @param {OrganizationPreviewWarning} organizationPreviewWarning 
+         * @param {OrganizationPreviewWarning} organizationPreviewWarning
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1485,11 +1485,11 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Update organization region quota
          * @param {string} organizationId Organization ID
          * @param {string} regionId Region ID
-         * @param {UpdateOrganizationRegionQuota} updateOrganizationRegionQuota 
+         * @param {UpdateOrganizationRegionQuota} updateOrganizationRegionQuota
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1500,9 +1500,9 @@ export const AdminApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Update runner scheduling status
-         * @param {string} id 
+         * @param {string} id
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1522,7 +1522,7 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
     const localVarFp = AdminApiFp(configuration)
     return {
         /**
-         * 
+         *
          * @summary Check if an image can be cleaned up
          * @param {string} imageName Image name with tag to check
          * @param {*} [options] Override http request option.
@@ -1532,9 +1532,9 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminCanCleanupImage(imageName, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Create organization for user
-         * @param {AdminCreateOrganization} adminCreateOrganization 
+         * @param {AdminCreateOrganization} adminCreateOrganization
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1542,11 +1542,11 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminCreateOrganization(adminCreateOrganization, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Create organization region quota
          * @param {string} organizationId Organization ID
          * @param {string} regionId ID of the region the new quota applies to
-         * @param {CreateOrganizationRegionQuota} createOrganizationRegionQuota 
+         * @param {CreateOrganizationRegionQuota} createOrganizationRegionQuota
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1554,9 +1554,9 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminCreateOrganizationRegionQuota(organizationId, regionId, createOrganizationRegionQuota, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Create runner
-         * @param {AdminCreateRunner} adminCreateRunner 
+         * @param {AdminCreateRunner} adminCreateRunner
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1564,9 +1564,9 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminCreateRunner(adminCreateRunner, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Create user
-         * @param {CreateUser} createUser 
+         * @param {CreateUser} createUser
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1574,7 +1574,7 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminCreateUser(createUser, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Delete organization region quota
          * @param {string} organizationId Organization ID
          * @param {string} regionId Region ID
@@ -1586,7 +1586,7 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminDeleteOrganizationRegionQuota(organizationId, regionId, sandboxClass, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Delete runner
          * @param {string} id Runner ID
          * @param {*} [options] Override http request option.
@@ -1596,7 +1596,7 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminDeleteRunner(id, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Get all audit logs
          * @param {number} [page] Page number of the results
          * @param {number} [limit] Number of results per page
@@ -1620,10 +1620,10 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminGetAllAuditLogs(page, limit, from, to, nextToken, id, actorId, actorEmail, actorApiKeyPrefix, actorApiKeySuffix, action, targetType, targetId, statusCode, createdAt, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Get delivery attempts for a webhook message
-         * @param {string} organizationId 
-         * @param {string} messageId 
+         * @param {string} organizationId
+         * @param {string} messageId
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1631,7 +1631,7 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminGetMessageAttempts(organizationId, messageId, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Get organization region quota
          * @param {string} organizationId Organization ID
          * @param {string} regionId Region ID
@@ -1643,7 +1643,7 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminGetOrganizationRegionQuota(organizationId, regionId, sandboxClass, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Get runner by ID
          * @param {string} id Runner ID
          * @param {*} [options] Override http request option.
@@ -1653,9 +1653,9 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminGetRunnerById(id, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Get user by ID
-         * @param {string} id 
+         * @param {string} id
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1663,7 +1663,7 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminGetUser(id, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Get webhook service status
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -1672,9 +1672,9 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminGetWebhookStatus(options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Initialize webhooks for an organization
-         * @param {string} organizationId 
+         * @param {string} organizationId
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1682,7 +1682,7 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminInitializeWebhooks(organizationId, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary List all runners
          * @param {string} [regionId] Filter runners by region ID
          * @param {*} [options] Override http request option.
@@ -1692,7 +1692,7 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminListRunners(regionId, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary List all users
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -1701,7 +1701,7 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminListUsers(options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Recover sandbox from error state as an admin
          * @param {string} sandboxId ID of the sandbox
          * @param {*} [options] Override http request option.
@@ -1711,9 +1711,9 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminRecoverSandbox(sandboxId, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Regenerate user key pair
-         * @param {string} id 
+         * @param {string} id
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1721,10 +1721,10 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminRegenerateKeyPair(id, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Send a webhook message to an organization
-         * @param {string} organizationId 
-         * @param {SendWebhookDto} sendWebhookDto 
+         * @param {string} organizationId
+         * @param {SendWebhookDto} sendWebhookDto
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1732,7 +1732,7 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminSendWebhook(organizationId, sendWebhookDto, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Set default registry
          * @param {string} id ID of the docker registry
          * @param {*} [options] Override http request option.
@@ -1742,10 +1742,10 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminSetDefaultRegistry(id, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Set snapshot general status
          * @param {string} id Snapshot ID
-         * @param {SetSnapshotGeneralStatusDto} setSnapshotGeneralStatusDto 
+         * @param {SetSnapshotGeneralStatusDto} setSnapshotGeneralStatusDto
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1753,10 +1753,10 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminSetSnapshotGeneralStatus(id, setSnapshotGeneralStatusDto, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Update organization preview warning
          * @param {string} organizationId Organization ID
-         * @param {OrganizationPreviewWarning} organizationPreviewWarning 
+         * @param {OrganizationPreviewWarning} organizationPreviewWarning
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1764,11 +1764,11 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminUpdateOrganizationPreviewWarning(organizationId, organizationPreviewWarning, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Update organization region quota
          * @param {string} organizationId Organization ID
          * @param {string} regionId Region ID
-         * @param {UpdateOrganizationRegionQuota} updateOrganizationRegionQuota 
+         * @param {UpdateOrganizationRegionQuota} updateOrganizationRegionQuota
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1776,9 +1776,9 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
             return localVarFp.adminUpdateOrganizationRegionQuota(organizationId, regionId, updateOrganizationRegionQuota, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Update runner scheduling status
-         * @param {string} id 
+         * @param {string} id
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1793,7 +1793,7 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
  */
 export class AdminApi extends BaseAPI {
     /**
-     * 
+     *
      * @summary Check if an image can be cleaned up
      * @param {string} imageName Image name with tag to check
      * @param {*} [options] Override http request option.
@@ -1804,9 +1804,9 @@ export class AdminApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Create organization for user
-     * @param {AdminCreateOrganization} adminCreateOrganization 
+     * @param {AdminCreateOrganization} adminCreateOrganization
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -1815,11 +1815,11 @@ export class AdminApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Create organization region quota
      * @param {string} organizationId Organization ID
      * @param {string} regionId ID of the region the new quota applies to
-     * @param {CreateOrganizationRegionQuota} createOrganizationRegionQuota 
+     * @param {CreateOrganizationRegionQuota} createOrganizationRegionQuota
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -1828,9 +1828,9 @@ export class AdminApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Create runner
-     * @param {AdminCreateRunner} adminCreateRunner 
+     * @param {AdminCreateRunner} adminCreateRunner
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -1839,9 +1839,9 @@ export class AdminApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Create user
-     * @param {CreateUser} createUser 
+     * @param {CreateUser} createUser
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -1850,7 +1850,7 @@ export class AdminApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Delete organization region quota
      * @param {string} organizationId Organization ID
      * @param {string} regionId Region ID
@@ -1863,7 +1863,7 @@ export class AdminApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Delete runner
      * @param {string} id Runner ID
      * @param {*} [options] Override http request option.
@@ -1874,7 +1874,7 @@ export class AdminApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Get all audit logs
      * @param {number} [page] Page number of the results
      * @param {number} [limit] Number of results per page
@@ -1899,10 +1899,10 @@ export class AdminApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Get delivery attempts for a webhook message
-     * @param {string} organizationId 
-     * @param {string} messageId 
+     * @param {string} organizationId
+     * @param {string} messageId
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -1911,7 +1911,7 @@ export class AdminApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Get organization region quota
      * @param {string} organizationId Organization ID
      * @param {string} regionId Region ID
@@ -1924,7 +1924,7 @@ export class AdminApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Get runner by ID
      * @param {string} id Runner ID
      * @param {*} [options] Override http request option.
@@ -1935,9 +1935,9 @@ export class AdminApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Get user by ID
-     * @param {string} id 
+     * @param {string} id
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -1946,7 +1946,7 @@ export class AdminApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Get webhook service status
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -1956,9 +1956,9 @@ export class AdminApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Initialize webhooks for an organization
-     * @param {string} organizationId 
+     * @param {string} organizationId
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -1967,7 +1967,7 @@ export class AdminApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary List all runners
      * @param {string} [regionId] Filter runners by region ID
      * @param {*} [options] Override http request option.
@@ -1978,7 +1978,7 @@ export class AdminApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary List all users
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -1988,7 +1988,7 @@ export class AdminApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Recover sandbox from error state as an admin
      * @param {string} sandboxId ID of the sandbox
      * @param {*} [options] Override http request option.
@@ -1999,9 +1999,9 @@ export class AdminApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Regenerate user key pair
-     * @param {string} id 
+     * @param {string} id
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -2010,10 +2010,10 @@ export class AdminApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Send a webhook message to an organization
-     * @param {string} organizationId 
-     * @param {SendWebhookDto} sendWebhookDto 
+     * @param {string} organizationId
+     * @param {SendWebhookDto} sendWebhookDto
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -2022,7 +2022,7 @@ export class AdminApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Set default registry
      * @param {string} id ID of the docker registry
      * @param {*} [options] Override http request option.
@@ -2033,10 +2033,10 @@ export class AdminApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Set snapshot general status
      * @param {string} id Snapshot ID
-     * @param {SetSnapshotGeneralStatusDto} setSnapshotGeneralStatusDto 
+     * @param {SetSnapshotGeneralStatusDto} setSnapshotGeneralStatusDto
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -2045,10 +2045,10 @@ export class AdminApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Update organization preview warning
      * @param {string} organizationId Organization ID
-     * @param {OrganizationPreviewWarning} organizationPreviewWarning 
+     * @param {OrganizationPreviewWarning} organizationPreviewWarning
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -2057,11 +2057,11 @@ export class AdminApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Update organization region quota
      * @param {string} organizationId Organization ID
      * @param {string} regionId Region ID
-     * @param {UpdateOrganizationRegionQuota} updateOrganizationRegionQuota 
+     * @param {UpdateOrganizationRegionQuota} updateOrganizationRegionQuota
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -2070,9 +2070,9 @@ export class AdminApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Update runner scheduling status
-     * @param {string} id 
+     * @param {string} id
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -2080,4 +2080,3 @@ export class AdminApi extends BaseAPI {
         return AdminApiFp(this.configuration).adminUpdateRunnerScheduling(id, options).then((request) => request(this.axios, this.basePath));
     }
 }
-

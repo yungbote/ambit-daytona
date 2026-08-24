@@ -24,4 +24,3 @@ export interface UserPublicKey {
      */
     'name': string;
 }
-

@@ -40,4 +40,3 @@ export interface StorageAccessDto {
      */
     'bucket': string;
 }
-

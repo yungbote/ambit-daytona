@@ -26,6 +26,3 @@ export const SandboxListSortField = {
 } as const;
 
 export type SandboxListSortField = typeof SandboxListSortField[keyof typeof SandboxListSortField];
-
-
-

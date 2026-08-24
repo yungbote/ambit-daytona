@@ -28,4 +28,3 @@ export interface RunnerServiceHealth {
      */
     'errorReason'?: string;
 }
-

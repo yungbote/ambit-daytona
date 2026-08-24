@@ -39,6 +39,3 @@ export const JobType = {
 } as const;
 
 export type JobType = typeof JobType[keyof typeof JobType];
-
-
-

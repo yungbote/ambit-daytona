@@ -31,6 +31,3 @@ export interface SendWebhookDto {
      */
     'eventId'?: string;
 }
-
-
-

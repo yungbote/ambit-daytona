@@ -20,4 +20,3 @@ export interface PreviewWarning {
      */
     'enabled': boolean;
 }
-

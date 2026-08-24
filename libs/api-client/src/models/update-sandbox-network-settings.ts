@@ -28,4 +28,3 @@ export interface UpdateSandboxNetworkSettings {
      */
     'domainAllowList'?: string;
 }
-

@@ -24,4 +24,3 @@ export interface OrganizationUsageOverview {
     'totalVolumeQuota': number;
     'currentVolumeUsage': number;
 }
-

@@ -72,4 +72,3 @@ export interface RunnerHealthMetrics {
      */
     'gpuType'?: string;
 }
-

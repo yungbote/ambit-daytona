@@ -32,4 +32,3 @@ export interface SignedPortPreviewUrl {
      */
     'url': string;
 }
-

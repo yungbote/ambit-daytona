@@ -56,5 +56,3 @@ export const UpdateSandboxStateDtoStateEnum = {
 } as const;
 
 export type UpdateSandboxStateDtoStateEnum = typeof UpdateSandboxStateDtoStateEnum[keyof typeof UpdateSandboxStateDtoStateEnum];
-
-

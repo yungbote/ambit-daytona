@@ -28,4 +28,3 @@ export interface OtelConfig {
      */
     'organizationId'?: string;
 }
-

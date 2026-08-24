@@ -36,4 +36,3 @@ export interface CreateRegionResponse {
      */
     'snapshotManagerPassword'?: string | null;
 }
-

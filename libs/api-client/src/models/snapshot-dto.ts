@@ -75,5 +75,3 @@ export const SnapshotDtoSandboxClassEnum = {
 } as const;
 
 export type SnapshotDtoSandboxClassEnum = typeof SnapshotDtoSandboxClassEnum[keyof typeof SnapshotDtoSandboxClassEnum];
-
-

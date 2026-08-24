@@ -36,4 +36,3 @@ export interface BuildInfo {
      */
     'snapshotRef': string;
 }
-

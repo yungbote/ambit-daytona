@@ -33,9 +33,9 @@ import type { CreateApiKey } from '../models';
 export const ApiKeysApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         * 
+         *
          * @summary Create API key
-         * @param {CreateApiKey} createApiKey 
+         * @param {CreateApiKey} createApiKey
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -78,9 +78,9 @@ export const ApiKeysApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * 
+         *
          * @summary Delete API key
-         * @param {string} name 
+         * @param {string} name
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -121,10 +121,10 @@ export const ApiKeysApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * 
+         *
          * @summary Delete API key for user
-         * @param {string} userId 
-         * @param {string} name 
+         * @param {string} userId
+         * @param {string} name
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -168,9 +168,9 @@ export const ApiKeysApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * 
+         *
          * @summary Get API key
-         * @param {string} name 
+         * @param {string} name
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -212,7 +212,7 @@ export const ApiKeysApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * 
+         *
          * @summary Get current API key\'s details
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -252,7 +252,7 @@ export const ApiKeysApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * 
+         *
          * @summary List API keys
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -301,9 +301,9 @@ export const ApiKeysApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = ApiKeysApiAxiosParamCreator(configuration)
     return {
         /**
-         * 
+         *
          * @summary Create API key
-         * @param {CreateApiKey} createApiKey 
+         * @param {CreateApiKey} createApiKey
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -315,9 +315,9 @@ export const ApiKeysApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Delete API key
-         * @param {string} name 
+         * @param {string} name
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -329,10 +329,10 @@ export const ApiKeysApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Delete API key for user
-         * @param {string} userId 
-         * @param {string} name 
+         * @param {string} userId
+         * @param {string} name
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -344,9 +344,9 @@ export const ApiKeysApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Get API key
-         * @param {string} name 
+         * @param {string} name
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -358,7 +358,7 @@ export const ApiKeysApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Get current API key\'s details
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -371,7 +371,7 @@ export const ApiKeysApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary List API keys
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -393,9 +393,9 @@ export const ApiKeysApiFactory = function (configuration?: Configuration, basePa
     const localVarFp = ApiKeysApiFp(configuration)
     return {
         /**
-         * 
+         *
          * @summary Create API key
-         * @param {CreateApiKey} createApiKey 
+         * @param {CreateApiKey} createApiKey
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -404,9 +404,9 @@ export const ApiKeysApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.createApiKey(createApiKey, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Delete API key
-         * @param {string} name 
+         * @param {string} name
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -415,10 +415,10 @@ export const ApiKeysApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.deleteApiKey(name, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Delete API key for user
-         * @param {string} userId 
-         * @param {string} name 
+         * @param {string} userId
+         * @param {string} name
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -427,9 +427,9 @@ export const ApiKeysApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.deleteApiKeyForUser(userId, name, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Get API key
-         * @param {string} name 
+         * @param {string} name
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -438,7 +438,7 @@ export const ApiKeysApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getApiKey(name, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Get current API key\'s details
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -448,7 +448,7 @@ export const ApiKeysApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getCurrentApiKey(xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary List API keys
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -465,9 +465,9 @@ export const ApiKeysApiFactory = function (configuration?: Configuration, basePa
  */
 export class ApiKeysApi extends BaseAPI {
     /**
-     * 
+     *
      * @summary Create API key
-     * @param {CreateApiKey} createApiKey 
+     * @param {CreateApiKey} createApiKey
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -477,9 +477,9 @@ export class ApiKeysApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Delete API key
-     * @param {string} name 
+     * @param {string} name
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -489,10 +489,10 @@ export class ApiKeysApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Delete API key for user
-     * @param {string} userId 
-     * @param {string} name 
+     * @param {string} userId
+     * @param {string} name
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -502,9 +502,9 @@ export class ApiKeysApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Get API key
-     * @param {string} name 
+     * @param {string} name
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -514,7 +514,7 @@ export class ApiKeysApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Get current API key\'s details
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
@@ -525,7 +525,7 @@ export class ApiKeysApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary List API keys
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
@@ -535,4 +535,3 @@ export class ApiKeysApi extends BaseAPI {
         return ApiKeysApiFp(this.configuration).listApiKeys(xDaytonaOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 }
-

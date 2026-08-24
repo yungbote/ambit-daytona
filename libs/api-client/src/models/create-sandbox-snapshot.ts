@@ -24,4 +24,3 @@ export interface CreateSandboxSnapshot {
      */
     'includeMemory'?: boolean;
 }
-

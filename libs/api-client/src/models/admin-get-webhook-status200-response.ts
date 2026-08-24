@@ -17,4 +17,3 @@
 export interface AdminGetWebhookStatus200Response {
     'enabled'?: boolean;
 }
-

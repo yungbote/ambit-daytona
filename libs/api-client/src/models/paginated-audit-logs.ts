@@ -27,4 +27,3 @@ export interface PaginatedAuditLogs {
      */
     'nextToken'?: string;
 }
-

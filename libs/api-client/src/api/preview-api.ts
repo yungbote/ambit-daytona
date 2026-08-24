@@ -29,7 +29,7 @@ import type { PreviewWarning } from '../models';
 export const PreviewApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         * 
+         *
          * @summary Get sandbox ID from signed preview URL token
          * @param {string} signedPreviewToken Signed preview URL token
          * @param {number} port Port number to get sandbox ID from signed preview URL token
@@ -73,9 +73,9 @@ export const PreviewApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * 
+         *
          * @summary Check if user has access to the sandbox
-         * @param {string} sandboxId 
+         * @param {string} sandboxId
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -113,7 +113,7 @@ export const PreviewApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * 
+         *
          * @summary Check if the preview warning page is enabled for the sandbox
          * @param {string} sandboxId ID of the sandbox, or a signed preview URL token (requires the port query param)
          * @param {number} [port] Port the signed preview URL token was issued for. Required when sandboxId is a signed token.
@@ -158,7 +158,7 @@ export const PreviewApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * 
+         *
          * @summary Check if sandbox is public
          * @param {string} sandboxId ID of the sandbox
          * @param {*} [options] Override http request option.
@@ -198,7 +198,7 @@ export const PreviewApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * 
+         *
          * @summary Check if sandbox auth token is valid
          * @param {string} sandboxId ID of the sandbox
          * @param {string} authToken Auth token of the sandbox
@@ -251,7 +251,7 @@ export const PreviewApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = PreviewApiAxiosParamCreator(configuration)
     return {
         /**
-         * 
+         *
          * @summary Get sandbox ID from signed preview URL token
          * @param {string} signedPreviewToken Signed preview URL token
          * @param {number} port Port number to get sandbox ID from signed preview URL token
@@ -265,9 +265,9 @@ export const PreviewApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Check if user has access to the sandbox
-         * @param {string} sandboxId 
+         * @param {string} sandboxId
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -278,7 +278,7 @@ export const PreviewApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Check if the preview warning page is enabled for the sandbox
          * @param {string} sandboxId ID of the sandbox, or a signed preview URL token (requires the port query param)
          * @param {number} [port] Port the signed preview URL token was issued for. Required when sandboxId is a signed token.
@@ -292,7 +292,7 @@ export const PreviewApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Check if sandbox is public
          * @param {string} sandboxId ID of the sandbox
          * @param {*} [options] Override http request option.
@@ -305,7 +305,7 @@ export const PreviewApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Check if sandbox auth token is valid
          * @param {string} sandboxId ID of the sandbox
          * @param {string} authToken Auth token of the sandbox
@@ -328,7 +328,7 @@ export const PreviewApiFactory = function (configuration?: Configuration, basePa
     const localVarFp = PreviewApiFp(configuration)
     return {
         /**
-         * 
+         *
          * @summary Get sandbox ID from signed preview URL token
          * @param {string} signedPreviewToken Signed preview URL token
          * @param {number} port Port number to get sandbox ID from signed preview URL token
@@ -339,9 +339,9 @@ export const PreviewApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.getSandboxIdFromSignedPreviewUrlToken(signedPreviewToken, port, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Check if user has access to the sandbox
-         * @param {string} sandboxId 
+         * @param {string} sandboxId
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -349,7 +349,7 @@ export const PreviewApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.hasSandboxAccess(sandboxId, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Check if the preview warning page is enabled for the sandbox
          * @param {string} sandboxId ID of the sandbox, or a signed preview URL token (requires the port query param)
          * @param {number} [port] Port the signed preview URL token was issued for. Required when sandboxId is a signed token.
@@ -360,7 +360,7 @@ export const PreviewApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.isPreviewWarningEnabled(sandboxId, port, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Check if sandbox is public
          * @param {string} sandboxId ID of the sandbox
          * @param {*} [options] Override http request option.
@@ -370,7 +370,7 @@ export const PreviewApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.isSandboxPublic(sandboxId, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Check if sandbox auth token is valid
          * @param {string} sandboxId ID of the sandbox
          * @param {string} authToken Auth token of the sandbox
@@ -388,7 +388,7 @@ export const PreviewApiFactory = function (configuration?: Configuration, basePa
  */
 export class PreviewApi extends BaseAPI {
     /**
-     * 
+     *
      * @summary Get sandbox ID from signed preview URL token
      * @param {string} signedPreviewToken Signed preview URL token
      * @param {number} port Port number to get sandbox ID from signed preview URL token
@@ -400,9 +400,9 @@ export class PreviewApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Check if user has access to the sandbox
-     * @param {string} sandboxId 
+     * @param {string} sandboxId
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -411,7 +411,7 @@ export class PreviewApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Check if the preview warning page is enabled for the sandbox
      * @param {string} sandboxId ID of the sandbox, or a signed preview URL token (requires the port query param)
      * @param {number} [port] Port the signed preview URL token was issued for. Required when sandboxId is a signed token.
@@ -423,7 +423,7 @@ export class PreviewApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Check if sandbox is public
      * @param {string} sandboxId ID of the sandbox
      * @param {*} [options] Override http request option.
@@ -434,7 +434,7 @@ export class PreviewApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Check if sandbox auth token is valid
      * @param {string} sandboxId ID of the sandbox
      * @param {string} authToken Auth token of the sandbox
@@ -445,4 +445,3 @@ export class PreviewApi extends BaseAPI {
         return PreviewApiFp(this.configuration).isValidAuthToken(sandboxId, authToken, options).then((request) => request(this.axios, this.basePath));
     }
 }
-

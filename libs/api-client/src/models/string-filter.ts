@@ -32,4 +32,3 @@ export interface StringFilter {
      */
     'notIn'?: Array<string>;
 }
-

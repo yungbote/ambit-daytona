@@ -24,4 +24,3 @@ export interface SshAccessValidationDto {
      */
     'sandboxId': string;
 }
-

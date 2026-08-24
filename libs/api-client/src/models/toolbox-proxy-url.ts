@@ -20,4 +20,3 @@ export interface ToolboxProxyUrl {
      */
     'url': string;
 }
-

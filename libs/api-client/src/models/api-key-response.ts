@@ -60,5 +60,3 @@ export const ApiKeyResponsePermissionsEnum = {
 } as const;
 
 export type ApiKeyResponsePermissionsEnum = typeof ApiKeyResponsePermissionsEnum[keyof typeof ApiKeyResponsePermissionsEnum];
-
-

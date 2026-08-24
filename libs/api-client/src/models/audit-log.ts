@@ -32,4 +32,3 @@ export interface AuditLog {
     'metadata'?: { [key: string]: any; };
     'createdAt': Date;
 }
-

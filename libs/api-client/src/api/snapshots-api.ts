@@ -35,7 +35,7 @@ import type { Url } from '../models';
 export const SnapshotsApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         * 
+         *
          * @summary Activate a snapshot
          * @param {string} id Snapshot ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -79,9 +79,9 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
             };
         },
         /**
-         * 
+         *
          * @summary Create a new snapshot
-         * @param {CreateSnapshot} createSnapshot 
+         * @param {CreateSnapshot} createSnapshot
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -124,7 +124,7 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
             };
         },
         /**
-         * 
+         *
          * @summary Deactivate a snapshot
          * @param {string} id Snapshot ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -167,7 +167,7 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
             };
         },
         /**
-         * 
+         *
          * @summary List all snapshots
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {number} [page] Page number of the results
@@ -232,7 +232,7 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
             };
         },
         /**
-         * 
+         *
          * @summary Get snapshot by ID or name
          * @param {string} id Snapshot ID or name
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -325,7 +325,7 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
             };
         },
         /**
-         * 
+         *
          * @summary Get snapshot build logs URL
          * @param {string} id Snapshot ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -369,7 +369,7 @@ export const SnapshotsApiAxiosParamCreator = function (configuration?: Configura
             };
         },
         /**
-         * 
+         *
          * @summary Delete snapshot
          * @param {string} id Snapshot ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -421,7 +421,7 @@ export const SnapshotsApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = SnapshotsApiAxiosParamCreator(configuration)
     return {
         /**
-         * 
+         *
          * @summary Activate a snapshot
          * @param {string} id Snapshot ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -435,9 +435,9 @@ export const SnapshotsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Create a new snapshot
-         * @param {CreateSnapshot} createSnapshot 
+         * @param {CreateSnapshot} createSnapshot
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -449,7 +449,7 @@ export const SnapshotsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Deactivate a snapshot
          * @param {string} id Snapshot ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -463,7 +463,7 @@ export const SnapshotsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary List all snapshots
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {number} [page] Page number of the results
@@ -481,7 +481,7 @@ export const SnapshotsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Get snapshot by ID or name
          * @param {string} id Snapshot ID or name
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -511,7 +511,7 @@ export const SnapshotsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Get snapshot build logs URL
          * @param {string} id Snapshot ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -525,7 +525,7 @@ export const SnapshotsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Delete snapshot
          * @param {string} id Snapshot ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -548,7 +548,7 @@ export const SnapshotsApiFactory = function (configuration?: Configuration, base
     const localVarFp = SnapshotsApiFp(configuration)
     return {
         /**
-         * 
+         *
          * @summary Activate a snapshot
          * @param {string} id Snapshot ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -559,9 +559,9 @@ export const SnapshotsApiFactory = function (configuration?: Configuration, base
             return localVarFp.activateSnapshot(id, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Create a new snapshot
-         * @param {CreateSnapshot} createSnapshot 
+         * @param {CreateSnapshot} createSnapshot
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -570,7 +570,7 @@ export const SnapshotsApiFactory = function (configuration?: Configuration, base
             return localVarFp.createSnapshot(createSnapshot, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Deactivate a snapshot
          * @param {string} id Snapshot ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -581,7 +581,7 @@ export const SnapshotsApiFactory = function (configuration?: Configuration, base
             return localVarFp.deactivateSnapshot(id, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary List all snapshots
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {number} [page] Page number of the results
@@ -596,7 +596,7 @@ export const SnapshotsApiFactory = function (configuration?: Configuration, base
             return localVarFp.getAllSnapshots(xDaytonaOrganizationID, page, limit, name, sort, order, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Get snapshot by ID or name
          * @param {string} id Snapshot ID or name
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -620,7 +620,7 @@ export const SnapshotsApiFactory = function (configuration?: Configuration, base
             return localVarFp.getSnapshotBuildLogs(id, xDaytonaOrganizationID, follow, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Get snapshot build logs URL
          * @param {string} id Snapshot ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -631,7 +631,7 @@ export const SnapshotsApiFactory = function (configuration?: Configuration, base
             return localVarFp.getSnapshotBuildLogsUrl(id, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Delete snapshot
          * @param {string} id Snapshot ID
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -649,7 +649,7 @@ export const SnapshotsApiFactory = function (configuration?: Configuration, base
  */
 export class SnapshotsApi extends BaseAPI {
     /**
-     * 
+     *
      * @summary Activate a snapshot
      * @param {string} id Snapshot ID
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -661,9 +661,9 @@ export class SnapshotsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Create a new snapshot
-     * @param {CreateSnapshot} createSnapshot 
+     * @param {CreateSnapshot} createSnapshot
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -673,7 +673,7 @@ export class SnapshotsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Deactivate a snapshot
      * @param {string} id Snapshot ID
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -685,7 +685,7 @@ export class SnapshotsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary List all snapshots
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {number} [page] Page number of the results
@@ -701,7 +701,7 @@ export class SnapshotsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Get snapshot by ID or name
      * @param {string} id Snapshot ID or name
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -727,7 +727,7 @@ export class SnapshotsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Get snapshot build logs URL
      * @param {string} id Snapshot ID
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -739,7 +739,7 @@ export class SnapshotsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Delete snapshot
      * @param {string} id Snapshot ID
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID

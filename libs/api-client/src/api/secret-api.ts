@@ -35,9 +35,9 @@ import type { UpdateSecret } from '../models';
 export const SecretApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         * 
+         *
          * @summary Create secret
-         * @param {CreateSecret} createSecret 
+         * @param {CreateSecret} createSecret
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -80,7 +80,7 @@ export const SecretApiAxiosParamCreator = function (configuration?: Configuratio
             };
         },
         /**
-         * 
+         *
          * @summary Delete secret
          * @param {string} secretId ID of the secret
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -123,7 +123,7 @@ export const SecretApiAxiosParamCreator = function (configuration?: Configuratio
             };
         },
         /**
-         * 
+         *
          * @summary Get secret
          * @param {string} secretId ID of the secret
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -208,7 +208,7 @@ export const SecretApiAxiosParamCreator = function (configuration?: Configuratio
             };
         },
         /**
-         * 
+         *
          * @summary List secrets with pagination
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {string} [cursor] Pagination cursor from a previous response
@@ -273,10 +273,10 @@ export const SecretApiAxiosParamCreator = function (configuration?: Configuratio
             };
         },
         /**
-         * 
+         *
          * @summary Update secret
          * @param {string} secretId ID of the secret
-         * @param {UpdateSecret} updateSecret 
+         * @param {UpdateSecret} updateSecret
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -331,9 +331,9 @@ export const SecretApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = SecretApiAxiosParamCreator(configuration)
     return {
         /**
-         * 
+         *
          * @summary Create secret
-         * @param {CreateSecret} createSecret 
+         * @param {CreateSecret} createSecret
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -345,7 +345,7 @@ export const SecretApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Delete secret
          * @param {string} secretId ID of the secret
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -359,7 +359,7 @@ export const SecretApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Get secret
          * @param {string} secretId ID of the secret
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -387,7 +387,7 @@ export const SecretApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary List secrets with pagination
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {string} [cursor] Pagination cursor from a previous response
@@ -405,10 +405,10 @@ export const SecretApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Update secret
          * @param {string} secretId ID of the secret
-         * @param {UpdateSecret} updateSecret 
+         * @param {UpdateSecret} updateSecret
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -429,9 +429,9 @@ export const SecretApiFactory = function (configuration?: Configuration, basePat
     const localVarFp = SecretApiFp(configuration)
     return {
         /**
-         * 
+         *
          * @summary Create secret
-         * @param {CreateSecret} createSecret 
+         * @param {CreateSecret} createSecret
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -440,7 +440,7 @@ export const SecretApiFactory = function (configuration?: Configuration, basePat
             return localVarFp.createSecret(createSecret, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Delete secret
          * @param {string} secretId ID of the secret
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -451,7 +451,7 @@ export const SecretApiFactory = function (configuration?: Configuration, basePat
             return localVarFp.deleteSecret(secretId, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Get secret
          * @param {string} secretId ID of the secret
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -473,7 +473,7 @@ export const SecretApiFactory = function (configuration?: Configuration, basePat
             return localVarFp.listSecrets(xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary List secrets with pagination
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {string} [cursor] Pagination cursor from a previous response
@@ -488,10 +488,10 @@ export const SecretApiFactory = function (configuration?: Configuration, basePat
             return localVarFp.listSecretsPaginated(xDaytonaOrganizationID, cursor, limit, name, sort, order, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Update secret
          * @param {string} secretId ID of the secret
-         * @param {UpdateSecret} updateSecret 
+         * @param {UpdateSecret} updateSecret
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -507,9 +507,9 @@ export const SecretApiFactory = function (configuration?: Configuration, basePat
  */
 export class SecretApi extends BaseAPI {
     /**
-     * 
+     *
      * @summary Create secret
-     * @param {CreateSecret} createSecret 
+     * @param {CreateSecret} createSecret
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
@@ -519,7 +519,7 @@ export class SecretApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Delete secret
      * @param {string} secretId ID of the secret
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -531,7 +531,7 @@ export class SecretApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Get secret
      * @param {string} secretId ID of the secret
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -555,7 +555,7 @@ export class SecretApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary List secrets with pagination
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {string} [cursor] Pagination cursor from a previous response
@@ -571,10 +571,10 @@ export class SecretApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Update secret
      * @param {string} secretId ID of the secret
-     * @param {UpdateSecret} updateSecret 
+     * @param {UpdateSecret} updateSecret
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}

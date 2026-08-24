@@ -28,4 +28,3 @@ export interface UpdateRegion {
      */
     'snapshotManagerUrl'?: string | null;
 }
-

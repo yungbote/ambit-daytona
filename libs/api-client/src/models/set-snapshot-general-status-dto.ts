@@ -20,4 +20,3 @@ export interface SetSnapshotGeneralStatusDto {
      */
     'general': boolean;
 }
-

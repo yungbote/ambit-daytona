@@ -29,7 +29,7 @@ import type { StorageAccessDto } from '../models';
 export const ObjectStorageApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         * 
+         *
          * @summary Get temporary storage access for pushing objects
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -78,7 +78,7 @@ export const ObjectStorageApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = ObjectStorageApiAxiosParamCreator(configuration)
     return {
         /**
-         * 
+         *
          * @summary Get temporary storage access for pushing objects
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -100,7 +100,7 @@ export const ObjectStorageApiFactory = function (configuration?: Configuration, 
     const localVarFp = ObjectStorageApiFp(configuration)
     return {
         /**
-         * 
+         *
          * @summary Get temporary storage access for pushing objects
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
@@ -117,7 +117,7 @@ export const ObjectStorageApiFactory = function (configuration?: Configuration, 
  */
 export class ObjectStorageApi extends BaseAPI {
     /**
-     * 
+     *
      * @summary Get temporary storage access for pushing objects
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
      * @param {*} [options] Override http request option.
@@ -127,4 +127,3 @@ export class ObjectStorageApi extends BaseAPI {
         return ObjectStorageApiFp(this.configuration).getPushAccess(xDaytonaOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 }
-

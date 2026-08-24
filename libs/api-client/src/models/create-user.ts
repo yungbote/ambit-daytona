@@ -34,5 +34,3 @@ export const CreateUserRoleEnum = {
 } as const;
 
 export type CreateUserRoleEnum = typeof CreateUserRoleEnum[keyof typeof CreateUserRoleEnum];
-
-

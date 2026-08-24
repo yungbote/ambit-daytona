@@ -19,4 +19,3 @@ export interface HealthControllerCheck200ResponseInfoValue {
 
     'status': string;
 }
-

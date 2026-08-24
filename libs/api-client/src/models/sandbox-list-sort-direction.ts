@@ -22,6 +22,3 @@ export const SandboxListSortDirection = {
 } as const;
 
 export type SandboxListSortDirection = typeof SandboxListSortDirection[keyof typeof SandboxListSortDirection];
-
-
-

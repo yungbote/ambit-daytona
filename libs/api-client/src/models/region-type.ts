@@ -26,6 +26,3 @@ export const RegionType = {
 } as const;
 
 export type RegionType = typeof RegionType[keyof typeof RegionType];
-
-
-

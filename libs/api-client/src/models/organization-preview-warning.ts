@@ -20,4 +20,3 @@ export interface OrganizationPreviewWarning {
      */
     'previewWarningEnabled': boolean;
 }
-

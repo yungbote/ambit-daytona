@@ -48,4 +48,3 @@ export interface IntFilter {
      */
     'lt'?: number;
 }
-

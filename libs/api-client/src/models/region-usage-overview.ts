@@ -40,6 +40,3 @@ export interface RegionUsageOverview {
     'maxMemoryPerGpuSandbox': number | null;
     'maxDiskPerGpuSandbox': number | null;
 }
-
-
-

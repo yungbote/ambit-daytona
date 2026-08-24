@@ -203,5 +203,3 @@ export const SandboxSandboxClassEnum = {
 } as const;
 
 export type SandboxSandboxClassEnum = typeof SandboxSandboxClassEnum[keyof typeof SandboxSandboxClassEnum];
-
-

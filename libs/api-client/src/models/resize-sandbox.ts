@@ -28,4 +28,3 @@ export interface ResizeSandbox {
      */
     'disk'?: number;
 }
-

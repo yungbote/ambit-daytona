@@ -20,4 +20,3 @@ export interface OrganizationSandboxDefaultLimitedNetworkEgress {
      */
     'sandboxDefaultLimitedNetworkEgress': boolean;
 }
-

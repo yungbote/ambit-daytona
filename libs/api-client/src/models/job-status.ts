@@ -24,6 +24,3 @@ export const JobStatus = {
 } as const;
 
 export type JobStatus = typeof JobStatus[keyof typeof JobStatus];
-
-
-

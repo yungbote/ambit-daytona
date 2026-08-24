@@ -51,4 +51,3 @@ export interface AdminCreateRunner {
      */
     'diskGiB'?: number;
 }
-

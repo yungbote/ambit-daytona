@@ -28,4 +28,3 @@ export interface UpdateSecret {
      */
     'hosts'?: Array<string>;
 }
-

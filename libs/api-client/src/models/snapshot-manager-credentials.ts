@@ -24,4 +24,3 @@ export interface SnapshotManagerCredentials {
      */
     'password': string;
 }
-

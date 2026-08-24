@@ -159,5 +159,3 @@ export const SandboxListItemBackupStateEnum = {
 } as const;
 
 export type SandboxListItemBackupStateEnum = typeof SandboxListItemBackupStateEnum[keyof typeof SandboxListItemBackupStateEnum];
-
-

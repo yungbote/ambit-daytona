@@ -46,4 +46,3 @@ export interface RunnerHealthcheck {
      */
     'appVersion': string;
 }
-

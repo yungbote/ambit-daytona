@@ -44,4 +44,3 @@ export interface SshAccessDto {
      */
     'sshCommand': string;
 }
-

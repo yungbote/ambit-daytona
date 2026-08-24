@@ -37,7 +37,7 @@ import type { UpdateJobStatus } from '../models';
 export const JobsApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         * 
+         *
          * @summary Get job details
          * @param {string} jobId ID of the job
          * @param {*} [options] Override http request option.
@@ -179,10 +179,10 @@ export const JobsApiAxiosParamCreator = function (configuration?: Configuration)
             };
         },
         /**
-         * 
+         *
          * @summary Update job status
          * @param {string} jobId ID of the job
-         * @param {UpdateJobStatus} updateJobStatus 
+         * @param {UpdateJobStatus} updateJobStatus
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -233,7 +233,7 @@ export const JobsApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = JobsApiAxiosParamCreator(configuration)
     return {
         /**
-         * 
+         *
          * @summary Get job details
          * @param {string} jobId ID of the job
          * @param {*} [options] Override http request option.
@@ -276,10 +276,10 @@ export const JobsApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         *
          * @summary Update job status
          * @param {string} jobId ID of the job
-         * @param {UpdateJobStatus} updateJobStatus 
+         * @param {UpdateJobStatus} updateJobStatus
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -299,7 +299,7 @@ export const JobsApiFactory = function (configuration?: Configuration, basePath?
     const localVarFp = JobsApiFp(configuration)
     return {
         /**
-         * 
+         *
          * @summary Get job details
          * @param {string} jobId ID of the job
          * @param {*} [options] Override http request option.
@@ -333,10 +333,10 @@ export const JobsApiFactory = function (configuration?: Configuration, basePath?
             return localVarFp.pollJobs(timeout, limit, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         *
          * @summary Update job status
          * @param {string} jobId ID of the job
-         * @param {UpdateJobStatus} updateJobStatus 
+         * @param {UpdateJobStatus} updateJobStatus
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -351,7 +351,7 @@ export const JobsApiFactory = function (configuration?: Configuration, basePath?
  */
 export class JobsApi extends BaseAPI {
     /**
-     * 
+     *
      * @summary Get job details
      * @param {string} jobId ID of the job
      * @param {*} [options] Override http request option.
@@ -388,10 +388,10 @@ export class JobsApi extends BaseAPI {
     }
 
     /**
-     * 
+     *
      * @summary Update job status
      * @param {string} jobId ID of the job
-     * @param {UpdateJobStatus} updateJobStatus 
+     * @param {UpdateJobStatus} updateJobStatus
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
@@ -399,4 +399,3 @@ export class JobsApi extends BaseAPI {
         return JobsApiFp(this.configuration).updateJobStatus(jobId, updateJobStatus, options).then((request) => request(this.axios, this.basePath));
     }
 }
-

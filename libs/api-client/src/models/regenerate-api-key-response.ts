@@ -20,4 +20,3 @@ export interface RegenerateApiKeyResponse {
      */
     'apiKey': string;
 }
-

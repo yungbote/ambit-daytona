@@ -52,5 +52,3 @@ export const CreateOrganizationRolePermissionsEnum = {
 } as const;
 
 export type CreateOrganizationRolePermissionsEnum = typeof CreateOrganizationRolePermissionsEnum[keyof typeof CreateOrganizationRolePermissionsEnum];
-
-

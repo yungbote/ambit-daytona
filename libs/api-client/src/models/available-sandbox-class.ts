@@ -26,6 +26,3 @@ export interface AvailableSandboxClass {
     'gpuAvailable': boolean;
     'allowedGpuTypes'?: Array<GpuType>;
 }
-
-
-

@@ -39,4 +39,3 @@ export interface RateLimitConfig {
      */
     'sandboxList'?: RateLimitEntry;
 }
-

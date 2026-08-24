@@ -28,4 +28,3 @@ export interface RunnerSnapshotDto {
      */
     'runnerDomain'?: string;
 }
-

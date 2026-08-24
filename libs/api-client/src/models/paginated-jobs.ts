@@ -23,4 +23,3 @@ export interface PaginatedJobs {
     'page': number;
     'totalPages': number;
 }
-

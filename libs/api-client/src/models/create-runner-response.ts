@@ -24,4 +24,3 @@ export interface CreateRunnerResponse {
      */
     'apiKey': string;
 }
-
