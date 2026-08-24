@@ -14,6 +14,9 @@ SOURCE_CONTRACT_LINE = re.compile(r"^([0-9a-f]{64})  ([A-Za-z0-9][A-Za-z0-9./_-]
 SOURCE_CONTRACT_PATHS = (
     "Dockerfile",
     "certification/audit_offline_inputs.py",
+    "certification/verify_source_contracts.py",
+    "certification/verify_structural_contracts.py",
+    "certification/verify_structural_runtime_archive.py",
     "locks/backend-lineage-input.lock.json",
     "locks/base-oci.lock.json",
     "locks/canvas-input.lock.json",
@@ -21,16 +24,26 @@ SOURCE_CONTRACT_PATHS = (
     "locks/debian-input.lock.json",
     "locks/node-input.lock.json",
     "locks/offline-build-input.lock.json",
+    "locks/offline-frozen-evidence.bytes",
+    "locks/offline-frozen-evidence.sha256",
     "locks/offline-public-artifacts.bytes",
     "locks/offline-public-artifacts.sha256",
     "locks/pdfjs-input.lock.json",
     "locks/pdfjs-static-files.sha256",
+    "locks/structural-compatibility-input.lock.json",
+    "locks/structural-runtime-conformance.json",
+    "locks/structural-runtime-files.sha256",
+    "locks/structural-runtime-links.txt",
+    "locks/structural-runtime-loaded-elf.sha256",
+    "locks/structural-runtime-tree.jsonl",
     "policy/license-policy.json",
     "policy/render-policy.json",
     "policy/runtime-policy.json",
     "renderer/ambit-render-pages.mjs",
     "renderer/pdfjs-page-renderer.mjs",
     "renderer/render-contracts.mjs",
+    "structural/ambit-structural-python",
+    "structural/verify_private_elf.py",
     "toolchain-manifest.json",
 )
 
@@ -514,10 +527,13 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
     _keys(
         offline,
         {
+            "atomicMaterializer",
             "baseOci",
             "buildFrontend",
             "buildTargets",
             "frozenEvidence",
+            "frozenEvidenceByteManifest",
+            "frozenEvidenceSha256Manifest",
             "missing",
             "namedBuildContext",
             "networkDuringBuild",
@@ -531,6 +547,21 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
             "state",
         },
         "offline build input lock",
+    )
+    _keys(
+        offline["atomicMaterializer"],
+        {
+            "binaryBytes",
+            "binarySecretId",
+            "binarySha256",
+            "includedInNamedContext",
+            "publisherAuthentication",
+            "sourceArchiveBytes",
+            "sourceArchiveSecretId",
+            "sourceArchiveSha256",
+            "state",
+        },
+        "offline atomic materializer",
     )
     _keys(
         offline["proprietaryHelper"],
@@ -584,6 +615,29 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
         offline["proprietaryHelper"]["state"],
         "unavailable",
         "offline helper state",
+    )
+    _expect(
+        offline["atomicMaterializer"]["state"],
+        "unavailable",
+        "offline atomic materializer state",
+    )
+    _expect(
+        offline["atomicMaterializer"]["includedInNamedContext"],
+        False,
+        "atomic materializer public-context exclusion",
+    )
+    _expect(
+        offline["atomicMaterializer"]["publisherAuthentication"],
+        "unavailable",
+        "atomic materializer publisher authentication",
+    )
+    _sha256(
+        offline["atomicMaterializer"]["sourceArchiveSha256"],
+        "atomic materializer source archive",
+    )
+    _sha256(
+        offline["atomicMaterializer"]["binarySha256"],
+        "atomic materializer binary",
     )
     expected_public_artifacts = [
         {
@@ -643,7 +697,6 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
         expected_public_artifacts,
         "offline public artifact roster",
     )
-    _expect(offline["frozenEvidence"], [], "offline frozen evidence roster")
     if not offline["requiredUnfrozenEvidence"]:
         raise ValueError("unavailable offline build must name its evidence gaps")
     _expect(
@@ -656,7 +709,24 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
         "offline-public-artifacts.bytes",
         "offline public byte manifest",
     )
+    _expect(
+        offline["frozenEvidenceSha256Manifest"],
+        "offline-frozen-evidence.sha256",
+        "offline frozen SHA manifest",
+    )
+    _expect(
+        offline["frozenEvidenceByteManifest"],
+        "offline-frozen-evidence.bytes",
+        "offline frozen byte manifest",
+    )
     _verify_offline_public_manifests(root, offline["publicArtifacts"])
+
+    try:
+        from .verify_structural_contracts import verify as verify_structural_contracts
+    except ImportError:
+        from verify_structural_contracts import verify as verify_structural_contracts
+
+    structural_result = verify_structural_contracts(root, offline)
 
     _keys(
         debian,
@@ -896,6 +966,8 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
             "runtime",
             "schema",
             "state",
+            "structuralCompatibility",
+            "structuralCompatibilityInputLock",
         },
         "toolchain",
     )
@@ -927,6 +999,11 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
             "version",
         },
         "toolchain PDF.js",
+    )
+    _keys(
+        toolchain["structuralCompatibility"],
+        {"atomicMaterializerConformance", "composition", "documentConformance", "runtimeArchive", "state"},
+        "toolchain structural compatibility",
     )
     _keys(
         toolchain["runtime"],
@@ -980,6 +1057,16 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
         toolchain["installedEngineLineage"]["callerSuppliedEnginePins"],
         "forbidden",
         "caller supplied engine pins",
+    )
+    _expect(
+        toolchain["structuralCompatibility"]["state"],
+        structural_result["state"],
+        "toolchain structural compatibility state",
+    )
+    _expect(
+        toolchain["structuralCompatibility"]["composition"],
+        "external-curated-files-not-core-document-v4-layer",
+        "toolchain structural composition",
     )
     if len(toolchain["knownBlockers"]) != len(set(toolchain["knownBlockers"])):
         raise ValueError("toolchain blockers must be unique")
@@ -1152,6 +1239,8 @@ def _verify(root: Path, *, require_ready: bool = False) -> dict[str, Any]:
         "fonts": toolchain["fonts"]["state"],
         "licenses": license_policy["state"],
         "renderExecution": render["pdfjs"]["executionState"],
+        "structuralCompatibility": structural_result["state"],
+        "atomicMaterializer": structural_result["atomicMaterializerState"],
     }
     if require_ready:
         raise ValueError(f"core-document@5 is unavailable: {unavailable}")
