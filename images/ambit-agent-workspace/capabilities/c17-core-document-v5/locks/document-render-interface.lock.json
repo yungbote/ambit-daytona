@@ -1,7 +1,7 @@
 {
   "schema": "ambit.runtime-interface-lock/v1",
   "state": "candidate-ready",
-  "digest": "sha256:02de6f6b030012a76a1798ad510a07bb03d882e3f052d0ad329e78872d8cec9e",
+  "digest": "sha256:901098446e1bf901092e60f9b6bcf906b481dbe0cb48feb32fb087b1d0b17f24",
   "contract": {
     "arguments": [
       "--framed-jsonl",
@@ -214,7 +214,7 @@
         ]
       },
       "protocolSources": {
-        "Dockerfile": "sha256:9bc2bb2661241acca5a6b918d6951206299964e138db1bbe13c211f8ee91ac2c",
+        "Dockerfile": "sha256:d008445cfee5395369d8e8ee9f45b078a488abea2cf8506a5dcf36d2c0a7b513",
         "certification/audit_offline_inputs.py": "sha256:fa3a8ffb13201dba092d9dbeab5cad52f86a0775e50b91c2a5499141e4848192",
         "certification/build_core_derived_candidate.py": "sha256:4288d65a6cbae110030e0b51905f21ca6b95817d77c5f5fe175b27f3d30bab7f",
         "certification/runtime_pty_conformance.py": "sha256:bf591d8fe55c50a612886a3dcd5cbb4765a9bea1a027f61806a3ff528ace8dab",

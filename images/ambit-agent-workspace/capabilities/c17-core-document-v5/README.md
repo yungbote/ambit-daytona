@@ -39,7 +39,7 @@ The stable component contract is:
 - role: `ambit.runtime-component/document-renderer@1`;
 - interface: `ambit.runtime-interface/docx-paginated-render@1`;
 - digest:
-  `sha256:02de6f6b030012a76a1798ad510a07bb03d882e3f052d0ad329e78872d8cec9e`;
+  `sha256:901098446e1bf901092e60f9b6bcf906b481dbe0cb48feb32fb087b1d0b17f24`;
 - exact preimage: `locks/document-render-interface.lock.json`.
 
 There are no caller-supplied file paths. The provider opens one raw, no-echo
