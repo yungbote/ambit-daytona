@@ -87,17 +87,7 @@ RUN --network=none set -eu; \
     echo '710d581169c105538897e9b6a719c47d437ceaeb980784e7996f8227264cc89c  /inputs/atomic-materializer-license.lock.json' \
       | sha256sum -c -
 
-FROM ${BASE_IMAGE} AS core_base
-
-ARG SOURCE_DATE_EPOCH
-ARG BUILD_SOURCE_REVISION
-ARG BUILD_SOURCE_TREE
-ARG BUILD_SOURCE_SUBTREE
-ARG BUILD_SOURCE_ARCHIVE_SHA256
-ARG BUILD_SOURCE_CONTEXT_SHA256
-ARG BUILD_SOURCE_FILES_SHA256
-ARG BUILD_SOURCE_MODES_SHA256
-ARG BUILD_SOURCE_IDENTITY_SHA256
+FROM ${BASE_IMAGE} AS core_rootfs
 
 USER root
 COPY --from=input_guard /inputs/base-installed-dpkg.lock /tmp/base-installed-dpkg.lock
@@ -139,9 +129,36 @@ RUN --network=none set -eu; \
       /var/cache/apt /var/cache/debconf \
       /var/lib/apt /var/lib/debconf /var/lib/dpkg \
       /var/log/apt; \
-    rm -f /var/log/alternatives.log /var/log/dpkg.log; \
+    rm -f \
+      /etc/systemd/system/timers.target.wants/apt-daily.timer \
+      /etc/systemd/system/timers.target.wants/apt-daily-upgrade.timer \
+      /etc/systemd/system/timers.target.wants/dpkg-db-backup.timer \
+      /var/log/alternatives.log /var/log/dpkg.log; \
     find /tmp -xdev -mindepth 1 -delete; \
     test -z "$(find /workspace -mindepth 1 -print -quit)"; \
+    test "$(sha256sum /opt/ambit/runtime-pack/core-document/bin/ambit-atomic-materialize | cut -d ' ' -f 1)" \
+      = 8d4405a1bd8f5d9d65be0860e52cab75cc9b7f5f659e510b4932347e0c6008e5; \
+    test ! -e /usr/bin/apt; \
+    test ! -e /usr/bin/dpkg; \
+    test ! -e /usr/bin/pip; \
+    test ! -e /usr/bin/npm
+
+FROM scratch AS core_base
+
+ARG SOURCE_DATE_EPOCH
+ARG BUILD_SOURCE_REVISION
+ARG BUILD_SOURCE_TREE
+ARG BUILD_SOURCE_SUBTREE
+ARG BUILD_SOURCE_ARCHIVE_SHA256
+ARG BUILD_SOURCE_CONTEXT_SHA256
+ARG BUILD_SOURCE_FILES_SHA256
+ARG BUILD_SOURCE_MODES_SHA256
+ARG BUILD_SOURCE_IDENTITY_SHA256
+
+COPY --from=core_rootfs / /
+RUN --network=none set -eu; \
+    test -x /bin/sh; \
+    test -x /bin/bash; \
     test "$(sha256sum /opt/ambit/runtime-pack/core-document/bin/ambit-atomic-materialize | cut -d ' ' -f 1)" \
       = 8d4405a1bd8f5d9d65be0860e52cab75cc9b7f5f659e510b4932347e0c6008e5; \
     test ! -e /usr/bin/apt; \
