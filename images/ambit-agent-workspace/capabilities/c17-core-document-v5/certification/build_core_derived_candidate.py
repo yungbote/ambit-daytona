@@ -206,7 +206,7 @@ def _build_command(
             "--metadata-file",
             os.fspath(metadata),
             "--output",
-            f"type=oci,dest={archive},rewrite-timestamp=true",
+            f"type=oci,dest={archive}",
             os.fspath(package_root),
         ]
     )
