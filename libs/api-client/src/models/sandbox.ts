@@ -139,6 +139,10 @@ export interface Sandbox {
      */
     'autoDeleteInterval'?: number;
     /**
+     * Absolute wall-clock destruction deadline
+     */
+    'autoDestroyAt'?: string;
+    /**
      * Array of volumes attached to the sandbox
      */
     'volumes'?: Array<SandboxVolume>;

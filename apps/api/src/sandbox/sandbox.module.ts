@@ -67,6 +67,11 @@ import { SandboxAuthContextGuard } from './guards/sandbox-auth-context.guard'
 import { SandboxSecretsAuthContextGuard } from './guards/sandbox-secrets-auth-context.guard'
 import { SandboxSecret } from './entities/sandbox-secret.entity'
 import { BillingModule } from '../billing/billing.module'
+import { WorkingCopyCaptureController } from './controllers/working-copy-capture.controller'
+import { WorkingCopyCaptureService } from './services/working-copy-capture.service'
+import { SandboxGenerationStopController } from './controllers/sandbox-generation-stop.controller'
+import { SandboxGenerationStopService } from './services/sandbox-generation-stop.service'
+import { SandboxExecutionAuthorityService } from './services/sandbox-execution-authority.service'
 
 @Module({
   imports: [
@@ -107,6 +112,8 @@ import { BillingModule } from '../billing/billing.module'
     PreviewController,
     VolumeController,
     JobController,
+    WorkingCopyCaptureController,
+    SandboxGenerationStopController,
   ],
   providers: [
     SandboxService,
@@ -132,6 +139,9 @@ import { BillingModule } from '../billing/billing.module'
     JobService,
     JobStateHandlerService,
     SandboxActivityService,
+    WorkingCopyCaptureService,
+    SandboxGenerationStopService,
+    SandboxExecutionAuthorityService,
     ProxyAuthContextGuard,
     SandboxAuthContextGuard,
     SandboxSecretsAuthContextGuard,
