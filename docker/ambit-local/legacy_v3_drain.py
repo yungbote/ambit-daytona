@@ -839,7 +839,7 @@ def parse_task_status(status: str) -> ParsedTaskStatus:
         "ambient": "CapAmb",
     }
     capabilities: dict[str, str] = {}
-    for name, field in capability_fields.items():
+    for name, field in capability_fields.items():  # noqa: F402
         raw = values[field][0]
         require(
             re.fullmatch(r"[0-9a-f]{16}", raw) is not None,
@@ -1243,7 +1243,7 @@ class ResourceCustody:
         for _attempt in range(2):
             try:
                 # Restore roster and publication state at one trace boundary.
-                self._resources = list.copy(baseline); registration.published = False
+                self._resources = list.copy(baseline); registration.published = False  # noqa: E702
                 if first_error is not None:
                     add_error_note(
                         active_error,
@@ -1318,7 +1318,7 @@ class ResourceCustody:
                             cleanup_error,
                         )
                     continue
-                registration.close_error = cleanup_error; registration.close_finished = True
+                registration.close_error = cleanup_error; registration.close_finished = True  # noqa: E702
                 if preinvoke_error is not None:
                     add_error_note(
                         preinvoke_error,
@@ -1652,7 +1652,7 @@ class ResourceCustody:
         finally:
             if completed:
                 # An interrupted line leaves CLOSING resumable with the old roster.
-                self._resources = []; self._state = "closed"
+                self._resources = []; self._state = "closed"  # noqa: E702
             else:
                 self._state = "closing"
         self._raise_cleanup_error(f"{self.label} cleanup failed")
@@ -2016,7 +2016,7 @@ def capture_process(candidate: Mapping[str, object]) -> CapturedProcess:
     try:
         with custody:
             return _capture_process_owned(candidate, pid, custody)
-    except ProcessUnavailable as error:
+    except ProcessUnavailable as error:  # noqa: F841
         if custody._cleanup_error is not None:
             raise DrainError(
                 f"candidate process cleanup is ambiguous: {pid}"
@@ -2028,7 +2028,7 @@ def validate_receipt_process(
     receipt_process: Mapping[str, object],
     captured: CapturedProcess,
 ) -> dict[str, object]:
-    for field in ("pid", "startTimeTicks", "executable", "argumentsSha256"):
+    for field in ("pid", "startTimeTicks", "executable", "argumentsSha256"):  # noqa: F402
         require(
             captured.authority[field] == receipt_process[field],
             f"legacy stable process field differs: {field}",
