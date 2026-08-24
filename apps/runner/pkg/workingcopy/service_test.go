@@ -7,6 +7,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -31,14 +33,14 @@ func TestCapturePersistsIntentBeforeOneStableStoppedContainerFile(t *testing.T) 
 		}
 		return nil
 	}
-	service := mustService(t, containers, objects)
+	service := mustService(t, containers, objects, binding.Authority)
 	service.now = func() time.Time { return time.Date(2026, 8, 23, 12, 34, 56, 789, time.UTC) }
 
 	receipt, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
 	if err != nil {
 		t.Fatalf("capture failed: %v", err)
 	}
-	if receipt.ByteLength != 11 || receipt.ProviderSHA256Digest != sha256Digest([]byte("exact bytes")) {
+	if receipt.TotalByteLength != 11 || receipt.ProviderSHA256Digest != sha256Digest([]byte("exact bytes")) {
 		t.Fatalf("unexpected receipt: %#v", receipt)
 	}
 	if receipt.CapturedAt != "2026-08-23T12:34:56.000000789Z" {
@@ -53,12 +55,12 @@ func TestCapturePersistsIntentBeforeOneStableStoppedContainerFile(t *testing.T) 
 	if got := containers.copyPaths[0]; got != "/workspace/work/report.txt" {
 		t.Fatalf("unexpected provider path %q", got)
 	}
-	if !strings.HasPrefix(receipt.ProviderResourceID, "daytona-working-copy-capture:v1:sha256:") {
+	if !strings.HasPrefix(receipt.ProviderResourceID, "daytona-working-copy-capture:v2:sha256:") {
 		t.Fatalf("provider identity is not opaque: %q", receipt.ProviderResourceID)
 	}
 	for key := range objects.objects {
 		if strings.Contains(key, binding.ProviderName) ||
-			strings.Contains(key, binding.Source.TenantID) ||
+			strings.Contains(key, binding.Owner.TenantID) ||
 			strings.Contains(key, containers.generation.ID) {
 			t.Fatalf("private object key leaked source identity: %q", key)
 		}
@@ -87,13 +89,13 @@ func TestCaptureAllowsZeroBytesAndOutputsZone(t *testing.T) {
 	objects := newFakeObjectStore()
 	containers := newFakeContainer(nil)
 	containers.archive = tarArchive(tarEntry{name: "empty.pdf", typeflag: tar.TypeReg})
-	service := mustService(t, containers, objects)
+	service := mustService(t, containers, objects, binding.Authority)
 
 	receipt, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
 	if err != nil {
 		t.Fatalf("zero-byte capture failed: %v", err)
 	}
-	if receipt.ByteLength != 0 || receipt.ProviderSHA256Digest != sha256Digest(nil) {
+	if receipt.TotalByteLength != 0 || receipt.ProviderSHA256Digest != sha256Digest(nil) {
 		t.Fatalf("unexpected zero-byte receipt: %#v", receipt)
 	}
 	if got := containers.copyPaths[0]; got != "/workspace/outputs/nested/empty.pdf" {
@@ -120,7 +122,7 @@ func TestCaptureRejectsUnadmittedSelectorsBeforeDockerOrStorage(t *testing.T) {
 			binding.Selector = selector
 			objects := newFakeObjectStore()
 			containers := newFakeContainer([]byte("x"))
-			service := mustService(t, containers, objects)
+			service := mustService(t, containers, objects, binding.Authority)
 			_, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
 			if !errors.Is(err, ErrInvalidRequest) {
 				t.Fatalf("expected invalid request, got %v", err)
@@ -135,24 +137,48 @@ func TestCaptureRejectsUnadmittedSelectorsBeforeDockerOrStorage(t *testing.T) {
 func TestCaptureRejectsNonCanonicalBindingAndWrongSource(t *testing.T) {
 	t.Parallel()
 	tests := map[string]func(*CaptureBinding){
-		"fingerprint":   func(value *CaptureBinding) { value.RequestFingerprint = strings.Repeat("A", 64) },
-		"authority":     func(value *CaptureBinding) { value.Authority.AuthorityRef = "wrong" },
-		"source-id":     func(value *CaptureBinding) { value.Source.ProviderResourceID = "another-sandbox" },
-		"profile":       func(value *CaptureBinding) { value.Source.ExpectedProfile = "managed-linux-vm" },
-		"runtime":       func(value *CaptureBinding) { value.Source.ExpectedRuntimeKind = "virtual-machine" },
+		"fingerprint":  func(value *CaptureBinding) { value.RequestFingerprint = strings.Repeat("A", 64) },
+		"authority":    func(value *CaptureBinding) { value.Authority.AuthorityRef = "wrong" },
+		"source-id":    func(value *CaptureBinding) { value.Source.ProviderResourceID = "another-sandbox" },
+		"profile":      func(value *CaptureBinding) { value.Source.ExpectedProfile = "managed-linux-vm" },
+		"runtime":      func(value *CaptureBinding) { value.Source.ExpectedRuntimeKind = "virtual-machine" },
+		"tenant-owner": func(value *CaptureBinding) { value.Owner.TenantID = "tenant-1" },
+		"run-owner": func(value *CaptureBinding) {
+			value.Owner.RunID = "A" + value.Owner.RunID[1:]
+		},
 		"provider-name": func(value *CaptureBinding) { value.ProviderName = " padded " },
 	}
 	for name, mutate := range tests {
 		mutate := mutate
 		t.Run(name, func(t *testing.T) {
 			binding := validBinding()
+			admittedAuthority := binding.Authority
 			mutate(&binding)
-			service := mustService(t, newFakeContainer([]byte("x")), newFakeObjectStore())
+			service := mustService(t, newFakeContainer([]byte("x")), newFakeObjectStore(), admittedAuthority)
 			_, err := service.Capture(context.Background(), "sandbox-1", binding)
 			if !errors.Is(err, ErrInvalidRequest) {
 				t.Fatalf("expected invalid request, got %v", err)
 			}
 		})
+	}
+}
+
+func TestCaptureRejectsSelfConsistentAuthorityOutsideAdmittedLineage(t *testing.T) {
+	t.Parallel()
+	admitted := validBinding()
+	requested := admitted
+	requested.Authority.LineageRef = "ambit.core-document-lineage:v5:sha256:" + strings.Repeat("9", 64)
+	requested.Authority.AuthorityRef = captureAuthorityRef(requested.Authority)
+	containers := newFakeContainer([]byte("must not be read"))
+	objects := newFakeObjectStore()
+	service := mustService(t, containers, objects, admitted.Authority)
+
+	_, err := service.Capture(context.Background(), requested.Source.ProviderResourceID, requested)
+	if !errors.Is(err, ErrInvalidRequest) || !strings.Contains(err.Error(), "admitted current lineage") {
+		t.Fatalf("self-consistent but unadmitted authority was not rejected: %v", err)
+	}
+	if containers.inspectCalls != 0 || containers.statCalls != 0 || containers.copyCalls != 0 || len(objects.objects) != 0 {
+		t.Fatal("unadmitted authority reached a provider effect")
 	}
 }
 
@@ -172,7 +198,7 @@ func TestCaptureRequiresExactStoppedGenerationBeforeAnyArchiveRead(t *testing.T)
 			containers := newFakeContainer([]byte("x"))
 			containers.state = state
 			objects := newFakeObjectStore()
-			service := mustService(t, containers, objects)
+			service := mustService(t, containers, objects, binding.Authority)
 			_, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
 			if !errors.Is(err, ErrConflict) {
 				t.Fatalf("expected stopped-state conflict, got %v", err)
@@ -189,8 +215,11 @@ func TestCaptureRejectsGenerationAndDescriptorDrift(t *testing.T) {
 	t.Run("generation", func(t *testing.T) {
 		binding := validBinding()
 		containers := newFakeContainer([]byte("x"))
-		containers.inspectMutations[3] = containerGeneration{ID: strings.Repeat("b", 64), Created: "2026-08-23T00:00:01Z"}
-		service := mustService(t, containers, newFakeObjectStore())
+		mutated := containers.generation
+		mutated.ID = strings.Repeat("b", 64)
+		mutated.Created = "2026-08-23T00:00:01Z"
+		containers.inspectMutations[3] = mutated
+		service := mustService(t, containers, newFakeObjectStore(), binding.Authority)
 		_, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
 		if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "generation changed") {
 			t.Fatalf("expected generation conflict, got %v", err)
@@ -206,12 +235,32 @@ func TestCaptureRejectsGenerationAndDescriptorDrift(t *testing.T) {
 			}
 			return stat
 		}
-		service := mustService(t, containers, newFakeObjectStore())
+		service := mustService(t, containers, newFakeObjectStore(), binding.Authority)
 		_, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
 		if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "source path changed") {
 			t.Fatalf("expected descriptor conflict, got %v", err)
 		}
 	})
+}
+
+func TestCaptureRejectsLaterExecutionEpochWithSameContainerIdentity(t *testing.T) {
+	t.Parallel()
+	binding := validBinding()
+	containers := newFakeContainer([]byte("x"))
+	later := containers.generation
+	later.StartedAt = "2026-08-23T00:03:00Z"
+	later.FinishedAt = "2026-08-23T00:04:00Z"
+	later.RestartCount++
+	containers.inspectMutations[3] = later
+	service := mustService(t, containers, newFakeObjectStore(), binding.Authority)
+
+	_, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
+	if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "generation changed") {
+		t.Fatalf("later execution epoch was not rejected: %v", err)
+	}
+	if containers.generation.ID != later.ID || containers.generation.Created != later.Created {
+		t.Fatal("test no longer holds container ID and Created constant")
+	}
 }
 
 func TestCaptureRejectsUnsafeArchiveEntryKindsAndShapes(t *testing.T) {
@@ -251,7 +300,7 @@ func TestCaptureRejectsUnsafeArchiveEntryKindsAndShapes(t *testing.T) {
 			binding := validBinding()
 			containers := newFakeContainer([]byte("x"))
 			mutate(containers)
-			service := mustService(t, containers, newFakeObjectStore())
+			service := mustService(t, containers, newFakeObjectStore(), binding.Authority)
 			_, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
 			if !errors.Is(err, ErrConflict) {
 				t.Fatalf("expected archive conflict, got %v", err)
@@ -272,7 +321,7 @@ func TestCaptureRejectsSymlinkParentAndOversizeSentinel(t *testing.T) {
 			}
 			return stat
 		}
-		service := mustService(t, containers, newFakeObjectStore())
+		service := mustService(t, containers, newFakeObjectStore(), binding.Authority)
 		_, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
 		if !errors.Is(err, ErrConflict) {
 			t.Fatalf("expected symlink conflict, got %v", err)
@@ -283,7 +332,7 @@ func TestCaptureRejectsSymlinkParentAndOversizeSentinel(t *testing.T) {
 		binding := validBinding()
 		containers := newFakeContainer(nil)
 		containers.statSizeOverride = MaximumCaptureBytes + 1
-		service := mustService(t, containers, newFakeObjectStore())
+		service := mustService(t, containers, newFakeObjectStore(), binding.Authority)
 		_, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
 		if !errors.Is(err, ErrInvalidRequest) || containers.copyCalls != 0 {
 			t.Fatalf("expected pre-copy size rejection, got %v", err)
@@ -297,11 +346,11 @@ func TestPartialIntentIsObservableAndExactReplayResumesSameGeneration(t *testing
 	objects := newFakeObjectStore()
 	containers := newFakeContainer([]byte("recover me"))
 	containers.copyErrors = []error{errors.New("transport cut")}
-	service := mustService(t, containers, objects)
+	service := mustService(t, containers, objects, binding.Authority)
 
 	_, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
-	if !errors.Is(err, ErrConflict) {
-		t.Fatalf("expected first copy failure, got %v", err)
+	if !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrConflict) {
+		t.Fatalf("expected transient copy failure to be unavailable, got %v", err)
 	}
 	observation, err := service.Observe(context.Background(), binding.Source.ProviderResourceID, binding)
 	if err != nil || observation.Status != "partial" || observation.Identity == nil {
@@ -318,51 +367,38 @@ func TestPartialIntentIsObservableAndExactReplayResumesSameGeneration(t *testing
 	}
 }
 
-func TestLostResponseReconcilesWithoutReplacingContentOrReceipt(t *testing.T) {
+func TestLostCreateResponsesReconcileWithoutReplacingDurableObjects(t *testing.T) {
 	t.Parallel()
-	binding := validBinding()
-	objects := newFakeObjectStore()
-	containers := newFakeContainer([]byte("durable"))
-	service := mustService(t, containers, objects)
-	objects.failAfterStoreSuffix = "/content.bin"
+	for _, suffix := range []string{"/intent.json", "/content.bin", "/receipt.json"} {
+		suffix := suffix
+		t.Run(suffix, func(t *testing.T) {
+			binding := validBinding()
+			binding.ProviderName += "-lost-create" + strings.ReplaceAll(suffix, "/", "-")
+			binding.RequestFingerprint = hashHex(binding.ProviderName)
+			objects := newFakeObjectStore()
+			containers := newFakeContainer([]byte("durable"))
+			service := mustService(t, containers, objects, binding.Authority)
+			objects.failAfterStoreSuffix = suffix
 
-	_, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
-	if err == nil {
-		t.Fatal("expected simulated lost content response")
+			receipt, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
+			if err != nil {
+				t.Fatalf("lost %s create response was not reconciled in-call: %v", suffix, err)
+			}
+			observation, err := service.Observe(context.Background(), binding.Source.ProviderResourceID, binding)
+			if err != nil || observation.Status != "complete" || observation.Receipt == nil || *observation.Receipt != receipt {
+				t.Fatalf("reconciled publication was not complete: %#v, %v", observation, err)
+			}
+			objects.failAfterStoreSuffix = ""
+			inspectCalls := containers.inspectCalls
+			replayed, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
+			if err != nil || replayed != receipt {
+				t.Fatalf("exact replay diverged after lost response: %#v, %v", replayed, err)
+			}
+			if containers.copyCalls != 1 || containers.inspectCalls != inspectCalls {
+				t.Fatalf("completed replay touched Docker: copies=%d inspect=%d->%d", containers.copyCalls, inspectCalls, containers.inspectCalls)
+			}
+		})
 	}
-	partial, err := service.Observe(context.Background(), binding.Source.ProviderResourceID, binding)
-	if err != nil || partial.Status != "partial" {
-		t.Fatalf("content-only cut was not partial: %#v, %v", partial, err)
-	}
-	objects.failAfterStoreSuffix = ""
-	receipt, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
-	if err != nil {
-		t.Fatalf("content replay did not reconcile: %v", err)
-	}
-	if containers.copyCalls != 1 {
-		t.Fatalf("content replay blindly recaptured source: %d", containers.copyCalls)
-	}
-
-	// A response lost after receipt publication is reconciled directly from the
-	// immutable receipt and does not inspect or copy the container again.
-	other := validBinding()
-	other.ProviderName = "capture-receipt-cut"
-	other.RequestFingerprint = strings.Repeat("b", 64)
-	objects.failAfterStoreSuffix = "/receipt.json"
-	_, err = service.Capture(context.Background(), other.Source.ProviderResourceID, other)
-	if err == nil {
-		t.Fatal("expected simulated lost receipt response")
-	}
-	copyCalls := containers.copyCalls
-	objects.failAfterStoreSuffix = ""
-	reconciled, err := service.Capture(context.Background(), other.Source.ProviderResourceID, other)
-	if err != nil || reconciled.ByteLength != int64(len("durable")) {
-		t.Fatalf("receipt replay did not reconcile: %#v, %v", reconciled, err)
-	}
-	if containers.copyCalls != copyCalls {
-		t.Fatal("completed replay touched Docker")
-	}
-	_ = receipt
 }
 
 func TestConflictingReplayCannotReplaceExistingGeneration(t *testing.T) {
@@ -370,7 +406,7 @@ func TestConflictingReplayCannotReplaceExistingGeneration(t *testing.T) {
 	binding := validBinding()
 	objects := newFakeObjectStore()
 	containers := newFakeContainer([]byte("x"))
-	service := mustService(t, containers, objects)
+	service := mustService(t, containers, objects, binding.Authority)
 	if _, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding); err != nil {
 		t.Fatalf("seed capture failed: %v", err)
 	}
@@ -389,56 +425,69 @@ func TestReadExistsAndDeleteRequireExactIdentity(t *testing.T) {
 	t.Parallel()
 	binding := validBinding()
 	objects := newFakeObjectStore()
-	service := mustService(t, newFakeContainer([]byte("readable")), objects)
+	service := mustService(t, newFakeContainer([]byte("readable")), objects, binding.Authority)
 	receipt, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
 	if err != nil {
 		t.Fatalf("capture failed: %v", err)
 	}
 	exists, err := service.Exists(context.Background(), binding.Source.ProviderResourceID, receipt.CaptureIdentity)
-	if err != nil || !exists {
-		t.Fatalf("exact identity should exist: %v, %v", exists, err)
+	if err != nil || !exists.Exists || exists.Status != "complete" || exists.Receipt == nil || *exists.Receipt != receipt {
+		t.Fatalf("exact identity should have a complete receipt: %#v, %v", exists, err)
 	}
 
 	read := CaptureReadRequest{
-		CaptureIdentity:    receipt.CaptureIdentity,
-		ExpectedByteLength: receipt.ByteLength,
-		MaximumBytes:       MaximumCaptureBytes,
+		CaptureIdentity:              receipt.CaptureIdentity,
+		ExpectedTotalByteLength:      receipt.TotalByteLength,
+		ExpectedProviderSHA256Digest: receipt.ProviderSHA256Digest,
+		Offset:                       0,
+		MaximumBytes:                 MaximumReadBytes,
 	}
-	data, err := service.Read(context.Background(), binding.Source.ProviderResourceID, read)
-	if err != nil || string(data) != "readable" {
-		t.Fatalf("exact read failed: %q, %v", data, err)
+	response, err := service.Read(context.Background(), binding.Source.ProviderResourceID, read)
+	data, decodeErr := base64.StdEncoding.DecodeString(response.BytesBase64)
+	if err != nil || decodeErr != nil || string(data) != "readable" ||
+		response.ByteLength != int64(len("readable")) || !response.EOF || response.Offset != 0 ||
+		response.TotalByteLength != receipt.TotalByteLength ||
+		response.ProviderSHA256Digest != receipt.ProviderSHA256Digest {
+		t.Fatalf("exact read failed: %#v, decoded=%q, decode=%v, read=%v", response, data, decodeErr, err)
 	}
-	read.ExpectedByteLength++
+	read.ExpectedTotalByteLength++
 	if _, err := service.Read(context.Background(), binding.Source.ProviderResourceID, read); !errors.Is(err, ErrConflict) {
 		t.Fatalf("length drift was not rejected: %v", err)
 	}
-	read.ExpectedByteLength = receipt.ByteLength
-	read.MaximumBytes = receipt.ByteLength - 1
+	read.ExpectedTotalByteLength = receipt.TotalByteLength
+	read.ExpectedProviderSHA256Digest = "sha256:" + strings.Repeat("f", 64)
+	if _, err := service.Read(context.Background(), binding.Source.ProviderResourceID, read); !errors.Is(err, ErrConflict) {
+		t.Fatalf("digest drift was not rejected: %v", err)
+	}
+	read.ExpectedProviderSHA256Digest = receipt.ProviderSHA256Digest
+	read.MaximumBytes = MaximumReadBytes + 1
 	if _, err := service.Read(context.Background(), binding.Source.ProviderResourceID, read); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("maximum bound was not rejected: %v", err)
 	}
 
 	wrong := receipt.CaptureIdentity
-	wrong.ProviderResourceID = "daytona-working-copy-capture:v1:sha256:" + strings.Repeat("f", 64)
+	wrong.ProviderResourceID = "daytona-working-copy-capture:v2:sha256:" + strings.Repeat("f", 64)
 	if _, err := service.Exists(context.Background(), binding.Source.ProviderResourceID, wrong); !errors.Is(err, ErrConflict) {
 		t.Fatalf("wrong identity existence was not rejected: %v", err)
 	}
-	if err := service.Delete(context.Background(), binding.Source.ProviderResourceID, wrong); !errors.Is(err, ErrConflict) {
+	if _, err := service.Delete(context.Background(), binding.Source.ProviderResourceID, wrong); !errors.Is(err, ErrConflict) {
 		t.Fatalf("wrong identity deletion was not rejected: %v", err)
 	}
-	if err := service.Delete(context.Background(), binding.Source.ProviderResourceID, receipt.CaptureIdentity); err != nil {
-		t.Fatalf("delete failed: %v", err)
+	deleted, err := service.Delete(context.Background(), binding.Source.ProviderResourceID, receipt.CaptureIdentity)
+	if err != nil || deleted.CaptureIdentity != receipt.CaptureIdentity || deleted.Outcome != "deleted" {
+		t.Fatalf("delete failed: %#v, %v", deleted, err)
 	}
 	exists, err = service.Exists(context.Background(), binding.Source.ProviderResourceID, receipt.CaptureIdentity)
-	if err != nil || exists {
-		t.Fatalf("deleted capture still exists: %v, %v", exists, err)
+	if err != nil || exists.Exists || exists.Status != "absent" || exists.Receipt != nil {
+		t.Fatalf("deleted capture still exists: %#v, %v", exists, err)
 	}
 	observation, err := service.Observe(context.Background(), binding.Source.ProviderResourceID, binding)
 	if err != nil || observation.Status != "absent" || observation.Binding == nil || *observation.Binding != binding {
 		t.Fatalf("deleted capture was not absent: %#v, %v", observation, err)
 	}
-	if err := service.Delete(context.Background(), binding.Source.ProviderResourceID, receipt.CaptureIdentity); err != nil {
-		t.Fatalf("idempotent exact delete failed: %v", err)
+	alreadyAbsent, err := service.Delete(context.Background(), binding.Source.ProviderResourceID, receipt.CaptureIdentity)
+	if err != nil || alreadyAbsent.CaptureIdentity != receipt.CaptureIdentity || alreadyAbsent.Outcome != "already_absent" {
+		t.Fatalf("idempotent exact delete failed: %#v, %v", alreadyAbsent, err)
 	}
 }
 
@@ -447,13 +496,13 @@ func TestInterruptedDeleteRemainsPartialAndResumable(t *testing.T) {
 	binding := validBinding()
 	objects := newFakeObjectStore()
 	containers := newFakeContainer([]byte("restore"))
-	service := mustService(t, containers, objects)
+	service := mustService(t, containers, objects, binding.Authority)
 	receipt, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
 	if err != nil {
 		t.Fatalf("capture failed: %v", err)
 	}
 	objects.failDeleteSuffix = "/content.bin"
-	if err := service.Delete(context.Background(), binding.Source.ProviderResourceID, receipt.CaptureIdentity); err == nil {
+	if _, err := service.Delete(context.Background(), binding.Source.ProviderResourceID, receipt.CaptureIdentity); err == nil {
 		t.Fatal("expected interrupted deletion")
 	}
 	observation, err := service.Observe(context.Background(), binding.Source.ProviderResourceID, binding)
@@ -461,12 +510,15 @@ func TestInterruptedDeleteRemainsPartialAndResumable(t *testing.T) {
 		t.Fatalf("interrupted deletion was not partial: %#v, %v", observation, err)
 	}
 	objects.failDeleteSuffix = ""
-	replayed, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
-	if err != nil || replayed.ProviderResourceID != receipt.ProviderResourceID {
-		t.Fatalf("partial delete did not resume same generation: %#v, %v", replayed, err)
+	if _, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding); !errors.Is(err, ErrConflict) {
+		t.Fatalf("capture recreated a tombstoned generation: %v", err)
 	}
 	if containers.copyCalls != 1 {
-		t.Fatal("resuming staged content unnecessarily recaptured source")
+		t.Fatal("tombstone cleanup unnecessarily recaptured source")
+	}
+	observation, err = service.Observe(context.Background(), binding.Source.ProviderResourceID, binding)
+	if err != nil || observation.Status != "absent" {
+		t.Fatalf("tombstone did not converge after retry: %#v, %v", observation, err)
 	}
 }
 
@@ -475,7 +527,7 @@ func TestConcurrentExactCaptureSerializesToOneProviderEffect(t *testing.T) {
 	binding := validBinding()
 	objects := newFakeObjectStore()
 	containers := newFakeContainer([]byte("once"))
-	service := mustService(t, containers, objects)
+	service := mustService(t, containers, objects, binding.Authority)
 	const count = 16
 	receipts := make(chan CaptureReceipt, count)
 	errorsChannel := make(chan error, count)
@@ -515,7 +567,7 @@ func TestStoredContentDriftFailsClosed(t *testing.T) {
 	t.Parallel()
 	binding := validBinding()
 	objects := newFakeObjectStore()
-	service := mustService(t, newFakeContainer([]byte("original")), objects)
+	service := mustService(t, newFakeContainer([]byte("original")), objects, binding.Authority)
 	receipt, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
 	if err != nil {
 		t.Fatalf("capture failed: %v", err)
@@ -524,16 +576,296 @@ func TestStoredContentDriftFailsClosed(t *testing.T) {
 	if !ok {
 		t.Fatal("content object missing")
 	}
+	objects.mu.Lock()
 	object := objects.objects[key]
 	object.data = []byte("tampered")
+	object.contentSHA256 = sha256Digest(object.data)
+	object.metadata["sha256"] = object.contentSHA256
 	objects.objects[key] = object
+	objects.mu.Unlock()
+	if int64(len(object.data)) != receipt.TotalByteLength {
+		t.Fatal("test corruption must preserve the receipt length")
+	}
+	if _, err := service.Observe(context.Background(), binding.Source.ProviderResourceID, binding); !errors.Is(err, ErrConflict) {
+		t.Fatalf("same-length content and metadata corruption was not rejected by Observe: %v", err)
+	}
+	if _, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding); !errors.Is(err, ErrConflict) {
+		t.Fatalf("same-length content and metadata corruption was not rejected by replay: %v", err)
+	}
 	request := CaptureReadRequest{
-		CaptureIdentity:    receipt.CaptureIdentity,
-		ExpectedByteLength: receipt.ByteLength,
-		MaximumBytes:       MaximumCaptureBytes,
+		CaptureIdentity:              receipt.CaptureIdentity,
+		ExpectedTotalByteLength:      receipt.TotalByteLength,
+		ExpectedProviderSHA256Digest: receipt.ProviderSHA256Digest,
+		MaximumBytes:                 MaximumReadBytes,
 	}
 	if _, err := service.Read(context.Background(), binding.Source.ProviderResourceID, request); !errors.Is(err, ErrConflict) {
 		t.Fatalf("tampered content was not rejected: %v", err)
+	}
+}
+
+func TestReadUsesExactBoundedRangesAndReportsOffsetsAndEOF(t *testing.T) {
+	t.Parallel()
+	binding := validBinding()
+	content := make([]byte, MaximumReadBytes+37)
+	for index := range content {
+		content[index] = byte(index % 251)
+	}
+	objects := newFakeObjectStore()
+	service := mustService(t, newFakeContainer(content), objects, binding.Authority)
+	receipt, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
+	if err != nil {
+		t.Fatalf("capture failed: %v", err)
+	}
+	objects.mu.Lock()
+	objects.rangeReads = nil
+	objects.fullContentReads = 0
+	objects.mu.Unlock()
+
+	request := CaptureReadRequest{
+		CaptureIdentity:              receipt.CaptureIdentity,
+		ExpectedTotalByteLength:      receipt.TotalByteLength,
+		ExpectedProviderSHA256Digest: receipt.ProviderSHA256Digest,
+		Offset:                       0,
+		MaximumBytes:                 MaximumReadBytes,
+	}
+	first, err := service.Read(context.Background(), binding.Source.ProviderResourceID, request)
+	firstBytes, decodeErr := base64.StdEncoding.DecodeString(first.BytesBase64)
+	if err != nil || decodeErr != nil || first.Offset != 0 || first.ByteLength != MaximumReadBytes || first.EOF ||
+		!bytes.Equal(firstBytes, content[:MaximumReadBytes]) {
+		t.Fatalf("first range mismatch: %#v, decode=%v, read=%v", first, decodeErr, err)
+	}
+
+	request.Offset = MaximumReadBytes
+	second, err := service.Read(context.Background(), binding.Source.ProviderResourceID, request)
+	secondBytes, decodeErr := base64.StdEncoding.DecodeString(second.BytesBase64)
+	if err != nil || decodeErr != nil || second.Offset != MaximumReadBytes || second.ByteLength != 37 || !second.EOF ||
+		!bytes.Equal(secondBytes, content[MaximumReadBytes:]) {
+		t.Fatalf("terminal range mismatch: %#v, decode=%v, read=%v", second, decodeErr, err)
+	}
+
+	request.Offset = receipt.TotalByteLength
+	atEOF, err := service.Read(context.Background(), binding.Source.ProviderResourceID, request)
+	if err != nil || atEOF.Offset != receipt.TotalByteLength || atEOF.ByteLength != 0 || !atEOF.EOF || atEOF.BytesBase64 != "" {
+		t.Fatalf("exact-EOF read mismatch: %#v, %v", atEOF, err)
+	}
+
+	invalid := []CaptureReadRequest{request, request, request, request}
+	invalid[0].Offset = -1
+	invalid[1].Offset = receipt.TotalByteLength + 1
+	invalid[2].Offset = 0
+	invalid[2].MaximumBytes = 0
+	invalid[3].Offset = 0
+	invalid[3].MaximumBytes = MaximumReadBytes + 1
+	for index, candidate := range invalid {
+		if _, err := service.Read(context.Background(), binding.Source.ProviderResourceID, candidate); !errors.Is(err, ErrInvalidRequest) {
+			t.Fatalf("invalid bounds case %d was not rejected: %v", index, err)
+		}
+	}
+
+	objects.mu.Lock()
+	ranges := append([]fakeRangeRead(nil), objects.rangeReads...)
+	fullContentReads := objects.fullContentReads
+	objects.mu.Unlock()
+	if fullContentReads != 0 {
+		t.Fatalf("completed ranged reads loaded the full content object %d times", fullContentReads)
+	}
+	if len(ranges) != 2 || ranges[0].offset != 0 || ranges[0].maximumBytes != MaximumReadBytes ||
+		ranges[1].offset != MaximumReadBytes || ranges[1].maximumBytes != 37 {
+		t.Fatalf("storage did not receive the exact two bounded ranges: %#v", ranges)
+	}
+}
+
+func TestDeleteReconcilesLostResponsesForEveryOperationalObject(t *testing.T) {
+	t.Parallel()
+	for _, suffix := range []string{"/receipt.json", "/content.bin", "/intent.json"} {
+		suffix := suffix
+		t.Run(suffix, func(t *testing.T) {
+			binding := validBinding()
+			binding.ProviderName += strings.ReplaceAll(suffix, "/", "-")
+			binding.RequestFingerprint = hashHex(binding.ProviderName)
+			objects := newFakeObjectStore()
+			service := mustService(t, newFakeContainer([]byte("delete me")), objects, binding.Authority)
+			receipt, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
+			if err != nil {
+				t.Fatalf("capture failed: %v", err)
+			}
+			objects.failAfterDeleteSuffix = suffix
+			deleted, err := service.Delete(context.Background(), binding.Source.ProviderResourceID, receipt.CaptureIdentity)
+			if err != nil || deleted.CaptureIdentity != receipt.CaptureIdentity || deleted.Outcome != "deleted" {
+				t.Fatalf("lost %s delete response did not reconcile: %#v, %v", suffix, deleted, err)
+			}
+			keys := keysForIdentity(receipt.CaptureIdentity)
+			objects.mu.Lock()
+			_, intentPresent := objects.objects[keys.intent]
+			_, contentPresent := objects.objects[keys.content]
+			_, receiptPresent := objects.objects[keys.receipt]
+			_, tombstonePresent := objects.objects[keys.deletion]
+			objects.mu.Unlock()
+			if intentPresent || contentPresent || receiptPresent || !tombstonePresent {
+				t.Fatalf("delete did not retain only the tombstone: intent=%v content=%v receipt=%v tombstone=%v", intentPresent, contentPresent, receiptPresent, tombstonePresent)
+			}
+		})
+	}
+}
+
+func TestDeleteCleansExactOrphansWhenIntentIsMissing(t *testing.T) {
+	t.Parallel()
+	binding := validBinding()
+	objects := newFakeObjectStore()
+	service := mustService(t, newFakeContainer([]byte("orphaned")), objects, binding.Authority)
+	receipt, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
+	if err != nil {
+		t.Fatalf("capture failed: %v", err)
+	}
+	keys := keysForIdentity(receipt.CaptureIdentity)
+	objects.mu.Lock()
+	delete(objects.objects, keys.intent)
+	objects.deletedKeys[keys.intent] = true
+	objects.mu.Unlock()
+
+	observation, err := service.Observe(context.Background(), binding.Source.ProviderResourceID, binding)
+	if err != nil || observation.Status != "absent" {
+		t.Fatalf("missing intent was not authoritative absence: %#v, %v", observation, err)
+	}
+	deleted, err := service.Delete(context.Background(), binding.Source.ProviderResourceID, receipt.CaptureIdentity)
+	if err != nil || deleted.Outcome != "deleted" {
+		t.Fatalf("exact orphan cleanup failed: %#v, %v", deleted, err)
+	}
+	objects.mu.Lock()
+	_, contentPresent := objects.objects[keys.content]
+	_, receiptPresent := objects.objects[keys.receipt]
+	_, tombstonePresent := objects.objects[keys.deletion]
+	objects.mu.Unlock()
+	if contentPresent || receiptPresent || !tombstonePresent {
+		t.Fatalf("orphan cleanup did not converge to its tombstone: content=%v receipt=%v tombstone=%v", contentPresent, receiptPresent, tombstonePresent)
+	}
+}
+
+func TestCrossServiceCaptureAndDeleteConvergeThroughDurableAuthority(t *testing.T) {
+	t.Parallel()
+	binding := validBinding()
+	objects := newFakeObjectStore()
+	containers := newFakeContainer([]byte("shared durable truth"))
+	first := mustService(t, containers, objects, binding.Authority)
+	second := mustService(t, containers, objects, binding.Authority)
+
+	receipt, err := first.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
+	if err != nil {
+		t.Fatalf("first capture failed: %v", err)
+	}
+	inspectCalls := containers.inspectCalls
+	replayed, err := second.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
+	if err != nil || replayed != receipt {
+		t.Fatalf("second service did not converge on the exact receipt: %#v, %v", replayed, err)
+	}
+	if containers.copyCalls != 1 || containers.inspectCalls != inspectCalls {
+		t.Fatalf("cross-service replay touched Docker: copies=%d inspect=%d->%d", containers.copyCalls, inspectCalls, containers.inspectCalls)
+	}
+
+	deleted, err := second.Delete(context.Background(), binding.Source.ProviderResourceID, receipt.CaptureIdentity)
+	if err != nil || deleted.Outcome != "deleted" {
+		t.Fatalf("cross-service delete failed: %#v, %v", deleted, err)
+	}
+	if _, err := first.Capture(context.Background(), binding.Source.ProviderResourceID, binding); !errors.Is(err, ErrConflict) {
+		t.Fatalf("first service recreated a tombstoned capture: %v", err)
+	}
+	observation, err := first.Observe(context.Background(), binding.Source.ProviderResourceID, binding)
+	if err != nil || observation.Status != "absent" {
+		t.Fatalf("first service did not observe durable deletion: %#v, %v", observation, err)
+	}
+	keys := keysForIdentity(receipt.CaptureIdentity)
+	objects.mu.Lock()
+	_, tombstonePresent := objects.objects[keys.deletion]
+	objects.mu.Unlock()
+	if !tombstonePresent || containers.copyCalls != 1 {
+		t.Fatalf("durable tombstone was lost or capture repeated: tombstone=%v copies=%d", tombstonePresent, containers.copyCalls)
+	}
+}
+
+func TestDeleteReportsOutcomeUnknownWhenDurableAbsenceCannotBeProven(t *testing.T) {
+	t.Parallel()
+	tests := map[string]func(*fakeObjectStore){
+		"delete-rejected-object-remains": func(objects *fakeObjectStore) {
+			objects.failDeleteSuffix = "/receipt.json"
+		},
+		"post-delete-stat-unavailable": func(objects *fakeObjectStore) {
+			objects.postDeleteStatErrors["/receipt.json"] = []error{errors.New("transient stat transport failure")}
+		},
+	}
+	for name, inject := range tests {
+		inject := inject
+		t.Run(name, func(t *testing.T) {
+			binding := validBinding()
+			binding.ProviderName += "-" + name
+			binding.RequestFingerprint = hashHex(binding.ProviderName)
+			objects := newFakeObjectStore()
+			service := mustService(t, newFakeContainer([]byte("delete uncertainty")), objects, binding.Authority)
+			receipt, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
+			if err != nil {
+				t.Fatalf("capture failed: %v", err)
+			}
+			inject(objects)
+			if _, err := service.Delete(context.Background(), binding.Source.ProviderResourceID, receipt.CaptureIdentity); !errors.Is(err, ErrOutcomeUnknown) {
+				t.Fatalf("unproven deletion outcome was not classified outcome-unknown: %v", err)
+			}
+		})
+	}
+}
+
+func TestTransientDockerFailuresAreUnavailableNotConflicts(t *testing.T) {
+	t.Parallel()
+	tests := map[string]func(*fakeContainer){
+		"inspect": func(container *fakeContainer) {
+			container.inspectErrors = []error{errors.New("transient inspect transport failure")}
+		},
+		"stat": func(container *fakeContainer) {
+			container.statErrors = []error{errors.New("transient stat transport failure")}
+		},
+		"copy": func(container *fakeContainer) {
+			container.copyErrors = []error{errors.New("transient copy transport failure")}
+		},
+	}
+	for name, inject := range tests {
+		inject := inject
+		t.Run(name, func(t *testing.T) {
+			binding := validBinding()
+			binding.ProviderName += "-docker-" + name
+			binding.RequestFingerprint = hashHex(binding.ProviderName)
+			container := newFakeContainer([]byte("x"))
+			inject(container)
+			service := mustService(t, container, newFakeObjectStore(), binding.Authority)
+			_, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding)
+			if !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrConflict) {
+				t.Fatalf("transient Docker %s failure had the wrong classification: %v", name, err)
+			}
+		})
+	}
+}
+
+func TestDecodeExactJSONRejectsDuplicateKeysAtEveryObjectDepth(t *testing.T) {
+	t.Parallel()
+	binding := validBinding()
+	canonical, err := json.Marshal(binding)
+	if err != nil {
+		t.Fatalf("marshal canonical binding: %v", err)
+	}
+	var decoded CaptureBinding
+	if err := DecodeExactJSON(canonical, &decoded); err != nil || decoded != binding {
+		t.Fatalf("canonical binding did not decode exactly: %#v, %v", decoded, err)
+	}
+	duplicates := map[string][]byte{
+		"top-level": bytes.Replace(canonical, []byte("{"), []byte(`{"providerName":"shadow",`), 1),
+		"nested": bytes.Replace(
+			canonical,
+			[]byte(`"owner":{`),
+			[]byte(`"owner":{"tenantId":"77777777-7777-4777-8777-777777777777",`),
+			1,
+		),
+	}
+	for name, data := range duplicates {
+		if err := DecodeExactJSON(data, &CaptureBinding{}); err == nil || !strings.Contains(err.Error(), "duplicate JSON object key") {
+			t.Fatalf("%s duplicate key was not rejected precisely: %v", name, err)
+		}
 	}
 }
 
@@ -551,6 +883,8 @@ type fakeContainer struct {
 	inspectMutations  map[int]containerGeneration
 	statMutation      func(containertypes.PathStat) containertypes.PathStat
 	afterStatMutation func(containertypes.PathStat) containertypes.PathStat
+	inspectErrors     []error
+	statErrors        []error
 	copyErrors        []error
 	beforeCopy        func() error
 }
@@ -558,7 +892,15 @@ type fakeContainer struct {
 func newFakeContainer(content []byte) *fakeContainer {
 	copy := append([]byte(nil), content...)
 	return &fakeContainer{
-		generation:       containerGeneration{ID: strings.Repeat("a", 64), Created: "2026-08-23T00:00:00Z"},
+		generation: containerGeneration{
+			ID:           strings.Repeat("a", 64),
+			Created:      "2026-08-23T00:00:00Z",
+			StartedAt:    "2026-08-23T00:01:00Z",
+			FinishedAt:   "2026-08-23T00:02:00Z",
+			RestartCount: 0,
+			ExitCode:     0,
+			OOMKilled:    false,
+		},
 		state:            &containertypes.State{Status: containertypes.StateExited},
 		content:          copy,
 		archive:          tarArchive(tarEntry{name: "report.txt", typeflag: tar.TypeReg, body: copy}),
@@ -573,13 +915,22 @@ func (f *fakeContainer) ContainerInspect(
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.inspectCalls++
+	if len(f.inspectErrors) > 0 {
+		err := f.inspectErrors[0]
+		f.inspectErrors = f.inspectErrors[1:]
+		return containertypes.InspectResponse{}, err
+	}
 	generation := f.generation
 	if mutated, ok := f.inspectMutations[f.inspectCalls]; ok {
 		generation = mutated
 	}
 	state := *f.state
+	state.StartedAt = generation.StartedAt
+	state.FinishedAt = generation.FinishedAt
+	state.ExitCode = generation.ExitCode
+	state.OOMKilled = generation.OOMKilled
 	return containertypes.InspectResponse{ContainerJSONBase: &containertypes.ContainerJSONBase{
-		ID: generation.ID, Created: generation.Created, State: &state,
+		ID: generation.ID, Created: generation.Created, State: &state, RestartCount: generation.RestartCount,
 	}}, nil
 }
 
@@ -591,6 +942,11 @@ func (f *fakeContainer) ContainerStatPath(
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.statCalls++
+	if len(f.statErrors) > 0 {
+		err := f.statErrors[0]
+		f.statErrors = f.statErrors[1:]
+		return containertypes.PathStat{}, err
+	}
 	name := pathBase(containerPath)
 	isFile := strings.Contains(name, ".")
 	mode := os.FileMode(0o755 | os.ModeDir)
@@ -652,19 +1008,35 @@ func (f *fakeContainer) CopyFromContainer(
 }
 
 type fakeStoredObject struct {
-	data     []byte
-	metadata map[string]string
+	data          []byte
+	contentSHA256 string
+	metadata      map[string]string
+}
+
+type fakeRangeRead struct {
+	key          string
+	offset       int64
+	maximumBytes int64
 }
 
 type fakeObjectStore struct {
-	mu                   sync.Mutex
-	objects              map[string]fakeStoredObject
-	failAfterStoreSuffix string
-	failDeleteSuffix     string
+	mu                    sync.Mutex
+	objects               map[string]fakeStoredObject
+	failAfterStoreSuffix  string
+	failDeleteSuffix      string
+	failAfterDeleteSuffix string
+	postDeleteStatErrors  map[string][]error
+	deletedKeys           map[string]bool
+	rangeReads            []fakeRangeRead
+	fullContentReads      int
 }
 
 func newFakeObjectStore() *fakeObjectStore {
-	return &fakeObjectStore{objects: make(map[string]fakeStoredObject)}
+	return &fakeObjectStore{
+		objects:              make(map[string]fakeStoredObject),
+		postDeleteStatErrors: make(map[string][]error),
+		deletedKeys:          make(map[string]bool),
+	}
 }
 
 func (f *fakeObjectStore) CreatePrivateObject(
@@ -679,7 +1051,12 @@ func (f *fakeObjectStore) CreatePrivateObject(
 	if _, exists := f.objects[key]; exists {
 		return storage.ErrPrivateObjectAlreadyExists
 	}
-	f.objects[key] = fakeStoredObject{data: append([]byte(nil), data...), metadata: lowerMetadata(metadata)}
+	f.objects[key] = fakeStoredObject{
+		data:          append([]byte(nil), data...),
+		contentSHA256: sha256Digest(data),
+		metadata:      lowerMetadata(metadata),
+	}
+	delete(f.deletedKeys, key)
 	if f.failAfterStoreSuffix != "" && strings.HasSuffix(key, f.failAfterStoreSuffix) {
 		return errors.New("simulated lost object-store response")
 	}
@@ -700,7 +1077,30 @@ func (f *fakeObjectStore) GetPrivateObject(
 	if int64(len(object.data)) > maximumBytes {
 		return nil, storage.ErrPrivateObjectTooLarge
 	}
+	if strings.HasSuffix(key, "/content.bin") {
+		f.fullContentReads++
+	}
 	return append([]byte(nil), object.data...), nil
+}
+
+func (f *fakeObjectStore) GetPrivateObjectRange(
+	_ context.Context,
+	key string,
+	offset int64,
+	maximumBytes int64,
+) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	object, exists := f.objects[key]
+	if !exists {
+		return nil, storage.ErrPrivateObjectNotFound
+	}
+	if offset < 0 || maximumBytes <= 0 || offset > int64(len(object.data)) {
+		return nil, storage.ErrPrivateObjectTooLarge
+	}
+	f.rangeReads = append(f.rangeReads, fakeRangeRead{key: key, offset: offset, maximumBytes: maximumBytes})
+	end := min(offset+maximumBytes, int64(len(object.data)))
+	return append([]byte(nil), object.data[offset:end]...), nil
 }
 
 func (f *fakeObjectStore) StatPrivateObject(
@@ -709,13 +1109,23 @@ func (f *fakeObjectStore) StatPrivateObject(
 ) (storage.PrivateObjectInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.deletedKeys[key] {
+		for suffix, queued := range f.postDeleteStatErrors {
+			if strings.HasSuffix(key, suffix) && len(queued) > 0 {
+				err := queued[0]
+				f.postDeleteStatErrors[suffix] = queued[1:]
+				return storage.PrivateObjectInfo{}, err
+			}
+		}
+	}
 	object, exists := f.objects[key]
 	if !exists {
 		return storage.PrivateObjectInfo{}, storage.ErrPrivateObjectNotFound
 	}
 	return storage.PrivateObjectInfo{
-		Size:         int64(len(object.data)),
-		UserMetadata: lowerMetadata(object.metadata),
+		Size:          int64(len(object.data)),
+		ContentSHA256: object.contentSHA256,
+		UserMetadata:  lowerMetadata(object.metadata),
 	}, nil
 }
 
@@ -726,6 +1136,10 @@ func (f *fakeObjectStore) DeletePrivateObject(_ context.Context, key string) err
 		return errors.New("simulated delete cut")
 	}
 	delete(f.objects, key)
+	f.deletedKeys[key] = true
+	if f.failAfterDeleteSuffix != "" && strings.HasSuffix(key, f.failAfterDeleteSuffix) {
+		return errors.New("simulated lost delete response")
+	}
 	return nil
 }
 
@@ -786,8 +1200,9 @@ func validBinding() CaptureBinding {
 	protocolDigest := "sha256:" + strings.Repeat("7", 64)
 	helperDigest := "sha256:" + strings.Repeat("8", 64)
 	authority := CaptureAuthority{
-		RoleRef:  captureRoleRef,
-		Protocol: CaptureAuthorityArtifact{Ref: captureProtocolRef, Digest: protocolDigest},
+		LineageRef: "ambit.core-document-lineage:v5:sha256:" + strings.Repeat("6", 64),
+		RoleRef:    captureRoleRef,
+		Protocol:   CaptureAuthorityArtifact{Ref: captureProtocolRef, Digest: protocolDigest},
 		Helper: CaptureAuthorityArtifact{
 			Ref: "runtime-component-artifact:" + helperDigest, Digest: helperDigest,
 		},
@@ -799,11 +1214,16 @@ func validBinding() CaptureBinding {
 		Authority:          authority,
 		Source: SourceAddress{
 			ProviderResourceID:  "sandbox-1",
-			WorkspaceID:         "workspace-1",
-			TenantID:            "tenant-1",
-			UserID:              "user-1",
 			ExpectedProfile:     "managed-container",
-			ExpectedRuntimeKind: "container",
+			ExpectedRuntimeKind: "full_image_runtime_pack",
+		},
+		Owner: CaptureOwner{
+			TenantID:      "11111111-1111-4111-8111-111111111111",
+			UserID:        "22222222-2222-4222-8222-222222222222",
+			WorkspaceID:   "33333333-3333-4333-8333-333333333333",
+			RunID:         "44444444-4444-4444-8444-444444444444",
+			GrantID:       "55555555-5555-4555-8555-555555555555",
+			WorkingCopyID: "66666666-6666-4666-8666-666666666666",
 		},
 		Selector: CaptureSelector{
 			SemanticZoneRef:  "ambit.workspace-zone/work@1",
@@ -812,9 +1232,14 @@ func validBinding() CaptureBinding {
 	}
 }
 
-func mustService(t *testing.T, containers ContainerClient, objects storage.PrivateObjectStorageClient) *Service {
+func mustService(
+	t *testing.T,
+	containers ContainerClient,
+	objects storage.PrivateObjectStorageClient,
+	authority CaptureAuthority,
+) *Service {
 	t.Helper()
-	service, err := NewService(containers, objects)
+	service, err := NewService(containers, objects, authority)
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
