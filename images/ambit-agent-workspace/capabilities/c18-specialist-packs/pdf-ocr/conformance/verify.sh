@@ -31,8 +31,18 @@ for pdf in "${output_root}"/fixtures/*.pdf; do
 done
 qpdf --check "${output_root}/checks/ocr.pdf" > "${output_root}/checks/ocr.qpdf.txt" 2>&1
 pdftotext -layout "${output_root}/checks/ocr.pdf" "${output_root}/checks/ocr-pdf.txt"
+set +e
 pdfsig "${output_root}/fixtures/redacted.pdf" \
   > "${output_root}/checks/signature-inspection.txt" 2>&1
+signature_status=$?
+set -e
+# Poppler 25.03 returns 2 when the inspected PDF has no signature fields. That
+# negative result is the expected proof for this pack: signing remains an
+# external approved effect, and the runtime fixture must not smuggle a key or
+# signature into the image.
+test "${signature_status}" = 2
+grep -Fi 'does not contain any signatures' \
+  "${output_root}/checks/signature-inspection.txt" >/dev/null
 exiftool -j "${output_root}/fixtures/metadata-edited.pdf" \
   > "${output_root}/checks/metadata.json"
 gs -dPDFA=2 -dBATCH -dNOPAUSE -dSAFER \
