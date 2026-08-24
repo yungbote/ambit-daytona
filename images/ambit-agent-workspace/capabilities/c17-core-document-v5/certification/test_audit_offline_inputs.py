@@ -26,11 +26,18 @@ class OfflineInputAuditTests(unittest.TestCase):
             )
         )
         self.assertNotIn("requiredFrozenFiles", lock)
-        self.assertEqual(lock["frozenEvidence"], [])
+        self.assertEqual(len(lock["frozenEvidence"]), 5)
+        self.assertEqual(
+            lock["frozenEvidence"][0]["sha256"],
+            "sha256:89f4f0fdcb0376e5079922a3bfb6dcc3a0262ab5a0e2449813f2b658ea94641c",
+        )
         self.assertGreater(len(lock["requiredUnfrozenEvidence"]), 5)
         for artifact in lock["publicArtifacts"]:
             self.assertGreater(artifact["bytes"], 0)
             self.assertRegex(artifact["sha256"], r"^sha256:[0-9a-f]{64}$")
+        for evidence in lock["frozenEvidence"]:
+            self.assertGreater(evidence["bytes"], 0)
+            self.assertRegex(evidence["sha256"], r"^sha256:[0-9a-f]{64}$")
 
     def test_exact_file_requires_raw_digest_size_mode_and_no_follow(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

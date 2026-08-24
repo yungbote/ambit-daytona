@@ -1,0 +1,168 @@
+{
+  "schema": "ambit.runtime-pack-structural-compatibility-input-lock/v1",
+  "state": "unavailable",
+  "composition": "external-curated-files-not-oci-layer-inheritance",
+  "sourceCandidate": {
+    "pack": "ambit.runtime-pack/core-document@4",
+    "daytonaRevision": "5f656cf40e5d37fb67af8d134ed791187b813211",
+    "ociIndexDigest": "sha256:57542e34fb60f23add49f7fdb7559ffbfa79bd79ecb97739facf4aab2c9bf4d2",
+    "ociManifestDigest": "sha256:a71ac9bcb773a81670c18b1dfdd73bc050f506cdbef7be4f066d0ed8f448379f",
+    "ociConfigDigest": "sha256:7b00fb6a1d3e420716cd7e62d7484fd4eebea8d4c1a0f5c9f165e905da4e945c",
+    "sourcePackTree": "db4118b86fde1524bf78114a0a41ed8cbf3df757"
+  },
+  "structuralRuntimeArchive": {
+    "path": "structural/core-document-v4-structural-runtime.tar",
+    "format": "canonical-sorted-posix-pax-tar",
+    "sourceDateEpoch": 1787380799,
+    "bytes": 68464640,
+    "sha256": "sha256:89f4f0fdcb0376e5079922a3bfb6dcc3a0262ab5a0e2449813f2b658ea94641c",
+    "extractedRegularBytes": 67111261,
+    "regularFileCount": 1640,
+    "symlinkCount": 15,
+    "directoryCount": 154,
+    "fileManifest": {
+      "path": "structural-runtime-files.sha256",
+      "sha256": "sha256:1695501ca0188de5b27d5be3056f71c6b867f525e5eda95d376c6e7b5bfc54b5"
+    },
+    "linkManifest": {
+      "path": "structural-runtime-links.txt",
+      "sha256": "sha256:af344322be282fc99f00f8e9fc81a483e1c8417cfe357574f2df8ad6eeeb0314"
+    },
+    "treeManifest": {
+      "path": "structural-runtime-tree.jsonl",
+      "entries": 1809,
+      "sha256": "sha256:720be80641123af6074cd049e16c4bdf1e7928dff52180600cb89f36e5b76c45"
+    }
+  },
+  "python": {
+    "version": "3.14.7",
+    "binary": {
+      "path": "bin/python3.14",
+      "bytes": 15792,
+      "sha256": "sha256:2323823450dd5bc9192c4e0461374064286d1d0ab7b0830f00d5c7f67f04b9e3"
+    },
+    "sharedLibrary": {
+      "path": "lib/libpython3.14.so.1.0",
+      "bytes": 7440392,
+      "sha256": "sha256:2e0fb698bd55bb013b3a43783f765101882ca28f046de1739cc3bb9dfeeb57ed"
+    },
+    "license": {
+      "path": "licenses/CPYTHON-LICENSE.txt",
+      "bytes": 13804,
+      "sha256": "sha256:b0e25a78cffb43f4d92de8b61ccfa1f1f98ecbc22330b54b5251e7b6ba010231"
+    },
+    "privateElfRuntime": {
+      "invocation": "private-loader-with-private-library-path",
+      "globalLdLibraryPath": "forbidden",
+      "loader": {
+        "path": "lib/ld-linux-x86-64.so.2",
+        "bytes": 254936,
+        "sha256": "sha256:e838909a91ab3aabc17e8bf51274488dad405683504242f1e035a6df400597aa"
+      },
+      "glibc": {
+        "path": "lib/libc.so.6",
+        "bytes": 2398424,
+        "sha256": "sha256:50156737c1dd60304d980e11debbef74b3b8580f97435d8eee7922c357d0f5a2"
+      },
+      "loadedObjectManifest": {
+        "path": "structural-runtime-loaded-elf.sha256",
+        "count": 37,
+        "sha256": "sha256:e6427caaf6d2eaa56573272e9c2c8d411060e6b0d06836841974b0ae80ebf88f"
+      }
+    },
+    "dynamicSonames": [
+      "libbz2.so.1",
+      "libcrypto.so.3",
+      "libexpat.so.1",
+      "libffi.so.8",
+      "libgdbm.so.6",
+      "libgdbm_compat.so.4",
+      "liblzma.so.5",
+      "libmpdec.so.4",
+      "libncursesw.so.6",
+      "libpanelw.so.6",
+      "libreadline.so.8",
+      "libsqlite3.so.0",
+      "libssl.so.3",
+      "libtinfo.so.6",
+      "libuuid.so.1",
+      "libz.so.1",
+      "libzstd.so.1"
+    ]
+  },
+  "wheels": {
+    "requirementsLockSha256": "sha256:79ecd487a9b2e8dae841e68cf1805675ecf09e91d60de52f00121b809a447f42",
+    "installed": [
+      {
+        "name": "cobble",
+        "version": "0.1.4",
+        "license": "BSD-2-Clause"
+      },
+      {
+        "name": "lxml",
+        "version": "6.1.2",
+        "license": "BSD-3-Clause"
+      },
+      {
+        "name": "mammoth",
+        "version": "1.12.1",
+        "license": "BSD-2-Clause"
+      },
+      {
+        "name": "python-docx",
+        "version": "1.2.0",
+        "license": "MIT"
+      },
+      {
+        "name": "typing-extensions",
+        "version": "4.16.0",
+        "license": "PSF-2.0"
+      }
+    ],
+    "originalArchiveRoster": "unavailable"
+  },
+  "atomicMaterializer": {
+    "sourceArchive": {
+      "path": "materializer/backend-atomic-materializer-source.tar",
+      "bytes": 184320,
+      "sha256": "sha256:af8db17dc5d7b2266444efc4911661659fdaf23035b7dde0172f29d9e55374ca",
+      "backendRevision": "6d60ac6cfc1fa6ac8de433972e5be6defd656d81",
+      "backendTree": "a9e546be90ea1e16d2728ddf19af13e4d722a855"
+    },
+    "binary": {
+      "path": "materializer/ambit-atomic-materialize",
+      "bytes": 2568340,
+      "sha256": "sha256:8d4405a1bd8f5d9d65be0860e52cab75cc9b7f5f659e510b4932347e0c6008e5"
+    },
+    "license": {
+      "packageLicenseField": "UNLICENSED",
+      "spdxExpression": "LicenseRef-Ambit-Proprietary",
+      "licenseLockSha256": "sha256:710d581169c105538897e9b6a719c47d437ceaeb980784e7996f8227264cc89c",
+      "noticeSha256": "sha256:ebda4883114f2939d766c552df33881f40da5710f6af5abbfe31a92c73070aff"
+    },
+    "interfaces": [
+      {
+        "ref": "ambit.runtime-interface/immutable-file-frame@1",
+        "digest": "sha256:1274e0bb27dfb15d9d7564d71fc02a7117631b405de73d84f39defb415a5f7ad"
+      },
+      {
+        "ref": "ambit.runtime-interface/immutable-tree-frame@1",
+        "digest": "sha256:2c3e58eedfa0d268c9844c038baa49d2f896c4f42de783a5d3ee1762d5828e4d"
+      }
+    ],
+    "publisherAuthentication": "unavailable"
+  },
+  "debianCompatibilityConformance": {
+    "path": "structural-runtime-conformance.json",
+    "sha256": "sha256:b1f551133c6441b3945e934df01fe9d6bee5ce07b7c57d806d145fa0f7969923",
+    "outcome": "passed"
+  },
+  "missing": [
+    "independently-published-structural-runtime-archive",
+    "exact-original-wheel-archive-roster",
+    "complete-wheel-source-and-license-archive-roster",
+    "complete-native-library-source-license-and-vulnerability-closure",
+    "publisher-authenticated-materializer-source-and-binary",
+    "real-daytona-xfs-materializer-conformance"
+  ]
+}
