@@ -287,8 +287,23 @@ def _inspect_layer(layer: bytes, ordinal: int) -> tuple[list[str], int]:
             if normalized.startswith(("etc/apt/", "etc/dpkg/", "usr/lib/apt/", "usr/lib/dpkg/", "var/lib/apt/", "var/lib/dpkg/")):
                 raise CandidateBuildError("OCI layer retains package-manager state")
             basename = path.name
-            if member.mode & 0o111 and basename.startswith(("apt", "dpkg", "pip", "npm", "npx")):
+            if (
+                (member.isfile() or member.issym() or member.islnk())
+                and member.mode & 0o111
+                and basename.startswith(("apt", "dpkg", "pip", "npm", "npx"))
+            ):
                 raise CandidateBuildError("OCI layer retains installer executable payload")
+            if (
+                ("apt" in basename.lower() or "dpkg" in basename.lower())
+                and normalized
+                not in {
+                    "opt/ambit/runtime-base/core/lineage/base-installed-dpkg.lock",
+                    "usr/bin/captoinfo",
+                }
+            ):
+                raise CandidateBuildError(
+                    f"OCI layer retains installer named payload: {normalized}"
+                )
             digest = "-"
             if member.isfile():
                 stream = archive.extractfile(member)
