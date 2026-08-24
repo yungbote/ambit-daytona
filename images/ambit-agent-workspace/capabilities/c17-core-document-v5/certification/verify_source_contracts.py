@@ -438,6 +438,11 @@ def _verify_candidate_evidence(
     _expect(contract["transport"]["chunkBytes"], 49152, "render chunk bytes")
     _expect(contract["transport"]["maximumLineBytes"], 70000, "render line bytes")
     _expect(
+        contract["transport"]["providerLaunch"],
+        "stty raw -echo -onlcr && exec exact-helper --framed-jsonl --nonce exact-nonce",
+        "fail-closed render provider launch",
+    )
+    _expect(
         contract["identities"]["protocolSources"],
         {
             relative: _raw_sha256(root / relative)

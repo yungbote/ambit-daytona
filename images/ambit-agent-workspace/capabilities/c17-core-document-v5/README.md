@@ -162,7 +162,7 @@ docker run --rm -it --network none --read-only --cap-drop ALL \
   --tmpfs /workspace:rw,noexec,nosuid,nodev,size=256m,uid=1000,gid=1000,mode=0700 \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m,uid=1000,gid=1000,mode=0700 \
   --entrypoint /bin/sh ambit-c17-core-document-v5:candidate -c \
-  'stty raw -echo -onlcr; exec /opt/ambit/runtime-pack/core-document-v5/bin/ambit-render-document --framed-jsonl --nonce 0123456789abcdef0123456789abcdef'
+  'stty raw -echo -onlcr && exec /opt/ambit/runtime-pack/core-document-v5/bin/ambit-render-document --framed-jsonl --nonce 0123456789abcdef0123456789abcdef'
 ```
 
 The caller must set Daytona PTY input echo suppression, validate the exact
