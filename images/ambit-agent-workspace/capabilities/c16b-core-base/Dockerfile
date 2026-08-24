@@ -116,7 +116,7 @@ RUN --network=none set -eu; \
       /opt/ambit/runtime-base/core/lineage/base-installed-dpkg.lock; \
     dpkg-query -L apt dpkg > /tmp/package-manager-files; \
     while IFS= read -r path; do \
-      if test -L "${path}" || { test -f "${path}" && test -x "${path}"; }; then \
+      if test -L "${path}" || test -f "${path}"; then \
         rm -f -- "${path}"; \
       fi; \
     done < /tmp/package-manager-files; \
@@ -126,13 +126,35 @@ RUN --network=none set -eu; \
     rm -rf \
       /etc/apt /etc/dpkg \
       /usr/lib/apt /usr/lib/dpkg \
+      /usr/lib/systemd/system/apt-daily.service \
+      /usr/lib/systemd/system/apt-daily.timer \
+      /usr/lib/systemd/system/apt-daily-upgrade.service \
+      /usr/lib/systemd/system/apt-daily-upgrade.timer \
+      /usr/lib/systemd/system/dpkg-db-backup.service \
+      /usr/lib/systemd/system/dpkg-db-backup.timer \
+      /usr/lib/x86_64-linux-gnu/libapt-pkg.so.7.0 \
+      /usr/lib/x86_64-linux-gnu/libapt-pkg.so.7.0.0 \
+      /usr/lib/x86_64-linux-gnu/libapt-private.so.0.0.0 \
+      /usr/libexec/dpkg \
+      /usr/share/apt /usr/share/bug/apt \
+      /usr/share/doc/apt /usr/share/doc/dpkg /usr/share/doc/libapt-pkg7.0 \
+      /usr/share/dpkg /usr/share/lintian/profiles/dpkg \
       /var/cache/apt /var/cache/debconf \
       /var/lib/apt /var/lib/debconf /var/lib/dpkg \
+      /var/lib/systemd/deb-systemd-helper-enabled/apt-daily.timer.dsh-also \
+      /var/lib/systemd/deb-systemd-helper-enabled/apt-daily-upgrade.timer.dsh-also \
+      /var/lib/systemd/deb-systemd-helper-enabled/dpkg-db-backup.timer.dsh-also \
+      /var/lib/systemd/deb-systemd-helper-enabled/timers.target.wants/apt-daily.timer \
+      /var/lib/systemd/deb-systemd-helper-enabled/timers.target.wants/apt-daily-upgrade.timer \
+      /var/lib/systemd/deb-systemd-helper-enabled/timers.target.wants/dpkg-db-backup.timer \
       /var/log/apt; \
     rm -f \
       /etc/systemd/system/timers.target.wants/apt-daily.timer \
       /etc/systemd/system/timers.target.wants/apt-daily-upgrade.timer \
       /etc/systemd/system/timers.target.wants/dpkg-db-backup.timer \
+      /usr/bin/debconf-apt-progress \
+      /usr/share/bash-completion/completions/apt \
+      /usr/share/polkit-1/actions/org.dpkg.pkexec.update-alternatives.policy \
       /var/log/alternatives.log /var/log/dpkg.log; \
     find /tmp -xdev -mindepth 1 -delete; \
     test -z "$(find /workspace -mindepth 1 -print -quit)"; \

@@ -149,6 +149,11 @@ installer_executables=$(find / -xdev \( -type f -o -type l \) -perm /111 \
   \( -name 'apt*' -o -name 'dpkg*' -o -name 'pip*' -o -name 'npm*' -o -name 'npx*' \) \
   -print 2>/dev/null | LC_ALL=C sort || true)
 equal "$installer_executables" '' 47 'runtime-installer-executable-payload-is-present'
+installer_named_paths=$(find / -xdev \( -iname '*apt*' -o -iname '*dpkg*' \) \
+  -print 2>/dev/null | LC_ALL=C sort | \
+  grep -Fvx '/opt/ambit/runtime-base/core/lineage/base-installed-dpkg.lock' | \
+  grep -Fvx '/usr/bin/captoinfo' || true)
+equal "$installer_named_paths" '' 48 'runtime-installer-named-payload-is-present'
 
 printf '%s\n' \
   '{"capabilities":["ambit.runtime/command.execute@1","ambit.runtime/filesystem.read-write@1"],"environmentNames":["HOME","HOSTNAME","LANG","LC_ALL","PATH","PWD","TZ"],"helperSha256":"sha256:8d4405a1bd8f5d9d65be0860e52cab75cc9b7f5f659e510b4932347e0c6008e5","hostSockets":"absent-global-census","linuxCapabilitySets":{"ambient":"none","bounding":"none","effective":"none","inheritable":"none","permitted":"none"},"mountTopology":"exact","network":"none-loopback-only","noNewPrivileges":true,"outcome":"passed","privilege":"uid-gid-groups-1000-only","rootFilesystem":"kernel-mount-read-only","runtimeInstallerExecutablePayload":"absent","schema":"ambit.runtime-core-base-conformance/v2","workspace":"empty-private-tmpfs"}'
