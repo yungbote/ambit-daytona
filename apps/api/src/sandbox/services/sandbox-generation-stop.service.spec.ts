@@ -130,7 +130,7 @@ describe(SandboxGenerationStopService.name, () => {
     expect(sandboxes.updateState).not.toHaveBeenCalled()
   })
 
-  it('never lets a historical receipt mark a restarted generation stopped', async () => {
+  it('returns historical receipt truth without marking a restarted generation stopped', async () => {
     const request = validStopRequest()
     adapter.stopSandboxGenerationOnce.mockResolvedValue(validReceipt(request))
     const restarted = validGenerationObservation('running')
@@ -138,7 +138,7 @@ describe(SandboxGenerationStopService.name, () => {
     restarted.generation.executionStartedAt = '2026-08-24T00:03:00Z'
     adapter.observeSandboxGeneration.mockResolvedValueOnce(restarted)
 
-    await expect(service.stopOnce('org-1', 'sandbox-1', request)).rejects.toBeInstanceOf(ConflictException)
+    await expect(service.stopOnce('org-1', 'sandbox-1', request)).resolves.toEqual(validReceipt(request))
     expect(sandboxes.updateState).not.toHaveBeenCalled()
   })
 
