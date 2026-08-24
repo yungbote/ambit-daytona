@@ -131,11 +131,91 @@ export function admitRenderPolicy(value) {
   ) {
     throw new TypeError('Render policy identity is invalid.')
   }
+  const input = exactKeys(
+    policy.input,
+    [
+      'externalLinks',
+      'formats',
+      'localImmutableBytesOnly',
+      'macros',
+      'maximumBytes',
+      'maximumEntryBytes',
+      'maximumPackageEntries',
+      'maximumRelationshipBytes',
+      'maximumUncompressedBytes',
+      'passwordProtected',
+      'remoteUrls',
+    ],
+    'Render input policy',
+  )
+  positiveSafeInteger(input.maximumBytes, 'Render input maximum bytes')
+  positiveSafeInteger(input.maximumEntryBytes, 'Render input maximum entry bytes')
+  positiveSafeInteger(
+    input.maximumPackageEntries,
+    'Render input maximum package entries',
+  )
+  positiveSafeInteger(
+    input.maximumRelationshipBytes,
+    'Render input maximum relationship bytes',
+  )
+  positiveSafeInteger(
+    input.maximumUncompressedBytes,
+    'Render input maximum uncompressed bytes',
+  )
+  if (
+    input.localImmutableBytesOnly !== true ||
+    canonicalJson(input.formats) !== canonicalJson(['docx']) ||
+    input.remoteUrls !== 'forbidden' ||
+    input.macros !== 'disabled' ||
+    input.externalLinks !== 'disabled' ||
+    input.passwordProtected !== 'unsupported' ||
+    input.maximumEntryBytes > input.maximumUncompressedBytes ||
+    input.maximumRelationshipBytes > input.maximumUncompressedBytes
+  ) {
+    throw new TypeError('Render input policy is invalid.')
+  }
+  const libreOffice = exactKeys(
+    policy.libreOffice,
+    [
+      'headless',
+      'maximumPdfBytes',
+      'maximumWallMilliseconds',
+      'nodefault',
+      'nolockcheck',
+      'nologo',
+      'norestore',
+      'privateUserProfile',
+      'processModel',
+      'profileReuse',
+    ],
+    'LibreOffice render policy',
+  )
+  positiveSafeInteger(
+    libreOffice.maximumWallMilliseconds,
+    'LibreOffice maximum wall milliseconds',
+  )
+  positiveSafeInteger(
+    libreOffice.maximumPdfBytes,
+    'LibreOffice maximum PDF bytes',
+  )
+  if (
+    libreOffice.processModel !== 'one-process-per-render' ||
+    libreOffice.privateUserProfile !== 'required' ||
+    libreOffice.profileReuse !== 'forbidden' ||
+    libreOffice.headless !== true ||
+    libreOffice.nologo !== true ||
+    libreOffice.nodefault !== true ||
+    libreOffice.norestore !== true ||
+    libreOffice.nolockcheck !== true
+  ) {
+    throw new TypeError('LibreOffice render policy is invalid.')
+  }
   const pages = exactKeys(
     policy.pages,
     [
       'background',
       'exactPngSha256Required',
+      'maximumBytesPerPage',
       'maximumCount',
       'maximumHeightPixels',
       'maximumPixelsPerPage',
@@ -150,6 +230,7 @@ export function admitRenderPolicy(value) {
   )
   for (const key of [
     'maximumCount',
+    'maximumBytesPerPage',
     'maximumHeightPixels',
     'maximumPixelsPerPage',
     'maximumTotalOutputBytes',
@@ -186,13 +267,22 @@ export function admitRenderPolicy(value) {
     pdfjs.canvasFactory !== 'ambit.pdfjs-canvas-factory/napi-rs@1' ||
     pdfjs.localStaticResourcesOnly !== true ||
     pdfjs.popplerFallback !== 'forbidden' ||
+    !['available', 'unavailable'].includes(pdfjs.executionState) ||
+    pdfjs.standardFonts !==
+      'unsupported-until-license-corrected-and-frozen' ||
     pdfjs.workerVersionMustEqualApiVersion !== true ||
     canonicalJson(pdfjs.requiredGlobals) !==
       canonicalJson(['DOMMatrix', 'ImageData', 'Path2D'])
   ) {
     throw new TypeError('PDF.js execution policy is invalid.')
   }
-  return Object.freeze(policy)
+  return Object.freeze({
+    ...policy,
+    input: Object.freeze(input),
+    libreOffice: Object.freeze(libreOffice),
+    pages: Object.freeze(pages),
+    pdfjs: Object.freeze(pdfjs),
+  })
 }
 
 export function planPageDimensions(dimensions, policyValue) {
@@ -532,16 +622,25 @@ function crc32(...chunks) {
 }
 
 export function createRenderManifest({
-  intermediatePdfSha256,
+  sourceDocument,
   intermediatePdfBytes,
   policySha256,
   pages,
   policy,
   executionLineage,
 }) {
-  exactSha256(intermediatePdfSha256, 'Render manifest intermediate PDF')
   exactSha256(policySha256, 'Render manifest policy')
   positiveSafeInteger(intermediatePdfBytes, 'Intermediate PDF bytes')
+  const source = exactKeys(
+    sourceDocument,
+    ['bytes', 'format', 'sha256'],
+    'Render manifest source document',
+  )
+  if (!['docx', 'pdf'].includes(source.format)) {
+    throw new TypeError('Render manifest source format is invalid.')
+  }
+  exactSha256(source.sha256, 'Render manifest source document')
+  positiveSafeInteger(source.bytes, 'Source document bytes')
   const admittedPolicy = admitRenderPolicy(policy)
   const admittedLineage = admitRenderExecutionLineage(executionLineage)
   const pageValues = exactArrayValues(pages, 'Render manifest page roster')
@@ -579,6 +678,7 @@ export function createRenderManifest({
     totalOutputBytes += positiveSafeInteger(page.bytes, 'Rendered page bytes')
     totalPixels += positiveSafeInteger(page.pixels, 'Rendered page pixels')
     if (
+      page.bytes > admittedPolicy.pages.maximumBytesPerPage ||
       totalOutputBytes > admittedPolicy.pages.maximumTotalOutputBytes ||
       totalPixels > admittedPolicy.pages.maximumTotalPixels
     ) {
@@ -590,9 +690,10 @@ export function createRenderManifest({
     kind: 'paginated_render_candidate',
     canonicalAuthority: 'none',
     canonicalBoundary: 'external_artifact_commit',
+    sourceDocument: Object.freeze(source),
     intermediatePdf: Object.freeze({
-      sha256: intermediatePdfSha256,
       bytes: intermediatePdfBytes,
+      digestDisposition: 'excluded_volatile_converter_metadata',
     }),
     policy: Object.freeze({
       ref: 'ambit.render-policy/core-document-paginated@1',

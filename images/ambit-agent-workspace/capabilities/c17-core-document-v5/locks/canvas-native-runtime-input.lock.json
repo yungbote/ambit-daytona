@@ -1,0 +1,42 @@
+{
+  "schema": "ambit.runtime-pack-canvas-native-runtime-input/v1",
+  "state": "candidate-ready",
+  "package": "@napi-rs/canvas-linux-x64-gnu@1.0.7",
+  "runtimeBinary": {
+    "path": "package/skia.linux-x64-gnu.node",
+    "bytes": 33978880,
+    "sha256": "sha256:b180b8e12464e337f5bc0c4195a7bed73c65f588542ca7d0de20c596419eff03"
+  },
+  "sourceInputs": [
+    {
+      "repository": "https://github.com/Brooooooklyn/canvas",
+      "commit": "062130c03715f275fd46a59a4bb224e907c91686",
+      "path": "public/canvas/canvas-source-062130c03715f275fd46a59a4bb224e907c91686.tar.gz",
+      "bytes": 29917286,
+      "sha256": "sha256:a742c5453323327c4d6de7bfdcc69d0678144c3bf0db8f7dc246668dc5273c22",
+      "license": "MIT"
+    },
+    {
+      "repository": "https://skia.googlesource.com/skia",
+      "commit": "7219df0fb0ff64f26adad448f94e8c001b964e6a",
+      "path": "public/canvas/skia-source-7219df0fb0ff64f26adad448f94e8c001b964e6a.tar.gz",
+      "bytes": 68583095,
+      "sha256": "sha256:83edae36346f1cd9122a1674b82277693bb101d17a106822835c0863f002b5bd",
+      "license": "BSD-3-Clause"
+    }
+  ],
+  "runtimeDynamicLibraries": [
+    "ld-linux-x86-64.so.2",
+    "libc.so.6",
+    "libdl.so.2",
+    "libgcc_s.so.1",
+    "libm.so.6",
+    "libpthread.so.0",
+    "librt.so.1"
+  ],
+  "promotionBlockers": [
+    "independent-npm-attestation-verification",
+    "complete-transitive-Skia-source-and-license-roster",
+    "production-vulnerability-policy-scan"
+  ]
+}

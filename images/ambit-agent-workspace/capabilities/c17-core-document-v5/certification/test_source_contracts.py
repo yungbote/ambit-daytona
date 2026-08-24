@@ -51,12 +51,12 @@ class SourceContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             verify(self.root)
 
-    def test_exact_unavailable_contract_passes_source_verification(self) -> None:
+    def test_exact_candidate_contract_passes_source_verification(self) -> None:
         result = verify(self.root)
         self.assertEqual(result["outcome"], "passed")
         self.assertEqual(
             set(result["availability"].values()),
-            {"pinned", "unavailable"},
+            {"available", "candidate-ready", "pinned", "unavailable"},
         )
         self.assertEqual(result["availability"]["pdfjsRoster"], "pinned")
 
@@ -136,7 +136,7 @@ class SourceContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "excluded resources"):
             verify(self.root)
 
-    def test_pdfjs_execution_claim_without_canvas_is_rejected(self) -> None:
+    def test_pdfjs_execution_state_substitution_is_rejected(self) -> None:
         self.assert_rejected(
             "locks/pdfjs-input.lock.json",
             lambda value: value["execution"].__setitem__("state", "available"),
@@ -156,6 +156,34 @@ class SourceContractTests(unittest.TestCase):
             lambda value: value["platformArchive"].__setitem__(
                 "nativeSha256", f"sha256:{'0' * 64}"
             ),
+        )
+
+    def test_candidate_release_lineage_and_font_evidence_cannot_drift(self) -> None:
+        self.assert_rejected(
+            "locks/node-release-keyring-verification.json",
+            lambda value: value["releaseKeysRepository"].__setitem__(
+                "fingerprint", "0" * 40
+            ),
+        )
+        shutil.rmtree(self.root)
+        shutil.copytree(ROOT, self.root)
+        self.assert_rejected(
+            "locks/installed-render-engine-lineage.json",
+            lambda value: value["canvasNative"].__setitem__(
+                "digest", f"sha256:{'0' * 64}"
+            ),
+        )
+        shutil.rmtree(self.root)
+        shutil.copytree(ROOT, self.root)
+        self.assert_rejected(
+            "locks/font-license-inventory.json",
+            lambda value: value["packages"][0].__setitem__("fontFiles", 5),
+        )
+        shutil.rmtree(self.root)
+        shutil.copytree(ROOT, self.root)
+        self.assert_rejected(
+            "locks/document-render-interface.lock.json",
+            lambda value: value.__setitem__("digest", f"sha256:{'0' * 64}"),
         )
 
     def test_structural_archive_and_materializer_authority_cannot_self_promote(self) -> None:
@@ -262,6 +290,20 @@ class SourceContractTests(unittest.TestCase):
         self.assert_rejected(
             "policy/render-policy.json",
             lambda value: value["pages"].pop("maximumTotalOutputBytes"),
+        )
+
+    def test_docx_package_bounds_cannot_be_removed_or_expanded(self) -> None:
+        self.assert_rejected(
+            "policy/render-policy.json",
+            lambda value: value["input"].__setitem__(
+                "maximumUncompressedBytes", 268435457
+            ),
+        )
+        shutil.rmtree(self.root)
+        shutil.copytree(ROOT, self.root)
+        self.assert_rejected(
+            "policy/render-policy.json",
+            lambda value: value["input"].pop("maximumRelationshipBytes"),
         )
 
     def test_raw_source_manifest_tamper_is_rejected(self) -> None:

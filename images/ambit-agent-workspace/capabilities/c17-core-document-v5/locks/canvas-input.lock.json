@@ -1,13 +1,13 @@
 {
   "schema": "ambit.runtime-pack-pdfjs-canvas-input-lock/v1",
-  "state": "unavailable",
+  "state": "candidate-ready",
   "implementation": {
     "package": "@napi-rs/canvas",
     "version": "1.0.7",
     "sourceRepository": "https://github.com/Brooooooklyn/canvas",
     "sourceCommit": "062130c03715f275fd46a59a4bb224e907c91686",
     "sourceArchiveUrl": "https://github.com/Brooooooklyn/canvas/archive/062130c03715f275fd46a59a4bb224e907c91686.tar.gz",
-    "sourceArchiveBytes": 2273773,
+    "sourceArchiveBytes": 29917286,
     "sourceArchiveSha256": "sha256:a742c5453323327c4d6de7bfdcc69d0678144c3bf0db8f7dc246668dc5273c22",
     "licenseExpression": "MIT",
     "licensePath": "LICENSE"
@@ -62,12 +62,12 @@
     "poppler-rasterization",
     "prebuilt-binary-without-source-license-closure"
   ],
-  "missing": [
+  "promotionBlockers": [
     "verified-npm-slsa-attestations",
     "exact-skia-build-configuration",
     "exact-cargo-and-native-source-closure",
     "complete-skia-and-third-party-license-inventory",
     "native-binary-vulnerability-policy-pass",
-    "real-pdfjs-page-pixel-conformance"
+    "production-pixel-conformance-reproof"
   ]
 }

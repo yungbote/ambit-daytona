@@ -320,6 +320,39 @@ def verify(input_root: Path, pack_root: Path) -> dict[str, int | str]:
             raise ValueError(f"runtime package has ambiguous binary identity: {path.name}")
         package, version = next(iter(identities))
         selected_packages[package] = version
+
+    build_digests = parse_manifest(
+        locks / "offline-build-tools.sha256", digest_manifest=True
+    )
+    build_sizes = parse_manifest(
+        locks / "offline-build-tools.bytes", digest_manifest=False
+    )
+    build_paths = require_roster(
+        input_root / "build-tools",
+        build_digests,
+        build_sizes,
+        prefix="build-tools/",
+    )
+    if {path.name for path in (input_root / "build-tools").glob("*.deb")} != {
+        path.name for path in build_paths
+    }:
+        raise ValueError("the build-tool directory contains an unlocked package")
+    for path in build_paths:
+        candidates = [
+            record
+            for record in binaries.get(digest(path), [])
+            if int(record["Size"]) == path.stat().st_size
+        ]
+        identities = {
+            (record["Package"], record["Version"], record["Architecture"])
+            for record in candidates
+        }
+        if identities != {("xz-utils", "5.8.1-1+deb13u1", "amd64")}:
+            raise ValueError("the Node extractor is absent from the signed package index")
+        pairs = {source_pair(record) for record in candidates}
+        if len(pairs) != 1:
+            raise ValueError("the Node extractor has ambiguous source authority")
+        selected_pairs.update(pairs)
     for package, version in EXPECTED_REQUESTED_PACKAGES.items():
         if selected_packages.get(package) != version:
             raise ValueError(f"requested package is missing or substituted: {package}")
@@ -405,6 +438,7 @@ def verify(input_root: Path, pack_root: Path) -> dict[str, int | str]:
     return {
         "schema": "ambit.signed-debian-snapshot-verification/v1",
         "runtimeDebs": len(runtime_paths),
+        "buildTools": len(build_paths),
         "installedPackages": len(runtime_lock_lines),
         "sourcePackages": len(selected_pairs),
         "sourceArtifacts": len(source_paths),

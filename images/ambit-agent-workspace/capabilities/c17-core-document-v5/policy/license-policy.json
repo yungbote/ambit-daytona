@@ -1,25 +1,25 @@
 {
   "schema": "ambit.runtime-pack-license-policy/v2",
-  "state": "unavailable",
+  "state": "candidate-ready",
   "noAssertion": "fail",
   "unknown": "fail",
-  "proprietary": "allow-only-exact-internal-capture-helper-with-independent-authority",
+  "proprietary": "allow-only-exact-internal-atomic-materializer",
   "requiredEvidence": [
     "complete-installed-package-license-inventory",
     "exact-debian-copyright-file-digest-roster",
     "exact-corresponding-source-artifact-roster",
     "exact-noto-font-file-and-ofl-inventory",
     "exact-retained-pdfjs-resource-license-roster",
-    "exact-capture-helper-proprietary-notice-and-lock"
+    "exact-atomic-materializer-proprietary-notice-and-lock"
   ],
   "pdfjsStandardFonts": {
     "disposition": "excluded",
     "reason": "6.2.108-packaged-license-metadata-conflict-not-admitted"
   },
   "nativeCanvas": {
-    "disposition": "unavailable",
+    "disposition": "candidate-only",
     "candidate": "@napi-rs/canvas-linux-x64-gnu@1.0.7",
-    "requiredBeforeAdmission": "exact-native-binary-skia-cargo-source-and-complete-third-party-license-closure"
+    "requiredBeforeAdmission": "complete-transitive-skia-source-license-and-production-vulnerability-reproof"
   },
   "promotionWithoutCompleteInventory": "forbidden"
 }
