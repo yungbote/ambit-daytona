@@ -15,7 +15,9 @@ SOURCE_CONTRACT_PATHS = (
     "Dockerfile",
     "README.md",
     "certification/audit_offline_inputs.py",
+    "certification/build_core_derived_candidate.py",
     "certification/runtime_pty_conformance.py",
+    "certification/test_build_core_derived_candidate.py",
     "certification/verify_render_output.mjs",
     "certification/verify_signed_debian_snapshot.py",
     "certification/verify_source_contracts.py",
@@ -83,6 +85,7 @@ SOURCE_CONTRACT_PATHS = (
 PROTOCOL_SOURCE_PATHS = (
     "Dockerfile",
     "certification/audit_offline_inputs.py",
+    "certification/build_core_derived_candidate.py",
     "certification/runtime_pty_conformance.py",
     "certification/verify_render_output.mjs",
     "certification/verify_signed_debian_snapshot.py",
@@ -652,6 +655,21 @@ def _verify_candidate_evidence(
     pty_source = (root / "certification/runtime_pty_conformance.py").read_text(
         encoding="utf-8"
     )
+    candidate_builder_source = (
+        root / "certification/build_core_derived_candidate.py"
+    ).read_text(encoding="utf-8")
+    for required in (
+        'for ordinal in (1, 2)',
+        '"--no-cache"',
+        'byteIdenticalCompleteOciArchives',
+        'core_parent=oci-layout://',
+        'final image does not preserve core layer prefix',
+        'final image does not contain one closed overlay layer',
+    ):
+        if required not in candidate_builder_source:
+            raise ValueError(
+                f"core-derived candidate builder is incomplete: {required}"
+            )
     for required in (
         "size=800m,uid=1000,gid=1000,mode=0700",
         "all-render-process-groups-settled-and-private-roots-removed",
