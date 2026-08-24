@@ -31,12 +31,13 @@
     ]
   },
   "composition": {
-    "backendContract": "RuntimeCapabilityFullImageDeploymentBinding@1",
-    "backendPlanKind": "full_image_runtime_pack_plan",
-    "backendPlanVersion": 2,
+    "backendContract": null,
+    "backendContractSourceBlobSha": null,
+    "backendPlanKind": null,
+    "backendPlanVersion": null,
     "descendantRequirement": "the final OCI manifest must inherit this exact platform manifest as its literal OCI parent so the complete ordered core layer prefix is byte-identical",
     "distinctDocumentArtifactRequired": true,
-    "packArtifactRefRule": "runtime-pack-artifact:<sha256>",
+    "packArtifactRefRule": null,
     "tarOrFilesystemCopyCountsAsArtifactReuse": false
   },
   "historicalInput": {
@@ -71,5 +72,5 @@
     "requiresSeparateDemotionReceipt": true
   },
   "schema": "ambit.runtime-core-baseline/v2",
-  "state": "source-ready-unbuilt"
+  "state": "source-ready-contract-pending-unbuilt"
 }

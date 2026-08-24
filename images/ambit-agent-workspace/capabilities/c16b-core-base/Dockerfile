@@ -4,14 +4,69 @@ ARG BASE_IMAGE=docker.io/library/debian@sha256:38a76d01668772e381ad2826d876627c8
 ARG SOURCE_DATE_EPOCH=0
 ARG BUILD_SOURCE_REVISION=unbound
 ARG BUILD_SOURCE_TREE=unbound
+ARG BUILD_SOURCE_SUBTREE=unbound
+ARG BUILD_SOURCE_ARCHIVE_SHA256=unbound
 ARG BUILD_SOURCE_CONTEXT_SHA256=unbound
+ARG BUILD_SOURCE_FILES_SHA256=unbound
+ARG BUILD_SOURCE_MODES_SHA256=unbound
+ARG BUILD_SOURCE_IDENTITY_SHA256=unbound
 
 FROM ${BASE_IMAGE} AS input_guard
+ARG SOURCE_DATE_EPOCH
+ARG BUILD_SOURCE_REVISION
+ARG BUILD_SOURCE_TREE
+ARG BUILD_SOURCE_SUBTREE
+ARG BUILD_SOURCE_ARCHIVE_SHA256
+ARG BUILD_SOURCE_CONTEXT_SHA256
+ARG BUILD_SOURCE_FILES_SHA256
+ARG BUILD_SOURCE_MODES_SHA256
+ARG BUILD_SOURCE_IDENTITY_SHA256
+COPY . /source-current/
+COPY --from=source_identity /daytona-source.tar /source-identity/daytona-source.tar
+COPY --from=source_identity /source-files.sha256 /source-identity/source-files.sha256
+COPY --from=source_identity /source-modes.tsv /source-identity/source-modes.tsv
+COPY --from=source_identity /source-identity.json /source-identity/source-identity.json
 COPY locks/base-installed-dpkg.lock /inputs/base-installed-dpkg.lock
 COPY locks/materializer-input.lock.json /inputs/materializer-input.lock.json
 COPY --from=materializer_inputs /ambit-atomic-materialize /inputs/ambit-atomic-materialize
 COPY --from=materializer_inputs /backend-atomic-materializer-source.tar /inputs/backend-atomic-materializer-source.tar
 RUN --network=none set -eu; \
+    case "${BUILD_SOURCE_REVISION}" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;; *) exit 41 ;; esac; \
+    case "${BUILD_SOURCE_TREE}" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;; *) exit 42 ;; esac; \
+    case "${BUILD_SOURCE_SUBTREE}" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;; *) exit 43 ;; esac; \
+    case "${SOURCE_DATE_EPOCH}" in ''|*[!0-9]*|0) exit 44 ;; esac; \
+    for digest in \
+      "${BUILD_SOURCE_ARCHIVE_SHA256}" \
+      "${BUILD_SOURCE_CONTEXT_SHA256}" \
+      "${BUILD_SOURCE_FILES_SHA256}" \
+      "${BUILD_SOURCE_MODES_SHA256}" \
+      "${BUILD_SOURCE_IDENTITY_SHA256}"; do \
+      case "${digest}" in sha256:[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;; *) exit 45 ;; esac; \
+    done; \
+    test "$(find /source-identity -maxdepth 1 -type f | wc -l)" = 4; \
+    test -z "$(find /source-identity -mindepth 1 ! -type f -print -quit)"; \
+    echo "${BUILD_SOURCE_ARCHIVE_SHA256#sha256:}  /source-identity/daytona-source.tar" | sha256sum -c -; \
+    echo "${BUILD_SOURCE_FILES_SHA256#sha256:}  /source-identity/source-files.sha256" | sha256sum -c -; \
+    echo "${BUILD_SOURCE_MODES_SHA256#sha256:}  /source-identity/source-modes.tsv" | sha256sum -c -; \
+    echo "${BUILD_SOURCE_IDENTITY_SHA256#sha256:}  /source-identity/source-identity.json" | sha256sum -c -; \
+    printf '%s\n' \
+      "{\"archiveSha256\":\"${BUILD_SOURCE_ARCHIVE_SHA256}\",\"contextSha256\":\"${BUILD_SOURCE_CONTEXT_SHA256}\",\"path\":\"images/ambit-agent-workspace/capabilities/c16b-core-base\",\"repositoryTree\":\"${BUILD_SOURCE_TREE}\",\"revision\":\"${BUILD_SOURCE_REVISION}\",\"schema\":\"ambit.git-source-identity/v1\",\"sourceDateEpoch\":${SOURCE_DATE_EPOCH},\"sourceFilesManifestSha256\":\"${BUILD_SOURCE_FILES_SHA256}\",\"sourceModesManifestSha256\":\"${BUILD_SOURCE_MODES_SHA256}\",\"subtree\":\"${BUILD_SOURCE_SUBTREE}\"}" \
+      > /tmp/source-identity.expected; \
+    cmp /source-identity/source-identity.json /tmp/source-identity.expected; \
+    mkdir /source-authority; \
+    tar -xf /source-identity/daytona-source.tar -C /source-authority; \
+    diff -r /source-current \
+      /source-authority/images/ambit-agent-workspace/capabilities/c16b-core-base; \
+    cd /source-current; \
+    sha256sum -c /source-identity/source-files.sha256; \
+    cut -d ' ' -f 3 /source-identity/source-files.sha256 | LC_ALL=C sort \
+      > /tmp/source-files.expected; \
+    find . -type f -print | LC_ALL=C sort > /tmp/source-files.actual; \
+    cmp /tmp/source-files.expected /tmp/source-files.actual; \
+    tab="$(printf '\t')"; \
+    while IFS="${tab}" read -r expected_mode path; do \
+      test "$(stat -c '%a' "${path}")" = "${expected_mode}"; \
+    done < /source-identity/source-modes.tsv; \
     dpkg-query -W '-f=${binary:Package}=${Version}\n' | LC_ALL=C sort \
       > /tmp/base-installed-dpkg.actual; \
     cmp /inputs/base-installed-dpkg.lock /tmp/base-installed-dpkg.actual; \
@@ -37,7 +92,12 @@ FROM ${BASE_IMAGE} AS core_base
 ARG SOURCE_DATE_EPOCH
 ARG BUILD_SOURCE_REVISION
 ARG BUILD_SOURCE_TREE
+ARG BUILD_SOURCE_SUBTREE
+ARG BUILD_SOURCE_ARCHIVE_SHA256
 ARG BUILD_SOURCE_CONTEXT_SHA256
+ARG BUILD_SOURCE_FILES_SHA256
+ARG BUILD_SOURCE_MODES_SHA256
+ARG BUILD_SOURCE_IDENTITY_SHA256
 
 USER root
 COPY --from=input_guard /inputs/base-installed-dpkg.lock /tmp/base-installed-dpkg.lock
@@ -96,7 +156,12 @@ LABEL org.opencontainers.image.title="ambit-c16b-core-base" \
       org.opencontainers.image.revision="${BUILD_SOURCE_REVISION}" \
       io.ambit.source-date-epoch="${SOURCE_DATE_EPOCH}" \
       io.ambit.source-tree="${BUILD_SOURCE_TREE}" \
+      io.ambit.source-subtree="${BUILD_SOURCE_SUBTREE}" \
+      io.ambit.source-archive-sha256="${BUILD_SOURCE_ARCHIVE_SHA256}" \
       io.ambit.source-context-sha256="${BUILD_SOURCE_CONTEXT_SHA256}" \
+      io.ambit.source-files-sha256="${BUILD_SOURCE_FILES_SHA256}" \
+      io.ambit.source-modes-sha256="${BUILD_SOURCE_MODES_SHA256}" \
+      io.ambit.source-identity-sha256="${BUILD_SOURCE_IDENTITY_SHA256}" \
       io.ambit.runtime-base="ambit.runtime-base/debian-core@1" \
       io.ambit.runtime-pack="ambit.runtime-pack/core@1" \
       io.ambit.runtime-pack-authority="candidate-only" \
