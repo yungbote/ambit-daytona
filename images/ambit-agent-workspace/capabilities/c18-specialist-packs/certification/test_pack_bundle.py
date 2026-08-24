@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -32,7 +33,6 @@ class PackBundleTests(unittest.TestCase):
             (source / "policy/runtime.json").write_text("{}\n")
             (source / "protocol/command.py").write_text("command\n")
             (source / "pack-set.lock.json").write_text("{}\n")
-            (source / "source-contracts.sha256").write_text("source\n")
             (source / "fixture/pack.lock.json").write_text(
                 '{"packRevisionRef":"ambit.runtime-pack/fixture@1"}\n'
             )
@@ -41,10 +41,20 @@ class PackBundleTests(unittest.TestCase):
                 '"baseImage":"registry.test/base@sha256:' + "1" * 64 + '"}\n'
             )
             (inputs / "python/dependency.whl").write_bytes(b"wheel")
-            import hashlib
-
             (source / "fixture/locks/python-wheels.sha256").write_text(
                 f"{hashlib.sha256(b'wheel').hexdigest()}  python/dependency.whl\n"
+            )
+            source_files = sorted(
+                path
+                for path in source.rglob("*")
+                if path.is_file() and path.name != "source-contracts.sha256"
+            )
+            (source / "source-contracts.sha256").write_text(
+                "".join(
+                    f"{hashlib.sha256(path.read_bytes()).hexdigest()}  "
+                    f"{path.relative_to(source).as_posix()}\n"
+                    for path in source_files
+                )
             )
             from pack_bundle import INPUT_MANIFESTS, PACKS
 
@@ -61,6 +71,13 @@ class PackBundleTests(unittest.TestCase):
                 second_artifact = root / "fixture-2.tar"
                 write_artifact(source, inputs, "fixture", second_artifact)
                 self.assertEqual(artifact.read_bytes(), second_artifact.read_bytes())
+                installer = source / "build/install-debian-python-pack.sh"
+                installer.write_text("drift\n")
+                with self.assertRaisesRegex(
+                    PackBundleError, "source manifest bytes differ"
+                ):
+                    build_manifest(source, inputs, "fixture", artifact)
+                installer.write_text("installer\n")
                 (inputs / "python/dependency.whl").write_bytes(b"drift")
                 with self.assertRaisesRegex(PackBundleError, "differs"):
                     verify_manifest(source, inputs, "fixture", artifact, manifest)

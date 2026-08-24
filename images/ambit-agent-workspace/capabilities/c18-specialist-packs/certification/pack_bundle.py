@@ -8,7 +8,7 @@ import re
 import stat
 import sys
 import tarfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 
@@ -25,14 +25,6 @@ INPUT_MANIFESTS = {
     "web-browser": ("npm-archives.sha256",),
 }
 MANIFEST_LINE = re.compile(r"^(?P<digest>[0-9a-f]{64})  (?P<path>[^\n]+)$")
-SHARED_SOURCE_ROOTS = (
-    "build",
-    "conformance",
-    "policy",
-    "protocol",
-)
-
-
 class PackBundleError(ValueError):
     """The reusable offline pack material is not a closed canonical bundle."""
 
@@ -83,14 +75,41 @@ def _entry(path: Path, relative: str, scope: str) -> dict[str, object]:
 
 
 def _source_paths(root: Path, pack_id: str) -> list[Path]:
-    values: list[Path] = []
-    for relative in SHARED_SOURCE_ROOTS:
-        values.extend(path for path in (root / relative).rglob("*") if path.is_file())
-    values.extend(path for path in (root / pack_id).rglob("*") if path.is_file())
-    for relative in ("pack-set.lock.json", "source-contracts.sha256"):
-        values.append(root / relative)
-    unique = {path.relative_to(root).as_posix(): path for path in values}
-    return [unique[key] for key in sorted(unique)]
+    if pack_id not in PACKS:
+        raise PackBundleError("pack ID is invalid")
+    manifest = root / "source-contracts.sha256"
+    paths: list[Path] = []
+    relatives: list[str] = []
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        match = MANIFEST_LINE.fullmatch(line)
+        if match is None:
+            raise PackBundleError("source manifest line is invalid")
+        relative = match.group("path")
+        parsed_relative = PurePosixPath(relative)
+        if (
+            parsed_relative.is_absolute()
+            or str(parsed_relative) != relative
+            or any(part in ("", ".", "..") for part in parsed_relative.parts)
+        ):
+            raise PackBundleError("source manifest path is invalid")
+        candidate = root / relative
+        try:
+            candidate.resolve(strict=True).relative_to(root.resolve(strict=True))
+        except (OSError, ValueError):
+            raise PackBundleError("source manifest path escapes its root") from None
+        if (
+            candidate.is_symlink()
+            or not candidate.is_file()
+            or file_digest(candidate)
+            != "sha256:" + match.group("digest")
+        ):
+            raise PackBundleError("source manifest bytes differ")
+        relatives.append(relative)
+        paths.append(candidate)
+    if not paths or relatives != sorted(set(relatives)):
+        raise PackBundleError("source manifest roster is not sorted and unique")
+    paths.append(manifest)
+    return paths
 
 
 def _input_paths(root: Path) -> list[Path]:
