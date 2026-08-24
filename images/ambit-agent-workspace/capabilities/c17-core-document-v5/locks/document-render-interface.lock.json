@@ -1,7 +1,7 @@
 {
   "schema": "ambit.runtime-interface-lock/v1",
   "state": "candidate-ready",
-  "digest": "sha256:8e15fc377bb2f4c98bef1bff0b2c3e7b6be6e97cb0ada1570a69770d29279ce4",
+  "digest": "sha256:5fdd5b18ac0d29429b3dd2cb5345909ed922550407f3bdfa6c25ce7c754eec86",
   "contract": {
     "arguments": [
       "--framed-jsonl",
@@ -22,6 +22,7 @@
       "helperTerminalFrame": "cancelled",
       "helperExitCode": 130,
       "hardTransportFailure": "requires-provider-runtime-quiescence-receipt-v1",
+      "privateRootCustody": "held-empty-workspace-and-cache-mount-authorities-cleaned-to-closed-empty-rosters-before-terminal",
       "quiescence": "all-render-process-groups-settled-and-private-roots-removed",
       "successCommit": "control-admission-atomically-closed-before-awaited-response_end-write",
       "typedCancelledWithoutTerminalOrProviderReceipt": "forbidden"
@@ -178,16 +179,16 @@
         "certification/runtime_pty_conformance.py": "sha256:bf591d8fe55c50a612886a3dcd5cbb4765a9bea1a027f61806a3ff528ace8dab",
         "certification/verify_render_output.mjs": "sha256:c3c9e0ea4469f48fb6cfb8f129ea18a769d851f68ec7ca2e2e06e34aff6d4814",
         "certification/verify_signed_debian_snapshot.py": "sha256:c9b36f28f14b639709f840836c8c5c36af3bd8935f9464e1ed44ccfb8a671899",
-        "certification/verify_source_contracts.py": "sha256:8fb5859c71fb935469cc1f427f1b06f157cd3e385463ea681f93fc2807b7bc79",
+        "certification/verify_source_contracts.py": "sha256:a06f3b7a8c00305bf4c9c3465e133cf839723b14f06c9481cdfc79adbd7093fe",
         "certification/verify_structural_contracts.py": "sha256:539ca505c9952e01ec213e606fb2823457aaa4acfce27278aae52eb307abb2da",
         "certification/verify_structural_runtime_archive.py": "sha256:73f247ceb6dd82087aaac68004888d66ee31884745d475cdda6cbde8d3e19401",
-        "renderer/ambit-render-document.mjs": "sha256:d1b83560d5a4d7745ada579953d27031e5951674cfceb8df1d1728565da22b56",
+        "renderer/ambit-render-document.mjs": "sha256:6d5fc68ca6fb3281cdff63e264c56407a2843a47e36d9acac7131a1f01431333",
         "renderer/ambit-render-pages.mjs": "sha256:5e888d07416c9fd8e65643df3fc0329df3bc3ac1fb3c6296cca1b5bf18a7fc8a",
         "renderer/docx-package-admission.mjs": "sha256:4e44b9c281b6ee95cf819abfd08fc14c9545ce1bc434648ca2baa0bdbf47063a",
         "renderer/framed-jsonl-protocol.mjs": "sha256:366c4141e9b73805460c3db96f57ca55f8a58a5d07b2e8c5051d152a77cce17d",
-        "renderer/pdfjs-page-renderer.mjs": "sha256:484bfb981a89e81109ae1c0d13ac767c8afba5c9982a996975ae59f2d14c14d3",
+        "renderer/pdfjs-page-renderer.mjs": "sha256:857a7121727fd3d7da9f83eea180ee0b66f27145b4d7d6584a1d771490584c89",
         "renderer/process-group-execution.mjs": "sha256:e3fca9cfbb69f2e3001e1aa9e59f8da2742f0b315cb295c7c92d92eb1b3e6d53",
-        "renderer/process-group-subreaper.py": "sha256:511c31746eb3c4359ed388d40cf7c5296c627360b6c8f912773e186692b5967c",
+        "renderer/process-group-subreaper.py": "sha256:59ed1d8d65bc16ba706016df7895f37105b461f7eaf939313ad4632f3ae1a109",
         "renderer/render-contracts.mjs": "sha256:025634b13d56e6ea89ebc8293dd0e5576d7c0b77ee7db0c4692db24e64b3076c",
         "renderer/render-output-verification.mjs": "sha256:4fadaea237d94446e408b97c546fc99b0cd8c8b7cd1df7510160bacb154e04b5",
         "renderer/render-terminal-arbiter.mjs": "sha256:2f57b599f1e6f55072dd6d2294034804cf77aa5aee2c4d74679719f649345078",

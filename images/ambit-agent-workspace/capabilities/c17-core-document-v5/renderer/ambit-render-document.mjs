@@ -15,7 +15,6 @@ import {
   readdir,
   realpath,
   rm,
-  stat,
   unlink,
 } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
@@ -89,6 +88,12 @@ function sameFileIdentity(left, right) {
   ].every((key) => left[key] === right[key])
 }
 
+function sameDirectoryAuthority(left, right) {
+  return ['dev', 'gid', 'ino', 'mode', 'uid'].every(
+    (key) => left[key] === right[key],
+  )
+}
+
 async function writePrivateImmutable(path, bytes) {
   const handle = await open(
     path,
@@ -117,29 +122,76 @@ async function writePrivateImmutable(path, bytes) {
 }
 
 async function admitPrivateMountRoot(path, label) {
-  if (!isAbsolute(path) || (await realpath(path)) !== path) {
+  if (!isAbsolute(path)) {
     throw new TypeError(`${label} must be one absolute real path.`)
   }
-  const metadata = await stat(path, { bigint: true })
-  if (
-    !metadata.isDirectory() ||
-    metadata.uid !== BigInt(process.getuid()) ||
-    (metadata.mode & 0o777n) !== 0o700n
-  ) {
-    throw new TypeError(`${label} is not one task-private mode-0700 directory.`)
-  }
-  return path
-}
-
-async function removePrivateRoot(path) {
-  await rm(path, { recursive: true, force: true, maxRetries: 2 })
+  const handle = await open(
+    path,
+    fsConstants.O_RDONLY |
+      fsConstants.O_DIRECTORY |
+      fsConstants.O_NOFOLLOW |
+      fsConstants.O_CLOEXEC,
+  )
   try {
-    await lstat(path)
+    const identity = await handle.stat({ bigint: true })
+    const linked = await lstat(path, { bigint: true })
+    if (
+      !identity.isDirectory() ||
+      !linked.isDirectory() ||
+      linked.isSymbolicLink() ||
+      !sameDirectoryAuthority(identity, linked) ||
+      identity.uid !== BigInt(process.getuid()) ||
+      (identity.mode & 0o777n) !== 0o700n ||
+      (await realpath(path)) !== path ||
+      (await readdir(`/proc/self/fd/${handle.fd}`)).length !== 0
+    ) {
+      throw new TypeError(
+        `${label} is not one empty task-private mode-0700 directory.`,
+      )
+    }
+    return Object.freeze({ handle, identity, label, path })
   } catch (error) {
-    if (error?.code === 'ENOENT') return
+    await handle.close()
     throw error
   }
-  throw new TypeError('Private render root remained after cleanup.')
+}
+
+async function reprovePrivateMount(mount) {
+  const linked = await lstat(mount.path, { bigint: true })
+  const held = await mount.handle.stat({ bigint: true })
+  if (
+    !linked.isDirectory() ||
+    linked.isSymbolicLink() ||
+    !sameDirectoryAuthority(mount.identity, linked) ||
+    !sameDirectoryAuthority(mount.identity, held)
+  ) {
+    throw new TypeError(`${mount.label} identity changed during rendering.`)
+  }
+}
+
+async function removePrivateMountContents(mount) {
+  await reprovePrivateMount(mount)
+  const heldPath = `/proc/self/fd/${mount.handle.fd}`
+  for (const name of await readdir(heldPath)) {
+    await rm(join(heldPath, name), {
+      recursive: true,
+      force: false,
+      maxRetries: 2,
+    })
+  }
+  await mount.handle.sync()
+  if ((await readdir(heldPath)).length !== 0) {
+    throw new TypeError(`${mount.label} retained private render residue.`)
+  }
+  await reprovePrivateMount(mount)
+}
+
+async function disposePrivateMount(mount) {
+  try {
+    await removePrivateMountContents(mount)
+  } finally {
+    await mount.handle.close()
+  }
 }
 
 export async function convertDocxToPdf({
@@ -161,31 +213,61 @@ export async function convertDocxToPdf({
     throw new TypeError('LibreOffice execution authority is invalid.')
   }
 
-  const workspace = await admitPrivateMountRoot(
-    workspaceRoot,
-    'Document workspace root',
-  )
-  const cache = await admitPrivateMountRoot(cacheRoot, 'Document cache root')
-  const operationRoot = await mkdtemp(join(workspace, '.ambit-document-render-'))
-  await chmod(operationRoot, 0o700)
-  let privateCacheRoot
+  let workspace
+  let cache
   try {
-    privateCacheRoot = await mkdtemp(join(cache, '.ambit-document-render-'))
-    await chmod(privateCacheRoot, 0o700)
+    workspace = await admitPrivateMountRoot(
+      workspaceRoot,
+      'Document workspace root',
+    )
+    cache = await admitPrivateMountRoot(cacheRoot, 'Document cache root')
+    if (sameDirectoryAuthority(workspace.identity, cache.identity)) {
+      throw new TypeError('Document workspace and cache mounts must be distinct.')
+    }
   } catch (error) {
-    await removePrivateRoot(operationRoot)
+    const opened = [workspace, cache].filter(Boolean)
+    await Promise.allSettled(opened.map((mount) => mount.handle.close()))
     throw error
   }
-  let disposed = false
-  const dispose = async () => {
-    if (disposed) return
-    disposed = true
-    const settled = await Promise.allSettled([
-      removePrivateRoot(operationRoot),
-      removePrivateRoot(privateCacheRoot),
+  let operationRoot
+  let privateCacheRoot
+  try {
+    operationRoot = await mkdtemp(join(workspace.path, '.ambit-document-render-'))
+    await chmod(operationRoot, 0o700)
+    privateCacheRoot = await mkdtemp(join(cache.path, '.ambit-document-render-'))
+    await chmod(privateCacheRoot, 0o700)
+  } catch (error) {
+    const cleanup = await Promise.allSettled([
+      disposePrivateMount(workspace),
+      disposePrivateMount(cache),
     ])
-    const failure = settled.find((result) => result.status === 'rejected')
-    if (failure) throw failure.reason
+    const failure = cleanup.find((result) => result.status === 'rejected')
+    if (failure) {
+      throw new AggregateError(
+        [error, failure.reason],
+        'Private render root creation and cleanup both failed.',
+        { cause: error },
+      )
+    }
+    throw error
+  }
+  let disposePromise
+  const dispose = () => {
+    if (disposePromise) return disposePromise
+    disposePromise = (async () => {
+      const settled = await Promise.allSettled([
+        disposePrivateMount(workspace),
+        disposePrivateMount(cache),
+      ])
+      const failures = settled
+        .filter((result) => result.status === 'rejected')
+        .map((result) => result.reason)
+      if (failures.length === 1) throw failures[0]
+      if (failures.length > 1) {
+        throw new AggregateError(failures, 'Both private render mounts failed cleanup.')
+      }
+    })()
+    return disposePromise
   }
   try {
     const input = join(operationRoot, 'document.docx')
@@ -265,7 +347,15 @@ export async function convertDocxToPdf({
       dispose,
     })
   } catch (error) {
-    await dispose()
+    try {
+      await dispose()
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        'Document conversion and private-mount cleanup both failed.',
+        { cause: error },
+      )
+    }
     throw error
   }
 }

@@ -159,8 +159,8 @@ export async function renderPdfBytes({
   if (!Buffer.isBuffer(pdfBytes) || pdfBytes.byteLength === 0) {
     throw new TypeError('PDF input bytes are unavailable.')
   }
-  if (pdfBytes.byteLength > admittedPolicy.input.maximumBytes) {
-    throw new RangeError('PDF input exceeds the render input policy.')
+  if (pdfBytes.byteLength > admittedPolicy.libreOffice.maximumPdfBytes) {
+    throw new RangeError('PDF input exceeds the intermediate PDF policy.')
   }
   let loadingTask
   let document

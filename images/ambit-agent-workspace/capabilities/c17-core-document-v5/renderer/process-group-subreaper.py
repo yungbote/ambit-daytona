@@ -131,6 +131,7 @@ def main() -> int:
             and time.monotonic() - terminating_at >= TERMINATION_GRACE_SECONDS
         ):
             forced = True
+        if forced:
             for pid in members:
                 try:
                     os.kill(pid, signal.SIGKILL)

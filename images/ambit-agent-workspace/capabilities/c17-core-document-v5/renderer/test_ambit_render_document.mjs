@@ -6,6 +6,7 @@ import {
   mkdir,
   mkdtemp,
   readdir,
+  rename,
   rm,
   symlink,
   writeFile,
@@ -189,6 +190,32 @@ test('removes private staging when conversion output is noncanonical', async () 
         },
       }),
       /one exact PDF output/,
+    )
+    assert.deepEqual(await readdir(workspace), [])
+    assert.deepEqual(await readdir(cache), [])
+  } finally {
+    await rm(workspace, { recursive: true, force: true })
+    await rm(cache, { recursive: true, force: true })
+  }
+})
+
+test('cleans the held mount rosters after hostile root renames', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'ambit-document-wrapper-'))
+  const cache = await mkdtemp(join(tmpdir(), 'ambit-document-cache-'))
+  try {
+    await assert.rejects(
+      convertDocxToPdf({
+        documentBytes: DOCX,
+        policy: POLICY,
+        workspaceRoot: workspace,
+        cacheRoot: cache,
+        execute: async (options) => {
+          await rename(options.cwd, join(workspace, 'renamed-operation-root'))
+          await rename(options.env.HOME, join(cache, 'renamed-cache-root'))
+          throw new Error('hostile child renamed both private roots')
+        },
+      }),
+      /hostile child renamed both private roots/,
     )
     assert.deepEqual(await readdir(workspace), [])
     assert.deepEqual(await readdir(cache), [])
