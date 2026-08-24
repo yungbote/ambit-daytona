@@ -280,6 +280,39 @@ def verify_lock(lock_path: Path, wheel_directory: Path) -> dict[str, object]:
     return rebuilt
 
 
+def requirements_from_lock(lock_path: Path) -> str:
+    lock = _load_unique_json(lock_path)
+    if not isinstance(lock, dict) or lock.get("schema") != SCHEMA:
+        raise WheelLockError("wheel lock schema is invalid")
+    wheels = lock.get("wheels")
+    if not isinstance(wheels, list) or not wheels:
+        raise WheelLockError("wheel lock has no resolved wheels")
+    lines: list[str] = []
+    identities: set[tuple[str, str]] = set()
+    for index, raw in enumerate(wheels):
+        if not isinstance(raw, dict):
+            raise WheelLockError(f"wheel lock entry {index} is invalid")
+        distribution = raw.get("distribution")
+        version = raw.get("version")
+        digest = raw.get("sha256")
+        if (
+            not isinstance(distribution, str)
+            or distribution != _canonical_distribution(distribution)
+            or not isinstance(version, str)
+            or not version
+            or not isinstance(digest, str)
+            or not digest.startswith("sha256:")
+            or not SHA256_PATTERN.fullmatch(digest.removeprefix("sha256:"))
+        ):
+            raise WheelLockError(f"wheel lock entry {index} identity is invalid")
+        identity = (distribution, version)
+        if identity in identities:
+            raise WheelLockError("wheel lock contains a duplicate requirement identity")
+        identities.add(identity)
+        lines.append(f"{distribution}=={version} --hash={digest}")
+    return "\n".join(lines) + "\n"
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -293,6 +326,9 @@ def _parser() -> argparse.ArgumentParser:
     verify = subparsers.add_parser("verify")
     verify.add_argument("--wheel-directory", required=True, type=Path)
     verify.add_argument("--lock", required=True, type=Path)
+    requirements = subparsers.add_parser("requirements")
+    requirements.add_argument("--lock", required=True, type=Path)
+    requirements.add_argument("--output", required=True, type=Path)
     return parser
 
 
@@ -310,8 +346,10 @@ def main(argv: list[str] | None = None) -> int:
                     direct_requirements=args.direct,
                 ),
             )
-        else:
+        elif args.command == "verify":
             verify_lock(args.lock, args.wheel_directory)
+        else:
+            args.output.write_text(requirements_from_lock(args.lock), encoding="utf-8")
     except (OSError, WheelLockError) as error:
         print(f"wheel-lock: {error}", file=sys.stderr)
         return 1

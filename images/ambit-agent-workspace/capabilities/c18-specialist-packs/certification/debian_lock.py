@@ -16,7 +16,7 @@ from typing import Any, Iterable
 SCHEMA = "ambit.c18-debian-binary-closure-lock/v1"
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 PLATFORM = "linux/amd64"
-BASE_IMAGE = (
+DEFAULT_BASE_IMAGE = (
     "docker.io/library/debian@sha256:"
     "38a76d01668772e381ad2826d876627c89e7133e2f8a0f5d567306798b0f2a16"
 )
@@ -207,7 +207,12 @@ def build_lock(
     requested_packages: list[str],
     installed_closure: Path,
     package_indexes: list[tuple[Path, str]],
+    base_image: str = DEFAULT_BASE_IMAGE,
 ) -> dict[str, object]:
+    if "@sha256:" not in base_image or not SHA256_PATTERN.fullmatch(
+        base_image.rsplit("@sha256:", 1)[1]
+    ):
+        raise DebianLockError("base image must use an immutable sha256 reference")
     if not deb_directory.is_dir() or deb_directory.is_symlink():
         raise DebianLockError("Debian archive directory must be one real directory")
     unexpected = sorted(
@@ -238,19 +243,28 @@ def build_lock(
             if (record.package, record.version, record.architecture, record.bytes, record.sha256)
             == (package, version, architecture, size, digest)
         ]
-        if len(matches) != 1:
+        if not matches:
             raise DebianLockError(
-                f"archive {path.name!r} does not resolve to exactly one signed package index record"
+                f"archive {path.name!r} does not resolve to a signed package index record"
             )
-        match = matches[0]
+        signed_locations = sorted(
+            (
+                {"repository": match.repository, "repositoryPath": match.filename}
+                for match in matches
+            ),
+            key=lambda value: (value["repository"], value["repositoryPath"]),
+        )
+        if len(signed_locations) != len(
+            {(value["repository"], value["repositoryPath"]) for value in signed_locations}
+        ):
+            raise DebianLockError(f"archive {path.name!r} has duplicate signed locations")
         archive_entries.append(
             {
                 "localFilename": path.name,
                 "package": package,
                 "version": version,
                 "architecture": architecture,
-                "repository": match.repository,
-                "repositoryPath": match.filename,
+                "signedLocations": signed_locations,
                 "bytes": size,
                 "sha256": f"sha256:{digest}",
             }
@@ -283,7 +297,7 @@ def build_lock(
         "schema": SCHEMA,
         "packRef": pack_ref,
         "platform": PLATFORM,
-        "baseImage": BASE_IMAGE,
+        "baseImage": base_image,
         "snapshots": SNAPSHOTS,
         "signaturePolicy": {
             "inReleaseVerification": "required-external-input",
@@ -338,6 +352,7 @@ def verify_lock(
         requested_packages=list(lock.get("requestedPackages") or []),
         installed_closure=installed_closure,
         package_indexes=package_indexes,
+        base_image=str(lock.get("baseImage")),
     )
     if rebuilt != lock:
         raise DebianLockError("Debian archive closure does not reproduce the lock")
@@ -368,6 +383,7 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--output", required=True, type=Path)
             command.add_argument("--pack-ref", required=True)
             command.add_argument("--requested", action="append", default=[])
+            command.add_argument("--base-image", default=DEFAULT_BASE_IMAGE)
         else:
             command.add_argument("--lock", required=True, type=Path)
     return parser
@@ -384,6 +400,7 @@ def main(argv: list[str] | None = None) -> int:
                 requested_packages=args.requested,
                 installed_closure=args.installed_closure,
                 package_indexes=indexes,
+                base_image=args.base_image,
             )
             args.output.write_text(json.dumps(lock, indent=2, sort_keys=True) + "\n")
         else:
