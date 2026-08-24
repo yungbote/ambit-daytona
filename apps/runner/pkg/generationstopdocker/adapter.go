@@ -19,6 +19,7 @@ import (
 const (
 	fullImageRuntimeObservationKind = "full_image_runtime_pack_provider_observation"
 	fullImageRuntimeKind            = "full_image_runtime_pack"
+	baseProfileRuntimeKind          = "base_profile"
 )
 
 type DockerAPI interface {
@@ -131,13 +132,31 @@ func observation(
 	if labels == nil {
 		return generationstop.CurrentGenerationObservation{}, errors.New("Docker generation has no provider labels")
 	}
-	if labels["ambitRuntimeKind"] != fullImageRuntimeObservationKind ||
-		labels["ambitRuntimeWorkspaceId"] != labels["ambitWorkspaceId"] ||
-		labels["ambitRuntimeManifestRef"] != labels["ambitWorkspaceExecutionManifestRef"] ||
-		labels["ambitRuntimeProductRunId"] != labels["ambitTaskId"] ||
-		labels["ambitRuntimeGrantId"] != labels["ambitGrantId"] {
-		return generationstop.CurrentGenerationObservation{}, errors.New(
-			"Docker full-image runtime labels are absent, partial, or substituted",
+	runtimeKind := ""
+	switch labels["ambitRuntimeKind"] {
+	case fullImageRuntimeObservationKind:
+		if labels["ambitRuntimeWorkspaceId"] != labels["ambitWorkspaceId"] ||
+			labels["ambitRuntimeManifestRef"] != labels["ambitWorkspaceExecutionManifestRef"] ||
+			labels["ambitRuntimeProductRunId"] != labels["ambitTaskId"] ||
+			labels["ambitRuntimeGrantId"] != labels["ambitGrantId"] {
+			return generationstop.CurrentGenerationObservation{}, errors.New(
+				"Docker full-image runtime labels are absent, partial, or substituted",
+			)
+		}
+		runtimeKind = fullImageRuntimeKind
+	case "":
+		for label := range labels {
+			if strings.HasPrefix(label, "ambitRuntime") {
+				return generationstop.CurrentGenerationObservation{}, errors.New(
+					"Docker base-profile runtime labels are partial or substituted",
+				)
+			}
+		}
+		runtimeKind = baseProfileRuntimeKind
+	default:
+		return generationstop.CurrentGenerationObservation{}, fmt.Errorf(
+			"Docker runtime observation kind %q is retired or unrecognized",
+			labels["ambitRuntimeKind"],
 		)
 	}
 	state := inspect.State
@@ -149,7 +168,7 @@ func observation(
 		Source: generationstop.Source{
 			ProviderResourceID:  strings.TrimPrefix(inspect.Name, "/"),
 			ExpectedProfile:     labels["ambitProfile"],
-			ExpectedRuntimeKind: fullImageRuntimeKind,
+			ExpectedRuntimeKind: runtimeKind,
 		},
 		Owner: generationstop.ProviderOwner{
 			TenantID:    labels["ambitTenantId"],

@@ -84,6 +84,51 @@ func TestAdapterTreatsExactExitedGenerationAsIdempotentlyStopped(t *testing.T) {
 	}
 }
 
+func TestAdapterObservesBaseProfileWithoutInventingFullImageAuthority(t *testing.T) {
+	t.Parallel()
+	api := newFakeDockerAPI()
+	for label := range api.inspect.Config.Labels {
+		if strings.HasPrefix(label, "ambitRuntime") {
+			delete(api.inspect.Config.Labels, label)
+		}
+	}
+	adapter, _ := New(api)
+	observed, err := adapter.InspectGeneration(context.Background(), "sandbox-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed.Source.ExpectedRuntimeKind != baseProfileRuntimeKind {
+		t.Fatalf("base profile was not observed exactly: %#v", observed.Source)
+	}
+}
+
+func TestAdapterRejectsPartialRetiredOrUnknownRuntimeObservation(t *testing.T) {
+	t.Parallel()
+	for name, kind := range map[string]string{
+		"partial": "",
+		"retired": "retired_runtime_provider_observation",
+		"unknown": "future_runtime_provider_observation",
+	} {
+		t.Run(name, func(t *testing.T) {
+			api := newFakeDockerAPI()
+			for label := range api.inspect.Config.Labels {
+				if strings.HasPrefix(label, "ambitRuntime") {
+					delete(api.inspect.Config.Labels, label)
+				}
+			}
+			if kind == "" {
+				api.inspect.Config.Labels["ambitRuntimeManifestRef"] = "partial"
+			} else {
+				api.inspect.Config.Labels["ambitRuntimeKind"] = kind
+			}
+			adapter, _ := New(api)
+			if _, err := adapter.InspectGeneration(context.Background(), "sandbox-1"); err == nil {
+				t.Fatalf("%s runtime observation was accepted", name)
+			}
+		})
+	}
+}
+
 type fakeDockerAPI struct {
 	inspect   containertypes.InspectResponse
 	stopCalls int
