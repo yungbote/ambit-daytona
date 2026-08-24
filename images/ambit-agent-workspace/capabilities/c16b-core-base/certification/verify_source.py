@@ -258,6 +258,17 @@ def verify(root: Path) -> dict[str, object]:
     for forbidden in ("apt-get install", "pip install", "npm install", "curl ", "wget "):
         _require(forbidden not in dockerfile, f"Dockerfile contains forbidden {forbidden!r}")
 
+    conformance = (root / "conformance/verify.sh").read_text(encoding="utf-8")
+    for fragment in (
+        'CapEff:',
+        'NoNewPrivs:',
+        '/sys/class/net',
+        '/tmp/ambit-core-rootfs-write-probe',
+        '/var/run/docker.sock',
+        'secret-shaped environment name',
+    ):
+        _require(fragment in conformance, f"conformance is missing {fragment!r}")
+
     package_lock = (root / "locks/base-installed-dpkg.lock").read_text(
         encoding="utf-8"
     ).splitlines()
