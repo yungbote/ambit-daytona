@@ -334,7 +334,7 @@ func ValidateRequest(request Request) error {
 	if !exactDigest(request.Executor.Digest) || !boundedOperationalRef(request.Executor.Ref, 512) {
 		return invalidf("executor pin is invalid")
 	}
-	if !exactDigest(request.Image.ConfigDigest) || !boundedOperationalRef(request.Image.Ref, 512) ||
+	if !exactDigest(request.Image.ConfigDigest) || !immutableOCIReference(request.Image.Ref) ||
 		request.Image.PackID == "" || len(request.Image.PackID) > 64 ||
 		!boundedOperationalRef(request.Image.PackRef, 512) {
 		return invalidf("image pin is invalid")
@@ -611,8 +611,8 @@ func validateParentGeneration(value generationstop.ExpectedGeneration) error {
 	if _, err := hex.DecodeString(value.ContainerID); err != nil {
 		return invalidf("expected parent container identity is invalid")
 	}
-	created, createdErr := time.Parse(time.RFC3339Nano, value.ContainerCreatedAt)
-	started, startedErr := time.Parse(time.RFC3339Nano, value.ExecutionStartedAt)
+	created, createdErr := parseProviderTime(value.ContainerCreatedAt)
+	started, startedErr := parseProviderTime(value.ExecutionStartedAt)
 	if createdErr != nil || startedErr != nil || started.Before(created) ||
 		len(value.ContainerCreatedAt) > 64 || len(value.ExecutionStartedAt) > 64 {
 		return invalidf("expected parent generation timestamps are invalid")
@@ -828,6 +828,18 @@ func boundedOperationalRef(value string, maximum int) bool {
 		}
 	}
 	return true
+}
+
+func immutableOCIReference(value string) bool {
+	if !boundedOperationalRef(value, 512) {
+		return false
+	}
+	separator := strings.LastIndex(value, "@sha256:")
+	if separator <= 0 || separator+len("@sha256:")+64 != len(value) {
+		return false
+	}
+	_, err := hex.DecodeString(value[separator+len("@sha256:"):])
+	return err == nil && strings.ToLower(value) == value
 }
 
 func contains(values []string, target string) bool {

@@ -72,6 +72,9 @@ import { WorkingCopyCaptureService } from './services/working-copy-capture.servi
 import { SandboxGenerationStopController } from './controllers/sandbox-generation-stop.controller'
 import { SandboxGenerationStopService } from './services/sandbox-generation-stop.service'
 import { SandboxExecutionAuthorityService } from './services/sandbox-execution-authority.service'
+import { SandboxSpecialistRenderController } from './controllers/sandbox-specialist-render.controller'
+import { SandboxSpecialistRenderService } from './services/sandbox-specialist-render.service'
+import { RunnerSpecialistRenderTransport } from './runner-adapter/runner-specialist-render.transport'
 
 @Module({
   imports: [
@@ -114,6 +117,7 @@ import { SandboxExecutionAuthorityService } from './services/sandbox-execution-a
     JobController,
     WorkingCopyCaptureController,
     SandboxGenerationStopController,
+    SandboxSpecialistRenderController,
   ],
   providers: [
     SandboxService,
@@ -141,6 +145,8 @@ import { SandboxExecutionAuthorityService } from './services/sandbox-execution-a
     SandboxActivityService,
     WorkingCopyCaptureService,
     SandboxGenerationStopService,
+    SandboxSpecialistRenderService,
+    RunnerSpecialistRenderTransport,
     SandboxExecutionAuthorityService,
     ProxyAuthContextGuard,
     SandboxAuthContextGuard,

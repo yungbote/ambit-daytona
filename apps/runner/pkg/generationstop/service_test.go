@@ -100,6 +100,31 @@ func TestCurrentGenerationIsReadOnlyAndRejectsProviderAuthorityDrift(t *testing.
 	}
 }
 
+func TestProviderCurrentGenerationNormalizesExactMillisecondAuthority(t *testing.T) {
+	t.Parallel()
+	request := validStopRequest()
+	containers := newFakeContainer(request)
+	containers.observation.Generation.ContainerCreatedAt = "2026-08-23T23:59:00.123456789Z"
+	containers.observation.Generation.ExecutionStartedAt = "2026-08-24T00:00:00Z"
+	observer, err := NewObserver(containers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed, err := observer.ObserveProviderCurrent(
+		context.Background(),
+		ProviderGenerationObservationRequest{
+			Source: request.Source, Owner: providerOwner(request.Owner), Fence: request.Fence,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed.Generation.ContainerCreatedAt != "2026-08-23T23:59:00.123Z" ||
+		observed.Generation.ExecutionStartedAt != "2026-08-24T00:00:00.000Z" {
+		t.Fatalf("provider generation was not normalized to exact milliseconds: %#v", observed.Generation)
+	}
+}
+
 func TestRequireCurrentReceiptReprovesFullAuthorityAndFreshProviderState(t *testing.T) {
 	t.Parallel()
 	request := validStopRequest()

@@ -278,10 +278,10 @@ func TestValidateReceiptRejectsSelfConsistentLaunchForgery(t *testing.T) {
 func TestProviderContractGoldenValues(t *testing.T) {
 	policy := testPolicy(t)
 	request := testRequest(t, policy)
-	if policy.Authority.Digest != "sha256:71628448f2de7d0291bb775f44695341ba70ab0c07a7ec306963eca847766101" {
+	if policy.Authority.Digest != "sha256:f68b018ccb07c233e9e76941146579af73b62d3cd0ae6b10bba96cab8b36a4e9" {
 		t.Fatalf("policy digest golden drifted: %s", policy.Authority.Digest)
 	}
-	if request.RequestFingerprint != "dd881cc25d1da01dd6ce346aa703a089db48c7163764f691f7ccf23dbc0146c2" {
+	if request.RequestFingerprint != "7447c92d0ca108e04ad5fd8d86f9c4dad32733b7b10f2bdea7492b7e3a97f3d5" {
 		t.Fatalf("request fingerprint golden drifted: %s", request.RequestFingerprint)
 	}
 	receipt := receiptFromExecution(t, request, policy, testExecution(request, policy))
@@ -289,7 +289,7 @@ func TestProviderContractGoldenValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if receipt.ReceiptDigest != "sha256:b718dadf27a47d58a9ddf4f7f8c0b7f2bbc4736c5ff292c147233c5dbcfa3581" {
+	if receipt.ReceiptDigest != "sha256:59f9c4f069c8582e3c986b569a714476be50b192ad500a5e1a241664abff6016" {
 		t.Fatalf("receipt digest golden drifted: %s", receipt.ReceiptDigest)
 	}
 	fixture, err := os.ReadFile("testdata/provider-contract-golden.json")
@@ -308,7 +308,7 @@ func TestMaximumReceiptFitsOneProviderFrame(t *testing.T) {
 	request.Source.ExpectedProfile = strings.Repeat("p", 128)
 	request.Source.ExpectedRuntimeKind = strings.Repeat("r", 128)
 	request.Fence.WorkspaceExecutionManifestRef = strings.Repeat("f", 2048)
-	request.Image.Ref = "x:" + strings.Repeat("i", 510)
+	request.Image.Ref = "r/" + strings.Repeat("i", 438) + "@sha256:" + strings.Repeat("1", 64)
 	request.Image.PackRef = "x:" + strings.Repeat("k", 510)
 	request.Executor.Ref = "x:" + strings.Repeat("e", 510)
 	request.ProviderPolicy.Ref = "x:" + strings.Repeat("q", 510)
@@ -355,7 +355,7 @@ func testPolicy(t *testing.T) Policy {
 	policy := Policy{
 		Authority:               Pin{Ref: "ambit.runtime-provider/specialist-render-data-research@1"},
 		Composition:             Pin{Ref: "ambit.runtime-composition/test@2", Digest: "sha256:" + strings.Repeat("b", 64)},
-		Image:                   ImagePin{Ref: "ambit-c18-data-research:test", ConfigDigest: "sha256:" + strings.Repeat("1", 64), PackID: "data-research", PackRef: "ambit.runtime-pack/data-research@1"},
+		Image:                   ImagePin{Ref: "registry.test/ambit/data-research@sha256:" + strings.Repeat("1", 64), ConfigDigest: "sha256:" + strings.Repeat("1", 64), PackID: "data-research", PackRef: "ambit.runtime-pack/data-research@1"},
 		Interface:               Pin{Ref: InterfaceRef, Digest: "sha256:" + strings.Repeat("2", 64)},
 		Executor:                Pin{Ref: "ambit://specialist-render-executors/data-research@1", Digest: "sha256:" + strings.Repeat("3", 64)},
 		Executable:              "/opt/ambit/runtime-pack/data-research/bin/ambit-specialist-render",
@@ -394,8 +394,8 @@ func testRequest(t *testing.T, policy Policy) Request {
 		},
 		Fence: generationstop.Fence{WorkspaceExecutionManifestRef: "workspace-execution-manifest:sha256:" + strings.Repeat("6", 64)},
 		ExpectedParentGeneration: generationstop.ExpectedGeneration{
-			ContainerID: strings.Repeat("7", 64), ContainerCreatedAt: "2026-08-24T00:00:00Z",
-			ExecutionStartedAt: "2026-08-24T00:00:00Z", RestartCount: 0,
+			ContainerID: strings.Repeat("7", 64), ContainerCreatedAt: "2026-08-24T00:00:00.000Z",
+			ExecutionStartedAt: "2026-08-24T00:00:00.000Z", RestartCount: 0,
 		},
 		Image: policy.Image, Interface: policy.Interface, Executor: policy.Executor,
 		Executable: policy.Executable, ProviderPolicy: policy.Authority,

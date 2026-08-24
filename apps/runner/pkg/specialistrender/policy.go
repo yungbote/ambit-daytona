@@ -152,7 +152,7 @@ func validatePolicy(policy Policy) error {
 		!boundedOperationalRef(policy.Authority.Ref, 512) || !exactDigest(policy.Authority.Digest) ||
 		!boundedOperationalRef(policy.Composition.Ref, 512) || !exactDigest(policy.Composition.Digest) ||
 		policy.Interface.Ref != InterfaceRef || !exactDigest(policy.Interface.Digest) ||
-		!boundedOperationalRef(policy.Image.Ref, 512) || !exactDigest(policy.Image.ConfigDigest) ||
+		!immutableOCIReference(policy.Image.Ref) || !exactDigest(policy.Image.ConfigDigest) ||
 		!boundedOperationalRef(policy.Image.PackRef, 512) ||
 		!boundedOperationalRef(policy.Executor.Ref, 512) || !exactDigest(policy.Executor.Digest) ||
 		policy.ProcessExecutablePath == "" || !exactDigest(policy.ProcessExecutableDigest) ||

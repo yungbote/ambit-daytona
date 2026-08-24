@@ -98,7 +98,7 @@ func dockerTestPolicy(t *testing.T, pack string, seccomp []byte, environment []s
 	policy := specialistrender.Policy{
 		Authority:             specialistrender.Pin{Ref: "ambit.runtime-provider/specialist-render-" + pack + "@1"},
 		Composition:           specialistrender.Pin{Ref: "ambit.runtime-composition/test@2", Digest: "sha256:" + strings.Repeat("b", 64)},
-		Image:                 specialistrender.ImagePin{Ref: "image:" + pack, ConfigDigest: "sha256:" + strings.Repeat("1", 64), PackID: pack, PackRef: "ambit.runtime-pack/" + pack + "@1"},
+		Image:                 specialistrender.ImagePin{Ref: "registry.test/ambit/" + pack + "@sha256:" + strings.Repeat("1", 64), ConfigDigest: "sha256:" + strings.Repeat("1", 64), PackID: pack, PackRef: "ambit.runtime-pack/" + pack + "@1"},
 		Interface:             specialistrender.Pin{Ref: specialistrender.InterfaceRef, Digest: "sha256:" + strings.Repeat("2", 64)},
 		Executor:              specialistrender.Pin{Ref: "ambit://specialist-render-executors/" + pack + "@1", Digest: "sha256:" + strings.Repeat("3", 64)},
 		Executable:            "/opt/ambit/runtime-pack/" + pack + "/bin/ambit-specialist-render",
