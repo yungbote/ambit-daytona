@@ -56,8 +56,12 @@ def create_pdf(
 def create_scan(path: Path) -> None:
     image = Image.new("L", (1400, 520), color=255)
     draw = ImageDraw.Draw(image)
-    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 64)
-    small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 42)
+    font = ImageFont.truetype(
+        "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf", 64
+    )
+    small = ImageFont.truetype(
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", 42
+    )
     draw.text((70, 55), "AMBIT OCR 2026", font=font, fill=0)
     draw.rectangle((70, 180, 1320, 430), outline=0, width=4)
     for x in (470, 870):

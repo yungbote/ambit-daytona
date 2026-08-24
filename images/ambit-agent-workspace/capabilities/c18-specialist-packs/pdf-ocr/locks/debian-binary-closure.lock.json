@@ -1,5 +1,5 @@
 {
-  "archiveCount": 195,
+  "archiveCount": 199,
   "archives": [
     {
       "architecture": "all",
@@ -84,6 +84,62 @@
         }
       ],
       "version": "2.37-8"
+    },
+    {
+      "architecture": "all",
+      "bytes": 56674044,
+      "localFilename": "fonts-noto-cjk_1%3a20240730+repack1-1_all.deb",
+      "package": "fonts-noto-cjk",
+      "sha256": "sha256:f5dc28a754e17327d99f0a612134d92c8dd6187314ae967cb77f25df60860139",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/f/fonts-noto-cjk/fonts-noto-cjk_20240730+repack1-1_all.deb"
+        }
+      ],
+      "version": "1:20240730+repack1-1"
+    },
+    {
+      "architecture": "all",
+      "bytes": 12188336,
+      "localFilename": "fonts-noto-core_20201225-2_all.deb",
+      "package": "fonts-noto-core",
+      "sha256": "sha256:97978d09b68445fcf85342b106cd2e812d7813e3d5626f9884a5f344c3a55973",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/f/fonts-noto/fonts-noto-core_20201225-2_all.deb"
+        }
+      ],
+      "version": "20201225-2"
+    },
+    {
+      "architecture": "all",
+      "bytes": 397580,
+      "localFilename": "fonts-noto-mono_20201225-2_all.deb",
+      "package": "fonts-noto-mono",
+      "sha256": "sha256:7636f002caeb4a4082f69e2d9b8eb89da6c50b9c67f55db84e68638049b06006",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/f/fonts-noto/fonts-noto-mono_20201225-2_all.deb"
+        }
+      ],
+      "version": "20201225-2"
+    },
+    {
+      "architecture": "all",
+      "bytes": 128200,
+      "localFilename": "fonts-opensymbol_4%3a102.12+LibO25.2.3-2+deb13u6_all.deb",
+      "package": "fonts-opensymbol",
+      "sha256": "sha256:9bf3b5927d2bcec59482b7a0aaf2e6c60fffeeecb47939fc5bfd18a8f815a5a0",
+      "signedLocations": [
+        {
+          "repository": "debian",
+          "repositoryPath": "pool/main/libr/libreoffice/fonts-opensymbol_102.12+LibO25.2.3-2+deb13u6_all.deb"
+        }
+      ],
+      "version": "4:102.12+LibO25.2.3-2+deb13u6"
     },
     {
       "architecture": "all",
@@ -2850,12 +2906,16 @@
   ],
   "baseImage": "docker.io/library/python@sha256:d6e0850f13fda0e2305d4c3c1c2f7930fe1042d34ddd958e49bba6ef685d0bb2",
   "installedClosure": {
-    "entryCount": 276,
-    "sha256": "sha256:85c4e8b710c11eda88b70f30974122e71a7faa045472cb9356bdb6180763ab7c"
+    "entryCount": 280,
+    "sha256": "sha256:86e31001c06e189628d4820e1f738170177ba72ded009282faad9ad441bc0de0"
   },
   "packRef": "ambit.runtime-pack/pdf-ocr@1",
   "platform": "linux/amd64",
   "requestedPackages": [
+    "fonts-noto-cjk=1:20240730+repack1-1",
+    "fonts-noto-core=20201225-2",
+    "fonts-noto-mono=20201225-2",
+    "fonts-opensymbol=4:102.12+LibO25.2.3-2+deb13u6",
     "ghostscript=10.05.1~dfsg-1+deb13u1",
     "libimage-exiftool-perl=13.25+dfsg-1",
     "poppler-utils=25.03.0-5+deb13u4",
@@ -2888,5 +2948,5 @@
       "url": "https://snapshot.debian.org/archive/debian-security/20260802T121235Z/"
     }
   },
-  "transitiveGraphDigest": "sha256:3da216152d34d8cf9f44635e46a634289547e44d5707a2e10031bb6cad0f58fd"
+  "transitiveGraphDigest": "sha256:db1779b4c81ee9e09948eff82086a9ef5f88f0524ae12c1d7cd93ba6e2dbd17c"
 }

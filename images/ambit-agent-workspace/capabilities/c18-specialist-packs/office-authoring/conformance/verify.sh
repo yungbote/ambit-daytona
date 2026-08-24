@@ -20,7 +20,9 @@ for source in "${output_root}"/fixtures/*.xlsx "${output_root}"/fixtures/*.pptx;
   mkdir -p "${profile}"
   soffice --headless --nologo --nodefault --nofirststartwizard \
     -env:UserInstallation="file://${profile}" \
-    --convert-to pdf --outdir "${output_root}/rendered" "${source}" >/dev/null
+    --convert-to pdf --outdir "${output_root}/rendered" "${source}" \
+    >/dev/null \
+    2> "${output_root}/rendered/$(basename "${source}").soffice.stderr.txt"
 done
 for pdf in "${output_root}"/rendered/*.pdf; do
   stem=$(basename "${pdf}" .pdf)
