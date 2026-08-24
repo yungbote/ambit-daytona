@@ -48,9 +48,6 @@ equal "$PATH" /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin 18 \
   'path-roster-is-not-exact'
 equal "$PWD" /workspace 19 'working-directory-is-not-workspace'
 equal "$TZ" UTC 20 'timezone-is-not-utc'
-printf '%s\n' "$HOSTNAME" | grep -Eq '^[0-9a-f]{12}$' || \
-  fail 21 'hostname-is-not-a-docker-container-id'
-equal "$(hostname)" "$HOSTNAME" 22 'hostname-command-and-environment-differ'
 
 capability_rows=$(awk '
   $1 ~ /^Cap(Inh|Prm|Eff|Bnd|Amb):$/ { print $1 $2 }
@@ -68,6 +65,9 @@ equal "$no_new_privileges" 1 24 'no-new-privileges-is-not-set'
 
 interfaces=$(find /sys/class/net -mindepth 1 -maxdepth 1 -printf '%f\n' | LC_ALL=C sort)
 equal "$interfaces" lo 25 'network-namespace-is-not-loopback-only'
+printf '%s\n' "$HOSTNAME" | grep -Eq '^[0-9a-f]{12}$' || \
+  fail 21 'hostname-is-not-a-docker-container-id'
+equal "$(hostname)" "$HOSTNAME" 22 'hostname-command-and-environment-differ'
 
 mountpoints=$(awk '
   { for (field = 1; field <= NF; field += 1) if ($field == "-") { print $5; break } }
