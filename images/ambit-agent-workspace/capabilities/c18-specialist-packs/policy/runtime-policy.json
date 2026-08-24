@@ -10,6 +10,7 @@
   "identity": {
     "gid": 1000,
     "group": "daytona",
+    "supplementaryGroups": [],
     "uid": 1000,
     "user": "daytona"
   },

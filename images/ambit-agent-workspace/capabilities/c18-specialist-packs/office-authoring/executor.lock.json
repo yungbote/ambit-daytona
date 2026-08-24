@@ -1,0 +1,9 @@
+{
+  "digest": "sha256:832f3dfe25d2ae4a13563d0ad8c07d633af2c5564db5afd6f208a10ec00fe4fb",
+  "facets": [
+    "presentation",
+    "spreadsheet"
+  ],
+  "ref": "ambit://specialist-render-executors/office-authoring@1",
+  "schema": "ambit.c18-specialist-render-executor-lock/v1"
+}

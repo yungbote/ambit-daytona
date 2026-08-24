@@ -6,6 +6,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +50,12 @@ PACKS = {
         "requires": ["core"],
         "directPython": [],
     },
+}
+EXECUTOR_FACETS = {
+    "office-authoring": ["presentation", "spreadsheet"],
+    "pdf-ocr": ["pdf"],
+    "data-research": ["data_analysis", "research"],
+    "web-browser": ["web_application"],
 }
 FACETS = {
     "C18_DATA_ANALYSIS": ["ambit.runtime-pack/data-research@1"],
@@ -108,6 +115,57 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _source_files(root: Path) -> list[tuple[str, Path]]:
+    result: list[tuple[str, Path]] = []
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        if relative == "source-contracts.sha256":
+            continue
+        _require(not path.is_symlink(), f"source symlink is forbidden: {relative}")
+        if path.is_file():
+            _require(
+                "__pycache__" not in path.parts and path.suffix != ".pyc",
+                "generated Python cache entered source",
+            )
+            result.append((relative, path))
+    return result
+
+
+def render_source_manifest(root: Path) -> bytes:
+    root = root.resolve(strict=True)
+    return "".join(
+        f"{_sha256(path)}  {relative}\n"
+        for relative, path in _source_files(root)
+    ).encode("utf-8")
+
+
+def refresh_source_manifest(root: Path) -> None:
+    root = root.resolve(strict=True)
+    manifest = root / "source-contracts.sha256"
+    payload = render_source_manifest(root)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=".source-contracts.", dir=root
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb", closefd=True) as output:
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, manifest)
+        directory = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def _sorted_unique(value: object, name: str) -> list[str]:
     _require(isinstance(value, list) and all(isinstance(item, str) for item in value), f"{name} is invalid")
     result = list(value)
@@ -130,15 +188,7 @@ def _verify_source_manifest(root: Path) -> None:
         )
         entries[relative] = match.group("digest")
     _require(list(entries) == sorted(entries), "source contract digest roster is not sorted")
-    actual: list[str] = []
-    for path in sorted(root.rglob("*")):
-        relative = path.relative_to(root).as_posix()
-        if relative == "source-contracts.sha256":
-            continue
-        _require(not path.is_symlink(), f"source symlink is forbidden: {relative}")
-        if path.is_file():
-            _require("__pycache__" not in path.parts and path.suffix != ".pyc", "generated Python cache entered source")
-            actual.append(relative)
+    actual = [relative for relative, _path in _source_files(root)]
     _require(actual == list(entries), "source contract digest roster is not closed")
     for relative, expected in entries.items():
         _require(_sha256(root / relative) == expected, f"source digest mismatch: {relative}")
@@ -346,6 +396,30 @@ def _verify_dockerfile(root: Path, pack_id: str, expected: dict[str, object]) ->
         )
 
 
+def _verify_executor(root: Path, pack_id: str) -> None:
+    lock = _load_json(root / pack_id / "executor.lock.json")
+    _require(
+        isinstance(lock, dict)
+        and set(lock) == {"digest", "facets", "ref", "schema"},
+        f"{pack_id} executor lock fields are invalid",
+    )
+    body = {key: lock[key] for key in ("facets", "ref", "schema")}
+    expected_digest = "sha256:" + hashlib.sha256(
+        json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    _require(
+        lock["schema"] == "ambit.c18-specialist-render-executor-lock/v1"
+        and lock["facets"] == EXECUTOR_FACETS[pack_id]
+        and lock["ref"] == f"ambit://specialist-render-executors/{pack_id}@1"
+        and lock["digest"] == expected_digest,
+        f"{pack_id} executor lock identity is invalid",
+    )
+    _require(
+        (root / pack_id / "runtime/adapter.py").is_file(),
+        f"{pack_id} runtime adapter is absent",
+    )
+
+
 def verify_source(root: Path, *, verify_hashes: bool = True) -> dict[str, object]:
     root = root.resolve(strict=True)
     if verify_hashes:
@@ -365,7 +439,17 @@ def verify_source(root: Path, *, verify_hashes: bool = True) -> dict[str, object
 
     runtime_policy = _load_json(root / "policy/runtime-policy.json")
     _require(runtime_policy.get("schema") == "ambit.c18-runtime-policy/v1", "runtime policy schema is invalid")
-    _require(runtime_policy["identity"] == {"gid": 1000, "group": "daytona", "uid": 1000, "user": "daytona"}, "runtime identity policy is invalid")
+    _require(
+        runtime_policy["identity"]
+        == {
+            "gid": 1000,
+            "group": "daytona",
+            "supplementaryGroups": [],
+            "uid": 1000,
+            "user": "daytona",
+        },
+        "runtime identity policy is invalid",
+    )
     _require(runtime_policy["runtimeInstallers"]["disposition"] == "absent", "runtime installer policy is invalid")
     _require(runtime_policy["process"]["linuxCapabilities"] == [], "runtime capability policy is invalid")
     _require(runtime_policy["process"]["noNewPrivileges"] is True, "runtime no-new-privileges policy is invalid")
@@ -396,6 +480,7 @@ def verify_source(root: Path, *, verify_hashes: bool = True) -> dict[str, object
         _require(toolchain.get("schema") == expected_toolchain_schema, f"{pack_id} toolchain schema is invalid")
         _require(toolchain.get("packRef") == expected["ref"], f"{pack_id} toolchain ref mismatch")
         _verify_dockerfile(root, pack_id, expected)
+        _verify_executor(root, pack_id)
         if pack_id != "web-browser":
             _verify_python_pack(root, pack_id, expected)
             _verify_debian_pack(root, pack_id, expected)
@@ -431,8 +516,16 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-root", required=True, type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--refresh-source-manifest", action="store_true")
     args = parser.parse_args(argv)
     try:
+        if args.refresh_source_manifest:
+            if args.output:
+                raise SourceContractError(
+                    "--output and --refresh-source-manifest are mutually exclusive"
+                )
+            refresh_source_manifest(args.source_root)
+            return 0
         receipt = verify_source(args.source_root)
         rendered = json.dumps(receipt, indent=2, sort_keys=True) + "\n"
         if args.output:

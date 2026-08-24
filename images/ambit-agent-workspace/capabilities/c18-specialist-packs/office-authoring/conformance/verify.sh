@@ -24,6 +24,7 @@ done
 for pdf in "${output_root}"/rendered/*.pdf; do
   stem=$(basename "${pdf}" .pdf)
   pdfinfo "${pdf}" > "${output_root}/rendered/${stem}.pdfinfo.txt"
+  pdffonts "${pdf}" > "${output_root}/rendered/${stem}.pdffonts.txt"
   pdftotext -layout "${pdf}" "${output_root}/rendered/${stem}.txt"
   pdftoppm -png -r 96 "${pdf}" "${output_root}/rendered/${stem}" >/dev/null 2>&1
 done

@@ -1,0 +1,18 @@
+{
+  "authority": {
+    "contractPath": "src/skills/artifact-skills/rendering/c18-specialist-artifact-preview.contracts.ts",
+    "contractSha256": "sha256:3a7c5200dc98ee4e90023c643f09b5e560c7ef26e91663e302b2cfbe2bf5a505",
+    "fixturePath": "src/skills/artifact-skills/rendering/c18-specialist-artifact-preview.fixture.ts",
+    "fixtureSha256": "sha256:9d4db10ea25fafdbaa814bac2ed2515fb7c979ece7784b13f146112aa2c58dc5",
+    "goldensPath": "src/skills/artifact-skills/rendering/fixtures/c18-specialist-artifact-preview-goldens.v1.json",
+    "goldensSha256": "sha256:ebb31ba57ab58e36e45ec14899761ee4cf011108456cca9eed8a620925e14e01",
+    "repository": "https://github.com/yungbote/ambit.git",
+    "revision": "d641f1fca5633ed2ae6adf28e64413add9e0b6a1",
+    "tree": "dc809fc0a1765e5439c635833b8adf825f9c3ae5"
+  },
+  "contract": "ambit.c18-specialist-artifact-preview/v1",
+  "goldens": "public-preview-goldens.v1.json",
+  "mediaType": "application/vnd.ambit.c18-specialist-artifact-preview+json",
+  "schema": "ambit.c18-public-preview-authority-lock/v1",
+  "schemaVersion": 1
+}
