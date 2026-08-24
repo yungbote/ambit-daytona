@@ -1,0 +1,44 @@
+{
+  "capabilities": {
+    "provides": [
+      "application_services",
+      "browser_frontend_qa",
+      "javascript_web"
+    ],
+    "requires": [
+      "core"
+    ]
+  },
+  "conformance": {
+    "network": "none",
+    "requiredChecks": [
+      "chromium-firefox-webkit-launch-and-version",
+      "dom-accessibility-console-network-screenshot-video-and-trace",
+      "viewport-color-locale-timezone-and-reduced-motion",
+      "axe-accessibility-and-lighthouse-class-audit",
+      "bounded-local-service-health-and-signed-preview-contract",
+      "nonroot-installer-socket-egress-and-secret-denial"
+    ],
+    "script": "conformance/verify.sh"
+  },
+  "installMode": "image_layer",
+  "limitations": [
+    "browser-binaries-require-rapid-independent-security-refresh",
+    "host-network-and-host-container-sockets-forbidden",
+    "signed-preview-authority-remains-provider-owned",
+    "framework-dependencies-remain-project-lock-inputs"
+  ],
+  "packRef": "ambit.runtime-pack/web-browser",
+  "packRevisionRef": "ambit.runtime-pack/web-browser@1",
+  "promotion": "forbidden-until-full-image-binding-passes",
+  "revision": 1,
+  "runtime": {
+    "hostSockets": "absent",
+    "networkDuringConformance": "none",
+    "packageInstallers": "absent",
+    "uid": 1000
+  },
+  "schema": "ambit.c18-specialist-pack/v1",
+  "state": "candidate",
+  "toolchainLock": "locks/toolchain.lock.json"
+}

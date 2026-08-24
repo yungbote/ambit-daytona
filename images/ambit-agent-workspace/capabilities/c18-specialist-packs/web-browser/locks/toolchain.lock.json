@@ -1,0 +1,51 @@
+{
+  "axeCore": {
+    "integrity": "sha512-RE3mdQ7P3FRSe7eqCWoeQ/Z9QXrtniSjp1wUjt5nRC3WIpz5rSCve6o3fsZ2aCpJtrZjSZgjwXAoTO5k4tEI0w==",
+    "license": "MPL-2.0",
+    "licenseSha256": "sha256:af175b9d96ee93c21a036152e1b905b0b95304d4ae8c2c921c7609100ba8df7e",
+    "version": "4.10.2"
+  },
+  "browserSourceImage": {
+    "browsers": {
+      "chromium": {
+        "revision": "1187",
+        "version": "140.0.7339.16"
+      },
+      "firefox": {
+        "revision": "1490",
+        "version": "141.0"
+      },
+      "webkit": {
+        "revision": "2203",
+        "version": "playwright-2203"
+      }
+    },
+    "ffmpeg": "7.0.1-playwright-build-1011",
+    "fontconfigRosterSha256": "sha256:25521a442b49645463c3e837845b51df7df8d8657292fb961afc2e9ba00b164e",
+    "image": "mcr.microsoft.com/playwright@sha256:ffc33305f7b4b04057ae4a0caa70aad4fde87454fb403a1a22e7f931707dfcf9",
+    "installedDpkgClosure": {
+      "entryCount": 514,
+      "sha256": "sha256:665b914f5a66911ec5e09880118623be005b51e9e9e8cdf81fd74efaf42fbc32"
+    },
+    "rootfsDiffIds": [
+      "sha256:cd9664b1462ea111a41bdadf65ce077582cdc77e28683a4f6996dd03afcc56f5",
+      "sha256:2577149f0c22ef148b1eeb23b90c3b809e53737c2e7255a8a894720cba3c8004",
+      "sha256:e00631b0ddaa83bf7cf8b4dae9ff56c7d4676cd04aec763164fd05e41d1ca062",
+      "sha256:0f59b7656641bc319d8616fd27072e55cdec22aeccba5eca49634ed2a2996353"
+    ]
+  },
+  "node": {
+    "runtimeInstallerDisposition": "npm-npx-corepack-absent",
+    "version": "22.18.0"
+  },
+  "packRef": "ambit.runtime-pack/web-browser@1",
+  "performanceAudit": "owned-navigation-paint-layout-resource-timing-contract-v1",
+  "playwright": {
+    "coreIntegrity": "sha512-GvZs4vU3U5ro2nZpeiwyb0zuFaqb9sUiAJuyrWpcGouD8y9/HLgGbNRjIph7zU9D3hnPaisMl9zG9CgFi/biIg==",
+    "license": "Apache-2.0",
+    "licenseSha256": "sha256:45873d00a0dd243596deb4aa23b2493b3d1f0671921bf2538ea431d7380220eb",
+    "version": "1.55.0"
+  },
+  "schema": "ambit.c18-toolchain-lock/v1",
+  "state": "candidate"
+}

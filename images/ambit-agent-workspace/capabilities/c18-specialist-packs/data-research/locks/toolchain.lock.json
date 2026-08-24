@@ -1,0 +1,22 @@
+{
+  "baseImage": "docker.io/library/python@sha256:d6e0850f13fda0e2305d4c3c1c2f7930fe1042d34ddd958e49bba6ef685d0bb2",
+  "fontSetLock": "../../locks/font-set.lock.json",
+  "nativeTools": {
+    "graphviz": "2.42.4",
+    "pandoc": "3.1.11.1",
+    "sqlite": "3.46.1"
+  },
+  "osClosureLock": "debian-binary-closure.lock.json",
+  "packRef": "ambit.runtime-pack/data-research@1",
+  "python": {
+    "version": "3.14.7",
+    "wheelLock": "python-wheels.lock.json"
+  },
+  "reproducibility": {
+    "environmentCapture": "required",
+    "seedCapture": "required",
+    "timezone": "UTC"
+  },
+  "schema": "ambit.c18-toolchain-lock/v1",
+  "state": "candidate"
+}

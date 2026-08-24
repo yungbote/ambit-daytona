@@ -1,0 +1,84 @@
+{
+  "closurePolicy": {
+    "exactPackRefsFrozenAtSkillK": true,
+    "fullImageRequiredBeforePromotion": true,
+    "noOnePackPerSkillAssumption": true,
+    "reuseCertifiedBaselineFirst": true
+  },
+  "facetSpecialistClosures": {
+    "C18_DATA_ANALYSIS": [
+      "ambit.runtime-pack/data-research@1"
+    ],
+    "C18_PDF": [
+      "ambit.runtime-pack/pdf-ocr@1"
+    ],
+    "C18_PRESENTATIONS": [
+      "ambit.runtime-pack/office-authoring@1"
+    ],
+    "C18_RESEARCH": [
+      "ambit.runtime-pack/data-research@1",
+      "ambit.runtime-pack/web-browser@1"
+    ],
+    "C18_SPREADSHEETS": [
+      "ambit.runtime-pack/office-authoring@1"
+    ],
+    "C18_WEB_APPLICATION": [
+      "ambit.runtime-pack/web-browser@1"
+    ]
+  },
+  "packs": [
+    {
+      "directory": "office-authoring",
+      "packRevisionRef": "ambit.runtime-pack/office-authoring@1",
+      "provides": [
+        "presentations_design",
+        "spreadsheets"
+      ],
+      "requires": [
+        "core",
+        "documents_publishing",
+        "python"
+      ]
+    },
+    {
+      "directory": "pdf-ocr",
+      "packRevisionRef": "ambit.runtime-pack/pdf-ocr@1",
+      "provides": [
+        "pdf_scan_ocr"
+      ],
+      "requires": [
+        "core",
+        "documents_publishing",
+        "python"
+      ]
+    },
+    {
+      "directory": "data-research",
+      "packRevisionRef": "ambit.runtime-pack/data-research@1",
+      "provides": [
+        "data_local_query",
+        "research_scientific"
+      ],
+      "requires": [
+        "core",
+        "python"
+      ]
+    },
+    {
+      "directory": "web-browser",
+      "packRevisionRef": "ambit.runtime-pack/web-browser@1",
+      "provides": [
+        "application_services",
+        "browser_frontend_qa",
+        "javascript_web"
+      ],
+      "requires": [
+        "core"
+      ]
+    }
+  ],
+  "platform": "linux/amd64",
+  "promotion": "forbidden-until-exact-full-image-and-all-evidence-pass",
+  "schema": "ambit.c18-specialist-pack-set/v1",
+  "state": "candidate"
+}
