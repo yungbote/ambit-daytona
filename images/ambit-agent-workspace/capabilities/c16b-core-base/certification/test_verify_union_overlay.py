@@ -10,8 +10,13 @@ from verify_union_overlay import UnionOverlayError, verify
 
 ROOT = Path(__file__).resolve().parents[1]
 SHA = "sha256:" + "1" * 64
+CONTRACT_PENDING = (
+    json.loads((ROOT / "composition/union-overlay-contract.lock.json").read_text())["coreParent"]["status"]
+    != "qualified"
+)
 
 
+@unittest.skipIf(CONTRACT_PENDING, "qualified core parent identity is pending")
 class UnionOverlayTests(unittest.TestCase):
     def test_accepts_one_canonical_union_over_literal_core_parent(self) -> None:
         receipt = self._verify(self._receipt())

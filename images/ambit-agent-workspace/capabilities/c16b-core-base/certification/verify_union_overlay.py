@@ -71,6 +71,10 @@ def verify(contract_root: Path, receipt_path: Path) -> dict[str, object]:
     contract = _load(contract_root / "composition/union-overlay-contract.lock.json")
     _require(contract.get("schema") == "ambit.runtime-core-union-overlay-contract/v1", "union contract schema is invalid")
     core = contract["coreParent"]
+    _require(
+        core.get("status") == "qualified",
+        "qualified core parent identity is pending",
+    )
     expected_core_layers = _layers(core["orderedLayers"], "contract core layers")
 
     receipt = _exact(
