@@ -3,6 +3,8 @@
 This directory builds the first complete structural and paginated DOCX runtime
 candidate for `ambit.runtime-pack/core-document@5`. It combines:
 
+- the exact locally qualified `ambit.runtime-pack/core@1` OCI parent, preserved
+  as the complete ordered three-descriptor layer prefix;
 - headless Debian LibreOffice Writer for DOCX-to-PDF conversion;
 - PDF.js plus `@napi-rs/canvas` for bounded every-page PNG rendering;
 - the frozen private structural Python runtime from the reviewed
@@ -10,6 +12,12 @@ candidate for `ambit.runtime-pack/core-document@5`. It combines:
 - the exact deterministic atomic file/tree materializer; and
 - a root-owned installed-engine lineage plus an opaque backend current-component
   lineage input.
+
+One shared builder computes a single additive rootfs overlay against that core,
+rejects protected-core drift, deletions, special files, xattrs, and split
+hardlink groups, and records the exact changed-path manifest. Copying the core
+filesystem, rebuilding a lookalike, or using sequential last-writer-wins pack
+layers does not satisfy this composition boundary.
 
 The image is executable and locally verified. It is still a candidate, not an
 active or production-certified runtime. Backend registration, a production
@@ -31,7 +39,7 @@ The stable component contract is:
 - role: `ambit.runtime-component/document-renderer@1`;
 - interface: `ambit.runtime-interface/docx-paginated-render@1`;
 - digest:
-  `sha256:18d756d512666d8f481005dd2df106430212ba68a2c30b534fcefb871d9d82e3`;
+  `sha256:517803c00b342364214b15b2abee2d069ddc9b9083a260d6a4a03d8f9430d70e`;
 - exact preimage: `locks/document-render-interface.lock.json`.
 
 There are no caller-supplied file paths. The provider opens one raw, no-echo
@@ -158,6 +166,8 @@ docker buildx build \
   --pull=false \
   --build-context public_inputs=/path/to/public-inputs \
   --build-context materializer_inputs=/path/to/materializer-inputs \
+  --build-context core_parent=oci-layout:///path/to/qualified-core-layout@sha256:ebedd4a1dbca59499468595db8f3aba140234eeb2b2fdcd4fcc0c8f99a5dda94 \
+  --build-context composition_source=/path/to/images/ambit-agent-workspace \
   --target core_document_v5 \
   --tag ambit-c17-core-document-v5:candidate \
   --load .
