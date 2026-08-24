@@ -143,6 +143,13 @@ export function admitRenderPolicy(value) {
       'maximumPackageEntries',
       'maximumRelationshipBytes',
       'maximumUncompressedBytes',
+      'maximumXmlAttributeBytes',
+      'maximumXmlAttributesPerElement',
+      'maximumXmlBytes',
+      'maximumXmlDecodedTextBytes',
+      'maximumXmlDepth',
+      'maximumXmlEntityReferences',
+      'maximumXmlNodes',
       'passwordProtected',
       'remoteUrls',
     ],
@@ -162,6 +169,17 @@ export function admitRenderPolicy(value) {
     input.maximumUncompressedBytes,
     'Render input maximum uncompressed bytes',
   )
+  for (const key of [
+    'maximumXmlAttributeBytes',
+    'maximumXmlAttributesPerElement',
+    'maximumXmlBytes',
+    'maximumXmlDecodedTextBytes',
+    'maximumXmlDepth',
+    'maximumXmlEntityReferences',
+    'maximumXmlNodes',
+  ]) {
+    positiveSafeInteger(input[key], `Render input policy ${key}`)
+  }
   if (
     input.localImmutableBytesOnly !== true ||
     canonicalJson(input.formats) !== canonicalJson(['docx']) ||
@@ -170,7 +188,10 @@ export function admitRenderPolicy(value) {
     input.externalLinks !== 'disabled' ||
     input.passwordProtected !== 'unsupported' ||
     input.maximumEntryBytes > input.maximumUncompressedBytes ||
-    input.maximumRelationshipBytes > input.maximumUncompressedBytes
+    input.maximumRelationshipBytes > input.maximumUncompressedBytes ||
+    input.maximumXmlBytes > input.maximumRelationshipBytes ||
+    input.maximumXmlDecodedTextBytes > input.maximumXmlBytes ||
+    input.maximumXmlAttributeBytes > input.maximumXmlDecodedTextBytes
   ) {
     throw new TypeError('Render input policy is invalid.')
   }

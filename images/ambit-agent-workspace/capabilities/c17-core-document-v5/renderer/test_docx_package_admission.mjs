@@ -19,7 +19,7 @@ test('rejects external relationships and active embedded parts', () => {
   external[1] = {
     ...external[1],
     bytes: Buffer.from(
-      '<Relationships><Relationship Target="https://example.invalid" TargetMode="External"/></Relationships>',
+      '<r:Relationships xmlns:r="http://schemas.openxmlformats.org/package/2006/relationships"><r:Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="h&#x74;tps://example.invalid" TargetMode="Ext&#101;rnal"/></r:Relationships>',
     ),
   }
   assert.throws(
@@ -34,6 +34,95 @@ test('rejects external relationships and active embedded parts', () => {
   assert.throws(
     () => admitDocxPackage(makeDocx(macro), DOCX_LIMITS),
     /active or externally loaded part/,
+  )
+})
+
+test('decodes XML entities before macro, ActiveX, OLE, and external decisions', () => {
+  const contentTypes = minimalDocxEntries()
+  contentTypes[0] = {
+    ...contentTypes[0],
+    bytes: Buffer.from(
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.ms-word.document.macroEnabl&#101;d.main+xml"/></Types>',
+    ),
+  }
+  assert.throws(
+    () => admitDocxPackage(makeDocx(contentTypes), DOCX_LIMITS),
+    /active or invalid|main document content type/,
+  )
+
+  for (const escapedType of ['act&#x69;veX', 'oleObj&#101;ct']) {
+    const relationships = minimalDocxEntries()
+    relationships[1] = {
+      ...relationships[1],
+      bytes: Buffer.from(
+        `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${escapedType}" Target="word/document.xml"/></Relationships>`,
+      ),
+    }
+    assert.throws(
+      () => admitDocxPackage(makeDocx(relationships), DOCX_LIMITS),
+      /relationship identity or target is unsafe/,
+    )
+  }
+
+  const disguisedExternal = minimalDocxEntries()
+  disguisedExternal[1] = {
+    ...disguisedExternal[1],
+    bytes: Buffer.from(
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="h&#x74;tp://example.invalid"/></Relationships>',
+    ),
+  }
+  assert.throws(
+    () => admitDocxPackage(makeDocx(disguisedExternal), DOCX_LIMITS),
+    /relationship identity or target is unsafe/,
+  )
+})
+
+test('rejects DTD authority and bounded XML expansion classes', () => {
+  const dtd = minimalDocxEntries()
+  dtd[0] = {
+    ...dtd[0],
+    bytes: Buffer.from(
+      '<!DOCTYPE Types [<!ENTITY x "macroEnabled">]><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="&x;"/></Types>',
+    ),
+  }
+  assert.throws(
+    () => admitDocxPackage(makeDocx(dtd), DOCX_LIMITS),
+    /DTD, CDATA, or processing authority/,
+  )
+
+  for (const [field, value, message] of [
+    ['maximumXmlNodes', 1, /nodes exceed/],
+    ['maximumXmlDepth', 1, /depth exceeds/],
+    ['maximumXmlAttributesPerElement', 1, /attributes per element exceed/],
+    ['maximumXmlAttributeBytes', 8, /attribute bytes exceed/],
+    ['maximumXmlDecodedTextBytes', 8, /decoded text bytes exceed/],
+    ['maximumXmlBytes', 64, /bytes are unavailable, oversized/],
+  ]) {
+    assert.throws(
+      () =>
+        admitDocxPackage(makeDocx(), {
+          ...DOCX_LIMITS,
+          [field]: value,
+        }),
+      message,
+      field,
+    )
+  }
+
+  const entities = minimalDocxEntries()
+  entities[0] = {
+    ...entities[0],
+    bytes: Buffer.from(
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/docum&#101;nt.xm&#108;" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
+    ),
+  }
+  assert.throws(
+    () =>
+      admitDocxPackage(makeDocx(entities), {
+        ...DOCX_LIMITS,
+        maximumXmlEntityReferences: 1,
+      }),
+    /entity references exceed/,
   )
 })
 
