@@ -43,7 +43,11 @@
       "{workspaceRoot}/hack/go-client/openapi-templates/**/*",
       "{workspaceRoot}/hack/go-client/postprocess.sh"
     ],
-    "tsApiClient": ["apiClient", "{workspaceRoot}/hack/ts-client/postprocess.sh"]
+    "tsApiClient": [
+      "apiClient",
+      "{workspaceRoot}/hack/ts-client/postprocess.sh",
+      "{workspaceRoot}/hack/ts-client/normalize-generated.mjs"
+    ]
   },
   "plugins": [
     {

@@ -19,12 +19,14 @@
       "outputs": ["{projectRoot}/src"],
       "inputs": [
         "{workspaceRoot}/apps/runner/pkg/api/docs/swagger.json",
+        "{workspaceRoot}/hack/ts-client/normalize-generated.mjs",
         { "dependentTasksOutputFiles": "**/*", "transitive": true }
       ],
       "options": {
         "commands": [
           "rm -rf {projectRoot}/src/*",
-          "yarn run openapi-generator-cli generate --git-repo-id=daytona --git-user-id=daytonaio -i apps/runner/pkg/api/docs/swagger.json -g typescript-axios --additional-properties=supportsES6=true,typescriptThreePlus=true,withSeparateModelsAndApi=true,apiPackage=api,modelPackage=models,useTags=true,enumPropertyNaming=UPPERCASE,enumUnknownDefaultCase=true --type-mappings=DateTime=Date -o libs/runner-api-client/src"
+          "yarn run openapi-generator-cli generate --git-repo-id=daytona --git-user-id=daytonaio -i apps/runner/pkg/api/docs/swagger.json -g typescript-axios --additional-properties=supportsES6=true,typescriptThreePlus=true,withSeparateModelsAndApi=true,apiPackage=api,modelPackage=models,useTags=true,enumPropertyNaming=UPPERCASE,enumUnknownDefaultCase=true --type-mappings=DateTime=Date -o libs/runner-api-client/src",
+          "node hack/ts-client/normalize-generated.mjs libs/runner-api-client/src"
         ],
         "parallel": false
       },
