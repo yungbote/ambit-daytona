@@ -42,7 +42,7 @@ func TestProviderOperationIDRejectsInvalidAuthority(t *testing.T) {
 		"ambit://user@samples/one", "ambit://samples:80/one", "ambit://samples/one?",
 		"ambit://samples/a/../b", "ambit://samples/a/.", "ambit://samples/a/%2e%2e/b",
 		"ambit://samples/a b", "ambit://samples/%broken", "ambit://samples/a\\b",
-		"ambit://samples/a%5cb",
+		"ambit://samples/a%5cb", "ambit://samples/one?x=`", "ambit://samples/one#x=`",
 	} {
 		if _, err := DeriveProviderOperationIDV2("sha256:"+strings.Repeat("a", 64), ref, "source"); err == nil {
 			t.Fatalf("noncanonical operational ref was admitted: %q", ref)
