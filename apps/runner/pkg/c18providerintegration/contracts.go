@@ -298,6 +298,20 @@ func validateProviderCollectionBody(value ProviderLiveCollection) error {
 			row.Receipt.Request.Executable != policy.Executable {
 			return fmt.Errorf("provider receipt is detached from its exact facet policy")
 		}
+		launch := row.Receipt.Launch
+		if launch.ExecutablePath != policy.ProcessExecutablePath ||
+			launch.ExecutableDigest != policy.ProcessExecutableDigest ||
+			launch.EnvironmentDigest != policy.EnvironmentDigest ||
+			launch.SeccompDigest != policy.SeccompDigest || launch.PIDsLimit != policy.PIDsLimit ||
+			launch.MemoryBytes != policy.MemoryBytes || launch.NanoCPUs != policy.NanoCPUs ||
+			launch.ShmSize != policy.ShmSize || launch.Runtime != policy.Runtime ||
+			launch.RuntimeStatusDigest != policy.RuntimeStatusDigest ||
+			!equalStringMap(launch.Tmpfs, map[string]string{
+				"/workspace": fmt.Sprintf("rw,noexec,nosuid,nodev,size=%d,uid=1000,gid=1000,mode=0700", policy.WorkspaceSize),
+				"/tmp":       fmt.Sprintf("rw,noexec,nosuid,nodev,size=%d,uid=0,gid=0,mode=1777", policy.ScratchSize),
+			}) {
+			return fmt.Errorf("provider receipt launch differs from its exact runner policy")
+		}
 		if err := specialistrender.ValidateReceipt(row.Receipt); err != nil {
 			return fmt.Errorf("provider receipt is invalid: %w", err)
 		}
@@ -441,6 +455,18 @@ func digestBytes(value []byte) string {
 
 func equalStrings(left, right []string) bool {
 	return len(left) == len(right) && bytes.Equal([]byte(strings.Join(left, "\x00")), []byte(strings.Join(right, "\x00")))
+}
+
+func equalStringMap(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, value := range left {
+		if right[key] != value {
+			return false
+		}
+	}
+	return true
 }
 
 func knownPack(pack string) bool {

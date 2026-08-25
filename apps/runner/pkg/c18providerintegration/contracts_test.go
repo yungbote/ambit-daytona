@@ -42,6 +42,23 @@ func TestProviderLiveCollectionGoldenIsCanonicalAndRejectsFacetSubstitution(t *t
 	}
 }
 
+func TestProviderLiveCollectionRejectsLaunchPolicySubstitution(t *testing.T) {
+	collection := providerCollectionFixture(t)
+	forged := cloneCollection(t, collection)
+	forged.ProviderReceipts[1].Receipt.Launch.MemoryBytes++
+	var err error
+	forged.ProviderReceipts[1].Receipt.ReceiptDigest, err = specialistrender.ComputeReceiptDigest(
+		forged.ProviderReceipts[1].Receipt,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged.AuthenticatedStreaming.Cases[0].ReceiptDigest = forged.ProviderReceipts[1].Receipt.ReceiptDigest
+	if _, err := SealProviderLiveCollection(forged); err == nil {
+		t.Fatal("provider launch resource substitution was accepted")
+	}
+}
+
 func TestMinIOIntegrationReceiptGoldenIsCanonicalAndSelfDigested(t *testing.T) {
 	receipt, err := SealMinIOIntegrationReceipt(MinIOIntegrationReceipt{
 		SourceRevision:  "1" + strings.Repeat("0", 39),
