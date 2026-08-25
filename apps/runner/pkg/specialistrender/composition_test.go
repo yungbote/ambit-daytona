@@ -46,6 +46,25 @@ func TestCanonicalCompositionSortUsesUTF16CodeUnits(t *testing.T) {
 	}
 }
 
+func TestCompositionRoutingAllowsSharedCapabilityCoverage(t *testing.T) {
+	routing, _ := compositionFixture(t)
+	routing.Routes[1].ProvidedCapabilityFamilyRefs = append(
+		[]string(nil), routing.Routes[0].ProvidedCapabilityFamilyRefs...,
+	)
+	routing.Routes[1].ProvidedCapabilityRefs = append(
+		[]string(nil), routing.Routes[0].ProvidedCapabilityRefs...,
+	)
+	routing.Digest, _ = semanticDigest(routingBody{
+		Version: routing.Version, Kind: routing.Kind,
+		ExchangePolicy: routing.ExchangePolicy, Routes: routing.Routes,
+	})
+	routing.RoutingRef = "runtime-capability-composition-routing:" + routing.Digest
+
+	if err := validateRouting(routing); err != nil {
+		t.Fatalf("shared core or language capability coverage was rejected: %v", err)
+	}
+}
+
 func TestDecodeCompositionAdmissionMatchesCanonicalBackendWireGolden(t *testing.T) {
 	t.Parallel()
 

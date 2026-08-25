@@ -170,8 +170,6 @@ func validateRouting(value CompositionRouting) error {
 	}
 	routeRefs := make([]string, len(value.Routes))
 	executorRefs := make(map[string]struct{}, len(value.Routes))
-	familyRefs := make(map[string]struct{})
-	capabilityRefs := make(map[string]struct{})
 	for index, route := range value.Routes {
 		if !boundedOperationalRef(route.RouteRef, 512) || !boundedOperationalRef(route.ExecutorProfileRef, 512) ||
 			!sortedOperationalRefs(route.ProvidedCapabilityFamilyRefs, 1, 256) ||
@@ -183,18 +181,6 @@ func validateRouting(value CompositionRouting) error {
 			return errors.New("composition route executor is duplicated")
 		}
 		executorRefs[route.ExecutorProfileRef] = struct{}{}
-		for _, ref := range route.ProvidedCapabilityFamilyRefs {
-			if _, duplicate := familyRefs[ref]; duplicate {
-				return errors.New("composition capability family is duplicated")
-			}
-			familyRefs[ref] = struct{}{}
-		}
-		for _, ref := range route.ProvidedCapabilityRefs {
-			if _, duplicate := capabilityRefs[ref]; duplicate {
-				return errors.New("composition provided capability is duplicated")
-			}
-			capabilityRefs[ref] = struct{}{}
-		}
 	}
 	if !sortedStrings(routeRefs) {
 		return errors.New("composition routes are not sorted and unique")
