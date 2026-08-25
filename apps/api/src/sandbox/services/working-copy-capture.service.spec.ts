@@ -15,6 +15,12 @@ import {
 import {
   MAXIMUM_WORKING_COPY_CAPTURE_BYTES,
   MAXIMUM_WORKING_COPY_CAPTURE_READ_BYTES,
+  MAXIMUM_WORKING_COPY_ROSTER_AGGREGATE_BYTES,
+  MAXIMUM_WORKING_COPY_ROSTER_DEPTH,
+  MAXIMUM_WORKING_COPY_ROSTER_ENTRIES,
+  MAXIMUM_WORKING_COPY_ROSTER_FILE_BYTES,
+  StoppedWorkingCopyDirectoryRosterReceiptDto,
+  StoppedWorkingCopyDirectoryRosterRequestDto,
   WorkingCopyCaptureBindingDto,
   WorkingCopyCaptureDeleteReceiptDto,
   WorkingCopyCaptureExistsResponseDto,
@@ -52,6 +58,7 @@ describe(WorkingCopyCaptureService.name, () => {
   beforeEach(() => {
     adapter = {
       captureWorkingCopy: jest.fn(),
+      stoppedWorkingCopyDirectoryRoster: jest.fn(),
       observeWorkingCopyCapture: jest.fn(),
       readWorkingCopyCapture: jest.fn(),
       deleteWorkingCopyCapture: jest.fn(),
@@ -277,6 +284,134 @@ describe(WorkingCopyCaptureService.name, () => {
 
     await expect(service.capture('daytona-org-1', 'sandbox-1', binding)).resolves.toEqual(receipt)
     expect(adapter.captureWorkingCopy).toHaveBeenCalledWith('sandbox-1', binding)
+  })
+
+  it('forwards and re-proves an exact bounded stopped-generation directory roster', async () => {
+    const request = validRosterRequest()
+    const receipt = validRosterReceipt(request)
+    adapter.stoppedWorkingCopyDirectoryRoster.mockResolvedValue(receipt)
+
+    await expect(service.stoppedDirectoryRoster('daytona-org-1', 'friendly-name', request)).resolves.toEqual(receipt)
+
+    expect(sandboxService.findOneByIdOrName).toHaveBeenCalledWith('friendly-name', 'daytona-org-1')
+    expect(adapter.stoppedWorkingCopyDirectoryRoster).toHaveBeenCalledWith('sandbox-1', request)
+    expect(receipt.entries).toEqual([
+      {
+        zoneRelativePath: 'site/assets',
+        name: 'assets',
+        kind: 'directory',
+        size: 0,
+        mode: null,
+      },
+      {
+        zoneRelativePath: 'site/assets/app.js',
+        name: 'app.js',
+        kind: 'regular_file',
+        size: 5,
+        mode: '0644',
+      },
+      {
+        zoneRelativePath: 'site/index.html',
+        name: 'index.html',
+        kind: 'regular_file',
+        size: 13,
+        mode: '0644',
+      },
+    ])
+  })
+
+  it('rejects invalid stopped-directory roster authority and bounds before lookup', async () => {
+    const candidates: StoppedWorkingCopyDirectoryRosterRequestDto[] = []
+    for (const mutate of [
+      (request: StoppedWorkingCopyDirectoryRosterRequestDto) =>
+        (request.selector.semanticZoneRef = 'ambit.workspace-zone/outputs@1'),
+      (request: StoppedWorkingCopyDirectoryRosterRequestDto) => (request.selector.zoneRelativePath = '../site'),
+      (request: StoppedWorkingCopyDirectoryRosterRequestDto) => (request.selector.zoneRelativePath = 'other'),
+      (request: StoppedWorkingCopyDirectoryRosterRequestDto) => (request.maximumDepth = 0),
+      (request: StoppedWorkingCopyDirectoryRosterRequestDto) =>
+        (request.maximumDepth = MAXIMUM_WORKING_COPY_ROSTER_DEPTH + 1),
+      (request: StoppedWorkingCopyDirectoryRosterRequestDto) => (request.maximumEntries = 0),
+      (request: StoppedWorkingCopyDirectoryRosterRequestDto) =>
+        (request.maximumEntries = MAXIMUM_WORKING_COPY_ROSTER_ENTRIES + 1),
+      (request: StoppedWorkingCopyDirectoryRosterRequestDto) => (request.maximumFileBytes = 0),
+      (request: StoppedWorkingCopyDirectoryRosterRequestDto) =>
+        (request.maximumFileBytes = MAXIMUM_WORKING_COPY_ROSTER_FILE_BYTES + 1),
+      (request: StoppedWorkingCopyDirectoryRosterRequestDto) =>
+        (request.maximumAggregateBytes = request.maximumFileBytes - 1),
+      (request: StoppedWorkingCopyDirectoryRosterRequestDto) =>
+        (request.maximumAggregateBytes = MAXIMUM_WORKING_COPY_ROSTER_AGGREGATE_BYTES + 1),
+    ]) {
+      const request = validRosterRequest()
+      mutate(request)
+      candidates.push(request)
+    }
+    const extra = validRosterRequest() as StoppedWorkingCopyDirectoryRosterRequestDto & { absolutePath: string }
+    extra.absolutePath = '/workspace'
+    candidates.push(extra)
+
+    for (const candidate of candidates) {
+      await expect(service.stoppedDirectoryRoster('daytona-org-1', 'sandbox-1', candidate)).rejects.toBeInstanceOf(
+        BadRequestException,
+      )
+    }
+    expect(sandboxService.findOneByIdOrName).not.toHaveBeenCalled()
+    expect(adapter.stoppedWorkingCopyDirectoryRoster).not.toHaveBeenCalled()
+  })
+
+  it('rejects stopped-directory roster response drift in shape, request, generation, entries, bounds, digest or time', async () => {
+    const request = validRosterRequest()
+    const mutations: Array<(receipt: StoppedWorkingCopyDirectoryRosterReceiptDto & Record<string, unknown>) => void> = [
+      (receipt) => {
+        receipt.extra = true
+      },
+      (receipt) => {
+        receipt.request.maximumDepth -= 1
+      },
+      (receipt) => {
+        receipt.terminalGeneration.containerId = 'e'.repeat(64)
+      },
+      (receipt) => {
+        receipt.entries.reverse()
+      },
+      (receipt) => {
+        receipt.entries[0].zoneRelativePath = 'site'
+      },
+      (receipt) => {
+        receipt.entries[0].name = 'wrong'
+      },
+      (receipt) => {
+        receipt.entries[0].kind = 'regular_file'
+        receipt.entries[0].size = request.maximumFileBytes + 1
+      },
+      (receipt) => {
+        receipt.entries[0].mode = 'not-a-mode'
+      },
+      (receipt) => {
+        receipt.entries = receipt.entries.filter(
+          (entry) => entry.zoneRelativePath !== request.anchor.selector.zoneRelativePath,
+        )
+        receipt.rosterDigest = rosterDigest(receipt.request, receipt.terminalGeneration, receipt.entries)
+      },
+      (receipt) => {
+        receipt.rosterDigest = `sha256:${'f'.repeat(64)}`
+      },
+      (receipt) => {
+        receipt.observedAt = '2026-08-25T12:34:56Z'
+      },
+      (receipt) => {
+        receipt.observedAt = '2026-02-31T12:34:56.789Z'
+      },
+    ]
+
+    for (const mutate of mutations) {
+      const receipt = validRosterReceipt(request) as StoppedWorkingCopyDirectoryRosterReceiptDto &
+        Record<string, unknown>
+      mutate(receipt)
+      adapter.stoppedWorkingCopyDirectoryRoster.mockResolvedValueOnce(receipt)
+      await expect(service.stoppedDirectoryRoster('daytona-org-1', 'sandbox-1', request)).rejects.toBeInstanceOf(
+        ConflictException,
+      )
+    }
   })
 
   it('rejects an unadmitted runtime kind before sandbox lookup', async () => {
@@ -731,6 +866,84 @@ function validReceipt(
     providerSha256Digest: CAPTURE_DIGEST,
     capturedAt: '2026-08-23T12:34:56.123456789Z',
   }
+}
+
+function validRosterRequest(): StoppedWorkingCopyDirectoryRosterRequestDto {
+  const anchor = validBinding()
+  anchor.selector.zoneRelativePath = 'site/index.html'
+  return {
+    anchor,
+    selector: {
+      semanticZoneRef: 'ambit.workspace-zone/work@1',
+      zoneRelativePath: 'site',
+    },
+    maximumDepth: 8,
+    maximumEntries: 64,
+    maximumFileBytes: 1024,
+    maximumAggregateBytes: 4096,
+  }
+}
+
+function validRosterReceipt(
+  request: StoppedWorkingCopyDirectoryRosterRequestDto,
+): StoppedWorkingCopyDirectoryRosterReceiptDto {
+  const entries: StoppedWorkingCopyDirectoryRosterReceiptDto['entries'] = [
+    {
+      zoneRelativePath: 'site/assets',
+      name: 'assets',
+      kind: 'directory',
+      size: 0,
+      mode: null,
+    },
+    {
+      zoneRelativePath: 'site/assets/app.js',
+      name: 'app.js',
+      kind: 'regular_file',
+      size: 5,
+      mode: '0644',
+    },
+    {
+      zoneRelativePath: 'site/index.html',
+      name: 'index.html',
+      kind: 'regular_file',
+      size: 13,
+      mode: '0644',
+    },
+  ]
+  const exactRequest = structuredClone(request)
+  const terminalGeneration = structuredClone(request.anchor.stopAuthority.terminalGeneration)
+  return {
+    request: exactRequest,
+    terminalGeneration,
+    entries,
+    rosterDigest: rosterDigest(exactRequest, terminalGeneration, entries),
+    observedAt: '2026-08-25T12:34:56.789Z',
+  }
+}
+
+function rosterDigest(
+  request: StoppedWorkingCopyDirectoryRosterRequestDto,
+  terminalGeneration: StoppedWorkingCopyDirectoryRosterReceiptDto['terminalGeneration'],
+  entries: StoppedWorkingCopyDirectoryRosterReceiptDto['entries'],
+): string {
+  const payload = {
+    contract: 'ambit.working-copy-stopped-directory-roster/v1',
+    request,
+    terminalGeneration,
+    entries,
+  }
+  return `sha256:${createHash('sha256').update(testCanonicalJson(payload), 'utf8').digest('hex')}`
+}
+
+function testCanonicalJson(value: unknown): string {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number') {
+    return JSON.stringify(value)
+  }
+  if (Array.isArray(value)) return `[${value.map(testCanonicalJson).join(',')}]`
+  return `{${Object.keys(value as object)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${testCanonicalJson((value as Record<string, unknown>)[key])}`)
+    .join(',')}}`
 }
 
 function validRead(

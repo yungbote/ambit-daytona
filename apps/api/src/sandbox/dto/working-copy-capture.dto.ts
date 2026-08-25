@@ -5,7 +5,9 @@
 
 import { Type } from 'class-transformer'
 import {
+  ArrayMaxSize,
   Equals,
+  IsArray,
   IsBoolean,
   IsDateString,
   IsIn,
@@ -17,6 +19,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator'
 import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
@@ -24,12 +27,16 @@ import {
   SandboxExecutionOwnerDto as WorkingCopyCaptureOwnerDto,
   SandboxExecutionSourceDto as WorkingCopyCaptureSourceDto,
 } from './sandbox-execution-authority.dto'
-import { SandboxGenerationStopAuthorityDto } from './sandbox-generation-stop.dto'
+import { SandboxGenerationStopAuthorityDto, SandboxTerminalGenerationDto } from './sandbox-generation-stop.dto'
 
 export { WorkingCopyCaptureOwnerDto, WorkingCopyCaptureSourceDto }
 
 export const MAXIMUM_WORKING_COPY_CAPTURE_BYTES = 64 * 1024 * 1024
 export const MAXIMUM_WORKING_COPY_CAPTURE_READ_BYTES = 1 * 1024 * 1024
+export const MAXIMUM_WORKING_COPY_ROSTER_DEPTH = 32
+export const MAXIMUM_WORKING_COPY_ROSTER_ENTRIES = 1024
+export const MAXIMUM_WORKING_COPY_ROSTER_FILE_BYTES = 8 * 1024 * 1024
+export const MAXIMUM_WORKING_COPY_ROSTER_AGGREGATE_BYTES = 16 * 1024 * 1024
 
 @ApiSchema({ name: 'WorkingCopyCaptureAuthorityArtifact' })
 export class WorkingCopyCaptureAuthorityArtifactDto {
@@ -257,4 +264,99 @@ export class WorkingCopyCaptureExistsResponseDto extends WorkingCopyCaptureIdent
   @ValidateNested()
   @Type(() => WorkingCopyCaptureReceiptDto)
   receipt?: WorkingCopyCaptureReceiptDto
+}
+
+@ApiSchema({ name: 'StoppedWorkingCopyDirectoryRosterEntry' })
+export class StoppedWorkingCopyDirectoryRosterEntryDto {
+  @ApiProperty({ maxLength: 2048 })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(2048)
+  zoneRelativePath: string
+
+  @ApiProperty({ maxLength: 255 })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(255)
+  name: string
+
+  @ApiProperty({ enum: ['regular_file', 'directory'] })
+  @IsIn(['regular_file', 'directory'])
+  kind: 'regular_file' | 'directory'
+
+  @ApiProperty({ minimum: 0, maximum: MAXIMUM_WORKING_COPY_ROSTER_FILE_BYTES })
+  @IsInt()
+  @Min(0)
+  @Max(MAXIMUM_WORKING_COPY_ROSTER_FILE_BYTES)
+  size: number
+
+  @ApiProperty({ nullable: true, pattern: '^[0-7]{3,4}$' })
+  @ValidateIf((_object, value) => value !== null)
+  @Matches(/^[0-7]{3,4}$/)
+  mode: string | null
+}
+
+@ApiSchema({ name: 'StoppedWorkingCopyDirectoryRosterRequest' })
+export class StoppedWorkingCopyDirectoryRosterRequestDto {
+  @ApiProperty({ type: WorkingCopyCaptureBindingDto })
+  @ValidateNested()
+  @Type(() => WorkingCopyCaptureBindingDto)
+  anchor: WorkingCopyCaptureBindingDto
+
+  @ApiProperty({ type: WorkingCopyCaptureSelectorDto })
+  @ValidateNested()
+  @Type(() => WorkingCopyCaptureSelectorDto)
+  selector: WorkingCopyCaptureSelectorDto
+
+  @ApiProperty({ minimum: 1, maximum: MAXIMUM_WORKING_COPY_ROSTER_DEPTH })
+  @IsInt()
+  @Min(1)
+  @Max(MAXIMUM_WORKING_COPY_ROSTER_DEPTH)
+  maximumDepth: number
+
+  @ApiProperty({ minimum: 1, maximum: MAXIMUM_WORKING_COPY_ROSTER_ENTRIES })
+  @IsInt()
+  @Min(1)
+  @Max(MAXIMUM_WORKING_COPY_ROSTER_ENTRIES)
+  maximumEntries: number
+
+  @ApiProperty({ minimum: 1, maximum: MAXIMUM_WORKING_COPY_ROSTER_FILE_BYTES })
+  @IsInt()
+  @Min(1)
+  @Max(MAXIMUM_WORKING_COPY_ROSTER_FILE_BYTES)
+  maximumFileBytes: number
+
+  @ApiProperty({ minimum: 1, maximum: MAXIMUM_WORKING_COPY_ROSTER_AGGREGATE_BYTES })
+  @IsInt()
+  @Min(1)
+  @Max(MAXIMUM_WORKING_COPY_ROSTER_AGGREGATE_BYTES)
+  maximumAggregateBytes: number
+}
+
+@ApiSchema({ name: 'StoppedWorkingCopyDirectoryRosterReceipt' })
+export class StoppedWorkingCopyDirectoryRosterReceiptDto {
+  @ApiProperty({ type: StoppedWorkingCopyDirectoryRosterRequestDto })
+  @ValidateNested()
+  @Type(() => StoppedWorkingCopyDirectoryRosterRequestDto)
+  request: StoppedWorkingCopyDirectoryRosterRequestDto
+
+  @ApiProperty({ type: SandboxTerminalGenerationDto })
+  @ValidateNested()
+  @Type(() => SandboxTerminalGenerationDto)
+  terminalGeneration: SandboxTerminalGenerationDto
+
+  @ApiProperty({ type: [StoppedWorkingCopyDirectoryRosterEntryDto] })
+  @IsArray()
+  @ArrayMaxSize(MAXIMUM_WORKING_COPY_ROSTER_ENTRIES)
+  @ValidateNested({ each: true })
+  @Type(() => StoppedWorkingCopyDirectoryRosterEntryDto)
+  entries: StoppedWorkingCopyDirectoryRosterEntryDto[]
+
+  @ApiProperty({ pattern: '^sha256:[0-9a-f]{64}$' })
+  @Matches(/^sha256:[0-9a-f]{64}$/)
+  rosterDigest: string
+
+  @ApiProperty({ format: 'date-time' })
+  @IsDateString({ strict: true })
+  observedAt: string
 }

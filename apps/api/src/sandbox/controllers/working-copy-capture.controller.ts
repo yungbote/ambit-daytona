@@ -27,6 +27,8 @@ import {
   WorkingCopyCaptureReadDto,
   WorkingCopyCaptureReadResponseDto,
   WorkingCopyCaptureReceiptDto,
+  StoppedWorkingCopyDirectoryRosterRequestDto,
+  StoppedWorkingCopyDirectoryRosterReceiptDto,
 } from '../dto/working-copy-capture.dto'
 import { SandboxAccessGuard } from '../guards/sandbox-access.guard'
 import { WorkingCopyCaptureService } from '../services/working-copy-capture.service'
@@ -100,6 +102,26 @@ export class WorkingCopyCaptureController {
     @Body() request: WorkingCopyCaptureReadDto,
   ): Promise<WorkingCopyCaptureReadResponseDto> {
     return this.captures.read(auth.organizationId, sandboxIdOrName, request)
+  }
+
+  @Post('stopped-directory-roster')
+  @HttpCode(200)
+  @ApiOperation({
+    operationId: 'stoppedSandboxWorkingCopyDirectoryRoster',
+    summary: 'List a bounded directory from an exact stopped sandbox generation',
+  })
+  @ApiResponse({ status: 200, type: StoppedWorkingCopyDirectoryRosterReceiptDto })
+  @Audit({
+    action: AuditAction.READ,
+    targetType: AuditTarget.SANDBOX,
+    targetIdFromRequest: (request) => request.params.sandboxIdOrName,
+  })
+  stoppedDirectoryRoster(
+    @IsOrganizationAuthContext() auth: OrganizationAuthContext,
+    @Param('sandboxIdOrName') sandboxIdOrName: string,
+    @Body() request: StoppedWorkingCopyDirectoryRosterRequestDto,
+  ): Promise<StoppedWorkingCopyDirectoryRosterReceiptDto> {
+    return this.captures.stoppedDirectoryRoster(auth.organizationId, sandboxIdOrName, request)
   }
 
   @Post('delete')

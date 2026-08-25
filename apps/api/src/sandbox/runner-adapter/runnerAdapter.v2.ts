@@ -58,6 +58,8 @@ import {
   WorkingCopyCaptureReadDto,
   WorkingCopyCaptureReadResponseDto,
   WorkingCopyCaptureReceiptDto,
+  StoppedWorkingCopyDirectoryRosterRequestDto,
+  StoppedWorkingCopyDirectoryRosterReceiptDto,
 } from '../dto/working-copy-capture.dto'
 import {
   SandboxGenerationObservationDto,
@@ -136,6 +138,14 @@ export class RunnerAdapterV2 implements RunnerAdapter {
   ): Promise<WorkingCopyCaptureExistsResponseDto> {
     const response = await this.captureApi().workingCopyCaptureExists(sandboxId, identity)
     return response.data as WorkingCopyCaptureExistsResponseDto
+  }
+
+  async stoppedWorkingCopyDirectoryRoster(
+    sandboxId: string,
+    request: StoppedWorkingCopyDirectoryRosterRequestDto,
+  ): Promise<StoppedWorkingCopyDirectoryRosterReceiptDto> {
+    const response = await this.captureApi().stoppedWorkingCopyDirectoryRoster(sandboxId, request)
+    return response.data as StoppedWorkingCopyDirectoryRosterReceiptDto
   }
 
   async observeSandboxGeneration(

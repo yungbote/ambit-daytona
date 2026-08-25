@@ -16,6 +16,13 @@ import {
 import {
   MAXIMUM_WORKING_COPY_CAPTURE_BYTES,
   MAXIMUM_WORKING_COPY_CAPTURE_READ_BYTES,
+  MAXIMUM_WORKING_COPY_ROSTER_AGGREGATE_BYTES,
+  MAXIMUM_WORKING_COPY_ROSTER_DEPTH,
+  MAXIMUM_WORKING_COPY_ROSTER_ENTRIES,
+  MAXIMUM_WORKING_COPY_ROSTER_FILE_BYTES,
+  StoppedWorkingCopyDirectoryRosterEntryDto,
+  StoppedWorkingCopyDirectoryRosterRequestDto,
+  StoppedWorkingCopyDirectoryRosterReceiptDto,
   WorkingCopyCaptureAuthorityDto,
   WorkingCopyCaptureBindingDto,
   WorkingCopyCaptureDeleteReceiptDto,
@@ -141,6 +148,28 @@ export class WorkingCopyCaptureService {
     }
   }
 
+  async stoppedDirectoryRoster(
+    organizationId: string,
+    sandboxIdOrName: string,
+    request: StoppedWorkingCopyDirectoryRosterRequestDto,
+  ): Promise<StoppedWorkingCopyDirectoryRosterReceiptDto> {
+    assertStoppedDirectoryRosterRequest(request)
+    const { sandbox, adapter } = await this.executionAuthority.authorize(
+      organizationId,
+      sandboxIdOrName,
+      request.anchor.source,
+      request.anchor.owner,
+      request.anchor.stopAuthority.fence,
+    )
+    try {
+      const receipt = await adapter.stoppedWorkingCopyDirectoryRoster(sandbox.id, request)
+      assertStoppedDirectoryRosterReceipt(receipt, request)
+      return receipt
+    } catch (error) {
+      throw translateRunnerCaptureError(error, false)
+    }
+  }
+
   async delete(
     organizationId: string,
     sandboxIdOrName: string,
@@ -242,6 +271,115 @@ export class WorkingCopyCaptureService {
     } catch (error) {
       throw translateRunnerCaptureError(error, false)
     }
+  }
+}
+
+function assertStoppedDirectoryRosterRequest(request: StoppedWorkingCopyDirectoryRosterRequestDto): void {
+  assertExactKeys(
+    request,
+    ['anchor', 'maximumAggregateBytes', 'maximumDepth', 'maximumEntries', 'maximumFileBytes', 'selector'],
+    'stopped-directory roster request',
+    BadRequestException,
+  )
+  assertBinding(request.anchor)
+  assertExactKeys(request.selector, ['semanticZoneRef', 'zoneRelativePath'], 'roster selector', BadRequestException)
+  if (
+    request.selector.semanticZoneRef !== request.anchor.selector.semanticZoneRef ||
+    !canonicalRelativePath(request.selector.zoneRelativePath) ||
+    !request.anchor.selector.zoneRelativePath.startsWith(`${request.selector.zoneRelativePath}/`) ||
+    !Number.isSafeInteger(request.maximumDepth) ||
+    request.maximumDepth < 1 ||
+    request.maximumDepth > MAXIMUM_WORKING_COPY_ROSTER_DEPTH ||
+    !Number.isSafeInteger(request.maximumEntries) ||
+    request.maximumEntries < 1 ||
+    request.maximumEntries > MAXIMUM_WORKING_COPY_ROSTER_ENTRIES ||
+    !Number.isSafeInteger(request.maximumFileBytes) ||
+    request.maximumFileBytes < 1 ||
+    request.maximumFileBytes > MAXIMUM_WORKING_COPY_ROSTER_FILE_BYTES ||
+    !Number.isSafeInteger(request.maximumAggregateBytes) ||
+    request.maximumAggregateBytes < request.maximumFileBytes ||
+    request.maximumAggregateBytes > MAXIMUM_WORKING_COPY_ROSTER_AGGREGATE_BYTES
+  ) {
+    throw new BadRequestException('Stopped-directory roster authority or bounds are invalid.')
+  }
+}
+
+function assertStoppedDirectoryRosterReceipt(
+  receipt: StoppedWorkingCopyDirectoryRosterReceiptDto,
+  request: StoppedWorkingCopyDirectoryRosterRequestDto,
+): void {
+  assertExactKeys(
+    receipt,
+    ['entries', 'observedAt', 'request', 'rosterDigest', 'terminalGeneration'],
+    'stopped-directory roster receipt',
+    ConflictException,
+  )
+  if (
+    canonicalJson(receipt.request) !== canonicalJson(request) ||
+    canonicalJson(receipt.terminalGeneration) !== canonicalJson(request.anchor.stopAuthority.terminalGeneration) ||
+    !Array.isArray(receipt.entries) ||
+    receipt.entries.length > request.maximumEntries ||
+    !/^sha256:[0-9a-f]{64}$/.test(receipt.rosterDigest) ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(receipt.observedAt) ||
+    !Number.isFinite(Date.parse(receipt.observedAt)) ||
+    new Date(Date.parse(receipt.observedAt)).toISOString() !== receipt.observedAt
+  ) {
+    throw new ConflictException('Runner returned a conflicting stopped-directory roster receipt.')
+  }
+  let aggregateBytes = 0
+  for (const [index, entry] of receipt.entries.entries()) {
+    assertStoppedDirectoryRosterEntry(entry, request)
+    if (index > 0 && receipt.entries[index - 1].zoneRelativePath >= entry.zoneRelativePath) {
+      throw new ConflictException('Runner stopped-directory roster is not sorted and unique.')
+    }
+    if (entry.kind === 'regular_file') {
+      aggregateBytes += entry.size
+      if (!Number.isSafeInteger(aggregateBytes) || aggregateBytes > request.maximumAggregateBytes) {
+        throw new ConflictException('Runner stopped-directory roster exceeds its aggregate bound.')
+      }
+    }
+  }
+  if (
+    !receipt.entries.some(
+      (entry) => entry.kind === 'regular_file' && entry.zoneRelativePath === request.anchor.selector.zoneRelativePath,
+    )
+  ) {
+    throw new ConflictException('Runner stopped-directory roster omitted its exact anchor file.')
+  }
+  const payload = {
+    contract: 'ambit.working-copy-stopped-directory-roster/v1',
+    request,
+    terminalGeneration: request.anchor.stopAuthority.terminalGeneration,
+    entries: receipt.entries,
+  }
+  const expectedDigest = `sha256:${createHash('sha256').update(canonicalJson(payload), 'utf8').digest('hex')}`
+  if (receipt.rosterDigest !== expectedDigest) {
+    throw new ConflictException('Runner stopped-directory roster digest changed.')
+  }
+}
+
+function assertStoppedDirectoryRosterEntry(
+  entry: StoppedWorkingCopyDirectoryRosterEntryDto,
+  request: StoppedWorkingCopyDirectoryRosterRequestDto,
+): void {
+  assertExactKeys(entry, ['kind', 'mode', 'name', 'size', 'zoneRelativePath'], 'roster entry', ConflictException)
+  const prefix = `${request.selector.zoneRelativePath}/`
+  const relativePath = entry.zoneRelativePath.startsWith(prefix) ? entry.zoneRelativePath.slice(prefix.length) : ''
+  const depth = relativePath ? relativePath.split('/').length : 0
+  if (
+    !canonicalRelativePath(entry.zoneRelativePath) ||
+    !relativePath ||
+    entry.name !== posixPath.basename(entry.zoneRelativePath) ||
+    (entry.kind !== 'regular_file' && entry.kind !== 'directory') ||
+    !Number.isSafeInteger(entry.size) ||
+    entry.size < 0 ||
+    (entry.kind === 'directory' && entry.size !== 0) ||
+    (entry.kind === 'regular_file' && entry.size > request.maximumFileBytes) ||
+    depth > request.maximumDepth ||
+    (entry.kind === 'directory' && depth >= request.maximumDepth) ||
+    (entry.mode !== null && (typeof entry.mode !== 'string' || !/^[0-7]{3,4}$/.test(entry.mode)))
+  ) {
+    throw new ConflictException('Runner returned an invalid stopped-directory roster entry.')
   }
 }
 
@@ -603,6 +741,22 @@ function canonicalUtcTimestamp(value: unknown): value is string {
     /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(value) &&
     Number.isFinite(Date.parse(value))
   )
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value)
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new ConflictException('Canonical roster JSON contains a non-finite number.')
+    return JSON.stringify(value)
+  }
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+  if (!value || typeof value !== 'object') {
+    throw new ConflictException('Canonical roster JSON contains an unsupported value.')
+  }
+  return `{${Object.keys(value)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`)
+    .join(',')}}`
 }
 
 type HttpExceptionConstructor = new (message: string) => Error

@@ -51,3 +51,6 @@ export * from './workingcopy-capture-read-response';
 export * from './workingcopy-capture-receipt';
 export * from './workingcopy-capture-selector';
 export * from './workingcopy-source-address';
+export * from './workingcopy-stopped-directory-roster-entry';
+export * from './workingcopy-stopped-directory-roster-receipt';
+export * from './workingcopy-stopped-directory-roster-request';
