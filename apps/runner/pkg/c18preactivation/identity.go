@@ -6,15 +6,27 @@ package c18preactivation
 import (
 	"errors"
 	"fmt"
-	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 const semanticCanonicalizerV1 = "ambit.strict_canonical_json.v1"
 
 var operationalRefAuthority = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$`)
+
+const operationalRefPathSegmentASCII = "!$&'()*+,-.0123456789:;=@ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz~"
+const operationalRefQueryOrFragmentASCII = "!$&'()*+,-./0123456789:;=?@ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz~"
+
+const (
+	operationalRefMaximumQueryBytes     = 512
+	operationalRefMaximumFragmentBytes  = 512
+	operationalRefMaximumReferenceBytes = 2_048
+)
 
 // DeriveProviderOperationIDV2 is the exact Go projection of the backend's
 // deriveSemanticUuidV8 domain for one preactivation sample journey stage.
@@ -55,61 +67,82 @@ func DeriveProviderOperationIDV2(requestDigest, sampleRef, stage string) (string
 }
 
 func validOperationalRef(value string) bool {
-	if len(value) < len("ambit://a/b") || len(value) > 2_048 || !printable(value, 2_048) ||
-		strings.HasSuffix(value, "?") || strings.HasSuffix(value, "#") {
+	if len(value) < len("ambit://a/b") || len(value) > operationalRefMaximumReferenceBytes || !strings.HasPrefix(value, "ambit://") {
 		return false
 	}
-	parsed, err := url.Parse(value)
-	if err != nil || parsed.Scheme != "ambit" || !operationalRefAuthority.MatchString(parsed.Hostname()) ||
-		parsed.User != nil || parsed.Port() != "" || parsed.Host != parsed.Hostname() ||
-		!canonicalOperationalURLText(value) {
+	body := strings.TrimPrefix(value, "ambit://")
+	firstSlash := strings.IndexByte(body, '/')
+	if firstSlash < 1 || !operationalRefAuthority.MatchString(body[:firstSlash]) {
 		return false
 	}
-	segments := strings.Split(strings.TrimPrefix(parsed.EscapedPath(), "/"), "/")
-	if len(segments) == 0 {
+	resource := body[firstSlash:]
+	beforeFragment, fragment, hasFragment := strings.Cut(resource, "#")
+	path, query, hasQuery := strings.Cut(beforeFragment, "?")
+	if !strings.HasPrefix(path, "/") {
 		return false
 	}
+	segments := strings.Split(strings.TrimPrefix(path, "/"), "/")
 	for _, segment := range segments {
-		if segment == "" {
-			return false
-		}
-		decoded, err := url.PathUnescape(segment)
-		if err != nil || decoded == "." || decoded == ".." || strings.Contains(decoded, `\`) {
+		decoded, ok := parseOperationalRefComponent(segment, operationalRefPathSegmentASCII)
+		if !ok || decoded == "." || decoded == ".." {
 			return false
 		}
 	}
-	return true
+	return (!hasQuery || query != "" && len(query) <= operationalRefMaximumQueryBytes && validOperationalRefComponent(query, operationalRefQueryOrFragmentASCII)) &&
+		(!hasFragment || fragment != "" && len(fragment) <= operationalRefMaximumFragmentBytes && validOperationalRefComponent(fragment, operationalRefQueryOrFragmentASCII))
 }
 
-func canonicalOperationalURLText(value string) bool {
-	boundary := strings.IndexAny(value, "?#")
-	base := value
-	suffix := ""
-	if boundary >= 0 {
-		base, suffix = value[:boundary], value[boundary:]
+func validOperationalRefComponent(value, rawASCII string) bool {
+	_, ok := parseOperationalRefComponent(value, rawASCII)
+	return ok
+}
+
+func parseOperationalRefComponent(value, rawASCII string) (string, bool) {
+	if value == "" {
+		return "", false
 	}
-	parsed, err := url.Parse(base)
-	if err != nil || parsed.String() != base {
-		return false
-	}
-	for index := 0; index < len(suffix); index++ {
-		character := suffix[index]
-		if character <= 0x20 || character > 0x7e || character == '"' || character == '<' ||
-			character == '>' || character == '`' {
-			return false
-		}
+	decodedBytes := make([]byte, 0, len(value))
+	for index := 0; index < len(value); index++ {
+		character := value[index]
 		if character == '%' {
-			if index+2 >= len(suffix) || !hexadecimalByte(suffix[index+1]) || !hexadecimalByte(suffix[index+2]) {
-				return false
+			if index+2 >= len(value) || !uppercaseHexadecimalByte(value[index+1]) || !uppercaseHexadecimalByte(value[index+2]) {
+				return "", false
 			}
+			byteValue, err := strconv.ParseUint(value[index+1:index+3], 16, 8)
+			if err != nil || operationalRefUnreservedASCII(byte(byteValue)) {
+				return "", false
+			}
+			decodedBytes = append(decodedBytes, byte(byteValue))
 			index += 2
+			continue
+		}
+		if character > 0x7e || !strings.ContainsRune(rawASCII, rune(character)) {
+			return "", false
+		}
+		decodedBytes = append(decodedBytes, character)
+	}
+	if !utf8.Valid(decodedBytes) {
+		return "", false
+	}
+	decoded := string(decodedBytes)
+	if !norm.NFC.IsNormalString(decoded) || strings.ContainsAny(decoded, "\\`|") {
+		return "", false
+	}
+	for _, character := range decoded {
+		if unicode.Is(unicode.Cc, character) || unicode.Is(unicode.Cf, character) || character == '\u2028' || character == '\u2029' {
+			return "", false
 		}
 	}
-	return true
+	return decoded, true
 }
 
-func hexadecimalByte(value byte) bool {
-	return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f') || (value >= 'A' && value <= 'F')
+func uppercaseHexadecimalByte(value byte) bool {
+	return (value >= '0' && value <= '9') || (value >= 'A' && value <= 'F')
+}
+
+func operationalRefUnreservedASCII(value byte) bool {
+	return value >= '0' && value <= '9' || value >= 'A' && value <= 'Z' || value >= 'a' && value <= 'z' ||
+		value == '-' || value == '.' || value == '_' || value == '~'
 }
 
 func validJourneyStage(value string) bool {
