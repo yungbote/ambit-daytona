@@ -174,6 +174,20 @@ func (collector *Collector) prepareExecution(
 	if err != nil {
 		return preparedProviderExecution{}, err
 	}
+	command, err := c18preactivation.ParseRenderCommandV2(requestBytes, sourceBytes)
+	if err != nil {
+		return preparedProviderExecution{}, fmt.Errorf("command and source authority are invalid: %w", err)
+	}
+	deadline, deadlineErr := time.Parse(observationTimeLayout, command.DeadlineAt)
+	observedAt, observedErr := time.Parse(observationTimeLayout, run.Target.ObservedAt)
+	if deadlineErr != nil || observedErr != nil ||
+		!deadline.Equal(observedAt.Add(4*time.Hour)) ||
+		!collector.observedNow().Before(deadline) ||
+		command.Facet != execution.Facet ||
+		command.JobRef != execution.ArtifactRenderJobRef ||
+		command.Runtime.WorkspaceExecutionManifest != run.Target.WorkspaceExecutionManifest {
+		return preparedProviderExecution{}, fmt.Errorf("command differs from the issued live-run authority")
+	}
 	generation, err := collector.observeCurrent(ctx, run, run.Timeouts.ObservationSeconds)
 	if err != nil {
 		return preparedProviderExecution{}, fmt.Errorf("observe current parent: %w", err)
@@ -227,7 +241,6 @@ func (collector *Collector) collectConcurrentSuccesses(
 		prepared := prepared
 		go func() {
 			<-startMeasurement
-			startedAt := collector.observedNow()
 			measured.Done()
 			<-startExecution
 			observation, err := collector.executeSuccess(
@@ -238,9 +251,15 @@ func (collector *Collector) collectConcurrentSuccesses(
 				prepared.requestBytes,
 				prepared.sourceBytes,
 			)
-			completedAt := collector.observedNow()
 			result := concurrentSuccessResult{facet: prepared.execution.Facet, err: err}
 			if err == nil {
+				startedAt, startErr := parseObservationTime(observation.receipt.StartedAt)
+				completedAt, completionErr := parseObservationTime(observation.receipt.CompletedAt)
+				if startErr != nil || completionErr != nil || !startedAt.Before(completedAt) {
+					result.err = fmt.Errorf("provider success receipt interval is invalid")
+					results <- result
+					return
+				}
 				result.receipt = ProviderReceiptRow{
 					Facet:   prepared.execution.Facet,
 					Mode:    prepared.execution.Mode,
@@ -296,7 +315,7 @@ func (collector *Collector) collectConcurrentSuccesses(
 	}
 	return receipts, streams, ConcurrentLoadObservation{
 		PredeclaredConcurrency:      providerSuccessConcurrency,
-		MaximumDurationMilliseconds: int64(run.Timeouts.ExecuteSeconds) * 1000,
+		MaximumDurationMilliseconds: int64(providerExecuteSeconds) * 1000,
 		AllSucceeded:                true,
 		Outcome:                     "passed",
 		Cases:                       loadCases,
@@ -492,7 +511,7 @@ func (collector *Collector) observeCurrent(ctx context.Context, run ProviderLive
 		return generationstop.ExpectedGeneration{}, err
 	}
 	if observation.Source != request.Source || observation.Owner != request.Owner || observation.Fence != request.Fence ||
-		observation.State != "running" {
+		observation.State != "running" || observation.Generation != run.Target.ExpectedGeneration {
 		return generationstop.ExpectedGeneration{}, fmt.Errorf("current generation observation differs from the target authority")
 	}
 	return observation.Generation, nil

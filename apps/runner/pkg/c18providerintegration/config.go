@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/daytonaio/runner/pkg/c18preactivation"
 	"github.com/daytonaio/runner/pkg/generationstop"
@@ -45,9 +46,12 @@ type ProviderLiveTimeouts struct {
 }
 
 type ProviderLiveTarget struct {
-	Source generationstop.Source        `json:"source"`
-	Owner  generationstop.ProviderOwner `json:"owner"`
-	Fence  generationstop.Fence         `json:"fence"`
+	ExpectedGeneration         generationstop.ExpectedGeneration `json:"expectedGeneration"`
+	Fence                      generationstop.Fence              `json:"fence"`
+	ObservedAt                 string                            `json:"observedAt"`
+	Owner                      generationstop.ProviderOwner      `json:"owner"`
+	Source                     generationstop.Source             `json:"source"`
+	WorkspaceExecutionManifest specialistrender.Pin              `json:"workspaceExecutionManifest"`
 }
 
 type ProviderLiveRun struct {
@@ -117,14 +121,28 @@ func ValidateProviderLiveRun(value ProviderLiveRun) error {
 	if err := generationstop.ValidateProviderOwner(value.Target.Owner); err != nil {
 		return fmt.Errorf("provider target owner is invalid: %w", err)
 	}
-	if value.Target.Fence.WorkspaceExecutionManifestRef == "" ||
-		len(value.Target.Fence.WorkspaceExecutionManifestRef) > 2048 {
+	manifestDigest := strings.TrimPrefix(
+		value.Target.Fence.WorkspaceExecutionManifestRef,
+		"workspace-execution-manifest:",
+	)
+	if manifestDigest == value.Target.Fence.WorkspaceExecutionManifestRef ||
+		!exactDigest(manifestDigest) {
 		return fmt.Errorf("provider target fence is invalid")
 	}
-	if value.Timeouts.ExecuteSeconds < minimumExecuteSeconds || value.Timeouts.ExecuteSeconds > maximumExecuteSeconds ||
-		value.Timeouts.ObservationSeconds < 30 || value.Timeouts.ObservationSeconds > 600 ||
-		value.Timeouts.PollMilliseconds < 10 || value.Timeouts.PollMilliseconds > 1000 ||
-		value.Timeouts.CancelAfterPartialMilliseconds < 0 || value.Timeouts.CancelAfterPartialMilliseconds > 10_000 {
+	if err := generationstop.ValidateExpectedGeneration(value.Target.ExpectedGeneration); err != nil {
+		return fmt.Errorf("provider target generation is invalid: %w", err)
+	}
+	observedAt, err := time.Parse(observationTimeLayout, value.Target.ObservedAt)
+	startedAt, startedErr := time.Parse(time.RFC3339Nano, value.Target.ExpectedGeneration.ExecutionStartedAt)
+	if err != nil || startedErr != nil || observedAt.Before(startedAt) ||
+		value.Target.WorkspaceExecutionManifest.Ref != value.Target.Fence.WorkspaceExecutionManifestRef ||
+		!exactDigest(value.Target.WorkspaceExecutionManifest.Digest) {
+		return fmt.Errorf("provider target observation or manifest authority is invalid")
+	}
+	if value.Timeouts.ExecuteSeconds != providerExecuteSeconds ||
+		value.Timeouts.ObservationSeconds != providerObservationSeconds ||
+		value.Timeouts.PollMilliseconds != providerPollMilliseconds ||
+		value.Timeouts.CancelAfterPartialMilliseconds != providerCancelAfterPartialMilli {
 		return fmt.Errorf("provider run timeouts are invalid")
 	}
 	if len(value.Executions) != 12 {
@@ -132,6 +150,8 @@ func ValidateProviderLiveRun(value ProviderLiveRun) error {
 	}
 	seenOperations := make(map[string]struct{}, len(value.Executions))
 	seenJobs := make(map[string]struct{}, len(value.Executions))
+	seenRequestPaths := make(map[string]struct{}, len(value.Executions))
+	sourcesByFacet := make(map[string]PinnedInputFile, providerSuccessConcurrency)
 	previous := ""
 	for index, execution := range value.Executions {
 		key := execution.Facet + "\x00" + execution.Mode
@@ -150,7 +170,7 @@ func ValidateProviderLiveRun(value ProviderLiveRun) error {
 		jobID := strings.TrimPrefix(execution.ArtifactRenderJobRef, "ambit://artifact-render-jobs/")
 		parsedJob, err := uuid.Parse(jobID)
 		if !strings.HasPrefix(execution.ArtifactRenderJobRef, "ambit://artifact-render-jobs/") ||
-			err != nil || parsedJob == uuid.Nil || parsedJob.String() != jobID {
+			err != nil || parsedJob == uuid.Nil || parsedJob.String() != jobID || jobID != execution.OperationID {
 			return fmt.Errorf("provider artifact-render job ref is invalid")
 		}
 		if err := validatePinnedInput(execution.Request, specialistrender.MaximumRequestBytes, "provider request"); err != nil {
@@ -159,14 +179,22 @@ func ValidateProviderLiveRun(value ProviderLiveRun) error {
 		if err := validatePinnedInput(execution.Source, specialistrender.MaximumSourceBytes, "provider source"); err != nil {
 			return err
 		}
+		if source, exists := sourcesByFacet[execution.Facet]; exists && source != execution.Source {
+			return fmt.Errorf("provider facet modes use different source authority")
+		}
+		sourcesByFacet[execution.Facet] = execution.Source
 		if _, duplicate := seenOperations[execution.OperationID]; duplicate {
 			return fmt.Errorf("provider operation ids are duplicated")
 		}
 		if _, duplicate := seenJobs[execution.ArtifactRenderJobRef]; duplicate {
 			return fmt.Errorf("provider artifact-render job refs are duplicated")
 		}
+		if _, duplicate := seenRequestPaths[execution.Request.Path]; duplicate {
+			return fmt.Errorf("provider request paths are duplicated")
+		}
 		seenOperations[execution.OperationID] = struct{}{}
 		seenJobs[execution.ArtifactRenderJobRef] = struct{}{}
+		seenRequestPaths[execution.Request.Path] = struct{}{}
 	}
 	return nil
 }

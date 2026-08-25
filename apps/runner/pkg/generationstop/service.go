@@ -801,6 +801,13 @@ func ValidateProviderOwner(owner ProviderOwner) error {
 	return nil
 }
 
+// ValidateExpectedGeneration validates one exact immutable container epoch for
+// adjacent authority protocols that must bind effects to an already observed
+// parent generation.
+func ValidateExpectedGeneration(generation ExpectedGeneration) error {
+	return validateExpectedGeneration(generation)
+}
+
 // ValidateBinding is the pure syntax boundary for downstream identities that
 // carry a source, owner, and compact stopped-generation authority. Capture can
 // call RequireCurrentReceipt afterward when it needs live stopped-state proof;

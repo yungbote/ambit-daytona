@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	providerLiveCollectionGoldenSHA256 = "sha256:02c9af6d5e78e47ae231cb52911a629c4d67e79afca549459a4a911cab8a083d"
+	providerLiveCollectionGoldenSHA256 = "sha256:1ca3382bfe53ecb3785c143236c621a6ecd2ca17b571360d151ce2b78d047c4a"
 	minIOIntegrationGoldenSHA256       = "sha256:4c34ec1e61a495413c7d5c5c9bed7933084ad07c3722712e662af9e18b00ff0e"
 )
 
@@ -354,7 +354,7 @@ func providerCollectionFixture(t *testing.T) ProviderLiveCollection {
 		},
 		ConcurrentLoad: ConcurrentLoadObservation{
 			PredeclaredConcurrency:      providerSuccessConcurrency,
-			MaximumDurationMilliseconds: minimumExecuteSeconds * 1000,
+			MaximumDurationMilliseconds: providerExecuteSeconds * 1000,
 			AllSucceeded:                true, Outcome: "passed", Cases: loadCases,
 		},
 	})

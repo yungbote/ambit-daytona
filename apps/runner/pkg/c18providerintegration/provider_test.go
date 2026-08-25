@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/daytonaio/runner/pkg/c18preactivation"
 	"github.com/daytonaio/runner/pkg/generationstop"
 	"github.com/daytonaio/runner/pkg/specialistrender"
 )
@@ -98,6 +99,24 @@ func TestCollectorConcurrentSuccessFailureSettlesEveryReleasedRequest(t *testing
 	}
 }
 
+func TestCollectorRejectsParentGenerationRotationAfterIssuance(t *testing.T) {
+	fixture := newProviderCollectorFixture(t)
+	defer fixture.close()
+	fixture.run.Target.ExpectedGeneration.RestartCount++
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	collection, err := fixture.collector.Collect(ctx, fixture.run)
+	if err == nil || !strings.Contains(err.Error(), "current generation observation differs") {
+		t.Fatalf("rotated parent generation was not rejected: collection=%#v err=%v", collection, err)
+	}
+	fixture.harness.mu.Lock()
+	executed := fixture.harness.successStreams + fixture.harness.cancelledOperations
+	fixture.harness.mu.Unlock()
+	if executed != 0 {
+		t.Fatalf("provider executed after parent generation rotation: %d", executed)
+	}
+}
+
 type providerCollectorFixture struct {
 	collector *Collector
 	run       ProviderLiveRun
@@ -127,28 +146,28 @@ func newProviderCollectorFixture(t *testing.T) providerCollectorFixture {
 	if err := os.WriteFile(policyPath, policyBytes, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	commandBytes := []byte(`{"contract":"fixture-command","value":1}`)
-	commandPath := filepath.Join(root, "request.json")
-	if err := os.WriteFile(commandPath, commandBytes, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	sourceBytes := []byte("provider integration source bytes")
-	sourcePath := filepath.Join(root, "source.bin")
-	if err := os.WriteFile(sourcePath, sourceBytes, 0o600); err != nil {
-		t.Fatal(err)
-	}
 	base := readBaseReceipt(t)
+	renderPolicies := providerRenderPolicies(t)
 	executions := make([]ProviderLiveExecution, 0, 12)
 	modes := make(map[string]string, 12)
 	sequences := make(map[string]int, 12)
 	sequence := 1
 	for _, facet := range []string{"data_analysis", "pdf", "presentation", "research", "spreadsheet", "web_application"} {
+		sourceBytes := []byte("provider integration source for " + facet)
+		sourcePath := filepath.Join(root, "source-"+facet+".bin")
+		if err := os.WriteFile(sourcePath, sourceBytes, 0o600); err != nil {
+			t.Fatal(err)
+		}
 		for _, mode := range []string{"cancel", "success"} {
 			operationID := fmt.Sprintf("33333333-3333-4333-8333-%012d", sequence)
-			jobID := fmt.Sprintf("44444444-4444-4444-8444-%012d", sequence)
+			commandBytes := providerCommandFixture(t, renderPolicies[facet], operationID, sourceBytes)
+			commandPath := filepath.Join(root, "request-"+facet+"-"+mode+".json")
+			if err := os.WriteFile(commandPath, commandBytes, 0o600); err != nil {
+				t.Fatal(err)
+			}
 			executions = append(executions, ProviderLiveExecution{
 				Facet: facet, Mode: mode, OperationID: operationID,
-				ArtifactRenderJobRef: "ambit://artifact-render-jobs/" + jobID,
+				ArtifactRenderJobRef: "ambit://artifact-render-jobs/" + operationID,
 				Request:              PinnedInputFile{Path: commandPath, ByteLength: int64(len(commandBytes)), SHA256: digestBytes(commandBytes)},
 				Source:               PinnedInputFile{Path: sourcePath, ByteLength: int64(len(sourceBytes)), SHA256: digestBytes(sourceBytes)},
 			})
@@ -162,11 +181,22 @@ func newProviderCollectorFixture(t *testing.T) providerCollectorFixture {
 		SourceRevision: "1" + strings.Repeat("0", 39), SourceTree: "2" + strings.Repeat("0", 39),
 		SourceSetDigest: digestSeed(3),
 		RunnerPolicy:    PinnedInputFile{Path: policyPath, ByteLength: int64(len(policyBytes)), SHA256: digestBytes(policyBytes)},
-		Target:          ProviderLiveTarget{Source: base.Request.Source, Owner: base.Request.Owner, Fence: base.Request.Fence},
-		Executions:      executions,
+		Target: ProviderLiveTarget{
+			Source: base.Request.Source, Owner: base.Request.Owner,
+			Fence: generationstop.Fence{
+				WorkspaceExecutionManifestRef: "workspace-execution-manifest:" + digestSeed(3),
+			},
+			ExpectedGeneration: base.Request.ExpectedParentGeneration,
+			ObservedAt:         "2026-08-24T00:00:00.000Z",
+			WorkspaceExecutionManifest: specialistrender.Pin{
+				Ref: "workspace-execution-manifest:" + digestSeed(3), Digest: digestSeed(90),
+			},
+		},
+		Executions: executions,
 		Timeouts: ProviderLiveTimeouts{
-			ExecuteSeconds: 60, ObservationSeconds: 30, PollMilliseconds: 10,
-			CancelAfterPartialMilliseconds: 10,
+			ExecuteSeconds: providerExecuteSeconds, ObservationSeconds: providerObservationSeconds,
+			PollMilliseconds:               providerPollMilliseconds,
+			CancelAfterPartialMilliseconds: providerCancelAfterPartialMilli,
 		},
 	}
 
@@ -393,4 +423,120 @@ func readBaseReceipt(t *testing.T) specialistrender.Receipt {
 		t.Fatal(err)
 	}
 	return receipt
+}
+
+type providerRenderPolicyFixture struct {
+	CheckLabels             []c18preactivation.RenderLabeledCheckV2 `json:"checkLabels"`
+	ExecutablePath          string                                  `json:"executablePath"`
+	ExecutorPackRevisionRef string                                  `json:"executorPackRevisionRef"`
+	Facet                   string                                  `json:"facet"`
+	RenderMode              string                                  `json:"renderMode"`
+	RendererRef             string                                  `json:"rendererRef"`
+	Representation          string                                  `json:"representation"`
+	RequiredSchemaURI       *string                                 `json:"requiredSchemaUri"`
+	SourceMediaType         string                                  `json:"sourceMediaType"`
+	ValidationPolicyRef     string                                  `json:"validationPolicyRef"`
+}
+
+func providerRenderPolicies(t *testing.T) map[string]providerRenderPolicyFixture {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(
+		repoRoot(t),
+		"images/ambit-agent-workspace/capabilities/c18-specialist-packs/protocol/render-policy-matrix.v1.json",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var matrix struct {
+		Entries []providerRenderPolicyFixture `json:"entries"`
+		Schema  string                        `json:"schema"`
+	}
+	if err := json.Unmarshal(bytes.TrimSuffix(data, []byte{'\n'}), &matrix); err != nil {
+		t.Fatal(err)
+	}
+	mediaByFacet := map[string]string{
+		"data_analysis":   "text/csv",
+		"pdf":             "application/pdf",
+		"presentation":    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+		"research":        "text/markdown",
+		"spreadsheet":     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+		"web_application": "text/html",
+	}
+	result := make(map[string]providerRenderPolicyFixture, len(mediaByFacet))
+	for _, entry := range matrix.Entries {
+		if mediaByFacet[entry.Facet] == entry.SourceMediaType {
+			result[entry.Facet] = entry
+		}
+	}
+	if len(result) != providerSuccessConcurrency {
+		t.Fatalf("provider command policy coverage differs: %#v", result)
+	}
+	return result
+}
+
+func providerCommandFixture(
+	t *testing.T,
+	policy providerRenderPolicyFixture,
+	operationID string,
+	sourceBytes []byte,
+) []byte {
+	t.Helper()
+	jobRef := "ambit://artifact-render-jobs/" + operationID
+	command := c18preactivation.RenderCommandV2{
+		Contract:   c18preactivation.RenderCommandContractV2,
+		DeadlineAt: "2026-08-24T04:00:00.000Z",
+		Facet:      policy.Facet, JobRef: jobRef,
+		JobRoot:   "/workspace/.ambit/render-jobs/" + operationID,
+		Operation: "render_validate",
+		Output: c18preactivation.RenderOutputAuthorityV2{
+			JobOutputRoot: "outputs/render", MaximumAggregateImagePixels: 32 * 1024 * 1024,
+			MaximumImagePixels: 8 * 1024 * 1024, MaximumPreviewBytes: 8 * 1024 * 1024,
+			PreviewMediaType: c18preactivation.RenderPreviewMediaType,
+			PreviewPath:      "outputs/render/preview.json", ResultPath: "outputs/render/result.json",
+		},
+		PackRequiredChecks: append([]c18preactivation.RenderLabeledCheckV2(nil), policy.CheckLabels...),
+		Renderer: c18preactivation.RenderRendererV2{
+			ExecutablePath: policy.ExecutablePath, RenderMode: policy.RenderMode,
+			RendererRef: policy.RendererRef, Representation: policy.Representation,
+			ValidationPolicyRef: policy.ValidationPolicyRef,
+		},
+		RequestPath: "inputs/request.json",
+		Runtime: c18preactivation.RenderRuntimeV2{
+			PackRevisions: []specialistrender.Pin{{Ref: policy.ExecutorPackRevisionRef, Digest: digestSeed(91)}},
+			ProfileRevision: specialistrender.Pin{
+				Ref: "ambit.workspace-runtime/provider-live-test@1", Digest: digestSeed(92),
+			},
+			WorkspaceExecutionManifest: specialistrender.Pin{
+				Ref: "workspace-execution-manifest:" + digestSeed(3), Digest: digestSeed(90),
+			},
+		},
+		Source: c18preactivation.RenderSourceV2{
+			ByteLength: int64(len(sourceBytes)), Digest: digestBytes(sourceBytes),
+			MediaType: policy.SourceMediaType, Path: "inputs/source.bin",
+			Ref:       "ambit://artifact-revisions/provider-live/" + policy.Facet,
+			SchemaURI: policy.RequiredSchemaURI,
+		},
+	}
+	raw, err := json.Marshal(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	delete(body, "digest")
+	bodyBytes, err := generationstop.CanonicalJSON(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command.Digest = digestBytes(bodyBytes)
+	encoded, err := generationstop.CanonicalJSON(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c18preactivation.ParseRenderCommandV2(encoded, sourceBytes); err != nil {
+		t.Fatal(err)
+	}
+	return encoded
 }

@@ -27,8 +27,10 @@ const (
 	MinIOIntegrationTestRef         = "TestPrivateObjectMinIOConditionalChecksumRangeAndDelete"
 	observationTimeLayout           = "2006-01-02T15:04:05.000Z"
 	providerSuccessConcurrency      = 6
-	minimumExecuteSeconds           = 60
-	maximumExecuteSeconds           = 1800
+	providerExecuteSeconds          = 600
+	providerObservationSeconds      = 180
+	providerPollMilliseconds        = 250
+	providerCancelAfterPartialMilli = 100
 )
 
 type providerFacetBinding struct {
@@ -417,9 +419,7 @@ func validateConcurrentLoad(
 	observedUntil time.Time,
 ) error {
 	if load.PredeclaredConcurrency != providerSuccessConcurrency ||
-		load.MaximumDurationMilliseconds < minimumExecuteSeconds*1000 ||
-		load.MaximumDurationMilliseconds > maximumExecuteSeconds*1000 ||
-		load.MaximumDurationMilliseconds%1000 != 0 ||
+		load.MaximumDurationMilliseconds != providerExecuteSeconds*1000 ||
 		!load.AllSucceeded || load.Outcome != "passed" ||
 		len(load.Cases) != providerSuccessConcurrency {
 		return fmt.Errorf("concurrent provider load declaration is invalid")
@@ -442,11 +442,19 @@ func validateConcurrentLoad(
 		}
 		row, rowExists := successRow(receipts, item.Facet)
 		stream, streamExists := authenticatedStreamCase(streaming.Cases, item.Facet)
+		var receiptStartedAt, receiptCompletedAt time.Time
+		var receiptStartErr, receiptCompletionErr error
+		if rowExists {
+			receiptStartedAt, receiptStartErr = parseObservationTime(row.Receipt.StartedAt)
+			receiptCompletedAt, receiptCompletionErr = parseObservationTime(row.Receipt.CompletedAt)
+		}
 		if !rowExists || !streamExists ||
+			receiptStartErr != nil || receiptCompletionErr != nil ||
 			row.Receipt.Outcome != "succeeded" || row.Receipt.TerminalOutcome != "succeeded" ||
 			item.ReceiptDigest != row.Receipt.ReceiptDigest ||
 			item.ReceiptDigest != stream.ReceiptDigest ||
-			row.Receipt.Request.OperationID != stream.OperationID {
+			row.Receipt.Request.OperationID != stream.OperationID ||
+			startedAt.Before(receiptStartedAt) || completedAt.After(receiptCompletedAt) {
 			return fmt.Errorf("concurrent provider load case is detached from its authenticated success stream")
 		}
 		if latestStart.IsZero() || startedAt.After(latestStart) {
