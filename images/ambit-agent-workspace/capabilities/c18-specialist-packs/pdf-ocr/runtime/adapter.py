@@ -51,6 +51,7 @@ def _environment(scratch: Path) -> dict[str, str]:
         "XDG_CACHE_HOME": scratch / "cache",
         "XDG_CONFIG_HOME": scratch / "config",
         "XDG_RUNTIME_DIR": scratch / "run",
+        "TMPDIR": scratch / "tmp",
     }
     for directory in values.values():
         directory.mkdir(mode=0o700)

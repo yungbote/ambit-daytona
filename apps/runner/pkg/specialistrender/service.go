@@ -587,7 +587,7 @@ func validateReceiptLaunch(receipt Receipt) error {
 		launch.SeccompKernelMode != 2 || launch.EffectiveCapabilities != "0000000000000000" ||
 		launch.MountCount != 0 || launch.PIDsLimit <= 0 || launch.MemoryBytes <= 0 ||
 		launch.NanoCPUs <= 0 || launch.ShmSize < 0 || len(launch.Tmpfs) != 2 ||
-		launch.Tmpfs["/workspace"] == "" || launch.Tmpfs["/tmp/ambit-task"] == "" || launch.Runtime != "runc" ||
+		launch.Tmpfs["/workspace"] == "" || launch.Tmpfs["/tmp"] == "" || launch.Runtime != "runc" ||
 		!exactDigest(launch.RuntimeStatusDigest) {
 		return invalidf("receipt launch does not satisfy intrinsic provider isolation")
 	}
@@ -769,8 +769,8 @@ func helperCommandLine(executable string, nonce string) []string {
 
 func expectedTmpfs(policy Policy) map[string]string {
 	return map[string]string{
-		"/workspace":      fmt.Sprintf("rw,noexec,nosuid,nodev,size=%d,uid=1000,gid=1000,mode=0700", policy.WorkspaceSize),
-		"/tmp/ambit-task": fmt.Sprintf("rw,noexec,nosuid,nodev,size=%d,uid=1000,gid=1000,mode=0700", policy.ScratchSize),
+		"/workspace": fmt.Sprintf("rw,noexec,nosuid,nodev,size=%d,uid=1000,gid=1000,mode=0700", policy.WorkspaceSize),
+		"/tmp":       fmt.Sprintf("rw,noexec,nosuid,nodev,size=%d,uid=0,gid=0,mode=1777", policy.ScratchSize),
 	}
 }
 

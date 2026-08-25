@@ -289,7 +289,7 @@ func TestProviderContractGoldenValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if receipt.ReceiptDigest != "sha256:59f9c4f069c8582e3c986b569a714476be50b192ad500a5e1a241664abff6016" {
+	if receipt.ReceiptDigest != "sha256:1f421f3b60aa13e5233380463c6bc1a231ffd2ac074932e0605626a567d42890" {
 		t.Fatalf("receipt digest golden drifted: %s", receipt.ReceiptDigest)
 	}
 	fixture, err := os.ReadFile("testdata/provider-contract-golden.json")

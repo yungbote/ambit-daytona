@@ -377,8 +377,8 @@ func containerConfiguration(
 	pids := policy.PIDsLimit
 	securityOptions := []string{"no-new-privileges", "seccomp=" + string(policy.Seccomp)}
 	tmpfs := map[string]string{
-		"/workspace":      fmt.Sprintf("rw,noexec,nosuid,nodev,size=%d,uid=1000,gid=1000,mode=0700", policy.WorkspaceSize),
-		"/tmp/ambit-task": fmt.Sprintf("rw,noexec,nosuid,nodev,size=%d,uid=1000,gid=1000,mode=0700", policy.ScratchSize),
+		"/workspace": fmt.Sprintf("rw,noexec,nosuid,nodev,size=%d,uid=1000,gid=1000,mode=0700", policy.WorkspaceSize),
+		"/tmp":       fmt.Sprintf("rw,noexec,nosuid,nodev,size=%d,uid=0,gid=0,mode=1777", policy.ScratchSize),
 	}
 	host := &containertypes.HostConfig{
 		NetworkMode: "none", ReadonlyRootfs: true, CapDrop: []string{"ALL"},
@@ -751,8 +751,8 @@ func equalStringMaps(left map[string]string, right map[string]string) bool {
 
 func policyTmpfs(policy specialistrender.Policy) map[string]string {
 	return map[string]string{
-		"/workspace":      fmt.Sprintf("rw,noexec,nosuid,nodev,size=%d,uid=1000,gid=1000,mode=0700", policy.WorkspaceSize),
-		"/tmp/ambit-task": fmt.Sprintf("rw,noexec,nosuid,nodev,size=%d,uid=1000,gid=1000,mode=0700", policy.ScratchSize),
+		"/workspace": fmt.Sprintf("rw,noexec,nosuid,nodev,size=%d,uid=1000,gid=1000,mode=0700", policy.WorkspaceSize),
+		"/tmp":       fmt.Sprintf("rw,noexec,nosuid,nodev,size=%d,uid=0,gid=0,mode=1777", policy.ScratchSize),
 	}
 }
 

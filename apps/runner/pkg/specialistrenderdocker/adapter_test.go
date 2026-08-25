@@ -40,7 +40,7 @@ func TestContainerConfigurationIsProviderOwnedAndIsolated(t *testing.T) {
 		host.SecurityOpt[0] != "no-new-privileges" || !strings.HasPrefix(host.SecurityOpt[1], "seccomp=") || host.PidsLimit == nil ||
 		*host.PidsLimit != policy.PIDsLimit || host.Memory != policy.MemoryBytes ||
 		host.MemorySwap != policy.MemoryBytes || host.NanoCPUs != policy.NanoCPUs ||
-		host.Tmpfs["/workspace"] == "" || host.Tmpfs["/tmp/ambit-task"] == "" {
+		host.Tmpfs["/workspace"] == "" || host.Tmpfs["/tmp"] == "" {
 		t.Fatalf("host isolation differs: %#v", host)
 	}
 	if config.Labels["daytona.runner.container-kind"] != "specialist-render" ||

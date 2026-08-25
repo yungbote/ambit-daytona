@@ -46,7 +46,8 @@ def _environment(scratch: Path) -> dict[str, str]:
     cache = scratch / "cache"
     config = scratch / "config"
     runtime = scratch / "run"
-    for directory in (home, cache, config, runtime):
+    temporary = scratch / "tmp"
+    for directory in (home, cache, config, runtime, temporary):
         directory.mkdir(mode=0o700)
     return {
         "HOME": str(home),
@@ -55,6 +56,7 @@ def _environment(scratch: Path) -> dict[str, str]:
         "PATH": PATH,
         "PYTHONDONTWRITEBYTECODE": "1",
         "SAL_DISABLE_JAVA": "1",
+        "TMPDIR": str(temporary),
         "TZ": "UTC",
         "XDG_CACHE_HOME": str(cache),
         "XDG_CONFIG_HOME": str(config),

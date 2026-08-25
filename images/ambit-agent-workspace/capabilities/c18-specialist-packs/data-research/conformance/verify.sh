@@ -10,8 +10,9 @@ export XDG_CACHE_HOME=${output_root}/cache
 export XDG_CONFIG_HOME=${output_root}/config
 export XDG_RUNTIME_DIR=${output_root}/run
 export MPLCONFIGDIR=${output_root}/matplotlib
+export TMPDIR=${output_root}/tmp
 mkdir -p "${HOME}" "${XDG_CACHE_HOME}" "${XDG_CONFIG_HOME}" "${XDG_RUNTIME_DIR}" \
-  "${MPLCONFIGDIR}"
+  "${MPLCONFIGDIR}" "${TMPDIR}"
 chmod 0700 "${XDG_RUNTIME_DIR}"
 
 python3 "${pack_root}/conformance/verify.py" generate "${output_root}/run-a"
@@ -49,7 +50,7 @@ python3 "${pack_root}/conformance/render-probe.py" \
   --receipt "${output_root}/research-render-probe.json"
 
 rm -rf "${HOME}" "${XDG_CACHE_HOME}" "${XDG_CONFIG_HOME}" "${XDG_RUNTIME_DIR}" \
-  "${MPLCONFIGDIR}"
+  "${MPLCONFIGDIR}" "${TMPDIR}"
 python3 "${pack_root}/conformance/verify.py" finalize "${output_root}"
 test -s "${output_root}/data-analysis-render-probe.json"
 test -s "${output_root}/research-render-probe.json"

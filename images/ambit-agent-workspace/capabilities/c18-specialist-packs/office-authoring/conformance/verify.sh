@@ -9,8 +9,9 @@ export HOME=${output_root}/home
 export XDG_CACHE_HOME=${output_root}/cache
 export XDG_CONFIG_HOME=${output_root}/config
 export XDG_RUNTIME_DIR=${output_root}/run
+export TMPDIR=${output_root}/tmp
 export SAL_DISABLE_JAVA=1
-mkdir -p "${HOME}" "${XDG_CACHE_HOME}" "${XDG_CONFIG_HOME}" "${XDG_RUNTIME_DIR}"
+mkdir -p "${HOME}" "${XDG_CACHE_HOME}" "${XDG_CONFIG_HOME}" "${XDG_RUNTIME_DIR}" "${TMPDIR}"
 chmod 0700 "${XDG_RUNTIME_DIR}"
 
 python3 "${pack_root}/conformance/verify.py" generate "${output_root}/fixtures"
@@ -44,7 +45,7 @@ python3 "${pack_root}/conformance/render-probe.py" \
   --source "${output_root}/fixtures/presentation-v1.pptx" \
   --receipt "${output_root}/presentation-render-probe.json"
 rm -rf "${HOME}" "${XDG_CACHE_HOME}" "${XDG_CONFIG_HOME}" "${XDG_RUNTIME_DIR}" \
-  "${output_root}/profiles"
+  "${TMPDIR}" "${output_root}/profiles"
 python3 "${pack_root}/conformance/verify.py" finalize "${output_root}"
 test -s "${output_root}/spreadsheet-render-probe.json"
 test -s "${output_root}/presentation-render-probe.json"

@@ -4,7 +4,7 @@
     "rootFilesystemReadOnly": true,
     "writableRoots": [
       "/workspace",
-      "/tmp/ambit-task"
+      "/tmp"
     ]
   },
   "identity": {

@@ -71,6 +71,31 @@ FACT_KEY_BOUNDARY = re.compile(r"(?<!^)(?=[A-Z])")
 FACT_KEY_UNSAFE = re.compile(r"[^a-z0-9]+")
 
 
+def _prepare_task_scratch_root() -> None:
+    try:
+        TASK_SCRATCH_ROOT.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    descriptor = os.open(
+        TASK_SCRATCH_ROOT,
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0),
+    )
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+            or metadata.st_uid != os.getuid()
+            or metadata.st_gid != os.getgid()
+        ):
+            raise RenderCommandError("provider task scratch authority is invalid")
+    finally:
+        os.close(descriptor)
+
+
 class CommandCancelled(RuntimeError):
     """The host cancelled a valid in-flight render request."""
 
@@ -1828,6 +1853,10 @@ def _framed_main(
 
 def main(pack_root: Path, argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
+    try:
+        _prepare_task_scratch_root()
+    except (OSError, RenderCommandError):
+        return 70
     if (
         len(arguments) == 3
         and arguments[0] == "--framed-jsonl"

@@ -38,6 +38,7 @@ from render_runner import (  # noqa: E402
     _close_semantic_job_roots,
     _fact_value,
     _job_root_from_request_argument,
+    _prepare_task_scratch_root,
     _read_exact_regular_file,
     _reprove_semantic_roots,
     _semantic_job_roots,
@@ -49,6 +50,24 @@ from render_runner import (  # noqa: E402
 
 
 class RenderRunnerTests(unittest.TestCase):
+    def test_prepares_one_owner_only_task_scratch_root_and_rejects_substitution(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            scratch = parent / "task-scratch"
+            with mock.patch("render_runner.TASK_SCRATCH_ROOT", scratch):
+                _prepare_task_scratch_root()
+                self.assertEqual(scratch.stat().st_mode & 0o777, 0o700)
+                scratch.chmod(0o755)
+                with self.assertRaises(RenderCommandError):
+                    _prepare_task_scratch_root()
+                scratch.chmod(0o700)
+                scratch.rmdir()
+                replacement = parent / "replacement"
+                replacement.mkdir(mode=0o700)
+                scratch.symlink_to(replacement, target_is_directory=True)
+                with self.assertRaises(OSError):
+                    _prepare_task_scratch_root()
+
     def test_fd_anchors_control_reads_and_output_publication(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             job_root = Path(temporary) / "job"

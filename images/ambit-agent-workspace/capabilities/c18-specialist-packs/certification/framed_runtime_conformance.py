@@ -120,7 +120,7 @@ class PtyProcess:
             "--tmpfs",
             "/workspace:rw,noexec,nosuid,nodev,size=1g,uid=1000,gid=1000,mode=0700",
             "--tmpfs",
-            "/tmp/ambit-task:rw,noexec,nosuid,nodev,size=2g,uid=1000,gid=1000,mode=0700",
+            "/tmp:rw,noexec,nosuid,nodev,size=2g,uid=0,gid=0,mode=1777",
         ]
         if pack == "web-browser":
             command.extend(["--shm-size", "1g"])
@@ -256,7 +256,7 @@ class PtyProcess:
             or config.get("Tty") is not True
             or config.get("OpenStdin") is not True
             or "/workspace" not in host.get("Tmpfs", {})
-            or "/tmp/ambit-task" not in host.get("Tmpfs", {})
+            or "/tmp" not in host.get("Tmpfs", {})
         ):
             raise RuntimeError("provider launch isolation differs")
         return {
