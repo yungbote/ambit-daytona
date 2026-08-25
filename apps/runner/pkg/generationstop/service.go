@@ -229,16 +229,20 @@ func (s *Observer) ObserveProviderCurrent(
 		Fence:      request.Fence,
 		Generation: normalizeExpectedGenerationMillis(observed.Generation.ExpectedGeneration),
 		State:      state,
-		ObservedAt: s.now().UTC().Format(time.RFC3339Nano),
+		ObservedAt: formatUTCInstantMillis(s.now()),
 	}, nil
 }
 
 func normalizeExpectedGenerationMillis(value ExpectedGeneration) ExpectedGeneration {
 	created, _ := time.Parse(time.RFC3339Nano, value.ContainerCreatedAt)
 	started, _ := time.Parse(time.RFC3339Nano, value.ExecutionStartedAt)
-	value.ContainerCreatedAt = created.UTC().Truncate(time.Millisecond).Format("2006-01-02T15:04:05.000Z")
-	value.ExecutionStartedAt = started.UTC().Truncate(time.Millisecond).Format("2006-01-02T15:04:05.000Z")
+	value.ContainerCreatedAt = formatUTCInstantMillis(created)
+	value.ExecutionStartedAt = formatUTCInstantMillis(started)
 	return value
+}
+
+func formatUTCInstantMillis(value time.Time) string {
+	return value.UTC().Truncate(time.Millisecond).Format("2006-01-02T15:04:05.000Z")
 }
 
 // ObserveCurrent retains the durable service's compatibility surface while

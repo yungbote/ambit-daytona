@@ -110,6 +110,9 @@ func TestProviderCurrentGenerationNormalizesExactMillisecondAuthority(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
+	observer.now = func() time.Time {
+		return time.Date(2026, 8, 24, 4, 5, 6, 987654321, time.FixedZone("offset", -4*60*60))
+	}
 	observed, err := observer.ObserveProviderCurrent(
 		context.Background(),
 		ProviderGenerationObservationRequest{
@@ -120,8 +123,12 @@ func TestProviderCurrentGenerationNormalizesExactMillisecondAuthority(t *testing
 		t.Fatal(err)
 	}
 	if observed.Generation.ContainerCreatedAt != "2026-08-23T23:59:00.123Z" ||
-		observed.Generation.ExecutionStartedAt != "2026-08-24T00:00:00.000Z" {
+		observed.Generation.ExecutionStartedAt != "2026-08-24T00:00:00.000Z" ||
+		observed.ObservedAt != "2026-08-24T08:05:06.987Z" {
 		t.Fatalf("provider generation was not normalized to exact milliseconds: %#v", observed.Generation)
+	}
+	if strings.Contains(observed.ObservedAt, "987654") {
+		t.Fatalf("provider observation leaked RFC3339Nano precision: %q", observed.ObservedAt)
 	}
 }
 
