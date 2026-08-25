@@ -449,7 +449,8 @@ func exactMillisecondInstant(value string) bool {
 }
 
 func rewriteRegistryAuthority(runtimeReference, inspectAuthority string) (string, string, string, error) {
-	if !c18oci.ValidRegistryAuthority(inspectAuthority, true, true) || strings.Count(runtimeReference, "@") != 1 {
+	if !c18oci.ValidRegistryAuthority(inspectAuthority, true, true) ||
+		!c18oci.ValidImmutableReference(runtimeReference) {
 		return "", "", "", errors.New("registry image authority is invalid")
 	}
 	name, manifestDigest, found := strings.Cut(runtimeReference, "@")
@@ -459,32 +460,11 @@ func rewriteRegistryAuthority(runtimeReference, inspectAuthority string) (string
 	}
 	runtimeAuthority := name[:slash]
 	repositoryPath := name[slash+1:]
-	if !c18oci.ValidRegistryAuthority(runtimeAuthority, true, false) || !registryRepositoryPath(repositoryPath) {
+	inspectReference := inspectAuthority + "/" + repositoryPath + "@" + manifestDigest
+	if !c18oci.ValidRegistryAuthority(runtimeAuthority, true, false) ||
+		!c18oci.ValidImmutableSourceReference(inspectReference) {
 		return "", "", "", errors.New("runtime image reference is invalid")
 	}
-	return inspectAuthority + "/" + repositoryPath + "@" + manifestDigest,
+	return inspectReference,
 		runtimeAuthority, manifestDigest, nil
-}
-
-func registryRepositoryPath(value string) bool {
-	if value == "" || len(value) > 2048 || value != strings.ToLower(value) {
-		return false
-	}
-	for _, component := range strings.Split(value, "/") {
-		if component == "" || component == "." || component == ".." ||
-			!lowerAlphaNumeric(component[0]) || !lowerAlphaNumeric(component[len(component)-1]) {
-			return false
-		}
-		for _, character := range component {
-			if (character < 'a' || character > 'z') && (character < '0' || character > '9') &&
-				character != '.' && character != '_' && character != '-' {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func lowerAlphaNumeric(value byte) bool {
-	return value >= 'a' && value <= 'z' || value >= '0' && value <= '9'
 }

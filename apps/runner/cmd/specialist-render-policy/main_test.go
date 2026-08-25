@@ -158,10 +158,15 @@ func TestRegistryInspectionRewritesOnlyTheAuthority(t *testing.T) {
 		{"registry:6000/../ambit@" + manifest, "127.0.0.1:5001"},
 		{"registry:6000/Ambit@" + manifest, "127.0.0.1:5001"},
 		{"registry:6000/ambit:tag@" + manifest, "127.0.0.1:5001"},
+		{"registry:6000/a..b@" + manifest, "127.0.0.1:5001"},
 	} {
 		if _, _, _, err := rewriteRegistryAuthority(candidate.ref, candidate.authority); err == nil {
 			t.Fatalf("invalid registry rewrite was accepted: %#v", candidate)
 		}
+	}
+	overlong := "registry:6000/" + strings.Repeat("a", 512) + "@" + manifest
+	if _, _, _, err := rewriteRegistryAuthority(overlong, "127.0.0.1:5001"); err == nil {
+		t.Fatal("overlong immutable registry reference was accepted")
 	}
 }
 
