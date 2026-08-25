@@ -324,6 +324,70 @@
               "$ref": "#/definitions/ErrorResponse"
             }
           },
+          "404": {
+            "description": "Not Found",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "/sandboxes/{sandboxId}/generation/observe-current": {
+      "post": {
+        "produces": ["application/json"],
+        "tags": ["sandbox"],
+        "summary": "Observe current generation with provider-observable owner authority",
+        "operationId": "ObserveCurrentSandboxGeneration",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "Sandbox ID",
+            "name": "sandboxId",
+            "in": "path",
+            "required": true
+          },
+          {
+            "description": "Exact provider source, owner and fence",
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/generationstop.ProviderGenerationObservationRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/generationstop.ProviderGenerationObservation"
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
           "409": {
             "description": "Conflict",
             "schema": {
@@ -754,6 +818,140 @@
           },
           "500": {
             "description": "Internal Server Error",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "/sandboxes/{sandboxId}/specialist-renders": {
+      "post": {
+        "produces": ["application/vnd.ambit.runtime-provider-specialist-render+jsonl"],
+        "tags": ["sandbox"],
+        "summary": "Execute one provider-owned specialist render stream",
+        "operationId": "ExecuteSpecialistRender",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "Sandbox ID",
+            "name": "sandboxId",
+            "in": "path",
+            "required": true
+          },
+          {
+            "description": "Exact canonical provider JSONL stream",
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Exact provider response stream",
+            "schema": {
+              "type": "string"
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "422": {
+            "description": "Validated failed render stream",
+            "schema": {
+              "type": "string"
+            }
+          },
+          "502": {
+            "description": "Bad Gateway",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "504": {
+            "description": "Gateway Timeout",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "/sandboxes/{sandboxId}/specialist-renders/observe": {
+      "post": {
+        "produces": ["application/json"],
+        "tags": ["sandbox"],
+        "summary": "Observe durable specialist-render operation state",
+        "operationId": "ObserveSpecialistRender",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "Sandbox ID",
+            "name": "sandboxId",
+            "in": "path",
+            "required": true
+          },
+          {
+            "description": "Exact operation authority",
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/specialistrender.ObserveRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/specialistrender.Observation"
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
             "schema": {
               "$ref": "#/definitions/ErrorResponse"
             }
@@ -1452,6 +1650,65 @@
             "description": "OK",
             "schema": {
               "$ref": "#/definitions/workingcopy.CaptureReadResponse"
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "/sandboxes/{sandboxId}/working-copy-captures/stopped-directory-roster": {
+      "post": {
+        "description": "Stream and validate a byte-free regular-file/directory roster through Docker host authority; symlinks, hardlinks, special files, escapes, and bound overflows fail closed.",
+        "produces": ["application/json"],
+        "tags": ["sandbox"],
+        "summary": "List one bounded directory from an exact stopped sandbox generation",
+        "operationId": "StoppedWorkingCopyDirectoryRoster",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "Sandbox ID",
+            "name": "sandboxId",
+            "in": "path",
+            "required": true
+          },
+          {
+            "description": "Exact anchor, directory selector, and bounds",
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/workingcopy.StoppedDirectoryRosterRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/workingcopy.StoppedDirectoryRosterReceipt"
             }
           },
           "400": {
@@ -2650,6 +2907,65 @@
         }
       }
     },
+    "generationstop.ProviderGenerationObservation": {
+      "type": "object",
+      "required": ["fence", "generation", "observedAt", "owner", "source", "state"],
+      "properties": {
+        "fence": {
+          "$ref": "#/definitions/generationstop.Fence"
+        },
+        "generation": {
+          "$ref": "#/definitions/generationstop.ExpectedGeneration"
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "owner": {
+          "$ref": "#/definitions/generationstop.ProviderOwner"
+        },
+        "source": {
+          "$ref": "#/definitions/generationstop.Source"
+        },
+        "state": {
+          "type": "string"
+        }
+      }
+    },
+    "generationstop.ProviderGenerationObservationRequest": {
+      "type": "object",
+      "required": ["fence", "owner", "source"],
+      "properties": {
+        "fence": {
+          "$ref": "#/definitions/generationstop.Fence"
+        },
+        "owner": {
+          "$ref": "#/definitions/generationstop.ProviderOwner"
+        },
+        "source": {
+          "$ref": "#/definitions/generationstop.Source"
+        }
+      }
+    },
+    "generationstop.ProviderOwner": {
+      "type": "object",
+      "properties": {
+        "grantId": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "tenantId": {
+          "type": "string"
+        },
+        "userId": {
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        }
+      }
+    },
     "generationstop.Purpose": {
       "type": "object",
       "required": ["kind"],
@@ -2802,6 +3118,439 @@
         },
         "restartCount": {
           "type": "integer"
+        }
+      }
+    },
+    "specialistrender.ImagePin": {
+      "type": "object",
+      "required": ["configDigest", "packId", "packRef", "ref"],
+      "properties": {
+        "configDigest": {
+          "type": "string"
+        },
+        "packId": {
+          "type": "string"
+        },
+        "packRef": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string"
+        }
+      }
+    },
+    "specialistrender.LaunchObservation": {
+      "type": "object",
+      "required": [
+        "capDrop",
+        "command",
+        "containerId",
+        "containerName",
+        "effectiveCapabilities",
+        "environmentDigest",
+        "executableDigest",
+        "executablePath",
+        "hostPid",
+        "imageId",
+        "memoryBytes",
+        "mountNamespace",
+        "nanoCpus",
+        "networkMode",
+        "noNewPrivileges",
+        "observedAt",
+        "parentGeneration",
+        "parentMountNamespace",
+        "parentProcessNamespace",
+        "pidsLimit",
+        "processCount",
+        "processIdentity",
+        "processNamespace",
+        "readonlyRootfs",
+        "roleRef",
+        "runtime",
+        "runtimeStatusDigest",
+        "seccompKernelMode",
+        "seccompMode",
+        "tmpfs",
+        "user"
+      ],
+      "properties": {
+        "capDrop": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "containerId": {
+          "type": "string"
+        },
+        "containerName": {
+          "type": "string"
+        },
+        "effectiveCapabilities": {
+          "type": "string"
+        },
+        "environmentDigest": {
+          "type": "string"
+        },
+        "executableDigest": {
+          "type": "string"
+        },
+        "executablePath": {
+          "type": "string"
+        },
+        "hostPid": {
+          "type": "integer"
+        },
+        "imageId": {
+          "type": "string"
+        },
+        "memoryBytes": {
+          "type": "integer"
+        },
+        "mountCount": {
+          "type": "integer"
+        },
+        "mountNamespace": {
+          "type": "string"
+        },
+        "nanoCpus": {
+          "type": "integer"
+        },
+        "networkMode": {
+          "type": "string"
+        },
+        "noNewPrivileges": {
+          "type": "boolean"
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "parentGeneration": {
+          "$ref": "#/definitions/generationstop.ExpectedGeneration"
+        },
+        "parentMountNamespace": {
+          "type": "string"
+        },
+        "parentProcessNamespace": {
+          "type": "string"
+        },
+        "pidsLimit": {
+          "type": "integer"
+        },
+        "processCount": {
+          "type": "integer"
+        },
+        "processIdentity": {
+          "$ref": "#/definitions/specialistrender.ProcessIdentity"
+        },
+        "processNamespace": {
+          "type": "string"
+        },
+        "readonlyRootfs": {
+          "type": "boolean"
+        },
+        "roleRef": {
+          "type": "string"
+        },
+        "runtime": {
+          "type": "string"
+        },
+        "runtimeStatusDigest": {
+          "type": "string"
+        },
+        "seccompDigest": {
+          "type": "string"
+        },
+        "seccompKernelMode": {
+          "type": "integer"
+        },
+        "seccompMode": {
+          "type": "string"
+        },
+        "shmSize": {
+          "type": "integer"
+        },
+        "tmpfs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "user": {
+          "type": "string"
+        }
+      }
+    },
+    "specialistrender.Observation": {
+      "type": "object",
+      "required": ["schema", "status"],
+      "properties": {
+        "receipt": {
+          "$ref": "#/definitions/specialistrender.Receipt"
+        },
+        "schema": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      }
+    },
+    "specialistrender.ObserveRequest": {
+      "type": "object",
+      "required": ["fence", "operationId", "owner", "requestFingerprint", "schema", "source"],
+      "properties": {
+        "fence": {
+          "$ref": "#/definitions/generationstop.Fence"
+        },
+        "operationId": {
+          "type": "string"
+        },
+        "owner": {
+          "$ref": "#/definitions/generationstop.ProviderOwner"
+        },
+        "requestFingerprint": {
+          "type": "string"
+        },
+        "schema": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/definitions/generationstop.Source"
+        }
+      }
+    },
+    "specialistrender.OutputFile": {
+      "type": "object",
+      "required": ["byteLength", "mediaType", "ordinal", "path", "role", "sha256"],
+      "properties": {
+        "byteLength": {
+          "type": "integer"
+        },
+        "mediaType": {
+          "type": "string"
+        },
+        "ordinal": {
+          "type": "integer"
+        },
+        "path": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      }
+    },
+    "specialistrender.Pin": {
+      "type": "object",
+      "required": ["digest", "ref"],
+      "properties": {
+        "digest": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string"
+        }
+      }
+    },
+    "specialistrender.ProcessIdentity": {
+      "type": "object",
+      "required": ["pid", "startTicks"],
+      "properties": {
+        "pid": {
+          "type": "integer"
+        },
+        "startTicks": {
+          "type": "string"
+        }
+      }
+    },
+    "specialistrender.QuiescenceReceipt": {
+      "type": "object",
+      "required": ["containerAbsent", "containerId", "observedAt", "schema"],
+      "properties": {
+        "containerAbsent": {
+          "type": "boolean"
+        },
+        "containerId": {
+          "type": "string"
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "specialistrender.Receipt": {
+      "type": "object",
+      "required": [
+        "completedAt",
+        "files",
+        "helperExitCode",
+        "launch",
+        "nonce",
+        "outcome",
+        "quiescence",
+        "readyDigest",
+        "receiptDigest",
+        "request",
+        "schema",
+        "startedAt",
+        "terminalDigest",
+        "terminalKind",
+        "terminalOutcome",
+        "totalOutputBytes"
+      ],
+      "properties": {
+        "completedAt": {
+          "type": "string"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/specialistrender.OutputFile"
+          }
+        },
+        "helperExitCode": {
+          "type": "integer"
+        },
+        "launch": {
+          "$ref": "#/definitions/specialistrender.LaunchObservation"
+        },
+        "nonce": {
+          "type": "string"
+        },
+        "outcome": {
+          "type": "string"
+        },
+        "quiescence": {
+          "$ref": "#/definitions/specialistrender.QuiescenceReceipt"
+        },
+        "readyDigest": {
+          "type": "string"
+        },
+        "receiptDigest": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/definitions/specialistrender.Request"
+        },
+        "schema": {
+          "type": "string"
+        },
+        "startedAt": {
+          "type": "string"
+        },
+        "terminalDigest": {
+          "type": "string"
+        },
+        "terminalKind": {
+          "type": "string"
+        },
+        "terminalOutcome": {
+          "type": "string"
+        },
+        "totalOutputBytes": {
+          "type": "integer"
+        }
+      }
+    },
+    "specialistrender.Request": {
+      "type": "object",
+      "required": [
+        "artifactRenderJobRef",
+        "composition",
+        "executable",
+        "executor",
+        "expectedParentGeneration",
+        "fence",
+        "image",
+        "interface",
+        "operationId",
+        "owner",
+        "providerPolicy",
+        "requestBytes",
+        "requestChunkCount",
+        "requestFingerprint",
+        "requestSha256",
+        "schema",
+        "source",
+        "sourceBytes",
+        "sourceChunkCount",
+        "sourceSha256"
+      ],
+      "properties": {
+        "artifactRenderJobRef": {
+          "type": "string"
+        },
+        "composition": {
+          "$ref": "#/definitions/specialistrender.Pin"
+        },
+        "executable": {
+          "type": "string"
+        },
+        "executor": {
+          "$ref": "#/definitions/specialistrender.Pin"
+        },
+        "expectedParentGeneration": {
+          "$ref": "#/definitions/generationstop.ExpectedGeneration"
+        },
+        "fence": {
+          "$ref": "#/definitions/generationstop.Fence"
+        },
+        "image": {
+          "$ref": "#/definitions/specialistrender.ImagePin"
+        },
+        "interface": {
+          "$ref": "#/definitions/specialistrender.Pin"
+        },
+        "operationId": {
+          "type": "string"
+        },
+        "owner": {
+          "$ref": "#/definitions/generationstop.ProviderOwner"
+        },
+        "providerPolicy": {
+          "$ref": "#/definitions/specialistrender.Pin"
+        },
+        "requestBytes": {
+          "type": "integer"
+        },
+        "requestChunkCount": {
+          "type": "integer"
+        },
+        "requestFingerprint": {
+          "type": "string"
+        },
+        "requestSha256": {
+          "type": "string"
+        },
+        "schema": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/definitions/generationstop.Source"
+        },
+        "sourceBytes": {
+          "type": "integer"
+        },
+        "sourceChunkCount": {
+          "type": "integer"
+        },
+        "sourceSha256": {
+          "type": "string"
         }
       }
     },
@@ -3228,6 +3977,75 @@
         },
         "providerResourceId": {
           "type": "string"
+        }
+      }
+    },
+    "workingcopy.StoppedDirectoryRosterEntry": {
+      "type": "object",
+      "required": ["kind", "mode", "name", "size", "zoneRelativePath"],
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer"
+        },
+        "zoneRelativePath": {
+          "type": "string"
+        }
+      }
+    },
+    "workingcopy.StoppedDirectoryRosterReceipt": {
+      "type": "object",
+      "required": ["entries", "observedAt", "request", "rosterDigest", "terminalGeneration"],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/workingcopy.StoppedDirectoryRosterEntry"
+          }
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/definitions/workingcopy.StoppedDirectoryRosterRequest"
+        },
+        "rosterDigest": {
+          "type": "string"
+        },
+        "terminalGeneration": {
+          "$ref": "#/definitions/generationstop.TerminalGeneration"
+        }
+      }
+    },
+    "workingcopy.StoppedDirectoryRosterRequest": {
+      "type": "object",
+      "required": ["anchor", "maximumAggregateBytes", "maximumDepth", "maximumEntries", "maximumFileBytes", "selector"],
+      "properties": {
+        "anchor": {
+          "$ref": "#/definitions/workingcopy.CaptureBinding"
+        },
+        "maximumAggregateBytes": {
+          "type": "integer"
+        },
+        "maximumDepth": {
+          "type": "integer"
+        },
+        "maximumEntries": {
+          "type": "integer"
+        },
+        "maximumFileBytes": {
+          "type": "integer"
+        },
+        "selector": {
+          "$ref": "#/definitions/workingcopy.CaptureSelector"
         }
       }
     }
