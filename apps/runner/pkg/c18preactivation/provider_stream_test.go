@@ -6,7 +6,11 @@ package c18preactivation
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"errors"
+	"hash"
 	"io"
 	"strings"
 	"testing"
@@ -68,6 +72,66 @@ func TestProviderResponseStreamRoundTripsThroughRunnerEncoder(t *testing.T) {
 	if !canonicalEqual(decoded.Receipt, receipt) || len(decoded.Files) != 1 ||
 		decoded.Files[0].Descriptor != receipt.Files[0] || !bytes.Equal(decoded.Files[0].Bytes, payload) {
 		t.Fatal("driver decoded a different provider response")
+	}
+}
+
+func TestProviderResponseObserverStreamsTransactionalCustodyAndHashesExactWire(t *testing.T) {
+	request, _, _ := testProviderRequest(t)
+	payload := bytes.Repeat([]byte("stream-without-retention-"), 8_000)
+	receipt := testProviderReceipt(t, request, payload)
+	result := specialistrender.ExecutionResult{
+		Receipt: receipt,
+		Files: []specialistrender.Payload{{
+			File: receipt.Files[0],
+			Open: func(context.Context) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(payload)), nil
+			},
+			Cleanup: func() error { return nil },
+		}},
+	}
+	var encoded bytes.Buffer
+	if err := specialistrender.EncodeResponseStream(context.Background(), &encoded, result); err != nil {
+		t.Fatal(err)
+	}
+	custody := &hashingResponseCustody{}
+	observation, err := ObserveProviderResponseStream(
+		context.Background(), bytes.NewReader(encoded.Bytes()), request, custody,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !custody.committed || custody.aborted || len(custody.files) != 1 ||
+		observation.WireSHA256 != sha256Digest(encoded.Bytes()) ||
+		!canonicalEqual(observation.Receipt, receipt) {
+		t.Fatal("streaming response custody did not commit the exact wire")
+	}
+}
+
+func TestProviderResponseObserverAbortsCustodyBeforeCommitOnInvalidTail(t *testing.T) {
+	request, _, _ := testProviderRequest(t)
+	payload := []byte("result")
+	receipt := testProviderReceipt(t, request, payload)
+	result := specialistrender.ExecutionResult{
+		Receipt: receipt,
+		Files: []specialistrender.Payload{{
+			File: receipt.Files[0],
+			Open: func(context.Context) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(payload)), nil
+			},
+			Cleanup: func() error { return nil },
+		}},
+	}
+	var encoded bytes.Buffer
+	if err := specialistrender.EncodeResponseStream(context.Background(), &encoded, result); err != nil {
+		t.Fatal(err)
+	}
+	corrupt := append(append([]byte(nil), encoded.Bytes()...), 'x')
+	custody := &hashingResponseCustody{}
+	if _, err := ObserveProviderResponseStream(context.Background(), bytes.NewReader(corrupt), request, custody); err == nil {
+		t.Fatal("response with an invalid tail was admitted")
+	}
+	if custody.committed || !custody.aborted {
+		t.Fatal("invalid response custody was not aborted")
 	}
 }
 
@@ -248,4 +312,57 @@ func testPin(ref, digit string) specialistrender.Pin {
 
 func base64Of(value []byte) string {
 	return base64.StdEncoding.EncodeToString(value)
+}
+
+type hashingResponseCustody struct {
+	files       []*hashingResponseFile
+	committed   bool
+	aborted     bool
+	observation ProviderResponseObservation
+}
+
+type hashingResponseFile struct {
+	descriptor specialistrender.OutputFile
+	hash       hash.Hash
+	bytes      int64
+}
+
+func (custody *hashingResponseCustody) OpenFile(
+	_ context.Context,
+	descriptor specialistrender.OutputFile,
+) (io.Writer, error) {
+	if custody.committed || custody.aborted || descriptor.Ordinal != len(custody.files) {
+		return nil, errors.New("hashing custody descriptor order is invalid")
+	}
+	file := &hashingResponseFile{descriptor: descriptor, hash: sha256.New()}
+	custody.files = append(custody.files, file)
+	return file, nil
+}
+
+func (custody *hashingResponseCustody) Commit(
+	_ context.Context,
+	observation ProviderResponseObservation,
+) error {
+	if custody.committed || custody.aborted {
+		return errors.New("hashing custody terminal state is invalid")
+	}
+	for _, file := range custody.files {
+		if file.bytes != file.descriptor.ByteLength ||
+			"sha256:"+hex.EncodeToString(file.hash.Sum(nil)) != file.descriptor.Digest {
+			return errors.New("hashing custody bytes differ from descriptor")
+		}
+	}
+	custody.committed = true
+	custody.observation = observation
+	return nil
+}
+
+func (custody *hashingResponseCustody) Abort() {
+	custody.aborted = true
+}
+
+func (file *hashingResponseFile) Write(value []byte) (int, error) {
+	written, err := file.hash.Write(value)
+	file.bytes += int64(written)
+	return written, err
 }
