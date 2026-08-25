@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/daytonaio/runner/pkg/c18oci"
 	"github.com/daytonaio/runner/pkg/generationstop"
 	"github.com/daytonaio/runner/pkg/specialistrender"
 	imagetypes "github.com/docker/docker/api/types/image"
@@ -70,7 +71,7 @@ func run() int {
 		!absoluteNormalizedPath(*compositionPath) || !absoluteNormalizedPath(*routingPath) ||
 		!absoluteNormalizedPath(*outputRoot) || *seccompRuntimePath != runtimeSeccompPath ||
 		!gitObject(*sourceRevision) || !gitObject(*sourceTree) || !exactSHA256(*sourceSetDigest) ||
-		!registryAuthority(*registryInspectAuthority) {
+		!c18oci.ValidRegistryAuthority(*registryInspectAuthority, true, true) {
 		fmt.Fprintln(os.Stderr, "exact source identity, source inputs, runtime seccomp path, and new output root are required")
 		return 64
 	}

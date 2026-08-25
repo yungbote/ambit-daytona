@@ -7,14 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
+	"github.com/daytonaio/runner/pkg/c18oci"
 	"github.com/daytonaio/runner/pkg/generationstop"
 	"github.com/daytonaio/runner/pkg/specialistrender"
 	"golang.org/x/sys/unix"
@@ -139,8 +138,8 @@ func validatePolicyGenerationReceiptBody(value policyGenerationReceipt) error {
 		value.Inputs.SeccompSourceFileSHA256 != specialistrender.SpecialistSeccompDigest ||
 		value.Inputs.SeccompCopiedFileSHA256 != value.Inputs.SeccompSourceFileSHA256 ||
 		value.Inputs.SeccompRuntimePath != runtimeSeccompPath ||
-		!registryAuthority(value.Registry.InspectAuthority) ||
-		!registryAuthority(value.Registry.RuntimeAuthority) ||
+		!c18oci.ValidRegistryAuthority(value.Registry.InspectAuthority, true, true) ||
+		!c18oci.ValidRegistryAuthority(value.Registry.RuntimeAuthority, true, false) ||
 		value.Policy.Schema != specialistrender.PolicySetSchema || value.Policy.RowCount != 4 ||
 		!exactSHA256(value.Policy.FileSHA256) || !exactMillisecondInstant(value.ObservedAt) {
 		return errors.New("policy generation receipt body is invalid")
@@ -450,7 +449,7 @@ func exactMillisecondInstant(value string) bool {
 }
 
 func rewriteRegistryAuthority(runtimeReference, inspectAuthority string) (string, string, string, error) {
-	if !registryAuthority(inspectAuthority) || strings.Count(runtimeReference, "@") != 1 {
+	if !c18oci.ValidRegistryAuthority(inspectAuthority, true, true) || strings.Count(runtimeReference, "@") != 1 {
 		return "", "", "", errors.New("registry image authority is invalid")
 	}
 	name, manifestDigest, found := strings.Cut(runtimeReference, "@")
@@ -460,35 +459,11 @@ func rewriteRegistryAuthority(runtimeReference, inspectAuthority string) (string
 	}
 	runtimeAuthority := name[:slash]
 	repositoryPath := name[slash+1:]
-	if !registryAuthority(runtimeAuthority) || !registryRepositoryPath(repositoryPath) {
+	if !c18oci.ValidRegistryAuthority(runtimeAuthority, true, false) || !registryRepositoryPath(repositoryPath) {
 		return "", "", "", errors.New("runtime image reference is invalid")
 	}
 	return inspectAuthority + "/" + repositoryPath + "@" + manifestDigest,
 		runtimeAuthority, manifestDigest, nil
-}
-
-func registryAuthority(value string) bool {
-	if value == "" || len(value) > 512 || value != strings.TrimSpace(value) ||
-		value != strings.ToLower(value) || strings.ContainsAny(value, "/@?#") || strings.Contains(value, "://") {
-		return false
-	}
-	parsed, err := url.Parse("registry://" + value)
-	if err != nil || parsed.Host != value || parsed.Hostname() == "" || parsed.User != nil ||
-		parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return false
-	}
-	if port := parsed.Port(); port != "" {
-		number, err := strconv.Atoi(port)
-		if err != nil || number < 1 || number > 65535 {
-			return false
-		}
-	}
-	for _, character := range value {
-		if character < 33 || character == 127 {
-			return false
-		}
-	}
-	return true
 }
 
 func registryRepositoryPath(value string) bool {

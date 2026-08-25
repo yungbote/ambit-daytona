@@ -151,7 +151,10 @@ func TestRegistryInspectionRewritesOnlyTheAuthority(t *testing.T) {
 	}{
 		{runtimeRef, "https://127.0.0.1:5001"},
 		{runtimeRef, "127.0.0.1:5001/path"},
+		{runtimeRef, "127.00.0.1:5001"},
 		{runtimeRef, "Registry.Test:5001"},
+		{"2130706433:6000/ambit@" + manifest, "127.0.0.1:5001"},
+		{"0x7f000001:6000/ambit@" + manifest, "127.0.0.1:5001"},
 		{"registry:6000/../ambit@" + manifest, "127.0.0.1:5001"},
 		{"registry:6000/Ambit@" + manifest, "127.0.0.1:5001"},
 		{"registry:6000/ambit:tag@" + manifest, "127.0.0.1:5001"},

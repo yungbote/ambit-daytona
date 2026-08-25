@@ -375,10 +375,22 @@ func TestRequestRejectsNoncanonicalEndpointAndRoster(t *testing.T) {
 	if err := ValidateRequest(valid); err == nil {
 		t.Fatal("image tag detached from the source revision was admitted")
 	}
+	for _, authority := range []string{
+		"127.0.0.1:6000",
+		"127.00.0.1:6000",
+		"2130706433:6000",
+		"0x7f000001:6000",
+	} {
+		valid, _ = testRequest(t, server.URL, archiveVariation{})
+		valid.Registry.RuntimeAuthority = authority
+		if err := ValidateRequest(valid); err == nil {
+			t.Fatalf("noncanonical runtime registry authority was admitted: %q", authority)
+		}
+	}
 	valid, _ = testRequest(t, server.URL, archiveVariation{})
-	valid.Registry.RuntimeAuthority = "127.0.0.1:6000"
-	if err := ValidateRequest(valid); err == nil {
-		t.Fatal("loopback runtime registry authority was admitted")
+	valid.Registry.RuntimeAuthority = "[2001:db8::1]:6000"
+	if err := ValidateRequest(valid); err != nil {
+		t.Fatalf("canonical IPv6 runtime registry authority was rejected: %v", err)
 	}
 }
 

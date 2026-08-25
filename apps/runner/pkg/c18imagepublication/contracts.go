@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/daytonaio/runner/pkg/c18oci"
 	"github.com/daytonaio/runner/pkg/generationstop"
 )
 
@@ -317,51 +318,8 @@ func parsePublicationOrigin(value string) (*url.URL, error) {
 	return parsed, nil
 }
 
-func registryAuthority(value string) bool {
-	if value == "" || strings.ToLower(value) != value || strings.ContainsAny(value, "/?#@") {
-		return false
-	}
-	host, portText, err := net.SplitHostPort(value)
-	if err != nil || host == "" {
-		return false
-	}
-	port, err := strconv.Atoi(portText)
-	if err != nil || port < 1 || port > 65535 || strconv.Itoa(port) != portText {
-		return false
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return ip.String() == host
-	}
-	return validHostname(host)
-}
-
 func runtimeRegistryAuthority(value string) bool {
-	if !registryAuthority(value) {
-		return false
-	}
-	host, _, err := net.SplitHostPort(value)
-	if err != nil || host == "localhost" {
-		return false
-	}
-	ip := net.ParseIP(host)
-	return ip == nil || !ip.IsLoopback()
-}
-
-func validHostname(value string) bool {
-	if len(value) > 253 || strings.HasPrefix(value, ".") || strings.HasSuffix(value, ".") {
-		return false
-	}
-	for _, label := range strings.Split(value, ".") {
-		if len(label) < 1 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
-			return false
-		}
-		for _, character := range label {
-			if (character < 'a' || character > 'z') && (character < '0' || character > '9') && character != '-' {
-				return false
-			}
-		}
-	}
-	return true
+	return c18oci.ValidRegistryAuthority(value, true, false)
 }
 
 func validRepository(value string) bool {
