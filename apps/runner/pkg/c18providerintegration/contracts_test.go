@@ -13,9 +13,15 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/daytonaio/runner/pkg/generationstop"
 	"github.com/daytonaio/runner/pkg/specialistrender"
+)
+
+const (
+	providerLiveCollectionGoldenSHA256 = "sha256:4fead64e987dca681f2dd59321b05eb97fcca05a036e4f8fd7cf6b52fee6d12e"
+	minIOIntegrationGoldenSHA256       = "sha256:4c34ec1e61a495413c7d5c5c9bed7933084ad07c3722712e662af9e18b00ff0e"
 )
 
 func TestProviderLiveCollectionGoldenIsCanonicalAndRejectsFacetSubstitution(t *testing.T) {
@@ -24,7 +30,7 @@ func TestProviderLiveCollectionGoldenIsCanonicalAndRejectsFacetSubstitution(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertGolden(t, "c18-provider-live-collection.golden.json", encoded)
+	assertGolden(t, "c18-provider-live-collection.golden.json", providerLiveCollectionGoldenSHA256, encoded)
 	parsed, err := ParseProviderLiveCollection(encoded)
 	if err != nil {
 		t.Fatal(err)
@@ -59,13 +65,84 @@ func TestProviderLiveCollectionRejectsLaunchPolicySubstitution(t *testing.T) {
 	}
 }
 
+func TestProviderLiveCollectionRejectsReceiptsOutsideMeasuredInterval(t *testing.T) {
+	collection := providerCollectionFixture(t)
+
+	freshWrapper := cloneCollection(t, collection)
+	freshWrapper.AuthenticatedStreaming.ObservedFrom = "2026-08-25T04:00:00.000Z"
+	freshWrapper.AuthenticatedStreaming.ObservedUntil = "2026-08-25T04:01:00.000Z"
+	if _, err := SealProviderLiveCollection(freshWrapper); err == nil {
+		t.Fatal("fresh wrapper timestamps reauthorized older provider receipts")
+	}
+
+	truncatedStart := cloneCollection(t, collection)
+	truncatedStart.AuthenticatedStreaming.ObservedFrom = "2026-08-24T00:00:00.001Z"
+	if _, err := SealProviderLiveCollection(truncatedStart); err == nil {
+		t.Fatal("collection interval starting after receipt execution was accepted")
+	}
+
+	truncatedEnd := cloneCollection(t, collection)
+	truncatedEnd.AuthenticatedStreaming.ObservedUntil = "2026-08-24T00:00:00.999Z"
+	if _, err := SealProviderLiveCollection(truncatedEnd); err == nil {
+		t.Fatal("collection interval ending before receipt completion was accepted")
+	}
+}
+
+func TestCancelledReceiptDigestBindsEmittedEmptyFileRoster(t *testing.T) {
+	collection := providerCollectionFixture(t)
+	for _, row := range collection.ProviderReceipts {
+		if row.Mode != "cancel" {
+			continue
+		}
+		if row.Receipt.Files == nil || len(row.Receipt.Files) != 0 {
+			t.Fatalf("cancelled %s receipt does not retain an explicit empty file roster", row.Facet)
+		}
+		encoded, err := generationstop.CanonicalJSON(row.Receipt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(encoded, []byte(`"files":[]`)) {
+			t.Fatalf("cancelled %s receipt does not emit files as an empty array", row.Facet)
+		}
+		recomputed, err := specialistrender.ComputeReceiptDigest(row.Receipt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if recomputed != row.Receipt.ReceiptDigest {
+			t.Fatalf("cancelled %s receipt digest does not bind its emitted bytes", row.Facet)
+		}
+		nullRoster := row.Receipt
+		nullRoster.Files = nil
+		nullDigest, err := specialistrender.ComputeReceiptDigest(nullRoster)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if nullDigest == recomputed {
+			t.Fatalf("cancelled %s receipt collapses files null and empty array", row.Facet)
+		}
+	}
+
+	forged := cloneCollection(t, collection)
+	forged.ProviderReceipts[0].Receipt.Files = nil
+	forgedDigest, err := specialistrender.ComputeReceiptDigest(
+		forged.ProviderReceipts[0].Receipt,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged.ProviderReceipts[0].Receipt.ReceiptDigest = forgedDigest
+	if _, err := SealProviderLiveCollection(forged); err == nil {
+		t.Fatal("provider collection admitted a null receipt file roster")
+	}
+}
+
 func TestMinIOIntegrationReceiptGoldenIsCanonicalAndSelfDigested(t *testing.T) {
 	receipt, err := SealMinIOIntegrationReceipt(MinIOIntegrationReceipt{
 		SourceRevision:  "1" + strings.Repeat("0", 39),
 		SourceTree:      "2" + strings.Repeat("0", 39),
 		SourceSetDigest: digestSeed(3),
-		ObservedFrom:    "2026-08-25T04:00:00Z",
-		ObservedUntil:   "2026-08-25T04:00:01Z",
+		ObservedFrom:    "2026-08-24T00:00:00.000Z",
+		ObservedUntil:   "2026-08-24T00:00:01.000Z",
 		Observations: MinIOOperationObservations{
 			ConditionalCreate: MinIOConditionalCreateObservation{
 				PayloadBytes: 128, PayloadSHA256: digestSeed(4), Contenders: 16,
@@ -86,7 +163,7 @@ func TestMinIOIntegrationReceiptGoldenIsCanonicalAndSelfDigested(t *testing.T) {
 		t.Fatal(err)
 	}
 	encoded, _ := generationstop.CanonicalJSON(receipt)
-	assertGolden(t, "c18-minio-integration-receipt.golden.json", encoded)
+	assertGolden(t, "c18-minio-integration-receipt.golden.json", minIOIntegrationGoldenSHA256, encoded)
 	if _, err := ParseMinIOIntegrationReceipt(encoded); err != nil {
 		t.Fatal(err)
 	}
@@ -96,6 +173,30 @@ func TestMinIOIntegrationReceiptGoldenIsCanonicalAndSelfDigested(t *testing.T) {
 	forgedBytes, _ := generationstop.CanonicalJSON(forged)
 	if _, err := ParseMinIOIntegrationReceipt(forgedBytes); err == nil {
 		t.Fatal("forged MinIO operation roster was accepted")
+	}
+}
+
+func TestEvidenceIntervalsRequireExactUTCMilliseconds(t *testing.T) {
+	got := formatObservationTime(time.Date(
+		2026, 8, 25, 4, 0, 1, 987654321,
+		time.FixedZone("offset", 2*60*60),
+	))
+	if got != "2026-08-25T02:00:01.987Z" {
+		t.Fatalf("observation timestamp dialect differs: %q", got)
+	}
+	for _, value := range []string{
+		"2026-08-25T04:00:00Z",
+		"2026-08-25T04:00:00.00Z",
+		"2026-08-25T04:00:00.0000Z",
+		"2026-08-25T04:00:00.000+00:00",
+		"2026-08-25T00:00:00.000-04:00",
+	} {
+		if validInterval(value, "2026-08-25T04:00:01.000Z") {
+			t.Fatalf("non-canonical observation timestamp was accepted: %q", value)
+		}
+	}
+	if !validInterval("2026-08-25T04:00:00.000Z", "2026-08-25T04:00:01.000Z") {
+		t.Fatal("exact UTC millisecond interval was rejected")
 	}
 }
 
@@ -151,7 +252,12 @@ func TestProviderRequestAndResponseStreamsRoundTripExactBytes(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	observed, streamDigest, err := decodeResponseStream(context.Background(), bytes.NewReader(response.Bytes()), request, policy)
+	observed, streamDigest, err := decodeResponseStream(
+		context.Background(),
+		io.NopCloser(bytes.NewReader(response.Bytes())),
+		request,
+		policy,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,8 +306,8 @@ func providerCollectionFixture(t *testing.T) ProviderLiveCollection {
 		RunnerPolicy:     RunnerPolicyPin{CanonicalJSON: string(policyJSON), ContentSHA256: digestBytes(policyJSON)},
 		ProviderReceipts: rows,
 		AuthenticatedStreaming: AuthenticatedStreamingObservation{
-			Outcome: "passed", ObservedFrom: "2026-08-25T04:00:00Z",
-			ObservedUntil: "2026-08-25T04:01:00Z", Cases: streams,
+			Outcome: "passed", ObservedFrom: "2026-08-24T00:00:00.000Z",
+			ObservedUntil: "2026-08-24T00:00:01.000Z", Cases: streams,
 		},
 	})
 	if err != nil {
@@ -371,7 +477,7 @@ func repoRoot(t *testing.T) string {
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "../../../.."))
 }
 
-func assertGolden(t *testing.T, name string, actual []byte) {
+func assertGolden(t *testing.T, name, expectedDigest string, actual []byte) {
 	t.Helper()
 	path := filepath.Join("testdata", name)
 	if os.Getenv("UPDATE_C18_GOLDENS") == "1" {
@@ -385,6 +491,9 @@ func assertGolden(t *testing.T, name string, actual []byte) {
 	expected, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if digestBytes(expected) != expectedDigest {
+		t.Fatalf("golden %s raw digest differs: got %s want %s", name, digestBytes(expected), expectedDigest)
 	}
 	if !bytes.Equal(expected, actual) {
 		t.Fatalf("golden %s differs; run with UPDATE_C18_GOLDENS=1", name)

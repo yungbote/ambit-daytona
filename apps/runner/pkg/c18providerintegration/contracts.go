@@ -25,6 +25,7 @@ const (
 	ProviderLiveRunContract         = "C18ProviderLiveRun@1"
 	MinIOIntegrationRunContract     = "C18MinioIntegrationRun@1"
 	MinIOIntegrationTestRef         = "TestPrivateObjectMinIOConditionalChecksumRangeAndDelete"
+	observationTimeLayout           = "2006-01-02T15:04:05.000Z"
 )
 
 var facetPacks = map[string]string{
@@ -252,6 +253,15 @@ func validateProviderCollectionBody(value ProviderLiveCollection) error {
 	if err := validateSourceIdentity(value.SourceRevision, value.SourceTree, value.SourceSetDigest); err != nil {
 		return err
 	}
+	streaming := value.AuthenticatedStreaming
+	observedFrom, observedUntil, intervalErr := parseObservationInterval(
+		streaming.ObservedFrom,
+		streaming.ObservedUntil,
+	)
+	if streaming.Outcome != "passed" || intervalErr != nil ||
+		len(streaming.Cases) < 2 || len(streaming.Cases) > 6 {
+		return fmt.Errorf("authenticated streaming observation is invalid")
+	}
 	if value.RunnerPolicy.CanonicalJSON == "" || !exactDigest(value.RunnerPolicy.ContentSHA256) ||
 		value.RunnerPolicy.ContentSHA256 != digestBytes([]byte(value.RunnerPolicy.CanonicalJSON)) {
 		return fmt.Errorf("runner policy pin is invalid")
@@ -312,8 +322,16 @@ func validateProviderCollectionBody(value ProviderLiveCollection) error {
 			}) {
 			return fmt.Errorf("provider receipt launch differs from its exact runner policy")
 		}
+		if row.Receipt.Files == nil {
+			return fmt.Errorf("provider receipt file roster is not an explicit array")
+		}
 		if err := specialistrender.ValidateReceipt(row.Receipt); err != nil {
 			return fmt.Errorf("provider receipt is invalid: %w", err)
+		}
+		startedAt, startedErr := parseObservationTime(row.Receipt.StartedAt)
+		completedAt, completedErr := parseObservationTime(row.Receipt.CompletedAt)
+		if startedErr != nil || completedErr != nil || startedAt.Before(observedFrom) || completedAt.After(observedUntil) {
+			return fmt.Errorf("provider receipt chronology falls outside the authenticated streaming interval")
 		}
 		wanted := "succeeded"
 		if row.Mode == "cancel" {
@@ -334,11 +352,6 @@ func validateProviderCollectionBody(value ProviderLiveCollection) error {
 		seenRows[key] = struct{}{}
 		seenOperations[row.Receipt.Request.OperationID] = struct{}{}
 		seenReceiptDigests[row.Receipt.ReceiptDigest] = struct{}{}
-	}
-	streaming := value.AuthenticatedStreaming
-	if streaming.Outcome != "passed" || !validInterval(streaming.ObservedFrom, streaming.ObservedUntil) ||
-		len(streaming.Cases) < 2 || len(streaming.Cases) > 6 {
-		return fmt.Errorf("authenticated streaming observation is invalid")
 	}
 	previous = ""
 	seenFacets := make(map[string]struct{}, len(streaming.Cases))
@@ -418,9 +431,25 @@ func validateSourceIdentity(revision, tree, sourceSet string) error {
 }
 
 func validInterval(from, until string) bool {
-	start, startErr := time.Parse(time.RFC3339Nano, from)
-	end, endErr := time.Parse(time.RFC3339Nano, until)
-	return startErr == nil && endErr == nil && !end.Before(start)
+	_, _, err := parseObservationInterval(from, until)
+	return err == nil
+}
+
+func parseObservationInterval(from, until string) (time.Time, time.Time, error) {
+	start, startErr := parseObservationTime(from)
+	end, endErr := parseObservationTime(until)
+	if startErr != nil || endErr != nil || end.Before(start) {
+		return time.Time{}, time.Time{}, fmt.Errorf("observation interval is invalid")
+	}
+	return start, end, nil
+}
+
+func parseObservationTime(value string) (time.Time, error) {
+	parsed, err := time.Parse(observationTimeLayout, value)
+	if err != nil || formatObservationTime(parsed) != value {
+		return time.Time{}, fmt.Errorf("observation time is not an exact UTC millisecond instant")
+	}
+	return parsed, nil
 }
 
 func successRow(rows []ProviderReceiptRow, facet string) (ProviderReceiptRow, bool) {

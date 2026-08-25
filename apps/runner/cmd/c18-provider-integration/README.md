@@ -53,13 +53,16 @@ self-digested `C18ProviderLiveCollection@1` file atomically. It contains:
   facet-to-pack policy;
 - six successful authenticated HTTP streams with exact request-wire,
   response-wire, operation, status, and receipt digests; and
-- the measured collection interval.
+- the measured collection interval as exact UTC millisecond instants
+  (`YYYY-MM-DDTHH:mm:ss.SSSZ`) that encloses every receipt's start and
+  completion.
 
 Cancellation is not inferred from a disconnected socket. For each cancellation
 row the collector waits until the durable operation claim is observable as
 `partial`, aborts that authenticated request, then independently polls the
 observe endpoint until the provider publishes an exact `cancelled/130` receipt
-with zero output bytes and proven child-container absence. A raced success,
+whose digest binds an explicit `files:[]`, zero output bytes, and proven
+child-container absence. A raced success,
 missing terminal receipt, retained output, or unresolved operation fails the
 whole collection.
 

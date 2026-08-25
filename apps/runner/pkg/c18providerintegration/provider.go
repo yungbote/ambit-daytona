@@ -469,7 +469,7 @@ func (writer *contextWriter) Write(value []byte) (int, error) {
 
 func decodeResponseStream(
 	ctx context.Context,
-	reader io.Reader,
+	reader io.ReadCloser,
 	request specialistrender.Request,
 	policy specialistrender.Policy,
 ) (specialistrender.Receipt, string, error) {
@@ -519,7 +519,7 @@ func hashDigest(value hash.Hash) string {
 }
 
 func formatObservationTime(value time.Time) string {
-	return value.UTC().Format(time.RFC3339Nano)
+	return value.UTC().Truncate(time.Millisecond).Format(observationTimeLayout)
 }
 
 func discard(reader io.Reader, maximum int64) {

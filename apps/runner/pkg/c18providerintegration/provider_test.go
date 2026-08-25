@@ -97,6 +97,12 @@ func TestCollectorUsesAuthenticatedAPIAndDurablyObservesAllSixCancellations(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
+	observedAt := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
+	collector.now = func() time.Time {
+		value := observedAt
+		observedAt = observedAt.Add(time.Second)
+		return value
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	collection, err := collector.Collect(ctx, run)

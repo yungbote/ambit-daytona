@@ -41,7 +41,8 @@ Best-effort cleanup is retained for failure paths; success requires exact
 deletion before publication. The output path must not exist. The command
 atomically commits one mode-`0600`, canonical, self-digested
 `C18MinioIntegrationReceipt@1` file and records concrete counts and digests
-without exposing storage authority values.
+without exposing storage authority values. Its measured interval uses exact
+UTC millisecond instants (`YYYY-MM-DDTHH:mm:ss.SSSZ`).
 
 The checked-in consumer fixture is
 `apps/runner/pkg/c18providerintegration/testdata/c18-minio-integration-receipt.golden.json`.
