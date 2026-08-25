@@ -4,7 +4,7 @@
 package docker
 
 import (
-	"slices"
+	"maps"
 	"testing"
 )
 
@@ -50,48 +50,144 @@ func TestEnvSliceToMap(t *testing.T) {
 	}
 }
 
-func TestSecretProxyEnvVars(t *testing.T) {
+func TestProxyWiringEnvVars(t *testing.T) {
 	secretEnv := map[string]string{"KEY": "dtn_secret_x"}
 	plainEnv := map[string]string{"KEY": "plain"}
+	const proxyAddr = "172.20.0.1:18080"
 
-	// Disabled (no proxy address): never injects.
-	off := &DockerClient{}
-	if off.secretProxyEnvVars(secretEnv) != nil {
-		t.Fatal("no env vars expected when secret proxy is disabled")
+	tests := []struct {
+		name            string
+		client          *DockerClient
+		env             map[string]string
+		domainAllowList string
+		wantWiring      bool
+	}{
+		{
+			name:       "proxy unavailable",
+			client:     &DockerClient{},
+			env:        secretEnv,
+			wantWiring: false,
+		},
+		{
+			name:       "plain sandbox",
+			client:     &DockerClient{secretProxyAddr: proxyAddr},
+			env:        plainEnv,
+			wantWiring: false,
+		},
+		{
+			name:            "domain policy without enforcement",
+			client:          &DockerClient{secretProxyAddr: proxyAddr},
+			env:             plainEnv,
+			domainAllowList: "example.com",
+			wantWiring:      false,
+		},
+		{
+			name: "domain policy with enforcement",
+			client: &DockerClient{
+				secretProxyAddr:         proxyAddr,
+				proxyEnforcementEnabled: true,
+			},
+			env:             plainEnv,
+			domainAllowList: "example.com",
+			wantWiring:      true,
+		},
+		{
+			name:       "secret sandbox",
+			client:     &DockerClient{secretProxyAddr: proxyAddr},
+			env:        secretEnv,
+			wantWiring: true,
+		},
 	}
 
-	d := &DockerClient{secretProxyAddr: "172.20.0.1:18080"}
-	// No secrets in env: no injection (non-secret sandboxes untouched).
-	if d.secretProxyEnvVars(plainEnv) != nil {
-		t.Fatal("no env vars expected when the sandbox uses no secrets")
+	proxyURL := "http://" + proxyAddr
+	want := map[string]string{
+		"HTTP_PROXY":          proxyURL,
+		"HTTPS_PROXY":         proxyURL,
+		"http_proxy":          proxyURL,
+		"https_proxy":         proxyURL,
+		"NO_PROXY":            "localhost,127.0.0.1,::1",
+		"no_proxy":            "localhost,127.0.0.1,::1",
+		"SSL_CERT_FILE":       secretCAContainerPath,
+		"NODE_EXTRA_CA_CERTS": secretCAContainerPath,
+		"REQUESTS_CA_BUNDLE":  secretCAContainerPath,
+		"CURL_CA_BUNDLE":      secretCAContainerPath,
+		"DENO_CERT":           secretCAContainerPath,
 	}
-	got := d.secretProxyEnvVars(secretEnv)
-	if !slices.Contains(got, "HTTPS_PROXY=http://172.20.0.1:18080") {
-		t.Errorf("expected HTTPS_PROXY in %v", got)
-	}
-	if !slices.Contains(got, "SSL_CERT_FILE="+secretCAContainerPath) {
-		t.Errorf("expected SSL_CERT_FILE in %v", got)
-	}
-	if !slices.Contains(got, "NO_PROXY=localhost,127.0.0.1,::1") {
-		t.Errorf("expected NO_PROXY in %v", got)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.client.proxyWiringEnvVars(tt.env, tt.domainAllowList)
+			if !tt.wantWiring {
+				if got != nil {
+					t.Fatalf("proxyWiringEnvVars() = %v, want nil", got)
+				}
+				return
+			}
+
+			gotMap := envSliceToMap(got)
+			if len(got) != len(want) {
+				t.Fatalf("proxyWiringEnvVars() returned %d entries, want %d: %v", len(got), len(want), got)
+			}
+			if !maps.Equal(gotMap, want) {
+				t.Errorf("proxyWiringEnvVars() = %v, want %v", gotMap, want)
+			}
+		})
 	}
 }
 
-func TestSecretProxyCABind(t *testing.T) {
+func TestProxyCABind(t *testing.T) {
 	secretEnv := map[string]string{"KEY": "dtn_secret_x"}
+	plainEnv := map[string]string{"KEY": "plain"}
+	const caPath = "/var/lib/netleash/ca.crt"
+	wantBind := caPath + ":" + secretCAContainerPath + ":ro"
 
-	off := &DockerClient{}
-	if off.secretProxyCABind(secretEnv) != "" {
-		t.Fatal("no bind expected when CA path is unset")
+	tests := []struct {
+		name            string
+		client          *DockerClient
+		env             map[string]string
+		domainAllowList string
+		want            string
+	}{
+		{
+			name:   "CA unavailable",
+			client: &DockerClient{},
+			env:    secretEnv,
+		},
+		{
+			name:   "plain sandbox",
+			client: &DockerClient{secretProxyCACert: caPath},
+			env:    plainEnv,
+		},
+		{
+			name:            "domain policy without enforcement",
+			client:          &DockerClient{secretProxyCACert: caPath},
+			env:             plainEnv,
+			domainAllowList: "example.com",
+		},
+		{
+			name: "domain policy with enforcement",
+			client: &DockerClient{
+				secretProxyCACert:       caPath,
+				proxyEnforcementEnabled: true,
+			},
+			env:             plainEnv,
+			domainAllowList: "example.com",
+			want:            wantBind,
+		},
+		{
+			name:   "secret sandbox",
+			client: &DockerClient{secretProxyCACert: caPath},
+			env:    secretEnv,
+			want:   wantBind,
+		},
 	}
 
-	d := &DockerClient{secretProxyCACert: "/var/lib/netleash/ca.crt"}
-	if d.secretProxyCABind(map[string]string{"KEY": "plain"}) != "" {
-		t.Fatal("no bind expected when the sandbox uses no secrets")
-	}
-	want := "/var/lib/netleash/ca.crt:" + secretCAContainerPath + ":ro"
-	if got := d.secretProxyCABind(secretEnv); got != want {
-		t.Errorf("secretProxyCABind = %q, want %q", got, want)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.client.proxyCABind(tt.env, tt.domainAllowList); got != tt.want {
+				t.Errorf("proxyCABind() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
