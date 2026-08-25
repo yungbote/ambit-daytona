@@ -135,6 +135,34 @@ func TestProviderResponseObserverAbortsCustodyBeforeCommitOnInvalidTail(t *testi
 	}
 }
 
+func TestProviderResponseObserverRejectsCRLFFraming(t *testing.T) {
+	request, _, _ := testProviderRequest(t)
+	payload := []byte("result")
+	receipt := testProviderReceipt(t, request, payload)
+	result := specialistrender.ExecutionResult{
+		Receipt: receipt,
+		Files: []specialistrender.Payload{{
+			File: receipt.Files[0],
+			Open: func(context.Context) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(payload)), nil
+			},
+			Cleanup: func() error { return nil },
+		}},
+	}
+	var encoded bytes.Buffer
+	if err := specialistrender.EncodeResponseStream(context.Background(), &encoded, result); err != nil {
+		t.Fatal(err)
+	}
+	crlf := bytes.Replace(encoded.Bytes(), []byte{'\n'}, []byte{'\r', '\n'}, 1)
+	custody := &hashingResponseCustody{}
+	if _, err := ObserveProviderResponseStream(context.Background(), bytes.NewReader(crlf), request, custody); err == nil {
+		t.Fatal("CRLF provider framing was admitted")
+	}
+	if custody.committed || !custody.aborted {
+		t.Fatal("CRLF response custody was not aborted")
+	}
+}
+
 func TestProviderResponseStreamRejectsRequestAndByteSubstitution(t *testing.T) {
 	request, _, _ := testProviderRequest(t)
 	payload := []byte("result")

@@ -422,7 +422,8 @@ func readFrameLine(reader *bufio.Reader) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read specialist-render frame: %w", err)
 	}
-	if len(line) < 3 || line[len(line)-1] != '\n' || bytes.IndexByte(line[:len(line)-1], '\n') >= 0 {
+	if len(line) < 3 || line[len(line)-1] != '\n' ||
+		bytes.IndexByte(line[:len(line)-1], '\n') >= 0 || bytes.IndexByte(line[:len(line)-1], '\r') >= 0 {
 		return nil, errors.New("specialist-render frame delimiter is invalid")
 	}
 	return append([]byte(nil), line[:len(line)-1]...), nil
