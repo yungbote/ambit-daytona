@@ -320,6 +320,50 @@ describe(WorkingCopyCaptureService.name, () => {
     ])
   })
 
+  it('validates roster paths in portable UTF-8 byte order rather than JavaScript UTF-16 order', async () => {
+    const request = validRosterRequest()
+    const receipt = validRosterReceipt(request)
+    receipt.entries = [
+      {
+        zoneRelativePath: 'site/index.html',
+        name: 'index.html',
+        kind: 'regular_file',
+        size: 13,
+        mode: '0644',
+      },
+      {
+        zoneRelativePath: 'site/\uE000.js',
+        name: '\uE000.js',
+        kind: 'regular_file',
+        size: 1,
+        mode: '0644',
+      },
+      {
+        zoneRelativePath: 'site/😀.js',
+        name: '😀.js',
+        kind: 'regular_file',
+        size: 1,
+        mode: '0644',
+      },
+    ]
+    receipt.rosterDigest = rosterDigest(receipt.request, receipt.terminalGeneration, receipt.entries)
+    adapter.stoppedWorkingCopyDirectoryRoster.mockResolvedValueOnce(receipt)
+
+    await expect(service.stoppedDirectoryRoster('daytona-org-1', 'sandbox-1', request)).resolves.toEqual(receipt)
+
+    const utf16Ordered = structuredClone(receipt)
+    ;[utf16Ordered.entries[1], utf16Ordered.entries[2]] = [utf16Ordered.entries[2], utf16Ordered.entries[1]]
+    utf16Ordered.rosterDigest = rosterDigest(
+      utf16Ordered.request,
+      utf16Ordered.terminalGeneration,
+      utf16Ordered.entries,
+    )
+    adapter.stoppedWorkingCopyDirectoryRoster.mockResolvedValueOnce(utf16Ordered)
+    await expect(service.stoppedDirectoryRoster('daytona-org-1', 'sandbox-1', request)).rejects.toBeInstanceOf(
+      ConflictException,
+    )
+  })
+
   it('rejects invalid stopped-directory roster authority and bounds before lookup', async () => {
     const candidates: StoppedWorkingCopyDirectoryRosterRequestDto[] = []
     for (const mutate of [

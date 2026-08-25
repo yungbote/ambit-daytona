@@ -970,7 +970,10 @@ func readStoppedDirectoryRosterTar(
 		return nil, fmt.Errorf("%w: stopped-directory roster omitted its anchor file", ErrConflict)
 	}
 	sort.Slice(entries, func(left, right int) bool {
-		return entries[left].ZoneRelativePath < entries[right].ZoneRelativePath
+		return compareUTF8Lexicographic(
+			entries[left].ZoneRelativePath,
+			entries[right].ZoneRelativePath,
+		) < 0
 	})
 	for index := 1; index < len(entries); index++ {
 		if entries[index-1].ZoneRelativePath == entries[index].ZoneRelativePath {
@@ -978,6 +981,13 @@ func readStoppedDirectoryRosterTar(
 		}
 	}
 	return entries, nil
+}
+
+// UTF-8 byte order is the cross-language roster contract. In particular,
+// JavaScript's native UTF-16 relational order is not equivalent for paths that
+// mix BMP and supplementary code points.
+func compareUTF8Lexicographic(left, right string) int {
+	return bytes.Compare([]byte(left), []byte(right))
 }
 
 func canonicalRosterArchiveName(value string) bool {

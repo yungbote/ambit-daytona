@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -163,6 +164,37 @@ func TestStoppedDirectoryRosterUsesExactTerminalDockerGeneration(t *testing.T) {
 	encoded, err := json.Marshal(receipt)
 	if err != nil || bytes.Contains(encoded, []byte("entrypoint bytes")) || bytes.Contains(encoded, []byte("script bytes")) {
 		t.Fatalf("roster exposed file bytes: %s, %v", encoded, err)
+	}
+}
+
+func TestStoppedDirectoryRosterUsesPortableUTF8ByteOrder(t *testing.T) {
+	t.Parallel()
+	request := validStoppedDirectoryRosterRequest()
+	containers := newFakeContainer(nil)
+	containers.copyStatMode = os.ModeDir | 0o755
+	containers.archive = tarArchive(
+		tarEntry{name: "site/", typeflag: tar.TypeDir, mode: 0o755},
+		tarEntry{name: "site/😀.js", typeflag: tar.TypeReg, body: []byte("supplementary")},
+		tarEntry{name: "site/\uE000.js", typeflag: tar.TypeReg, body: []byte("bmp-private-use")},
+		tarEntry{name: "site/index.html", typeflag: tar.TypeReg, body: []byte("entrypoint")},
+	)
+	service := mustService(t, containers, newFakeObjectStore(), request.Anchor.Authority)
+
+	receipt, err := service.StoppedDirectoryRoster(
+		context.Background(),
+		request.Anchor.Source.ProviderResourceID,
+		request,
+	)
+	if err != nil {
+		t.Fatalf("Unicode stopped-directory roster failed: %v", err)
+	}
+	want := []string{"site/index.html", "site/\uE000.js", "site/😀.js"}
+	got := make([]string, 0, len(receipt.Entries))
+	for _, entry := range receipt.Entries {
+		got = append(got, entry.ZoneRelativePath)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("roster did not use UTF-8 byte order: got %#v, want %#v", got, want)
 	}
 }
 

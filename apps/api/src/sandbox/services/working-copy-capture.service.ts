@@ -329,7 +329,10 @@ function assertStoppedDirectoryRosterReceipt(
   let aggregateBytes = 0
   for (const [index, entry] of receipt.entries.entries()) {
     assertStoppedDirectoryRosterEntry(entry, request)
-    if (index > 0 && receipt.entries[index - 1].zoneRelativePath >= entry.zoneRelativePath) {
+    if (
+      index > 0 &&
+      compareUtf8Lexicographic(receipt.entries[index - 1].zoneRelativePath, entry.zoneRelativePath) >= 0
+    ) {
       throw new ConflictException('Runner stopped-directory roster is not sorted and unique.')
     }
     if (entry.kind === 'regular_file') {
@@ -356,6 +359,10 @@ function assertStoppedDirectoryRosterReceipt(
   if (receipt.rosterDigest !== expectedDigest) {
     throw new ConflictException('Runner stopped-directory roster digest changed.')
   }
+}
+
+function compareUtf8Lexicographic(left: string, right: string): number {
+  return Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8'))
 }
 
 function assertStoppedDirectoryRosterEntry(
