@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/daytonaio/runner/pkg/generationstop"
+	"github.com/daytonaio/runner/pkg/specialistrender"
 )
 
 type renderGoldenBundle struct {
@@ -92,7 +93,7 @@ func TestRenderCommandBindsSourceBytesAndFacetExecutable(t *testing.T) {
 	if _, err := ParseRenderCommandV2(encoded, append([]byte(nil), source[:len(source)-1]...)); err == nil {
 		t.Fatal("truncated inline source was admitted")
 	}
-	command.Renderer.ExecutablePath = facetExecutables["pdf"]
+	command.Renderer.ExecutablePath = facetExecutable("pdf")
 	command.Digest = resealForTest(t, command)
 	encoded, err = generationstop.CanonicalJSON(command)
 	if err != nil {
@@ -121,6 +122,99 @@ func TestRenderResultRejectsReboundRequestEvenWhenResealed(t *testing.T) {
 	}
 	if _, err := ParseRenderResultV2(command, encoded); err == nil {
 		t.Fatal("result rebound to another request was admitted")
+	}
+}
+
+func TestAdmitRenderExecutionParsesOwnedFailureEvidenceAndRejectsOrphans(t *testing.T) {
+	golden := loadRenderGolden(t)
+	var command RenderCommandV2
+	if err := generationstop.DecodeCanonicalJSON([]byte(golden.Request), &command); err != nil {
+		t.Fatal(err)
+	}
+	source := []byte("exact preactivation source")
+	command.Source.ByteLength = int64(len(source))
+	command.Source.Digest = sha256Digest(source)
+	command.Digest = resealForTest(t, command)
+	commandBytes, err := generationstop.CanonicalJSON(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerInput := testProviderInput(t, commandBytes, source)
+	providerInput.Executable = command.Renderer.ExecutablePath
+	providerInput.Image = specialistrender.ImagePin{
+		Ref:          "registry.test/ambit/office-authoring@sha256:" + repeatHex("8"),
+		ConfigDigest: "sha256:" + repeatHex("9"), PackID: "office-authoring",
+		PackRef: "ambit.runtime-pack/office-authoring@1",
+	}
+	providerInput.Executor = specialistrender.Pin{
+		Ref:    "ambit://specialist-render-executors/office-authoring@1",
+		Digest: "sha256:" + repeatHex("5"),
+	}
+	providerInput.ProviderPolicy = testPin("ambit.runtime-provider/specialist-render-office-authoring@1", "c")
+	providerRequest, _, _, err := ProviderRequest(providerInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := command.PackRequiredChecks[0].Check
+	evidence := RenderCheckEvidenceV1{
+		Artifacts: []RenderEvidenceDescriptor{}, Check: check,
+		Contract:         RenderEvidenceContractV1,
+		ExecutorRevision: providerRequest.Executor,
+		Facts:            []RenderEvidenceFactV1{{Key: "fixture", Value: "failed exactly"}},
+		Outcome:          "failed",
+		Request: RenderEvidenceRequestV1{
+			Digest: command.Digest, JobRef: command.JobRef, SourceDigest: command.Source.Digest,
+		},
+	}
+	evidence.Digest = resealForTest(t, evidence)
+	evidenceBytes, err := generationstop.CanonicalJSON(evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidenceDescriptor := RenderEvidenceDescriptor{
+		Path:      command.Output.JobOutputRoot + "/evidence/001-" + check + ".json",
+		MediaType: RenderEvidenceMediaType, ByteLength: int64(len(evidenceBytes)),
+		Digest: sha256Digest(evidenceBytes),
+	}
+	result := RenderResultV2{
+		Checks:   []RenderResultCheckV2{{Check: check, Evidence: &evidenceDescriptor, Outcome: "failed"}},
+		Contract: RenderResultContractV2,
+		Execution: RenderExecutionV2{
+			CompletedAt: "2026-08-24T00:00:02.000Z", ExecutorRevision: providerRequest.Executor,
+			StartedAt: "2026-08-24T00:00:01.000Z",
+		},
+		Failure: &RenderFailureV2{Code: "check_failed", Message: "The exact check failed."},
+		Outcome: "failed", Preview: nil,
+		Request: RenderResultRequestV2{Digest: command.Digest, JobRef: command.JobRef, JobRoot: command.JobRoot},
+	}
+	result.Digest = resealForTest(t, result)
+	resultBytes, err := generationstop.CanonicalJSON(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := failedProviderResult(t, providerRequest, command, resultBytes, evidenceDescriptor, evidenceBytes)
+
+	parsed, parsedEvidence, err := AdmitRenderExecution(commandBytes, source, provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Digest != result.Digest || len(parsedEvidence) != 1 || parsedEvidence[0].Digest != evidence.Digest {
+		t.Fatal("admitted render execution lost exact helper evidence")
+	}
+
+	orphan := []byte("orphan")
+	provider.Receipt.Files = append(provider.Receipt.Files, specialistrender.OutputFile{
+		Ordinal: 2, Role: "artifact", Path: command.Output.JobOutputRoot + "/artifacts/orphan.bin",
+		MediaType: "application/octet-stream", ByteLength: int64(len(orphan)), Digest: sha256Digest(orphan),
+	})
+	provider.Receipt.TotalOutputBytes += int64(len(orphan))
+	provider.Receipt.ReceiptDigest, err = specialistrender.ComputeReceiptDigest(provider.Receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.Files = append(provider.Files, ProviderOutput{Descriptor: provider.Receipt.Files[2], Bytes: orphan})
+	if _, _, err := AdmitRenderExecution(commandBytes, source, provider); err == nil {
+		t.Fatal("unowned provider artifact was admitted")
 	}
 }
 
@@ -165,4 +259,47 @@ func repeatHex(value string) string {
 		result += value
 	}
 	return result[:64]
+}
+
+func failedProviderResult(
+	t *testing.T,
+	request specialistrender.Request,
+	command RenderCommandV2,
+	resultBytes []byte,
+	evidenceDescriptor RenderEvidenceDescriptor,
+	evidenceBytes []byte,
+) ProviderExecutionResult {
+	t.Helper()
+	receipt := testProviderReceipt(t, request, resultBytes)
+	receipt.Outcome = "failed"
+	receipt.TerminalOutcome = "failed"
+	receipt.HelperExitCode = 1
+	receipt.Files = []specialistrender.OutputFile{
+		{
+			Ordinal: 0, Role: "result", Path: command.Output.ResultPath,
+			MediaType: RenderResultMediaType, ByteLength: int64(len(resultBytes)),
+			Digest: sha256Digest(resultBytes),
+		},
+		{
+			Ordinal: 1, Role: "evidence", Path: evidenceDescriptor.Path,
+			MediaType: evidenceDescriptor.MediaType, ByteLength: evidenceDescriptor.ByteLength,
+			Digest: evidenceDescriptor.Digest,
+		},
+	}
+	receipt.TotalOutputBytes = int64(len(resultBytes) + len(evidenceBytes))
+	var err error
+	receipt.ReceiptDigest, err = specialistrender.ComputeReceiptDigest(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := specialistrender.ValidateReceipt(receipt); err != nil {
+		t.Fatal(err)
+	}
+	return ProviderExecutionResult{
+		Receipt: receipt,
+		Files: []ProviderOutput{
+			{Descriptor: receipt.Files[0], Bytes: resultBytes},
+			{Descriptor: receipt.Files[1], Bytes: evidenceBytes},
+		},
+	}
 }

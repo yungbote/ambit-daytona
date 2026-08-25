@@ -37,15 +37,6 @@ var (
 	canonicalUUID      = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 )
 
-var facetExecutables = map[string]string{
-	"data_analysis":   "/opt/ambit/runtime-pack/data-research/bin/ambit-specialist-render",
-	"pdf":             "/opt/ambit/runtime-pack/pdf-ocr/bin/ambit-specialist-render",
-	"presentation":    "/opt/ambit/runtime-pack/office-authoring/bin/ambit-specialist-render",
-	"research":        "/opt/ambit/runtime-pack/data-research/bin/ambit-specialist-render",
-	"spreadsheet":     "/opt/ambit/runtime-pack/office-authoring/bin/ambit-specialist-render",
-	"web_application": "/opt/ambit/runtime-pack/web-browser/bin/ambit-specialist-render",
-}
-
 type RenderCommandV2 struct {
 	Contract           string                  `json:"contract"`
 	DeadlineAt         string                  `json:"deadlineAt"`
@@ -195,8 +186,8 @@ func validateRenderCommand(command RenderCommandV2, sourceBytes []byte) error {
 	if err := verifySealedDigest(command, command.Digest); err != nil {
 		return err
 	}
-	executable, facetExists := facetExecutables[command.Facet]
-	if !facetExists || command.Renderer.ExecutablePath != executable {
+	executable := facetExecutable(command.Facet)
+	if executable == "" || command.Renderer.ExecutablePath != executable {
 		return errors.New("C18 render command facet or executable is invalid")
 	}
 	jobID := strings.TrimPrefix(command.JobRef, "ambit://artifact-render-jobs/")
@@ -536,4 +527,19 @@ func containsString(values []string, expected string) bool {
 
 func equalStrings(left, right []string) bool {
 	return bytes.Equal([]byte(strings.Join(left, "\x00")), []byte(strings.Join(right, "\x00")))
+}
+
+func facetExecutable(facet string) string {
+	switch facet {
+	case "data_analysis", "research":
+		return "/opt/ambit/runtime-pack/data-research/bin/ambit-specialist-render"
+	case "pdf":
+		return "/opt/ambit/runtime-pack/pdf-ocr/bin/ambit-specialist-render"
+	case "presentation", "spreadsheet":
+		return "/opt/ambit/runtime-pack/office-authoring/bin/ambit-specialist-render"
+	case "web_application":
+		return "/opt/ambit/runtime-pack/web-browser/bin/ambit-specialist-render"
+	default:
+		return ""
+	}
 }
