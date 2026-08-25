@@ -89,10 +89,10 @@ func TestProviderRequestAndResponseStreamsRoundTripExactBytes(t *testing.T) {
 	sourceBytes := []byte("source bytes")
 	request := row.Receipt.Request
 	request.RequestBytes = int64(len(requestBytes))
-	request.RequestChunkCount = chunkCount(len(requestBytes))
+	request.RequestChunkCount = (len(requestBytes) + specialistrender.RequestChunkBytes - 1) / specialistrender.RequestChunkBytes
 	request.RequestDigest = digestBytes(requestBytes)
 	request.SourceBytes = int64(len(sourceBytes))
-	request.SourceChunkCount = chunkCount(len(sourceBytes))
+	request.SourceChunkCount = (len(sourceBytes) + specialistrender.RequestChunkBytes - 1) / specialistrender.RequestChunkBytes
 	request.SourceDigest = digestBytes(sourceBytes)
 	fingerprint, err := specialistrender.ComputeRequestFingerprint(request)
 	if err != nil {
@@ -134,7 +134,7 @@ func TestProviderRequestAndResponseStreamsRoundTripExactBytes(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	observed, streamDigest, err := decodeResponseStream(bytes.NewReader(response.Bytes()), request, policy)
+	observed, streamDigest, err := decodeResponseStream(context.Background(), bytes.NewReader(response.Bytes()), request, policy)
 	if err != nil {
 		t.Fatal(err)
 	}

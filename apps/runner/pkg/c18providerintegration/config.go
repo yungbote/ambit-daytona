@@ -6,11 +6,11 @@ package c18providerintegration
 import (
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/daytonaio/runner/pkg/c18preactivation"
 	"github.com/daytonaio/runner/pkg/generationstop"
 	"github.com/daytonaio/runner/pkg/specialistrender"
 	"github.com/google/uuid"
@@ -69,11 +69,7 @@ type MinIOIntegrationRun struct {
 	RunID           string `json:"runId"`
 }
 
-type DaytonaAPIConfig struct {
-	BaseURL        *url.URL
-	Credential     string
-	OrganizationID string
-}
+type DaytonaAPIConfig = c18preactivation.HTTPProviderConfig
 
 func ReadProviderLiveRun(path string) (ProviderLiveRun, []byte, error) {
 	bytes, err := readCanonicalConfig(path, maximumRunConfigBytes)
@@ -190,28 +186,7 @@ func ValidateMinIOIntegrationRun(value MinIOIntegrationRun) error {
 }
 
 func DaytonaConfigFromEnvironment() (DaytonaAPIConfig, error) {
-	rawURL := exactEnvironment("DAYTONA_API_URL")
-	apiKey := exactEnvironment("DAYTONA_API_KEY")
-	jwt := exactEnvironment("DAYTONA_JWT_TOKEN")
-	organizationID := exactEnvironment("DAYTONA_ORGANIZATION_ID")
-	if rawURL == "" || (apiKey == "" && jwt == "") || (apiKey != "" && jwt != "") ||
-		(apiKey == "" && organizationID == "") {
-		return DaytonaAPIConfig{}, fmt.Errorf("exact Daytona API URL and one credential are required")
-	}
-	parsed, err := url.Parse(rawURL)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" ||
-		(parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil ||
-		parsed.RawQuery != "" || parsed.Fragment != "" {
-		return DaytonaAPIConfig{}, fmt.Errorf("Daytona API URL is invalid")
-	}
-	if !strings.HasSuffix(parsed.Path, "/") {
-		parsed.Path += "/"
-	}
-	credential := apiKey
-	if credential == "" {
-		credential = jwt
-	}
-	return DaytonaAPIConfig{BaseURL: parsed, Credential: credential, OrganizationID: organizationID}, nil
+	return c18preactivation.HTTPProviderConfigFromEnvironment(os.Getenv)
 }
 
 func validatePinnedInput(value PinnedInputFile, maximum int64, label string) error {
@@ -256,19 +231,6 @@ func readCanonicalConfig(path string, maximum int64) ([]byte, error) {
 func absoluteCleanPath(value string) bool {
 	return value != "" && len(value) <= maximumInputPathBytes && strings.TrimSpace(value) == value &&
 		filepath.IsAbs(value) && filepath.Clean(value) == value && value != "/" && !strings.ContainsRune(value, 0)
-}
-
-func exactEnvironment(name string) string {
-	value := os.Getenv(name)
-	if value == "" || len(value) > 4096 || strings.TrimSpace(value) != value {
-		return ""
-	}
-	for _, character := range value {
-		if character < 32 || character == 127 {
-			return ""
-		}
-	}
-	return value
 }
 
 func CanonicalProviderLiveRun(value ProviderLiveRun) ([]byte, error) {

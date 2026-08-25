@@ -4,14 +4,11 @@
 package c18providerintegration
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -22,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/daytonaio/runner/pkg/c18preactivation"
 	"github.com/daytonaio/runner/pkg/generationstop"
 	"github.com/daytonaio/runner/pkg/specialistrender"
 	"golang.org/x/sys/unix"
@@ -183,7 +181,7 @@ func (collector *Collector) executeSuccess(
 		discard(response.Body, 64*1024)
 		return executionObservation{}, fmt.Errorf("authenticated provider success returned an invalid status or content type")
 	}
-	receipt, responseDigest, err := decodeResponseStream(response.Body, request, policy)
+	receipt, responseDigest, err := decodeResponseStream(executeCtx, response.Body, request, policy)
 	if err != nil {
 		return executionObservation{}, err
 	}
@@ -265,7 +263,7 @@ func (collector *Collector) executeCancellation(
 		defer early.response.Body.Close()
 		if early.response.StatusCode == http.StatusUnprocessableEntity &&
 			early.response.Header.Get("Content-Type") == specialistRenderContentType {
-			receipt, _, decodeErr := decodeResponseStream(early.response.Body, request, policy)
+			receipt, _, decodeErr := decodeResponseStream(observationCtx, early.response.Body, request, policy)
 			if decodeErr == nil && receipt.Outcome == "cancelled" {
 				return executionObservation{receipt: receipt}, nil
 			}
@@ -423,23 +421,15 @@ func specialistRequest(
 	generation generationstop.ExpectedGeneration,
 	requestBytes, sourceBytes []byte,
 ) (specialistrender.Request, error) {
-	request := specialistrender.Request{
-		Schema: specialistrender.RequestSchema, OperationID: execution.OperationID,
-		ArtifactRenderJobRef: execution.ArtifactRenderJobRef,
-		Composition:          policy.Composition, Source: run.Target.Source, Owner: run.Target.Owner,
-		Fence: run.Target.Fence, ExpectedParentGeneration: generation,
+	request, _, _, err := c18preactivation.ProviderRequest(c18preactivation.ProviderExecutionInput{
+		Workspace: run.Target.Source, OperationID: execution.OperationID,
+		ArtifactRenderJobRef: execution.ArtifactRenderJobRef, Composition: policy.Composition,
+		Owner: run.Target.Owner, Fence: run.Target.Fence, ExpectedParentGeneration: generation,
 		Image: policy.Image, Interface: policy.Interface, Executor: policy.Executor,
 		Executable: policy.Executable, ProviderPolicy: policy.Authority,
-		RequestBytes: int64(len(requestBytes)), RequestChunkCount: chunkCount(len(requestBytes)),
-		RequestDigest: digestBytes(requestBytes), SourceBytes: int64(len(sourceBytes)),
-		SourceChunkCount: chunkCount(len(sourceBytes)), SourceDigest: digestBytes(sourceBytes),
-	}
-	fingerprint, err := specialistrender.ComputeRequestFingerprint(request)
-	if err != nil {
-		return specialistrender.Request{}, err
-	}
-	request.RequestFingerprint = fingerprint
-	return request, nil
+		RequestBytes: requestBytes, SourceBytes: sourceBytes,
+	})
+	return request, err
 }
 
 type requestDigestResult struct {
@@ -459,227 +449,40 @@ func requestStream(ctx context.Context, request specialistrender.Request, reques
 	return reader, result
 }
 
-type providerRequestStart struct {
-	Schema     string                   `json:"schema"`
-	Kind       string                   `json:"kind"`
-	ChunkBytes int                      `json:"chunkBytes"`
-	Request    specialistrender.Request `json:"request"`
-}
-
-type providerChunk struct {
-	Schema      string `json:"schema"`
-	Kind        string `json:"kind"`
-	OperationID string `json:"operationId"`
-	Index       int    `json:"index"`
-	Bytes       int    `json:"bytes"`
-	SHA256      string `json:"sha256"`
-	Base64      string `json:"base64"`
-}
-
-type providerRequestEnd struct {
-	Schema            string `json:"schema"`
-	Kind              string `json:"kind"`
-	OperationID       string `json:"operationId"`
-	RequestBytes      int64  `json:"requestBytes"`
-	RequestChunkCount int    `json:"requestChunkCount"`
-	RequestSHA256     string `json:"requestSha256"`
-	SourceBytes       int64  `json:"sourceBytes"`
-	SourceChunkCount  int    `json:"sourceChunkCount"`
-	SourceSHA256      string `json:"sourceSha256"`
-	FrameCount        int    `json:"frameCount"`
-	StreamSHA256      string `json:"streamSha256"`
-}
-
 func encodeRequestStream(ctx context.Context, writer io.Writer, request specialistrender.Request, requestBytes, sourceBytes []byte) error {
-	protocolHash := sha256.New()
-	frameCount := 0
-	write := func(value any) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		line, err := generationstop.CanonicalJSON(value)
-		if err != nil || len(line)+1 > specialistrender.MaximumFrameBytes {
-			return fmt.Errorf("provider request frame is invalid")
-		}
-		framed := append(line, '\n')
-		if _, err := writer.Write(framed); err != nil {
-			return err
-		}
-		_, _ = protocolHash.Write(framed)
-		frameCount++
-		return nil
-	}
-	if err := write(providerRequestStart{Schema: specialistrender.ProviderFrameSchema, Kind: "provider_request_start", ChunkBytes: specialistrender.RequestChunkBytes, Request: request}); err != nil {
-		return err
-	}
-	for _, item := range []struct {
-		kind  string
-		bytes []byte
-	}{{"request_chunk", requestBytes}, {"source_chunk", sourceBytes}} {
-		for index, offset := 0, 0; offset < len(item.bytes); index, offset = index+1, offset+specialistrender.RequestChunkBytes {
-			end := offset + specialistrender.RequestChunkBytes
-			if end > len(item.bytes) {
-				end = len(item.bytes)
-			}
-			chunk := item.bytes[offset:end]
-			if err := write(providerChunk{
-				Schema: specialistrender.ProviderFrameSchema, Kind: item.kind,
-				OperationID: request.OperationID, Index: index, Bytes: len(chunk),
-				SHA256: digestBytes(chunk), Base64: base64.StdEncoding.EncodeToString(chunk),
-			}); err != nil {
-				return err
-			}
-		}
-	}
-	end := providerRequestEnd{
-		Schema: specialistrender.ProviderFrameSchema, Kind: "provider_request_end", OperationID: request.OperationID,
-		RequestBytes: request.RequestBytes, RequestChunkCount: request.RequestChunkCount, RequestSHA256: request.RequestDigest,
-		SourceBytes: request.SourceBytes, SourceChunkCount: request.SourceChunkCount, SourceSHA256: request.SourceDigest,
-		FrameCount: frameCount, StreamSHA256: hashDigest(protocolHash),
-	}
-	line, err := generationstop.CanonicalJSON(end)
-	if err != nil || len(line)+1 > specialistrender.MaximumFrameBytes {
-		return fmt.Errorf("provider request end is invalid")
-	}
-	_, err = writer.Write(append(line, '\n'))
-	return err
+	return c18preactivation.EncodeProviderRequestStream(
+		&contextWriter{ctx: ctx, writer: writer}, request, requestBytes, sourceBytes,
+	)
 }
 
-type providerResponseStart struct {
-	Schema     string                   `json:"schema"`
-	Kind       string                   `json:"kind"`
-	ChunkBytes int                      `json:"chunkBytes"`
-	Receipt    specialistrender.Receipt `json:"receipt"`
+type contextWriter struct {
+	ctx    context.Context
+	writer io.Writer
 }
 
-type providerFileChunk struct {
-	Schema      string `json:"schema"`
-	Kind        string `json:"kind"`
-	OperationID string `json:"operationId"`
-	Ordinal     int    `json:"ordinal"`
-	Index       int    `json:"index"`
-	Bytes       int    `json:"bytes"`
-	SHA256      string `json:"sha256"`
-	Base64      string `json:"base64"`
+func (writer *contextWriter) Write(value []byte) (int, error) {
+	if err := writer.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return writer.writer.Write(value)
 }
 
-type providerResponseEnd struct {
-	Schema        string `json:"schema"`
-	Kind          string `json:"kind"`
-	OperationID   string `json:"operationId"`
-	ReceiptDigest string `json:"receiptDigest"`
-	FileCount     int    `json:"fileCount"`
-	TotalBytes    int64  `json:"totalBytes"`
-	FrameCount    int    `json:"frameCount"`
-	StreamSHA256  string `json:"streamSha256"`
-}
-
-type frameKind struct {
-	Kind string `json:"kind"`
-}
-
-func decodeResponseStream(reader io.Reader, request specialistrender.Request, policy specialistrender.Policy) (specialistrender.Receipt, string, error) {
-	lines := bufio.NewReaderSize(reader, specialistrender.MaximumFrameBytes+1)
-	protocolHash := sha256.New()
-	wholeHash := sha256.New()
-	frameCount := 0
-	line, framed, err := readCanonicalLine(lines)
+func decodeResponseStream(
+	ctx context.Context,
+	reader io.Reader,
+	request specialistrender.Request,
+	policy specialistrender.Policy,
+) (specialistrender.Receipt, string, error) {
+	observation, err := c18preactivation.ObserveProviderResponseStream(
+		ctx, reader, request, c18preactivation.DiscardProviderResponseCustody(),
+	)
 	if err != nil {
 		return specialistrender.Receipt{}, "", err
 	}
-	var start providerResponseStart
-	if err := generationstop.DecodeCanonicalJSON(line, &start); err != nil ||
-		start.Schema != specialistrender.ProviderFrameSchema || start.Kind != "provider_response_start" ||
-		start.ChunkBytes != specialistrender.RequestChunkBytes || start.Receipt.Request != request {
-		return specialistrender.Receipt{}, "", fmt.Errorf("provider response start is invalid")
+	if err := specialistrender.ValidateReceiptWithPolicy(observation.Receipt, policy); err != nil {
+		return specialistrender.Receipt{}, "", fmt.Errorf("provider receipt differs from runner policy: %w", err)
 	}
-	if err := specialistrender.ValidateReceiptWithPolicy(start.Receipt, policy); err != nil {
-		return specialistrender.Receipt{}, "", fmt.Errorf("provider receipt is invalid: %w", err)
-	}
-	_, _ = protocolHash.Write(framed)
-	_, _ = wholeHash.Write(framed)
-	frameCount++
-	fileHashes := make([]hash.Hash, len(start.Receipt.Files))
-	fileBytes := make([]int64, len(start.Receipt.Files))
-	fileIndexes := make([]int, len(start.Receipt.Files))
-	currentOrdinal := 0
-	for index := range fileHashes {
-		fileHashes[index] = sha256.New()
-	}
-	terminal := providerResponseEnd{}
-	for {
-		line, framed, err = readCanonicalLine(lines)
-		if err != nil {
-			return specialistrender.Receipt{}, "", err
-		}
-		var kind frameKind
-		if err := json.Unmarshal(line, &kind); err != nil {
-			return specialistrender.Receipt{}, "", fmt.Errorf("provider response kind is invalid")
-		}
-		if kind.Kind == "provider_response_end" {
-			if err := generationstop.DecodeCanonicalJSON(line, &terminal); err != nil {
-				return specialistrender.Receipt{}, "", fmt.Errorf("provider response end is invalid")
-			}
-			_, _ = wholeHash.Write(framed)
-			break
-		}
-		var chunk providerFileChunk
-		if err := generationstop.DecodeCanonicalJSON(line, &chunk); err != nil ||
-			chunk.Schema != specialistrender.ProviderFrameSchema || chunk.Kind != "file_chunk" ||
-			chunk.OperationID != request.OperationID || chunk.Ordinal != currentOrdinal || chunk.Ordinal >= len(start.Receipt.Files) ||
-			chunk.Index != fileIndexes[chunk.Ordinal] || chunk.Bytes <= 0 || chunk.Bytes > specialistrender.RequestChunkBytes {
-			return specialistrender.Receipt{}, "", fmt.Errorf("provider output chunk is invalid")
-		}
-		decoded, err := base64.StdEncoding.Strict().DecodeString(chunk.Base64)
-		if err != nil || len(decoded) != chunk.Bytes || base64.StdEncoding.EncodeToString(decoded) != chunk.Base64 ||
-			chunk.SHA256 != digestBytes(decoded) {
-			return specialistrender.Receipt{}, "", fmt.Errorf("provider output chunk bytes are invalid")
-		}
-		fileIndexes[chunk.Ordinal]++
-		fileBytes[chunk.Ordinal] += int64(len(decoded))
-		if fileBytes[chunk.Ordinal] > start.Receipt.Files[chunk.Ordinal].ByteLength {
-			return specialistrender.Receipt{}, "", fmt.Errorf("provider output exceeds its declared file length")
-		}
-		_, _ = fileHashes[chunk.Ordinal].Write(decoded)
-		if fileBytes[chunk.Ordinal] == start.Receipt.Files[chunk.Ordinal].ByteLength {
-			if "sha256:"+hex.EncodeToString(fileHashes[chunk.Ordinal].Sum(nil)) != start.Receipt.Files[chunk.Ordinal].Digest {
-				return specialistrender.Receipt{}, "", fmt.Errorf("provider output file digest differs")
-			}
-			currentOrdinal++
-		}
-		_, _ = protocolHash.Write(framed)
-		_, _ = wholeHash.Write(framed)
-		frameCount++
-	}
-	if terminal.Schema != specialistrender.ProviderFrameSchema || terminal.Kind != "provider_response_end" ||
-		terminal.OperationID != request.OperationID || terminal.ReceiptDigest != start.Receipt.ReceiptDigest ||
-		terminal.FileCount != len(start.Receipt.Files) || terminal.TotalBytes != start.Receipt.TotalOutputBytes ||
-		terminal.FrameCount != frameCount || terminal.StreamSHA256 != hashDigest(protocolHash) ||
-		currentOrdinal != len(start.Receipt.Files) {
-		return specialistrender.Receipt{}, "", fmt.Errorf("provider response end does not close the exact stream")
-	}
-	for index, descriptor := range start.Receipt.Files {
-		if fileBytes[index] != descriptor.ByteLength || "sha256:"+hex.EncodeToString(fileHashes[index].Sum(nil)) != descriptor.Digest {
-			return specialistrender.Receipt{}, "", fmt.Errorf("provider output bytes differ from the receipt")
-		}
-	}
-	if trailing, err := lines.ReadByte(); err == nil || !errors.Is(err, io.EOF) {
-		_ = trailing
-		return specialistrender.Receipt{}, "", fmt.Errorf("provider response contains trailing bytes")
-	}
-	return start.Receipt, hashDigest(wholeHash), nil
-}
-
-func readCanonicalLine(reader *bufio.Reader) ([]byte, []byte, error) {
-	line, err := reader.ReadSlice('\n')
-	if err != nil {
-		return nil, nil, fmt.Errorf("provider response closed before its terminal frame")
-	}
-	if len(line) <= 1 || len(line) > specialistrender.MaximumFrameBytes || bytes.ContainsRune(line, '\r') {
-		return nil, nil, fmt.Errorf("provider response line is invalid")
-	}
-	framed := append([]byte(nil), line...)
-	return line[:len(line)-1], framed, nil
+	return observation.Receipt, observation.WireSHA256, nil
 }
 
 func readPinnedFile(pin PinnedInputFile, maximum int64) ([]byte, error) {
@@ -709,10 +512,6 @@ func readPinnedFile(pin PinnedInputFile, maximum int64) ([]byte, error) {
 		return nil, fmt.Errorf("pinned input file changed while read")
 	}
 	return data, nil
-}
-
-func chunkCount(size int) int {
-	return (size + specialistrender.RequestChunkBytes - 1) / specialistrender.RequestChunkBytes
 }
 
 func hashDigest(value hash.Hash) string {
