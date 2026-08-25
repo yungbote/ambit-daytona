@@ -319,6 +319,9 @@ func (collector *Collector) preflightJournal(
 		}
 		return true, nil
 	}
+	if snapshot.Abandoned {
+		return false, fmt.Errorf("%w: durable abandoned provider collection", ErrProviderCollectionAbandoned)
+	}
 	hasRemoteAuthority := false
 	for _, prepared := range executions {
 		observation, err := collector.observeRender(ctx, prepared.request)
@@ -328,9 +331,6 @@ func (collector *Collector) preflightJournal(
 		if observation.Status != "absent" {
 			hasRemoteAuthority = true
 		}
-	}
-	if snapshot.Abandoned {
-		return false, fmt.Errorf("%w: durable abandoned provider collection", ErrProviderCollectionAbandoned)
 	}
 	if len(snapshot.Entries) == 0 && !hasRemoteAuthority && journal.Fresh() {
 		return false, nil

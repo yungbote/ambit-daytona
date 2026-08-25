@@ -246,6 +246,7 @@ type providerHarness struct {
 	activeSuccessRequests  int
 	peakSuccessRequests    int
 	settledSuccessRequests int
+	renderObservations     int
 	releaseSuccess         chan struct{}
 	failedSuccessOperation string
 	hideFirstObservation   bool
@@ -308,6 +309,7 @@ func (harness *providerHarness) observeRender(response http.ResponseWriter, requ
 		return
 	}
 	harness.mu.Lock()
+	harness.renderObservations++
 	delay := harness.observationDelay
 	harness.mu.Unlock()
 	if delay > 0 {

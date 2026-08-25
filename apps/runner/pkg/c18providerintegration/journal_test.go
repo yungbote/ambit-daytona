@@ -114,8 +114,16 @@ func TestProviderCollectionJournalAbandonsPartialBatchWithoutRetryingIDs(t *test
 			t.Fatalf("abandoned settlement is not quiescent: %#v", settlement)
 		}
 	}
+	observationsBeforeReplay := providerObservationCount(fixture.harness)
 	if _, err := fixture.collector.CollectWithJournal(context.Background(), fixture.run, journalPath); !errors.Is(err, ErrProviderCollectionAbandoned) {
 		t.Fatalf("abandoned journal replay changed disposition: %v", err)
+	}
+	if observationsAfterReplay := providerObservationCount(fixture.harness); observationsAfterReplay != observationsBeforeReplay {
+		t.Fatalf(
+			"abandoned journal replay contacted the provider: before=%d after=%d",
+			observationsBeforeReplay,
+			observationsAfterReplay,
+		)
 	}
 	if final := providerEffectCount(fixture.harness); final != before {
 		t.Fatalf("abandoned replay duplicated provider effects: before=%d after=%d", before, final)
@@ -394,6 +402,12 @@ func providerEffectCount(harness *providerHarness) int {
 	harness.mu.Lock()
 	defer harness.mu.Unlock()
 	return harness.cancelledOperations + harness.settledSuccessRequests
+}
+
+func providerObservationCount(harness *providerHarness) int {
+	harness.mu.Lock()
+	defer harness.mu.Unlock()
+	return harness.renderObservations
 }
 
 func assertProviderJournalMutationRejected(
