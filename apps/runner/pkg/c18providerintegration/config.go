@@ -121,7 +121,7 @@ func ValidateProviderLiveRun(value ProviderLiveRun) error {
 		len(value.Target.Fence.WorkspaceExecutionManifestRef) > 2048 {
 		return fmt.Errorf("provider target fence is invalid")
 	}
-	if value.Timeouts.ExecuteSeconds < 60 || value.Timeouts.ExecuteSeconds > 1800 ||
+	if value.Timeouts.ExecuteSeconds < minimumExecuteSeconds || value.Timeouts.ExecuteSeconds > maximumExecuteSeconds ||
 		value.Timeouts.ObservationSeconds < 30 || value.Timeouts.ObservationSeconds > 600 ||
 		value.Timeouts.PollMilliseconds < 10 || value.Timeouts.PollMilliseconds > 1000 ||
 		value.Timeouts.CancelAfterPartialMilliseconds < 0 || value.Timeouts.CancelAfterPartialMilliseconds > 10_000 {

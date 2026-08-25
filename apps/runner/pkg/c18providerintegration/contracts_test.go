@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	providerLiveCollectionGoldenSHA256 = "sha256:4fead64e987dca681f2dd59321b05eb97fcca05a036e4f8fd7cf6b52fee6d12e"
+	providerLiveCollectionGoldenSHA256 = "sha256:02c9af6d5e78e47ae231cb52911a629c4d67e79afca549459a4a911cab8a083d"
 	minIOIntegrationGoldenSHA256       = "sha256:4c34ec1e61a495413c7d5c5c9bed7933084ad07c3722712e662af9e18b00ff0e"
 )
 
@@ -35,7 +35,9 @@ func TestProviderLiveCollectionGoldenIsCanonicalAndRejectsFacetSubstitution(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if parsed.Digest != collection.Digest || len(parsed.ProviderReceipts) != 12 || len(parsed.AuthenticatedStreaming.Cases) != 6 {
+	if parsed.Digest != collection.Digest || len(parsed.ProviderReceipts) != 12 ||
+		len(parsed.AuthenticatedStreaming.Cases) != providerSuccessConcurrency ||
+		len(parsed.ConcurrentLoad.Cases) != providerSuccessConcurrency {
 		t.Fatalf("provider collection differs after parse: %#v", parsed)
 	}
 
@@ -85,6 +87,37 @@ func TestProviderLiveCollectionRejectsReceiptsOutsideMeasuredInterval(t *testing
 	truncatedEnd.AuthenticatedStreaming.ObservedUntil = "2026-08-24T00:00:00.999Z"
 	if _, err := SealProviderLiveCollection(truncatedEnd); err == nil {
 		t.Fatal("collection interval ending before receipt completion was accepted")
+	}
+}
+
+func TestProviderLiveCollectionRejectsForgedConcurrentLoadEvidence(t *testing.T) {
+	collection := providerCollectionFixture(t)
+
+	withoutOverlap := cloneCollection(t, collection)
+	withoutOverlap.ConcurrentLoad.Cases[0].CompletedAt = "2026-08-24T00:00:00.149Z"
+	withoutOverlap.ConcurrentLoad.Cases[0].DurationMilliseconds = 49
+	if _, err := SealProviderLiveCollection(withoutOverlap); err == nil {
+		t.Fatal("non-overlapping provider calls were accepted as concurrent load")
+	}
+
+	overLimit := cloneCollection(t, collection)
+	overLimit.ConcurrentLoad.Cases[0].CompletedAt = "2026-08-24T00:01:00.101Z"
+	overLimit.ConcurrentLoad.Cases[0].DurationMilliseconds = 60_001
+	overLimit.AuthenticatedStreaming.ObservedUntil = "2026-08-24T00:01:01.000Z"
+	if _, err := SealProviderLiveCollection(overLimit); err == nil {
+		t.Fatal("provider load duration beyond the declared execution timeout was accepted")
+	}
+
+	detached := cloneCollection(t, collection)
+	detached.ConcurrentLoad.Cases[0].ReceiptDigest = digestSeed(999)
+	if _, err := SealProviderLiveCollection(detached); err == nil {
+		t.Fatal("concurrent load case detached from its authenticated stream was accepted")
+	}
+
+	loosenedDeclaration := cloneCollection(t, collection)
+	loosenedDeclaration.ConcurrentLoad.MaximumDurationMilliseconds++
+	if _, err := SealProviderLiveCollection(loosenedDeclaration); err == nil {
+		t.Fatal("non-second provider timeout declaration was accepted")
 	}
 }
 
@@ -300,6 +333,16 @@ func providerCollectionFixture(t *testing.T) ProviderLiveCollection {
 			sequence++
 		}
 	}
+	loadCases := make([]ConcurrentLoadCase, 0, providerSuccessConcurrency)
+	for index, stream := range streams {
+		startedAt := time.Date(2026, 8, 24, 0, 0, 0, (100+index*10)*int(time.Millisecond), time.UTC)
+		completedAt := startedAt.Add(800 * time.Millisecond)
+		loadCases = append(loadCases, ConcurrentLoadCase{
+			Facet: stream.Facet, StartedAt: formatObservationTime(startedAt),
+			CompletedAt: formatObservationTime(completedAt), DurationMilliseconds: 800,
+			ReceiptDigest: stream.ReceiptDigest,
+		})
+	}
 	collection, err := SealProviderLiveCollection(ProviderLiveCollection{
 		SourceRevision: "1" + strings.Repeat("0", 39), SourceTree: "2" + strings.Repeat("0", 39),
 		SourceSetDigest:  digestSeed(3),
@@ -308,6 +351,11 @@ func providerCollectionFixture(t *testing.T) ProviderLiveCollection {
 		AuthenticatedStreaming: AuthenticatedStreamingObservation{
 			Outcome: "passed", ObservedFrom: "2026-08-24T00:00:00.000Z",
 			ObservedUntil: "2026-08-24T00:00:01.000Z", Cases: streams,
+		},
+		ConcurrentLoad: ConcurrentLoadObservation{
+			PredeclaredConcurrency:      providerSuccessConcurrency,
+			MaximumDurationMilliseconds: minimumExecuteSeconds * 1000,
+			AllSucceeded:                true, Outcome: "passed", Cases: loadCases,
 		},
 	})
 	if err != nil {

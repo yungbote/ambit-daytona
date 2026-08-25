@@ -23,7 +23,94 @@ import (
 	"github.com/daytonaio/runner/pkg/specialistrender"
 )
 
-func TestCollectorUsesAuthenticatedAPIAndDurablyObservesAllSixCancellations(t *testing.T) {
+func TestCollectorUsesAuthenticatedAPIWithConcurrentSuccessesAndDurableCancellations(t *testing.T) {
+	fixture := newProviderCollectorFixture(t)
+	defer fixture.close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	collection, err := fixture.collector.Collect(ctx, fixture.run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(collection.ProviderReceipts) != 12 ||
+		len(collection.AuthenticatedStreaming.Cases) != providerSuccessConcurrency ||
+		collection.ConcurrentLoad.PredeclaredConcurrency != providerSuccessConcurrency ||
+		collection.ConcurrentLoad.MaximumDurationMilliseconds != int64(fixture.run.Timeouts.ExecuteSeconds)*1000 ||
+		!collection.ConcurrentLoad.AllSucceeded || collection.ConcurrentLoad.Outcome != "passed" ||
+		len(collection.ConcurrentLoad.Cases) != providerSuccessConcurrency {
+		t.Fatalf("live collection coverage differs: %#v", collection)
+	}
+	cancelled := 0
+	for _, row := range collection.ProviderReceipts {
+		if row.Mode == "cancel" {
+			cancelled++
+			if row.Receipt.Outcome != "cancelled" || len(row.Receipt.Files) != 0 || !row.Receipt.Quiescence.ContainerAbsent {
+				t.Fatalf("cancellation receipt differs: %#v", row)
+			}
+		}
+	}
+	fixture.harness.mu.Lock()
+	unauthenticated := fixture.harness.unauthenticated
+	successStreams := fixture.harness.successStreams
+	cancelledOperations := fixture.harness.cancelledOperations
+	peakSuccessRequests := fixture.harness.peakSuccessRequests
+	settledSuccessRequests := fixture.harness.settledSuccessRequests
+	fixture.harness.mu.Unlock()
+	if cancelled != 6 || unauthenticated != 0 || successStreams != 6 || cancelledOperations != 6 ||
+		peakSuccessRequests != providerSuccessConcurrency || settledSuccessRequests != providerSuccessConcurrency {
+		t.Fatalf("authenticated provider census differs: %#v", fixture.harness)
+	}
+	encoded, _ := generationstop.CanonicalJSON(collection)
+	if _, err := ParseProviderLiveCollection(encoded); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCollectorConcurrentSuccessFailureSettlesEveryReleasedRequest(t *testing.T) {
+	fixture := newProviderCollectorFixture(t)
+	defer fixture.close()
+	for _, execution := range fixture.run.Executions {
+		if execution.Facet == "presentation" && execution.Mode == "success" {
+			fixture.harness.failedSuccessOperation = execution.OperationID
+		}
+	}
+	if fixture.harness.failedSuccessOperation == "" {
+		t.Fatal("failure operation fixture is absent")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	collection, err := fixture.collector.Collect(ctx, fixture.run)
+	if err == nil || !strings.Contains(err.Error(), "presentation success") {
+		t.Fatalf("concurrent provider failure was not attributed: collection=%#v err=%v", collection, err)
+	}
+	if collection.Contract != "" || collection.Digest != "" || len(collection.ProviderReceipts) != 0 {
+		t.Fatal("failed concurrent load returned a partial collection")
+	}
+	fixture.harness.mu.Lock()
+	arrived := fixture.harness.arrivedSuccessRequests
+	settled := fixture.harness.settledSuccessRequests
+	peak := fixture.harness.peakSuccessRequests
+	cancelledOperations := fixture.harness.cancelledOperations
+	fixture.harness.mu.Unlock()
+	if arrived != providerSuccessConcurrency || settled != providerSuccessConcurrency ||
+		peak != providerSuccessConcurrency || cancelledOperations != providerSuccessConcurrency {
+		t.Fatalf("concurrent failure did not settle the full released batch: %#v", fixture.harness)
+	}
+}
+
+type providerCollectorFixture struct {
+	collector *Collector
+	run       ProviderLiveRun
+	harness   *providerHarness
+	server    *httptest.Server
+}
+
+func (fixture providerCollectorFixture) close() {
+	fixture.server.Close()
+}
+
+func newProviderCollectorFixture(t *testing.T) providerCollectorFixture {
+	t.Helper()
 	root := t.TempDir()
 	seccompSource := filepath.Join(repoRoot(t), "images/ambit-agent-workspace/capabilities/c18-specialist-packs/policy/specialist-seccomp-v1.json")
 	seccompBytes, err := os.ReadFile(seccompSource)
@@ -86,9 +173,9 @@ func TestCollectorUsesAuthenticatedAPIAndDurablyObservesAllSixCancellations(t *t
 	harness := &providerHarness{
 		t: t, credential: "live-test-key", base: base, policies: policies,
 		modes: modes, sequences: sequences, states: make(map[string]specialistrender.Observation),
+		releaseSuccess: make(chan struct{}),
 	}
 	server := httptest.NewServer(http.HandlerFunc(harness.serveHTTP))
-	defer server.Close()
 	baseURL, _ := url.Parse(server.URL + "/api/")
 	collector, err := NewCollector(
 		DaytonaAPIConfig{BaseURL: baseURL, Credential: harness.credential, OrganizationID: base.Request.Owner.TenantID},
@@ -103,31 +190,7 @@ func TestCollectorUsesAuthenticatedAPIAndDurablyObservesAllSixCancellations(t *t
 		observedAt = observedAt.Add(time.Second)
 		return value
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	collection, err := collector.Collect(ctx, run)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(collection.ProviderReceipts) != 12 || len(collection.AuthenticatedStreaming.Cases) != 6 {
-		t.Fatalf("live collection coverage differs: %#v", collection)
-	}
-	cancelled := 0
-	for _, row := range collection.ProviderReceipts {
-		if row.Mode == "cancel" {
-			cancelled++
-			if row.Receipt.Outcome != "cancelled" || len(row.Receipt.Files) != 0 || !row.Receipt.Quiescence.ContainerAbsent {
-				t.Fatalf("cancellation receipt differs: %#v", row)
-			}
-		}
-	}
-	if cancelled != 6 || harness.unauthenticated != 0 || harness.successStreams != 6 || harness.cancelledOperations != 6 {
-		t.Fatalf("authenticated provider census differs: %#v", harness)
-	}
-	encoded, _ := generationstop.CanonicalJSON(collection)
-	if _, err := ParseProviderLiveCollection(encoded); err != nil {
-		t.Fatal(err)
-	}
+	return providerCollectorFixture{collector: collector, run: run, harness: harness, server: server}
 }
 
 type providerHarness struct {
@@ -138,11 +201,17 @@ type providerHarness struct {
 	modes      map[string]string
 	sequences  map[string]int
 
-	mu                  sync.Mutex
-	states              map[string]specialistrender.Observation
-	unauthenticated     int
-	successStreams      int
-	cancelledOperations int
+	mu                     sync.Mutex
+	states                 map[string]specialistrender.Observation
+	unauthenticated        int
+	successStreams         int
+	cancelledOperations    int
+	arrivedSuccessRequests int
+	activeSuccessRequests  int
+	peakSuccessRequests    int
+	settledSuccessRequests int
+	releaseSuccess         chan struct{}
+	failedSuccessOperation string
 }
 
 func (harness *providerHarness) serveHTTP(response http.ResponseWriter, request *http.Request) {
@@ -237,6 +306,33 @@ func (harness *providerHarness) execute(response http.ResponseWriter, request *h
 		}
 		harness.cancelledOperations++
 		harness.mu.Unlock()
+		return
+	}
+	harness.mu.Lock()
+	harness.arrivedSuccessRequests++
+	harness.activeSuccessRequests++
+	if harness.activeSuccessRequests > harness.peakSuccessRequests {
+		harness.peakSuccessRequests = harness.activeSuccessRequests
+	}
+	if harness.arrivedSuccessRequests == providerSuccessConcurrency {
+		close(harness.releaseSuccess)
+	}
+	releaseSuccess := harness.releaseSuccess
+	failed := stream.Request.OperationID == harness.failedSuccessOperation
+	harness.mu.Unlock()
+	select {
+	case <-releaseSuccess:
+	case <-request.Context().Done():
+		return
+	}
+	defer func() {
+		harness.mu.Lock()
+		harness.activeSuccessRequests--
+		harness.settledSuccessRequests++
+		harness.mu.Unlock()
+	}()
+	if failed {
+		response.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	receipt := receiptForRequest(harness.t, harness.base, policy, stream.Request, harness.sequences[stream.Request.OperationID], "success")

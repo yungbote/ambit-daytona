@@ -26,16 +26,32 @@ const (
 	MinIOIntegrationRunContract     = "C18MinioIntegrationRun@1"
 	MinIOIntegrationTestRef         = "TestPrivateObjectMinIOConditionalChecksumRangeAndDelete"
 	observationTimeLayout           = "2006-01-02T15:04:05.000Z"
+	providerSuccessConcurrency      = 6
+	minimumExecuteSeconds           = 60
+	maximumExecuteSeconds           = 1800
 )
 
-var facetPacks = map[string]string{
-	"data_analysis":   "data-research",
-	"pdf":             "pdf-ocr",
-	"presentation":    "office-authoring",
-	"research":        "data-research",
-	"spreadsheet":     "office-authoring",
-	"web_application": "web-browser",
+type providerFacetBinding struct {
+	Facet string
+	Pack  string
 }
+
+var providerFacetRoster = [providerSuccessConcurrency]providerFacetBinding{
+	{Facet: "data_analysis", Pack: "data-research"},
+	{Facet: "pdf", Pack: "pdf-ocr"},
+	{Facet: "presentation", Pack: "office-authoring"},
+	{Facet: "research", Pack: "data-research"},
+	{Facet: "spreadsheet", Pack: "office-authoring"},
+	{Facet: "web_application", Pack: "web-browser"},
+}
+
+var facetPacks = func() map[string]string {
+	result := make(map[string]string, len(providerFacetRoster))
+	for _, binding := range providerFacetRoster {
+		result[binding.Facet] = binding.Pack
+	}
+	return result
+}()
 
 var minIOOperations = []string{
 	"bounded_list",
@@ -75,6 +91,22 @@ type AuthenticatedStreamingObservation struct {
 	Cases         []AuthenticatedStreamingCase `json:"cases"`
 }
 
+type ConcurrentLoadCase struct {
+	Facet                string `json:"facet"`
+	StartedAt            string `json:"startedAt"`
+	CompletedAt          string `json:"completedAt"`
+	DurationMilliseconds int64  `json:"durationMilliseconds"`
+	ReceiptDigest        string `json:"receiptDigest"`
+}
+
+type ConcurrentLoadObservation struct {
+	PredeclaredConcurrency      int                  `json:"predeclaredConcurrency"`
+	MaximumDurationMilliseconds int64                `json:"maximumDurationMilliseconds"`
+	AllSucceeded                bool                 `json:"allSucceeded"`
+	Outcome                     string               `json:"outcome"`
+	Cases                       []ConcurrentLoadCase `json:"cases"`
+}
+
 type ProviderLiveCollection struct {
 	Contract               string                            `json:"contract"`
 	SourceRevision         string                            `json:"sourceRevision"`
@@ -83,6 +115,7 @@ type ProviderLiveCollection struct {
 	RunnerPolicy           RunnerPolicyPin                   `json:"runnerPolicy"`
 	ProviderReceipts       []ProviderReceiptRow              `json:"providerReceipts"`
 	AuthenticatedStreaming AuthenticatedStreamingObservation `json:"authenticatedStreaming"`
+	ConcurrentLoad         ConcurrentLoadObservation         `json:"concurrentLoad"`
 	Digest                 string                            `json:"digest"`
 }
 
@@ -94,6 +127,7 @@ type providerLiveCollectionBody struct {
 	RunnerPolicy           RunnerPolicyPin                   `json:"runnerPolicy"`
 	ProviderReceipts       []ProviderReceiptRow              `json:"providerReceipts"`
 	AuthenticatedStreaming AuthenticatedStreamingObservation `json:"authenticatedStreaming"`
+	ConcurrentLoad         ConcurrentLoadObservation         `json:"concurrentLoad"`
 }
 
 type MinIOConditionalCreateObservation struct {
@@ -259,7 +293,7 @@ func validateProviderCollectionBody(value ProviderLiveCollection) error {
 		streaming.ObservedUntil,
 	)
 	if streaming.Outcome != "passed" || intervalErr != nil ||
-		len(streaming.Cases) < 2 || len(streaming.Cases) > 6 {
+		len(streaming.Cases) != providerSuccessConcurrency {
 		return fmt.Errorf("authenticated streaming observation is invalid")
 	}
 	if value.RunnerPolicy.CanonicalJSON == "" || !exactDigest(value.RunnerPolicy.ContentSHA256) ||
@@ -354,13 +388,12 @@ func validateProviderCollectionBody(value ProviderLiveCollection) error {
 		seenReceiptDigests[row.Receipt.ReceiptDigest] = struct{}{}
 	}
 	previous = ""
-	seenFacets := make(map[string]struct{}, len(streaming.Cases))
 	for index, item := range streaming.Cases {
 		if index > 0 && previous >= item.Facet {
 			return fmt.Errorf("authenticated streaming cases are not sorted and unique")
 		}
 		previous = item.Facet
-		if _, ok := facetPacks[item.Facet]; !ok || item.HTTPStatus != 200 || !item.Authenticated ||
+		if item.Facet != providerFacetRoster[index].Facet || item.HTTPStatus != 200 || !item.Authenticated ||
 			!exactDigest(item.RequestStreamSHA256) || !exactDigest(item.ResponseStreamSHA256) ||
 			!exactDigest(item.ReceiptDigest) {
 			return fmt.Errorf("authenticated streaming case is invalid")
@@ -369,10 +402,62 @@ func validateProviderCollectionBody(value ProviderLiveCollection) error {
 		if !ok || row.Receipt.Request.OperationID != item.OperationID || row.Receipt.ReceiptDigest != item.ReceiptDigest {
 			return fmt.Errorf("authenticated streaming case is detached from its success receipt")
 		}
-		if _, duplicate := seenFacets[item.Facet]; duplicate {
-			return fmt.Errorf("authenticated streaming facet is duplicated")
+	}
+	if err := validateConcurrentLoad(value.ConcurrentLoad, streaming, value.ProviderReceipts, observedFrom, observedUntil); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateConcurrentLoad(
+	load ConcurrentLoadObservation,
+	streaming AuthenticatedStreamingObservation,
+	receipts []ProviderReceiptRow,
+	observedFrom time.Time,
+	observedUntil time.Time,
+) error {
+	if load.PredeclaredConcurrency != providerSuccessConcurrency ||
+		load.MaximumDurationMilliseconds < minimumExecuteSeconds*1000 ||
+		load.MaximumDurationMilliseconds > maximumExecuteSeconds*1000 ||
+		load.MaximumDurationMilliseconds%1000 != 0 ||
+		!load.AllSucceeded || load.Outcome != "passed" ||
+		len(load.Cases) != providerSuccessConcurrency {
+		return fmt.Errorf("concurrent provider load declaration is invalid")
+	}
+
+	var latestStart time.Time
+	var earliestCompletion time.Time
+	for index, item := range load.Cases {
+		if item.Facet != providerFacetRoster[index].Facet || !exactDigest(item.ReceiptDigest) {
+			return fmt.Errorf("concurrent provider load case roster is invalid")
 		}
-		seenFacets[item.Facet] = struct{}{}
+		startedAt, startErr := parseObservationTime(item.StartedAt)
+		completedAt, completionErr := parseObservationTime(item.CompletedAt)
+		duration := completedAt.Sub(startedAt).Milliseconds()
+		if startErr != nil || completionErr != nil || duration <= 0 ||
+			item.DurationMilliseconds != duration ||
+			item.DurationMilliseconds > load.MaximumDurationMilliseconds ||
+			startedAt.Before(observedFrom) || completedAt.After(observedUntil) {
+			return fmt.Errorf("concurrent provider load case interval is invalid")
+		}
+		row, rowExists := successRow(receipts, item.Facet)
+		stream, streamExists := authenticatedStreamCase(streaming.Cases, item.Facet)
+		if !rowExists || !streamExists ||
+			row.Receipt.Outcome != "succeeded" || row.Receipt.TerminalOutcome != "succeeded" ||
+			item.ReceiptDigest != row.Receipt.ReceiptDigest ||
+			item.ReceiptDigest != stream.ReceiptDigest ||
+			row.Receipt.Request.OperationID != stream.OperationID {
+			return fmt.Errorf("concurrent provider load case is detached from its authenticated success stream")
+		}
+		if latestStart.IsZero() || startedAt.After(latestStart) {
+			latestStart = startedAt
+		}
+		if earliestCompletion.IsZero() || completedAt.Before(earliestCompletion) {
+			earliestCompletion = completedAt
+		}
+	}
+	if !latestStart.Before(earliestCompletion) {
+		return fmt.Errorf("concurrent provider load cases do not share a positive overlap")
 	}
 	return nil
 }
@@ -411,6 +496,7 @@ func providerCollectionBody(value ProviderLiveCollection) providerLiveCollection
 		Contract: value.Contract, SourceRevision: value.SourceRevision, SourceTree: value.SourceTree,
 		SourceSetDigest: value.SourceSetDigest, RunnerPolicy: value.RunnerPolicy,
 		ProviderReceipts: value.ProviderReceipts, AuthenticatedStreaming: value.AuthenticatedStreaming,
+		ConcurrentLoad: value.ConcurrentLoad,
 	}
 }
 
@@ -459,6 +545,15 @@ func successRow(rows []ProviderReceiptRow, facet string) (ProviderReceiptRow, bo
 		}
 	}
 	return ProviderReceiptRow{}, false
+}
+
+func authenticatedStreamCase(cases []AuthenticatedStreamingCase, facet string) (AuthenticatedStreamingCase, bool) {
+	for _, item := range cases {
+		if item.Facet == facet {
+			return item, true
+		}
+	}
+	return AuthenticatedStreamingCase{}, false
 }
 
 func exactDigest(value string) bool {

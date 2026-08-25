@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/daytonaio/runner/pkg/c18preactivation"
@@ -28,9 +30,10 @@ import (
 const specialistRenderContentType = "application/vnd.ambit.runtime-provider-specialist-render+jsonl;version=1"
 
 type Collector struct {
-	api    DaytonaAPIConfig
-	client *http.Client
-	now    func() time.Time
+	api     DaytonaAPIConfig
+	client  *http.Client
+	now     func() time.Time
+	clockMu sync.Mutex
 }
 
 func NewCollector(api DaytonaAPIConfig, client *http.Client) (*Collector, error) {
@@ -82,70 +85,54 @@ func (collector *Collector) Collect(ctx context.Context, run ProviderLiveRun) (P
 		documents[policy.Image.PackID] = policy
 	}
 
-	observedFrom := formatObservationTime(collector.now())
+	observedFrom := formatObservationTime(collector.observedNow())
 	receipts := make([]ProviderReceiptRow, 0, len(run.Executions))
-	streamCases := make([]AuthenticatedStreamingCase, 0, 6)
 	for _, execution := range run.Executions {
-		if err := ctx.Err(); err != nil {
-			return ProviderLiveCollection{}, err
+		if execution.Mode != "cancel" {
+			continue
 		}
-		requestBytes, err := readPinnedFile(execution.Request, specialistrender.MaximumRequestBytes)
+		prepared, err := collector.prepareExecution(ctx, run, execution, documents, registry)
 		if err != nil {
-			return ProviderLiveCollection{}, err
+			return ProviderLiveCollection{}, fmt.Errorf("prepare %s %s: %w", execution.Facet, execution.Mode, err)
 		}
-		var canonicalRequest json.RawMessage
-		if err := generationstop.DecodeCanonicalJSON(requestBytes, &canonicalRequest); err != nil {
-			return ProviderLiveCollection{}, fmt.Errorf("%s %s command is not canonical JSON: %w", execution.Facet, execution.Mode, err)
-		}
-		sourceBytes, err := readPinnedFile(execution.Source, specialistrender.MaximumSourceBytes)
-		if err != nil {
-			return ProviderLiveCollection{}, err
-		}
-		generation, err := collector.observeCurrent(ctx, run, run.Timeouts.ObservationSeconds)
-		if err != nil {
-			return ProviderLiveCollection{}, fmt.Errorf("observe current parent before %s %s: %w", execution.Facet, execution.Mode, err)
-		}
-		policyDocument, exists := documents[facetPacks[execution.Facet]]
-		if !exists {
-			return ProviderLiveCollection{}, fmt.Errorf("runner policy does not cover facet %s", execution.Facet)
-		}
-		request, err := specialistRequest(run, execution, policyDocument, generation, requestBytes, sourceBytes)
-		if err != nil {
-			return ProviderLiveCollection{}, fmt.Errorf("construct provider request: %w", err)
-		}
-		if err := specialistrender.ValidateRequest(request); err != nil {
-			return ProviderLiveCollection{}, fmt.Errorf("constructed provider request is invalid: %w", err)
-		}
-		policy, err := registry.Resolve(request)
-		if err != nil {
-			return ProviderLiveCollection{}, fmt.Errorf("provider request is not admitted by the runner policy: %w", err)
-		}
-
-		var result executionObservation
-		if execution.Mode == "success" {
-			result, err = collector.executeSuccess(ctx, run, request, policy, requestBytes, sourceBytes)
-		} else {
-			result, err = collector.executeCancellation(ctx, run, request, policy, requestBytes, sourceBytes)
-		}
+		result, err := collector.executeCancellation(
+			ctx,
+			run,
+			prepared.request,
+			prepared.policy,
+			prepared.requestBytes,
+			prepared.sourceBytes,
+		)
 		if err != nil {
 			return ProviderLiveCollection{}, fmt.Errorf("collect %s %s: %w", execution.Facet, execution.Mode, err)
 		}
-		receipts = append(receipts, ProviderReceiptRow{Facet: execution.Facet, Mode: execution.Mode, Receipt: result.receipt})
-		if execution.Mode == "success" {
-			streamCases = append(streamCases, AuthenticatedStreamingCase{
-				Facet: execution.Facet, OperationID: execution.OperationID,
-				HTTPStatus: 200, Authenticated: true,
-				RequestStreamSHA256:  result.requestStreamSHA256,
-				ResponseStreamSHA256: result.responseStreamSHA256,
-				ReceiptDigest:        result.receipt.ReceiptDigest,
-			})
-		}
+		receipts = append(receipts, ProviderReceiptRow{
+			Facet:   execution.Facet,
+			Mode:    execution.Mode,
+			Receipt: result.receipt,
+		})
 	}
+
+	successes := make([]preparedProviderExecution, 0, providerSuccessConcurrency)
+	for _, execution := range run.Executions {
+		if execution.Mode != "success" {
+			continue
+		}
+		prepared, err := collector.prepareExecution(ctx, run, execution, documents, registry)
+		if err != nil {
+			return ProviderLiveCollection{}, fmt.Errorf("prepare %s %s: %w", execution.Facet, execution.Mode, err)
+		}
+		successes = append(successes, prepared)
+	}
+	successReceipts, streamCases, concurrentLoad, err := collector.collectConcurrentSuccesses(ctx, run, successes)
+	if err != nil {
+		return ProviderLiveCollection{}, err
+	}
+	receipts = append(receipts, successReceipts...)
 	sort.Slice(receipts, func(left, right int) bool {
 		return receipts[left].Facet+"\x00"+receipts[left].Mode < receipts[right].Facet+"\x00"+receipts[right].Mode
 	})
-	sort.Slice(streamCases, func(left, right int) bool { return streamCases[left].Facet < streamCases[right].Facet })
-	observedUntil := formatObservationTime(collector.now())
+	observedUntil := formatObservationTime(collector.observedNow())
 	return SealProviderLiveCollection(ProviderLiveCollection{
 		SourceRevision: run.SourceRevision, SourceTree: run.SourceTree, SourceSetDigest: run.SourceSetDigest,
 		RunnerPolicy:     RunnerPolicyPin{CanonicalJSON: string(policyBytes), ContentSHA256: digestBytes(policyBytes)},
@@ -153,7 +140,173 @@ func (collector *Collector) Collect(ctx context.Context, run ProviderLiveRun) (P
 		AuthenticatedStreaming: AuthenticatedStreamingObservation{
 			Outcome: "passed", ObservedFrom: observedFrom, ObservedUntil: observedUntil, Cases: streamCases,
 		},
+		ConcurrentLoad: concurrentLoad,
 	})
+}
+
+type preparedProviderExecution struct {
+	execution    ProviderLiveExecution
+	request      specialistrender.Request
+	policy       specialistrender.Policy
+	requestBytes []byte
+	sourceBytes  []byte
+}
+
+func (collector *Collector) prepareExecution(
+	ctx context.Context,
+	run ProviderLiveRun,
+	execution ProviderLiveExecution,
+	documents map[string]specialistrender.PolicyDocument,
+	registry specialistrender.PolicyRegistry,
+) (preparedProviderExecution, error) {
+	if err := ctx.Err(); err != nil {
+		return preparedProviderExecution{}, err
+	}
+	requestBytes, err := readPinnedFile(execution.Request, specialistrender.MaximumRequestBytes)
+	if err != nil {
+		return preparedProviderExecution{}, err
+	}
+	var canonicalRequest json.RawMessage
+	if err := generationstop.DecodeCanonicalJSON(requestBytes, &canonicalRequest); err != nil {
+		return preparedProviderExecution{}, fmt.Errorf("command is not canonical JSON: %w", err)
+	}
+	sourceBytes, err := readPinnedFile(execution.Source, specialistrender.MaximumSourceBytes)
+	if err != nil {
+		return preparedProviderExecution{}, err
+	}
+	generation, err := collector.observeCurrent(ctx, run, run.Timeouts.ObservationSeconds)
+	if err != nil {
+		return preparedProviderExecution{}, fmt.Errorf("observe current parent: %w", err)
+	}
+	policyDocument, exists := documents[facetPacks[execution.Facet]]
+	if !exists {
+		return preparedProviderExecution{}, fmt.Errorf("runner policy does not cover facet %s", execution.Facet)
+	}
+	request, err := specialistRequest(run, execution, policyDocument, generation, requestBytes, sourceBytes)
+	if err != nil {
+		return preparedProviderExecution{}, fmt.Errorf("construct provider request: %w", err)
+	}
+	if err := specialistrender.ValidateRequest(request); err != nil {
+		return preparedProviderExecution{}, fmt.Errorf("constructed provider request is invalid: %w", err)
+	}
+	policy, err := registry.Resolve(request)
+	if err != nil {
+		return preparedProviderExecution{}, fmt.Errorf("provider request is not admitted by the runner policy: %w", err)
+	}
+	return preparedProviderExecution{
+		execution: execution, request: request, policy: policy,
+		requestBytes: requestBytes, sourceBytes: sourceBytes,
+	}, nil
+}
+
+type concurrentSuccessResult struct {
+	facet   string
+	receipt ProviderReceiptRow
+	stream  AuthenticatedStreamingCase
+	load    ConcurrentLoadCase
+	err     error
+}
+
+func (collector *Collector) collectConcurrentSuccesses(
+	ctx context.Context,
+	run ProviderLiveRun,
+	executions []preparedProviderExecution,
+) ([]ProviderReceiptRow, []AuthenticatedStreamingCase, ConcurrentLoadObservation, error) {
+	if len(executions) != providerSuccessConcurrency {
+		return nil, nil, ConcurrentLoadObservation{}, fmt.Errorf("concurrent provider load requires exactly six prepared successes")
+	}
+
+	results := make(chan concurrentSuccessResult, providerSuccessConcurrency)
+	startMeasurement := make(chan struct{})
+	startExecution := make(chan struct{})
+	var measured sync.WaitGroup
+	measured.Add(providerSuccessConcurrency)
+	var loadCtx context.Context
+
+	for _, prepared := range executions {
+		prepared := prepared
+		go func() {
+			<-startMeasurement
+			startedAt := collector.observedNow()
+			measured.Done()
+			<-startExecution
+			observation, err := collector.executeSuccess(
+				loadCtx,
+				run,
+				prepared.request,
+				prepared.policy,
+				prepared.requestBytes,
+				prepared.sourceBytes,
+			)
+			completedAt := collector.observedNow()
+			result := concurrentSuccessResult{facet: prepared.execution.Facet, err: err}
+			if err == nil {
+				result.receipt = ProviderReceiptRow{
+					Facet:   prepared.execution.Facet,
+					Mode:    prepared.execution.Mode,
+					Receipt: observation.receipt,
+				}
+				result.stream = AuthenticatedStreamingCase{
+					Facet: prepared.execution.Facet, OperationID: prepared.execution.OperationID,
+					HTTPStatus: 200, Authenticated: true,
+					RequestStreamSHA256:  observation.requestStreamSHA256,
+					ResponseStreamSHA256: observation.responseStreamSHA256,
+					ReceiptDigest:        observation.receipt.ReceiptDigest,
+				}
+				result.load = ConcurrentLoadCase{
+					Facet:     prepared.execution.Facet,
+					StartedAt: formatObservationTime(startedAt), CompletedAt: formatObservationTime(completedAt),
+					DurationMilliseconds: completedAt.Sub(startedAt).Milliseconds(),
+					ReceiptDigest:        observation.receipt.ReceiptDigest,
+				}
+			}
+			results <- result
+		}()
+	}
+
+	close(startMeasurement)
+	measured.Wait()
+	var cancel context.CancelFunc
+	loadCtx, cancel = context.WithTimeout(ctx, time.Duration(run.Timeouts.ExecuteSeconds)*time.Second)
+	defer cancel()
+	close(startExecution)
+
+	completed := make([]concurrentSuccessResult, 0, providerSuccessConcurrency)
+	for range executions {
+		completed = append(completed, <-results)
+	}
+	sort.Slice(completed, func(left, right int) bool { return completed[left].facet < completed[right].facet })
+	errorsByFacet := make([]error, 0)
+	for _, result := range completed {
+		if result.err != nil {
+			errorsByFacet = append(errorsByFacet, fmt.Errorf("collect %s success: %w", result.facet, result.err))
+		}
+	}
+	if len(errorsByFacet) > 0 {
+		return nil, nil, ConcurrentLoadObservation{}, errors.Join(errorsByFacet...)
+	}
+
+	receipts := make([]ProviderReceiptRow, 0, providerSuccessConcurrency)
+	streams := make([]AuthenticatedStreamingCase, 0, providerSuccessConcurrency)
+	loadCases := make([]ConcurrentLoadCase, 0, providerSuccessConcurrency)
+	for _, result := range completed {
+		receipts = append(receipts, result.receipt)
+		streams = append(streams, result.stream)
+		loadCases = append(loadCases, result.load)
+	}
+	return receipts, streams, ConcurrentLoadObservation{
+		PredeclaredConcurrency:      providerSuccessConcurrency,
+		MaximumDurationMilliseconds: int64(run.Timeouts.ExecuteSeconds) * 1000,
+		AllSucceeded:                true,
+		Outcome:                     "passed",
+		Cases:                       loadCases,
+	}, nil
+}
+
+func (collector *Collector) observedNow() time.Time {
+	collector.clockMu.Lock()
+	defer collector.clockMu.Unlock()
+	return collector.now().UTC().Truncate(time.Millisecond)
 }
 
 type executionObservation struct {

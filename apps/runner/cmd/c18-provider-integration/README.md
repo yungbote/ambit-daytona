@@ -53,6 +53,9 @@ self-digested `C18ProviderLiveCollection@1` file atomically. It contains:
   facet-to-pack policy;
 - six successful authenticated HTTP streams with exact request-wire,
   response-wire, operation, status, and receipt digests; and
+- one six-way concurrent-load observation whose predeclared concurrency and
+  maximum duration are fixed by the live-run request, with sorted per-facet
+  start, completion, exact duration, and success-receipt joins; and
 - the measured collection interval as exact UTC millisecond instants
   (`YYYY-MM-DDTHH:mm:ss.SSSZ`) that encloses every receipt's start and
   completion.
@@ -65,6 +68,15 @@ whose digest binds an explicit `files:[]`, zero output bytes, and proven
 child-container absence. A raced success,
 missing terminal receipt, retained output, or unresolved operation fails the
 whole collection.
+
+Cancellation rows are collected and durably settled before load measurement.
+The six already-authorized success rows are then prepared against fresh parent
+generation observations and released together as six real authenticated HTTP
+provider requests. Publication requires all six to succeed within
+`timeouts.executeSeconds`, every load case to join its authenticated stream and
+success receipt, and all six measured intervals to share a strictly positive
+overlap. A failed success is not replaced or replayed: the collector drains the
+entire released batch and returns no partial collection.
 
 The checked-in full-schema consumer fixture is
 `apps/runner/pkg/c18providerintegration/testdata/c18-provider-live-collection.golden.json`.
