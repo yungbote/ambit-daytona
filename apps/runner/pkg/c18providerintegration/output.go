@@ -26,15 +26,24 @@ func WriteCanonicalExclusive(path string, value any) error {
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("output directory is invalid")
 	}
+	if err := validatePrivateOwnedDirectory(directory); err != nil {
+		return fmt.Errorf("output directory is not private: %w", err)
+	}
+	if err := validatePrivateOwnedDirectory(filepath.Dir(directory)); err != nil {
+		return fmt.Errorf("output staging directory is not private: %w", err)
+	}
 	encoded, err := EncodeCanonical(value)
 	if err != nil {
 		return fmt.Errorf("encode canonical output: %w", err)
 	}
-	temporary, err := os.CreateTemp(directory, ".c18-integration-*")
+	temporaryPath := canonicalOutputStagingPath(path)
+	if err := reconcileOwnedStaging(temporaryPath); err != nil {
+		return fmt.Errorf("reconcile private output staging: %w", err)
+	}
+	temporary, err := os.OpenFile(temporaryPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return fmt.Errorf("create private output: %w", err)
 	}
-	temporaryPath := temporary.Name()
 	committed := false
 	defer func() {
 		_ = temporary.Close()
@@ -69,5 +78,16 @@ func WriteCanonicalExclusive(path string, value any) error {
 	if err := directoryHandle.Sync(); err != nil {
 		return fmt.Errorf("sync output directory: %w", err)
 	}
+	if err := syncDirectory(filepath.Dir(directory)); err != nil {
+		return fmt.Errorf("sync output staging directory: %w", err)
+	}
 	return nil
+}
+
+func canonicalOutputStagingPath(path string) string {
+	directory := filepath.Dir(path)
+	return filepath.Join(
+		filepath.Dir(directory),
+		"."+filepath.Base(directory)+"."+filepath.Base(path)+".c18-integration-staging",
+	)
 }

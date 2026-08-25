@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -21,9 +22,10 @@ func main() {
 func run() int {
 	requestPath := flag.String("request", "", "absolute canonical C18 provider live-run request")
 	outputPath := flag.String("output", "", "absolute new canonical collection output")
+	journalPath := flag.String("journal", "", "absolute private crash-recovery journal")
 	flag.Parse()
-	if flag.NArg() != 0 || *requestPath == "" || *outputPath == "" {
-		fmt.Fprintln(os.Stderr, "usage: c18-provider-integration --request ABSOLUTE_JSON --output ABSOLUTE_NEW_JSON")
+	if flag.NArg() != 0 || *requestPath == "" || *outputPath == "" || *journalPath == "" {
+		fmt.Fprintln(os.Stderr, "usage: c18-provider-integration --request ABSOLUTE_JSON --journal ABSOLUTE_PRIVATE_JSON --output ABSOLUTE_NEW_JSON")
 		return 64
 	}
 	runRequest, _, err := c18providerintegration.ReadProviderLiveRun(*requestPath)
@@ -40,7 +42,7 @@ func run() int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	collection, err := collector.Collect(ctx, runRequest)
+	collection, err := collector.CollectWithJournal(ctx, runRequest, *journalPath)
 	if err != nil {
 		return fail(err)
 	}
@@ -52,5 +54,8 @@ func run() int {
 
 func fail(err error) int {
 	fmt.Fprintf(os.Stderr, "c18-provider-integration: %v\n", err)
+	if errors.Is(err, c18providerintegration.ErrProviderCollectionAbandoned) {
+		return 75
+	}
 	return 1
 }

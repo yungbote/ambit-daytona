@@ -33,6 +33,7 @@ type Collector struct {
 	api     DaytonaAPIConfig
 	client  *http.Client
 	now     func() time.Time
+	after   func(time.Duration) <-chan time.Time
 	clockMu sync.Mutex
 }
 
@@ -50,10 +51,34 @@ func NewCollector(api DaytonaAPIConfig, client *http.Client) (*Collector, error)
 			},
 		}
 	}
-	return &Collector{api: api, client: client, now: time.Now}, nil
+	return &Collector{api: api, client: client, now: time.Now, after: time.After}, nil
 }
 
 func (collector *Collector) Collect(ctx context.Context, run ProviderLiveRun) (ProviderLiveCollection, error) {
+	journal, err := NewMemoryProviderCollectionJournal(run)
+	if err != nil {
+		return ProviderLiveCollection{}, err
+	}
+	return collector.collect(ctx, run, journal)
+}
+
+func (collector *Collector) CollectWithJournal(
+	ctx context.Context,
+	run ProviderLiveRun,
+	journalPath string,
+) (ProviderLiveCollection, error) {
+	journal, err := OpenProviderCollectionJournal(journalPath, run)
+	if err != nil {
+		return ProviderLiveCollection{}, err
+	}
+	return collector.collect(ctx, run, journal)
+}
+
+func (collector *Collector) collect(
+	ctx context.Context,
+	run ProviderLiveRun,
+	journal ProviderCollectionJournalStore,
+) (ProviderLiveCollection, error) {
 	if err := ValidateProviderLiveRun(run); err != nil {
 		return ProviderLiveCollection{}, err
 	}
@@ -85,15 +110,35 @@ func (collector *Collector) Collect(ctx context.Context, run ProviderLiveRun) (P
 		documents[policy.Image.PackID] = policy
 	}
 
-	observedFrom := formatObservationTime(collector.observedNow())
-	receipts := make([]ProviderReceiptRow, 0, len(run.Executions))
+	prepared := make([]preparedProviderExecution, 0, len(run.Executions))
 	for _, execution := range run.Executions {
-		if execution.Mode != "cancel" {
-			continue
-		}
-		prepared, err := collector.prepareExecution(ctx, run, execution, documents, registry)
+		preparedExecution, err := collector.prepareExecution(ctx, run, execution, documents, registry)
 		if err != nil {
 			return ProviderLiveCollection{}, fmt.Errorf("prepare %s %s: %w", execution.Facet, execution.Mode, err)
+		}
+		prepared = append(prepared, preparedExecution)
+	}
+	replay, err := collector.preflightJournal(ctx, run, prepared, journal)
+	if err != nil {
+		return ProviderLiveCollection{}, err
+	}
+	if replay {
+		return ProviderCollectionFromJournal(journal.Snapshot(), run, policyBytes)
+	}
+	for _, preparedExecution := range prepared {
+		if err := collector.assertFreshExecutionAuthority(ctx, run, preparedExecution); err != nil {
+			return ProviderLiveCollection{}, fmt.Errorf(
+				"refresh %s %s: %w",
+				preparedExecution.execution.Facet,
+				preparedExecution.execution.Mode,
+				err,
+			)
+		}
+	}
+
+	for _, prepared := range prepared {
+		if prepared.execution.Mode != "cancel" {
+			continue
 		}
 		result, err := collector.executeCancellation(
 			ctx,
@@ -104,44 +149,27 @@ func (collector *Collector) Collect(ctx context.Context, run ProviderLiveRun) (P
 			prepared.sourceBytes,
 		)
 		if err != nil {
-			return ProviderLiveCollection{}, fmt.Errorf("collect %s %s: %w", execution.Facet, execution.Mode, err)
+			return ProviderLiveCollection{}, fmt.Errorf("collect %s %s: %w", prepared.execution.Facet, prepared.execution.Mode, err)
 		}
-		receipts = append(receipts, ProviderReceiptRow{
-			Facet:   execution.Facet,
-			Mode:    execution.Mode,
-			Receipt: result.receipt,
-		})
+		if err := journal.Append(ProviderCollectionJournalEntry{
+			Facet: prepared.execution.Facet, Mode: prepared.execution.Mode, Receipt: result.receipt,
+		}); err != nil {
+			return ProviderLiveCollection{}, fmt.Errorf("journal %s %s: %w", prepared.execution.Facet, prepared.execution.Mode, err)
+		}
 	}
 
 	successes := make([]preparedProviderExecution, 0, providerSuccessConcurrency)
-	for _, execution := range run.Executions {
-		if execution.Mode != "success" {
+	for _, prepared := range prepared {
+		if prepared.execution.Mode != "success" {
 			continue
-		}
-		prepared, err := collector.prepareExecution(ctx, run, execution, documents, registry)
-		if err != nil {
-			return ProviderLiveCollection{}, fmt.Errorf("prepare %s %s: %w", execution.Facet, execution.Mode, err)
 		}
 		successes = append(successes, prepared)
 	}
-	successReceipts, streamCases, concurrentLoad, err := collector.collectConcurrentSuccesses(ctx, run, successes)
+	_, _, _, err = collector.collectConcurrentSuccesses(ctx, run, successes, journal)
 	if err != nil {
 		return ProviderLiveCollection{}, err
 	}
-	receipts = append(receipts, successReceipts...)
-	sort.Slice(receipts, func(left, right int) bool {
-		return receipts[left].Facet+"\x00"+receipts[left].Mode < receipts[right].Facet+"\x00"+receipts[right].Mode
-	})
-	observedUntil := formatObservationTime(collector.observedNow())
-	return SealProviderLiveCollection(ProviderLiveCollection{
-		SourceRevision: run.SourceRevision, SourceTree: run.SourceTree, SourceSetDigest: run.SourceSetDigest,
-		RunnerPolicy:     RunnerPolicyPin{CanonicalJSON: string(policyBytes), ContentSHA256: digestBytes(policyBytes)},
-		ProviderReceipts: receipts,
-		AuthenticatedStreaming: AuthenticatedStreamingObservation{
-			Outcome: "passed", ObservedFrom: observedFrom, ObservedUntil: observedUntil, Cases: streamCases,
-		},
-		ConcurrentLoad: concurrentLoad,
-	})
+	return ProviderCollectionFromJournal(journal.Snapshot(), run, policyBytes)
 }
 
 type preparedProviderExecution struct {
@@ -150,6 +178,7 @@ type preparedProviderExecution struct {
 	policy       specialistrender.Policy
 	requestBytes []byte
 	sourceBytes  []byte
+	deadline     time.Time
 }
 
 func (collector *Collector) prepareExecution(
@@ -182,21 +211,23 @@ func (collector *Collector) prepareExecution(
 	observedAt, observedErr := time.Parse(observationTimeLayout, run.Target.ObservedAt)
 	if deadlineErr != nil || observedErr != nil ||
 		!deadline.Equal(observedAt.Add(4*time.Hour)) ||
-		!collector.observedNow().Before(deadline) ||
 		command.Facet != execution.Facet ||
 		command.JobRef != execution.ArtifactRenderJobRef ||
 		command.Runtime.WorkspaceExecutionManifest != run.Target.WorkspaceExecutionManifest {
 		return preparedProviderExecution{}, fmt.Errorf("command differs from the issued live-run authority")
 	}
-	generation, err := collector.observeCurrent(ctx, run, run.Timeouts.ObservationSeconds)
-	if err != nil {
-		return preparedProviderExecution{}, fmt.Errorf("observe current parent: %w", err)
-	}
 	policyDocument, exists := documents[facetPacks[execution.Facet]]
 	if !exists {
 		return preparedProviderExecution{}, fmt.Errorf("runner policy does not cover facet %s", execution.Facet)
 	}
-	request, err := specialistRequest(run, execution, policyDocument, generation, requestBytes, sourceBytes)
+	request, err := specialistRequest(
+		run,
+		execution,
+		policyDocument,
+		run.Target.ExpectedGeneration,
+		requestBytes,
+		sourceBytes,
+	)
 	if err != nil {
 		return preparedProviderExecution{}, fmt.Errorf("construct provider request: %w", err)
 	}
@@ -209,8 +240,169 @@ func (collector *Collector) prepareExecution(
 	}
 	return preparedProviderExecution{
 		execution: execution, request: request, policy: policy,
-		requestBytes: requestBytes, sourceBytes: sourceBytes,
+		requestBytes: requestBytes, sourceBytes: sourceBytes, deadline: deadline,
 	}, nil
+}
+
+func (collector *Collector) assertFreshExecutionAuthority(
+	ctx context.Context,
+	run ProviderLiveRun,
+	prepared preparedProviderExecution,
+) error {
+	if !collector.observedNow().Before(prepared.deadline) {
+		return fmt.Errorf("command deadline has expired")
+	}
+	if _, err := collector.observeCurrent(ctx, run, run.Timeouts.ObservationSeconds); err != nil {
+		return fmt.Errorf("observe current parent: %w", err)
+	}
+	return nil
+}
+
+func (collector *Collector) preflightJournal(
+	ctx context.Context,
+	run ProviderLiveRun,
+	executions []preparedProviderExecution,
+	journal ProviderCollectionJournalStore,
+) (bool, error) {
+	snapshot := journal.Snapshot()
+	if snapshot.Complete {
+		for _, prepared := range executions {
+			entry, exists := providerJournalEntry(snapshot.Entries, prepared.execution)
+			if !exists || specialistrender.ValidateReceiptWithPolicy(entry.Receipt, prepared.policy) != nil ||
+				entry.Receipt.Request != prepared.request {
+				return false, fmt.Errorf(
+					"complete provider journal differs from exact run authority %s %s",
+					prepared.execution.Facet,
+					prepared.execution.Mode,
+				)
+			}
+		}
+		return true, nil
+	}
+	hasRemoteAuthority := false
+	for _, prepared := range executions {
+		observation, err := collector.observeRender(ctx, prepared.request)
+		if err != nil {
+			return false, fmt.Errorf("preflight %s %s: %w", prepared.execution.Facet, prepared.execution.Mode, err)
+		}
+		if observation.Status != "absent" {
+			hasRemoteAuthority = true
+		}
+	}
+	if snapshot.Abandoned {
+		settlements, err := collector.reconcileAbandonedOperations(ctx, run, executions, snapshot)
+		if err != nil {
+			return false, err
+		}
+		if err := journal.MarkAbandoned(settlements); err != nil {
+			return false, err
+		}
+		return false, fmt.Errorf("%w: durable abandoned provider collection", ErrProviderCollectionAbandoned)
+	}
+	if len(snapshot.Entries) == 0 && !hasRemoteAuthority {
+		return false, nil
+	}
+	settlements, err := collector.reconcileAbandonedOperations(ctx, run, executions, snapshot)
+	if err != nil {
+		return false, err
+	}
+	if err := journal.MarkAbandoned(settlements); err != nil {
+		return false, fmt.Errorf("persist provider abandonment: %w", err)
+	}
+	return false, fmt.Errorf("%w: partial journal or unjournaled durable operation", ErrProviderCollectionAbandoned)
+}
+
+func (collector *Collector) reconcileAbandonedOperations(
+	ctx context.Context,
+	run ProviderLiveRun,
+	executions []preparedProviderExecution,
+	journal ProviderCollectionJournal,
+) ([]ProviderCollectionAbandonmentSettlement, error) {
+	reconcileCtx, cancel := context.WithTimeout(
+		ctx,
+		time.Duration(run.Timeouts.ObservationSeconds)*time.Second+
+			2*time.Duration(run.Timeouts.PollMilliseconds)*time.Millisecond,
+	)
+	defer cancel()
+	pending := append([]preparedProviderExecution(nil), executions...)
+	absentSince := make(map[string]time.Time, len(executions))
+	absenceWindow := time.Duration(run.Timeouts.ObservationSeconds) * time.Second
+	settled := make(map[string]ProviderCollectionAbandonmentSettlement, len(executions))
+	for len(pending) > 0 {
+		next := make([]preparedProviderExecution, 0, len(pending))
+		for _, prepared := range pending {
+			observation, err := collector.observeRender(reconcileCtx, prepared.request)
+			if err != nil {
+				return nil, fmt.Errorf("reconcile abandoned %s %s: %w", prepared.execution.Facet, prepared.execution.Mode, err)
+			}
+			key := prepared.execution.Facet + "\x00" + prepared.execution.Mode
+			switch observation.Status {
+			case "absent":
+				now := collector.observedNow()
+				started, observed := absentSince[key]
+				if !observed {
+					absentSince[key] = now
+					started = now
+				}
+				if now.Sub(started) < absenceWindow {
+					next = append(next, prepared)
+				} else {
+					settled[key] = ProviderCollectionAbandonmentSettlement{
+						Facet: prepared.execution.Facet, Mode: prepared.execution.Mode, Status: "absent",
+					}
+				}
+			case "partial":
+				delete(absentSince, key)
+				next = append(next, prepared)
+			case "complete":
+				if observation.Receipt == nil || !observation.Receipt.Quiescence.ContainerAbsent ||
+					specialistrender.ValidateReceiptWithPolicy(*observation.Receipt, prepared.policy) != nil {
+					return nil, fmt.Errorf("abandoned operation %s %s is not terminal and quiescent", prepared.execution.Facet, prepared.execution.Mode)
+				}
+				if entry, exists := providerJournalEntry(journal.Entries, prepared.execution); exists &&
+					entry.Receipt.ReceiptDigest != observation.Receipt.ReceiptDigest {
+					return nil, fmt.Errorf("abandoned operation %s %s differs from journal", prepared.execution.Facet, prepared.execution.Mode)
+				}
+				receipt := *observation.Receipt
+				settled[key] = ProviderCollectionAbandonmentSettlement{
+					Facet: prepared.execution.Facet, Mode: prepared.execution.Mode, Status: "complete", Receipt: &receipt,
+				}
+			default:
+				return nil, fmt.Errorf("abandoned operation observation is invalid")
+			}
+		}
+		pending = next
+		if len(pending) == 0 {
+			break
+		}
+		select {
+		case <-collector.after(time.Duration(run.Timeouts.PollMilliseconds) * time.Millisecond):
+		case <-reconcileCtx.Done():
+			return nil, fmt.Errorf("abandoned provider operations did not become terminal: %w", reconcileCtx.Err())
+		}
+	}
+	settlements := make([]ProviderCollectionAbandonmentSettlement, 0, len(executions))
+	for _, prepared := range executions {
+		key := prepared.execution.Facet + "\x00" + prepared.execution.Mode
+		settlement, exists := settled[key]
+		if !exists {
+			return nil, fmt.Errorf("abandoned provider operation settlement is missing")
+		}
+		settlements = append(settlements, settlement)
+	}
+	return settlements, nil
+}
+
+func providerJournalEntry(
+	entries []ProviderCollectionJournalEntry,
+	execution ProviderLiveExecution,
+) (ProviderCollectionJournalEntry, bool) {
+	for _, entry := range entries {
+		if entry.Facet == execution.Facet && entry.Mode == execution.Mode {
+			return entry, true
+		}
+	}
+	return ProviderCollectionJournalEntry{}, false
 }
 
 type concurrentSuccessResult struct {
@@ -225,6 +417,7 @@ func (collector *Collector) collectConcurrentSuccesses(
 	ctx context.Context,
 	run ProviderLiveRun,
 	executions []preparedProviderExecution,
+	journal ProviderCollectionJournalStore,
 ) ([]ProviderReceiptRow, []AuthenticatedStreamingCase, ConcurrentLoadObservation, error) {
 	if len(executions) != providerSuccessConcurrency {
 		return nil, nil, ConcurrentLoadObservation{}, fmt.Errorf("concurrent provider load requires exactly six prepared successes")
@@ -277,6 +470,13 @@ func (collector *Collector) collectConcurrentSuccesses(
 					StartedAt: formatObservationTime(startedAt), CompletedAt: formatObservationTime(completedAt),
 					DurationMilliseconds: completedAt.Sub(startedAt).Milliseconds(),
 					ReceiptDigest:        observation.receipt.ReceiptDigest,
+				}
+				if journalErr := journal.Append(ProviderCollectionJournalEntry{
+					Facet: prepared.execution.Facet, Mode: prepared.execution.Mode,
+					Receipt: observation.receipt, RequestStreamSHA256: observation.requestStreamSHA256,
+					ResponseStreamSHA256: observation.responseStreamSHA256,
+				}); journalErr != nil {
+					result.err = fmt.Errorf("journal provider success: %w", journalErr)
 				}
 			}
 			results <- result

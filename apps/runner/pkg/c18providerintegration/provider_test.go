@@ -220,6 +220,11 @@ func newProviderCollectorFixture(t *testing.T) providerCollectorFixture {
 		observedAt = observedAt.Add(time.Second)
 		return value
 	}
+	collector.after = func(time.Duration) <-chan time.Time {
+		ready := make(chan time.Time, 1)
+		ready <- time.Now()
+		return ready
+	}
 	return providerCollectorFixture{collector: collector, run: run, harness: harness, server: server}
 }
 

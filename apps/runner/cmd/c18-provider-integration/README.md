@@ -42,8 +42,26 @@ Run it from the exact admitted source checkout:
 ```sh
 go run ./apps/runner/cmd/c18-provider-integration \
   --request /absolute/private/c18-provider-live-run.json \
+  --journal /absolute/private-journal/c18-provider-collection-journal.json \
   --output /absolute/private/c18-provider-live-collection.json
 ```
+
+The journal directory must already exist as an owner-private mode-`0700`
+directory and must be outside the final-output roster. The mode-`0600`,
+self-digested journal pins the exact live-run bytes and commits every settled
+operation before that settlement can contribute to a final collection. A
+complete twelve-entry journal is replayable without another provider effect,
+including after command expiry. A partial journal, or a durable operation with
+no matching journal entry, is reconciled across the entire old roster: every
+operation must be terminal and quiescent or remain durably absent for the full
+observation window. That attempt is then sealed as abandoned and none of its
+operation IDs may be retried. A new host observation and request authority are
+required for a new attempt.
+
+An abandoned attempt exits with stable status `75`. Orchestration must still
+parse and revalidate the journal's `abandoned:true` disposition and exact
+twelve-settlement roster before allocating the successor attempt; the exit
+status alone is not authority.
 
 The output path must not exist. The command commits one mode-`0600`, canonical,
 self-digested `C18ProviderLiveCollection@1` file atomically. It contains:
