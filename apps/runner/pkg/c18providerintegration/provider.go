@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -27,7 +28,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const specialistRenderContentType = "application/vnd.ambit.runtime-provider-specialist-render+jsonl;version=1"
+const (
+	specialistRenderContentType          = "application/vnd.ambit.runtime-provider-specialist-render+jsonl;version=1"
+	providerControlRequestTimeoutSeconds = 30
+)
 
 type Collector struct {
 	api     DaytonaAPIConfig
@@ -59,7 +63,8 @@ func (collector *Collector) Collect(ctx context.Context, run ProviderLiveRun) (P
 	if err != nil {
 		return ProviderLiveCollection{}, err
 	}
-	return collector.collect(ctx, run, journal)
+	collection, collectErr := collector.collect(ctx, run, journal)
+	return collection, errors.Join(collectErr, journal.Close())
 }
 
 func (collector *Collector) CollectWithJournal(
@@ -71,7 +76,31 @@ func (collector *Collector) CollectWithJournal(
 	if err != nil {
 		return ProviderLiveCollection{}, err
 	}
-	return collector.collect(ctx, run, journal)
+	collection, collectErr := collector.collect(ctx, run, journal)
+	return collection, errors.Join(collectErr, journal.Close())
+}
+
+func (collector *Collector) CollectAndPublishWithJournal(
+	ctx context.Context,
+	run ProviderLiveRun,
+	journalPath string,
+	outputPath string,
+) (ProviderLiveCollection, error) {
+	if filepath.Clean(filepath.Dir(journalPath)) ==
+		filepath.Clean(filepath.Dir(filepath.Dir(outputPath))) {
+		return ProviderLiveCollection{}, fmt.Errorf(
+			"provider journal directory must differ from output staging directory",
+		)
+	}
+	journal, err := OpenProviderCollectionJournal(journalPath, run)
+	if err != nil {
+		return ProviderLiveCollection{}, err
+	}
+	collection, collectErr := collector.collect(ctx, run, journal)
+	if collectErr == nil {
+		collectErr = WriteCanonicalExclusive(outputPath, collection)
+	}
+	return collection, errors.Join(collectErr, journal.Close())
 }
 
 func (collector *Collector) collect(
@@ -117,6 +146,14 @@ func (collector *Collector) collect(
 			return ProviderLiveCollection{}, fmt.Errorf("prepare %s %s: %w", execution.Facet, execution.Mode, err)
 		}
 		prepared = append(prepared, preparedExecution)
+	}
+	journalBeforePreflight := journal.Snapshot()
+	if !journalBeforePreflight.Complete && !journalBeforePreflight.Abandoned &&
+		len(journalBeforePreflight.Entries) == len(run.Executions) {
+		if err := journal.FinalizeComplete(policyBytes); err != nil &&
+			!errors.Is(err, ErrProviderJournalCompletionInvalid) {
+			return ProviderLiveCollection{}, fmt.Errorf("recover provider journal completion: %w", err)
+		}
 	}
 	replay, err := collector.preflightJournal(ctx, run, prepared, journal)
 	if err != nil {
@@ -168,6 +205,9 @@ func (collector *Collector) collect(
 	_, _, _, err = collector.collectConcurrentSuccesses(ctx, run, successes, journal)
 	if err != nil {
 		return ProviderLiveCollection{}, err
+	}
+	if err := journal.FinalizeComplete(policyBytes); err != nil {
+		return ProviderLiveCollection{}, fmt.Errorf("finalize provider collection journal: %w", err)
 	}
 	return ProviderCollectionFromJournal(journal.Snapshot(), run, policyBytes)
 }
@@ -290,16 +330,9 @@ func (collector *Collector) preflightJournal(
 		}
 	}
 	if snapshot.Abandoned {
-		settlements, err := collector.reconcileAbandonedOperations(ctx, run, executions, snapshot)
-		if err != nil {
-			return false, err
-		}
-		if err := journal.MarkAbandoned(settlements); err != nil {
-			return false, err
-		}
 		return false, fmt.Errorf("%w: durable abandoned provider collection", ErrProviderCollectionAbandoned)
 	}
-	if len(snapshot.Entries) == 0 && !hasRemoteAuthority {
+	if len(snapshot.Entries) == 0 && !hasRemoteAuthority && journal.Fresh() {
 		return false, nil
 	}
 	settlements, err := collector.reconcileAbandonedOperations(ctx, run, executions, snapshot)
@@ -318,41 +351,52 @@ func (collector *Collector) reconcileAbandonedOperations(
 	executions []preparedProviderExecution,
 	journal ProviderCollectionJournal,
 ) ([]ProviderCollectionAbandonmentSettlement, error) {
+	absenceWindow := time.Duration(run.Timeouts.ObservationSeconds) * time.Second
 	reconcileCtx, cancel := context.WithTimeout(
 		ctx,
-		time.Duration(run.Timeouts.ObservationSeconds)*time.Second+
+		absenceWindow+2*time.Duration(providerControlRequestTimeoutSeconds)*time.Second+
 			2*time.Duration(run.Timeouts.PollMilliseconds)*time.Millisecond,
 	)
 	defer cancel()
 	pending := append([]preparedProviderExecution(nil), executions...)
-	absentSince := make(map[string]time.Time, len(executions))
-	absenceWindow := time.Duration(run.Timeouts.ObservationSeconds) * time.Second
+	var allAbsentSince time.Time
 	settled := make(map[string]ProviderCollectionAbandonmentSettlement, len(executions))
 	for len(pending) > 0 {
-		next := make([]preparedProviderExecution, 0, len(pending))
+		type observationResult struct {
+			prepared    preparedProviderExecution
+			observation specialistrender.Observation
+			err         error
+		}
+		results := make(chan observationResult, len(pending))
 		for _, prepared := range pending {
-			observation, err := collector.observeRender(reconcileCtx, prepared.request)
-			if err != nil {
-				return nil, fmt.Errorf("reconcile abandoned %s %s: %w", prepared.execution.Facet, prepared.execution.Mode, err)
+			prepared := prepared
+			go func() {
+				observation, err := collector.observeRender(reconcileCtx, prepared.request)
+				results <- observationResult{prepared: prepared, observation: observation, err: err}
+			}()
+		}
+		observed := make([]observationResult, 0, len(pending))
+		for range pending {
+			observed = append(observed, <-results)
+		}
+		sort.Slice(observed, func(left, right int) bool {
+			return observed[left].prepared.execution.Facet+"\x00"+observed[left].prepared.execution.Mode <
+				observed[right].prepared.execution.Facet+"\x00"+observed[right].prepared.execution.Mode
+		})
+		next := make([]preparedProviderExecution, 0, len(pending))
+		allAbsent := true
+		for _, result := range observed {
+			prepared := result.prepared
+			observation := result.observation
+			if result.err != nil {
+				return nil, fmt.Errorf("reconcile abandoned %s %s: %w", prepared.execution.Facet, prepared.execution.Mode, result.err)
 			}
 			key := prepared.execution.Facet + "\x00" + prepared.execution.Mode
 			switch observation.Status {
 			case "absent":
-				now := collector.observedNow()
-				started, observed := absentSince[key]
-				if !observed {
-					absentSince[key] = now
-					started = now
-				}
-				if now.Sub(started) < absenceWindow {
-					next = append(next, prepared)
-				} else {
-					settled[key] = ProviderCollectionAbandonmentSettlement{
-						Facet: prepared.execution.Facet, Mode: prepared.execution.Mode, Status: "absent",
-					}
-				}
+				next = append(next, prepared)
 			case "partial":
-				delete(absentSince, key)
+				allAbsent = false
 				next = append(next, prepared)
 			case "complete":
 				if observation.Receipt == nil || !observation.Receipt.Quiescence.ContainerAbsent ||
@@ -370,6 +414,24 @@ func (collector *Collector) reconcileAbandonedOperations(
 			default:
 				return nil, fmt.Errorf("abandoned operation observation is invalid")
 			}
+		}
+		sweepCompletedAt := collector.observedNow()
+		if len(next) > 0 && allAbsent {
+			if allAbsentSince.IsZero() {
+				allAbsentSince = sweepCompletedAt
+			} else if sweepCompletedAt.Sub(allAbsentSince) >= absenceWindow {
+				for _, prepared := range next {
+					key := prepared.execution.Facet + "\x00" + prepared.execution.Mode
+					settled[key] = ProviderCollectionAbandonmentSettlement{
+						Facet: prepared.execution.Facet, Mode: prepared.execution.Mode, Status: "absent",
+						ObservedFrom:  formatObservationTime(allAbsentSince),
+						ObservedUntil: formatObservationTime(sweepCompletedAt),
+					}
+				}
+				next = next[:0]
+			}
+		} else if !allAbsent {
+			allAbsentSince = time.Time{}
 		}
 		pending = next
 		if len(pending) == 0 {
@@ -724,7 +786,7 @@ func (collector *Collector) observeRender(ctx context.Context, request specialis
 		Owner: request.Owner, Fence: request.Fence,
 	}
 	var observation specialistrender.Observation
-	if err := collector.postJSON(ctx, 30, request.Source.ProviderResourceID, "specialist-renders/observe", observe, &observation); err != nil {
+	if err := collector.postJSON(ctx, providerControlRequestTimeoutSeconds, request.Source.ProviderResourceID, "specialist-renders/observe", observe, &observation); err != nil {
 		return specialistrender.Observation{}, err
 	}
 	if observation.Schema != specialistrender.ObservationSchema ||

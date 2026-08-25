@@ -203,7 +203,8 @@ func newProviderCollectorFixture(t *testing.T) providerCollectorFixture {
 	harness := &providerHarness{
 		t: t, credential: "live-test-key", base: base, policies: policies,
 		modes: modes, sequences: sequences, states: make(map[string]specialistrender.Observation),
-		releaseSuccess: make(chan struct{}),
+		observationCalls: make(map[string]int),
+		releaseSuccess:   make(chan struct{}),
 	}
 	server := httptest.NewServer(http.HandlerFunc(harness.serveHTTP))
 	baseURL, _ := url.Parse(server.URL + "/api/")
@@ -247,6 +248,9 @@ type providerHarness struct {
 	settledSuccessRequests int
 	releaseSuccess         chan struct{}
 	failedSuccessOperation string
+	hideFirstObservation   bool
+	observationCalls       map[string]int
+	observationDelay       time.Duration
 }
 
 func (harness *providerHarness) serveHTTP(response http.ResponseWriter, request *http.Request) {
@@ -304,6 +308,21 @@ func (harness *providerHarness) observeRender(response http.ResponseWriter, requ
 		return
 	}
 	harness.mu.Lock()
+	delay := harness.observationDelay
+	harness.mu.Unlock()
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+	harness.mu.Lock()
+	if harness.hideFirstObservation && harness.observationCalls[observe.OperationID] == 0 {
+		harness.observationCalls[observe.OperationID]++
+		harness.mu.Unlock()
+		response.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(response).Encode(specialistrender.Observation{
+			Schema: specialistrender.ObservationSchema, Status: "absent",
+		})
+		return
+	}
 	observation, exists := harness.states[observe.OperationID]
 	harness.mu.Unlock()
 	if !exists {

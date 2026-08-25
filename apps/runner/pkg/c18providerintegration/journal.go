@@ -12,6 +12,7 @@ import (
 	"sort"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/daytonaio/runner/pkg/generationstop"
 	"github.com/daytonaio/runner/pkg/specialistrender"
@@ -24,6 +25,7 @@ const (
 )
 
 var ErrProviderCollectionAbandoned = errors.New("C18 provider collection attempt is abandoned")
+var ErrProviderJournalCompletionInvalid = errors.New("C18 provider journal completion is invalid")
 
 type ProviderCollectionJournalEntry struct {
 	Facet                string                   `json:"facet"`
@@ -34,10 +36,12 @@ type ProviderCollectionJournalEntry struct {
 }
 
 type ProviderCollectionAbandonmentSettlement struct {
-	Facet   string                    `json:"facet"`
-	Mode    string                    `json:"mode"`
-	Status  string                    `json:"status"`
-	Receipt *specialistrender.Receipt `json:"receipt"`
+	Facet         string                    `json:"facet"`
+	Mode          string                    `json:"mode"`
+	Status        string                    `json:"status"`
+	ObservedFrom  string                    `json:"observedFrom"`
+	ObservedUntil string                    `json:"observedUntil"`
+	Receipt       *specialistrender.Receipt `json:"receipt"`
 }
 
 type ProviderCollectionJournal struct {
@@ -65,15 +69,21 @@ type providerCollectionJournalBody struct {
 
 type ProviderCollectionJournalStore interface {
 	Snapshot() ProviderCollectionJournal
+	Fresh() bool
 	Append(entry ProviderCollectionJournalEntry) error
+	FinalizeComplete(policyBytes []byte) error
 	MarkAbandoned(settlements []ProviderCollectionAbandonmentSettlement) error
+	Close() error
 }
 
 type fileProviderCollectionJournalStore struct {
-	mu   sync.Mutex
-	path string
-	run  ProviderLiveRun
-	data ProviderCollectionJournal
+	mu     sync.Mutex
+	path   string
+	run    ProviderLiveRun
+	data   ProviderCollectionJournal
+	fresh  bool
+	lock   *os.File
+	closed bool
 }
 
 func OpenProviderCollectionJournal(path string, run ProviderLiveRun) (ProviderCollectionJournalStore, error) {
@@ -83,6 +93,17 @@ func OpenProviderCollectionJournal(path string, run ProviderLiveRun) (ProviderCo
 	if err := validatePrivateOwnedDirectory(filepath.Dir(path)); err != nil {
 		return nil, fmt.Errorf("provider collection journal directory is invalid: %w", err)
 	}
+	directoryLock, err := lockPrivateOwnedDirectory(filepath.Dir(path))
+	if err != nil {
+		return nil, fmt.Errorf("provider collection journal is already active: %w", err)
+	}
+	store := &fileProviderCollectionJournalStore{path: path, run: run, lock: directoryLock}
+	opened := false
+	defer func() {
+		if !opened {
+			_ = store.Close()
+		}
+	}()
 	if err := ValidateProviderLiveRun(run); err != nil {
 		return nil, err
 	}
@@ -93,7 +114,6 @@ func OpenProviderCollectionJournal(path string, run ProviderLiveRun) (ProviderCo
 	if err != nil {
 		return nil, err
 	}
-	store := &fileProviderCollectionJournalStore{path: path, run: run}
 	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
 		journal, sealErr := sealProviderCollectionJournal(ProviderCollectionJournal{
 			RunSHA256:   runSHA256,
@@ -107,9 +127,14 @@ func OpenProviderCollectionJournal(path string, run ProviderLiveRun) (ProviderCo
 			return nil, err
 		}
 		store.data = journal
+		store.fresh = true
+		opened = true
 		return store, nil
 	} else if err != nil {
 		return nil, fmt.Errorf("inspect provider collection journal: %w", err)
+	}
+	if err := validateOwnedRegularFile(path); err != nil {
+		return nil, fmt.Errorf("provider collection journal is not private: %w", err)
 	}
 	encoded, err := readCanonicalConfig(path, maximumProviderJournalBytes)
 	if err != nil {
@@ -123,6 +148,7 @@ func OpenProviderCollectionJournal(path string, run ProviderLiveRun) (ProviderCo
 		return nil, fmt.Errorf("provider collection journal changed run authority")
 	}
 	store.data = journal
+	opened = true
 	return store, nil
 }
 
@@ -148,10 +174,30 @@ func (store *fileProviderCollectionJournalStore) Snapshot() ProviderCollectionJo
 	return cloneProviderCollectionJournal(store.data)
 }
 
+func (store *fileProviderCollectionJournalStore) Fresh() bool {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return store.fresh
+}
+
 func (store *fileProviderCollectionJournalStore) Append(entry ProviderCollectionJournalEntry) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	next, changed, err := appendProviderJournalEntry(store.data, store.run, entry)
+	if err != nil || !changed {
+		return err
+	}
+	if err := writeProviderJournal(store.path, next, store.data.Digest); err != nil {
+		return err
+	}
+	store.data = next
+	return nil
+}
+
+func (store *fileProviderCollectionJournalStore) FinalizeComplete(policyBytes []byte) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	next, changed, err := finalizeProviderCollectionJournal(store.data, store.run, policyBytes)
 	if err != nil || !changed {
 		return err
 	}
@@ -178,6 +224,16 @@ func (store *fileProviderCollectionJournalStore) MarkAbandoned(
 	return nil
 }
 
+func (store *fileProviderCollectionJournalStore) Close() error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.closed || store.lock == nil {
+		return nil
+	}
+	store.closed = true
+	return closeLockedDirectory(store.lock)
+}
+
 type memoryProviderCollectionJournalStore struct {
 	mu   sync.Mutex
 	run  ProviderLiveRun
@@ -190,10 +246,24 @@ func (store *memoryProviderCollectionJournalStore) Snapshot() ProviderCollection
 	return cloneProviderCollectionJournal(store.data)
 }
 
+func (store *memoryProviderCollectionJournalStore) Fresh() bool {
+	return true
+}
+
 func (store *memoryProviderCollectionJournalStore) Append(entry ProviderCollectionJournalEntry) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	next, _, err := appendProviderJournalEntry(store.data, store.run, entry)
+	if err == nil {
+		store.data = next
+	}
+	return err
+}
+
+func (store *memoryProviderCollectionJournalStore) FinalizeComplete(policyBytes []byte) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	next, _, err := finalizeProviderCollectionJournal(store.data, store.run, policyBytes)
 	if err == nil {
 		store.data = next
 	}
@@ -210,6 +280,10 @@ func (store *memoryProviderCollectionJournalStore) MarkAbandoned(
 		store.data = next
 	}
 	return err
+}
+
+func (store *memoryProviderCollectionJournalStore) Close() error {
+	return nil
 }
 
 func ParseProviderCollectionJournal(data []byte, run ProviderLiveRun) (ProviderCollectionJournal, error) {
@@ -257,15 +331,42 @@ func appendProviderJournalEntry(
 		Entries:     entries,
 		Settlements: []ProviderCollectionAbandonmentSettlement{},
 	}
-	if len(entries) == len(run.Executions) {
-		next.Complete = true
-		for index, item := range entries {
-			if index == 0 || item.Receipt.StartedAt < next.ObservedFrom {
-				next.ObservedFrom = item.Receipt.StartedAt
-			}
-			if index == 0 || item.Receipt.CompletedAt > next.ObservedUntil {
-				next.ObservedUntil = item.Receipt.CompletedAt
-			}
+	sealed, err := sealProviderCollectionJournal(next)
+	if err != nil {
+		return ProviderCollectionJournal{}, false, err
+	}
+	if err := validateProviderCollectionJournal(sealed, run); err != nil {
+		return ProviderCollectionJournal{}, false, err
+	}
+	return sealed, true, nil
+}
+
+func finalizeProviderCollectionJournal(
+	current ProviderCollectionJournal,
+	run ProviderLiveRun,
+	policyBytes []byte,
+) (ProviderCollectionJournal, bool, error) {
+	if current.Abandoned {
+		return ProviderCollectionJournal{}, false, fmt.Errorf("%w: abandoned journal", ErrProviderJournalCompletionInvalid)
+	}
+	if current.Complete {
+		return current, false, nil
+	}
+	if len(current.Entries) != len(run.Executions) {
+		return ProviderCollectionJournal{}, false, fmt.Errorf("%w: execution roster is incomplete", ErrProviderJournalCompletionInvalid)
+	}
+	next := ProviderCollectionJournal{
+		RunSHA256:   current.RunSHA256,
+		Complete:    true,
+		Entries:     append([]ProviderCollectionJournalEntry(nil), current.Entries...),
+		Settlements: []ProviderCollectionAbandonmentSettlement{},
+	}
+	for index, item := range next.Entries {
+		if index == 0 || item.Receipt.StartedAt < next.ObservedFrom {
+			next.ObservedFrom = item.Receipt.StartedAt
+		}
+		if index == 0 || item.Receipt.CompletedAt > next.ObservedUntil {
+			next.ObservedUntil = item.Receipt.CompletedAt
 		}
 	}
 	sealed, err := sealProviderCollectionJournal(next)
@@ -273,7 +374,10 @@ func appendProviderJournalEntry(
 		return ProviderCollectionJournal{}, false, err
 	}
 	if err := validateProviderCollectionJournal(sealed, run); err != nil {
-		return ProviderCollectionJournal{}, false, err
+		return ProviderCollectionJournal{}, false, fmt.Errorf("%w: %v", ErrProviderJournalCompletionInvalid, err)
+	}
+	if _, err := ProviderCollectionFromJournal(sealed, run, policyBytes); err != nil {
+		return ProviderCollectionJournal{}, false, fmt.Errorf("%w: %v", ErrProviderJournalCompletionInvalid, err)
 	}
 	return sealed, true, nil
 }
@@ -393,11 +497,15 @@ func validateProviderCollectionJournal(value ProviderCollectionJournal, run Prov
 			previous = key
 			switch settlement.Status {
 			case "absent":
-				if settlement.Receipt != nil {
+				observedFrom, fromErr := parseObservationTime(settlement.ObservedFrom)
+				observedUntil, untilErr := parseObservationTime(settlement.ObservedUntil)
+				if settlement.Receipt != nil || fromErr != nil || untilErr != nil ||
+					observedUntil.Sub(observedFrom) < time.Duration(run.Timeouts.ObservationSeconds)*time.Second {
 					return fmt.Errorf("absent provider abandonment settlement contains a receipt")
 				}
 			case "complete":
-				if settlement.Receipt == nil || !settlement.Receipt.Quiescence.ContainerAbsent ||
+				if settlement.ObservedFrom != "" || settlement.ObservedUntil != "" ||
+					settlement.Receipt == nil || !settlement.Receipt.Quiescence.ContainerAbsent ||
 					specialistrender.ValidateReceipt(*settlement.Receipt) != nil ||
 					settlement.Receipt.Request.OperationID != execution.OperationID ||
 					settlement.Receipt.Request.ArtifactRenderJobRef != execution.ArtifactRenderJobRef {
@@ -419,7 +527,7 @@ func validateProviderCollectionJournal(value ProviderCollectionJournal, run Prov
 			return fmt.Errorf("complete provider collection journal is incomplete")
 		}
 	} else if value.ObservedFrom != "" || value.ObservedUntil != "" ||
-		len(value.Entries) >= len(run.Executions) || len(value.Settlements) != 0 {
+		len(value.Entries) > len(run.Executions) || len(value.Settlements) != 0 {
 		return fmt.Errorf("partial provider collection journal claims completion")
 	}
 	return nil
@@ -498,7 +606,14 @@ func providerJournalStagingPath(path string) string {
 	return filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+".c18-journal-staging")
 }
 
-func writeProviderJournal(path string, journal ProviderCollectionJournal, expectedCurrentDigest string) error {
+func writeProviderJournal(
+	path string,
+	journal ProviderCollectionJournal,
+	expectedCurrentDigest string,
+) (returnErr error) {
+	if err := validatePrivateOwnedDirectory(filepath.Dir(path)); err != nil {
+		return fmt.Errorf("provider journal directory lost private custody: %w", err)
+	}
 	encoded, err := generationstop.CanonicalJSON(journal)
 	if err != nil {
 		return err
@@ -513,11 +628,22 @@ func writeProviderJournal(path string, journal ProviderCollectionJournal, expect
 	}
 	committed := false
 	defer func() {
-		_ = file.Close()
-		if !committed {
-			_ = os.Remove(staging)
+		closeErr := file.Close()
+		if errors.Is(closeErr, os.ErrClosed) {
+			closeErr = nil
 		}
+		if !committed {
+			removeErr := os.Remove(staging)
+			if errors.Is(removeErr, os.ErrNotExist) {
+				removeErr = nil
+			}
+			returnErr = errors.Join(returnErr, removeErr)
+		}
+		returnErr = errors.Join(returnErr, closeErr)
 	}()
+	if err := file.Chmod(0o600); err != nil {
+		return fmt.Errorf("protect provider journal staging: %w", err)
+	}
 	if _, err := file.Write(encoded); err != nil {
 		return err
 	}
@@ -558,13 +684,27 @@ func reconcileOwnedStaging(path string) error {
 	} else if err != nil {
 		return err
 	}
-	if err := validateOwnedRegularFile(path); err != nil {
+	if err := validateOwnedStagingFile(path); err != nil {
 		return fmt.Errorf("owned staging substitution: %w", err)
 	}
 	if err := os.Remove(path); err != nil {
 		return fmt.Errorf("remove owned staging: %w", err)
 	}
 	return syncDirectory(filepath.Dir(path))
+}
+
+func validateOwnedStagingFile(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 ||
+		info.Mode().Perm()&0o177 != 0 || stat.Nlink != 1 || int(stat.Uid) != os.Geteuid() ||
+		info.Size() < 0 || info.Size() > maximumProviderJournalBytes {
+		return fmt.Errorf("file is not one recoverable owned staging file")
+	}
+	return nil
 }
 
 func validateOwnedRegularFile(path string) error {
@@ -574,7 +714,8 @@ func validateOwnedRegularFile(path string) error {
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 ||
-		info.Mode().Perm() != 0o600 || stat.Nlink != 1 || int(stat.Uid) != os.Geteuid() {
+		info.Mode().Perm() != 0o600 || stat.Nlink != 1 || int(stat.Uid) != os.Geteuid() ||
+		info.Size() < 0 || info.Size() > maximumProviderJournalBytes {
 		return fmt.Errorf("file is not one private owned regular file")
 	}
 	return nil
@@ -591,6 +732,31 @@ func validatePrivateOwnedDirectory(path string) error {
 		return fmt.Errorf("directory is not one private owned physical directory")
 	}
 	return nil
+}
+
+func lockPrivateOwnedDirectory(path string) (*os.File, error) {
+	if err := validatePrivateOwnedDirectory(path); err != nil {
+		return nil, err
+	}
+	directory, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := unix.Flock(int(directory.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		_ = directory.Close()
+		return nil, err
+	}
+	return directory, nil
+}
+
+func closeLockedDirectory(directory *os.File) error {
+	if directory == nil {
+		return nil
+	}
+	return errors.Join(
+		unix.Flock(int(directory.Fd()), unix.LOCK_UN),
+		directory.Close(),
+	)
 }
 
 func syncDirectory(path string) error {

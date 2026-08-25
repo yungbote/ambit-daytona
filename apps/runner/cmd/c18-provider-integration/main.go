@@ -42,11 +42,12 @@ func run() int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	collection, err := collector.CollectWithJournal(ctx, runRequest, *journalPath)
-	if err != nil {
-		return fail(err)
-	}
-	if err := c18providerintegration.WriteCanonicalExclusive(*outputPath, collection); err != nil {
+	if _, err := collector.CollectAndPublishWithJournal(
+		ctx,
+		runRequest,
+		*journalPath,
+		*outputPath,
+	); err != nil {
 		return fail(err)
 	}
 	return 0
