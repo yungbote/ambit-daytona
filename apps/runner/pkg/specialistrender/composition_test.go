@@ -4,6 +4,9 @@
 package specialistrender
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -43,6 +46,56 @@ func TestCanonicalCompositionSortUsesUTF16CodeUnits(t *testing.T) {
 	}
 }
 
+func TestDecodeCompositionAdmissionMatchesCanonicalBackendWireGolden(t *testing.T) {
+	t.Parallel()
+
+	bytes, err := os.ReadFile(filepath.Join("testdata", "runtime-capability-composition-wire.golden.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var golden struct {
+		Contract    string               `json:"contract"`
+		Routing     CompositionRouting   `json:"routing"`
+		Composition FullImageComposition `json:"composition"`
+	}
+	if err := json.Unmarshal(bytes, &golden); err != nil {
+		t.Fatal(err)
+	}
+	if golden.Contract != "RuntimeCapabilityCompositionWireGolden@1" {
+		t.Fatal("composition wire golden contract changed")
+	}
+	routingBytes, err := generationstop.CanonicalJSON(golden.Routing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compositionBytes, err := generationstop.CanonicalJSON(golden.Composition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeCompositionAdmission(compositionBytes, routingBytes); err != nil {
+		t.Fatalf("canonical backend wire golden was rejected: %v", err)
+	}
+
+	legacy := strings.Replace(
+		string(routingBytes),
+		`"providedCapabilityFamilyRefs"`,
+		`"capabilityFamilyRefs"`,
+		1,
+	)
+	if _, err := DecodeCompositionAdmission(compositionBytes, []byte(legacy)); err == nil {
+		t.Fatal("legacy routing wire key was accepted")
+	}
+	legacy = strings.Replace(
+		string(compositionBytes),
+		`"capability_coverage_map"`,
+		`"capability_family_partition"`,
+		1,
+	)
+	if _, err := DecodeCompositionAdmission([]byte(legacy), routingBytes); err == nil {
+		t.Fatal("legacy composition routing discriminator was accepted")
+	}
+}
+
 func compositionFixture(t *testing.T) (CompositionRouting, FullImageComposition) {
 	t.Helper()
 	packs := []string{"data-research", "office-authoring", "pdf-ocr", "web-browser"}
@@ -52,8 +105,8 @@ func compositionFixture(t *testing.T) (CompositionRouting, FullImageComposition)
 		profile := "ambit.workspace-runtime/" + pack + "@1"
 		routes[index] = CompositionRoute{
 			RouteRef: "route:" + pack, ExecutorProfileRef: profile,
-			CapabilityFamilyRefs:   []string{"family:" + pack},
-			RequiredCapabilityRefs: []string{"ambit.runtime/" + pack + "@1"},
+			ProvidedCapabilityFamilyRefs: []string{"family:" + pack},
+			ProvidedCapabilityRefs:       []string{"ambit.runtime/" + pack + "@1"},
 		}
 		indexDigest := digestSeed(string(rune('1' + index)))
 		executors[index] = CompositionExecutor{
@@ -86,7 +139,7 @@ func compositionFixture(t *testing.T) (CompositionRouting, FullImageComposition)
 	})
 	routing.RoutingRef = "runtime-capability-composition-routing:" + routing.Digest
 	multi := MultiExecutorComposition{
-		Mode: "explicit_multi_executor", Routing: "capability_family_partition",
+		Mode: "explicit_multi_executor", Routing: "capability_coverage_map",
 		Executors: executors, RoutingReceipt: Pin{Ref: routing.RoutingRef, Digest: routing.Digest},
 	}
 	receiptDigest, _ := semanticDigest(compositionEvidence{

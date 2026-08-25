@@ -25,10 +25,10 @@ type CompositionRouting struct {
 }
 
 type CompositionRoute struct {
-	RouteRef               string   `json:"routeRef"`
-	ExecutorProfileRef     string   `json:"executorProfileRef"`
-	CapabilityFamilyRefs   []string `json:"capabilityFamilyRefs"`
-	RequiredCapabilityRefs []string `json:"requiredCapabilityRefs"`
+	RouteRef                     string   `json:"routeRef"`
+	ExecutorProfileRef           string   `json:"executorProfileRef"`
+	ProvidedCapabilityFamilyRefs []string `json:"providedCapabilityFamilyRefs"`
+	ProvidedCapabilityRefs       []string `json:"providedCapabilityRefs"`
 }
 
 type FullImageComposition struct {
@@ -174,8 +174,8 @@ func validateRouting(value CompositionRouting) error {
 	capabilityRefs := make(map[string]struct{})
 	for index, route := range value.Routes {
 		if !boundedOperationalRef(route.RouteRef, 512) || !boundedOperationalRef(route.ExecutorProfileRef, 512) ||
-			!sortedOperationalRefs(route.CapabilityFamilyRefs, 1, 256) ||
-			!sortedOperationalRefs(route.RequiredCapabilityRefs, 1, 256) {
+			!sortedOperationalRefs(route.ProvidedCapabilityFamilyRefs, 1, 256) ||
+			!sortedOperationalRefs(route.ProvidedCapabilityRefs, 1, 256) {
 			return errors.New("composition route is invalid")
 		}
 		routeRefs[index] = route.RouteRef
@@ -183,15 +183,15 @@ func validateRouting(value CompositionRouting) error {
 			return errors.New("composition route executor is duplicated")
 		}
 		executorRefs[route.ExecutorProfileRef] = struct{}{}
-		for _, ref := range route.CapabilityFamilyRefs {
+		for _, ref := range route.ProvidedCapabilityFamilyRefs {
 			if _, duplicate := familyRefs[ref]; duplicate {
 				return errors.New("composition capability family is duplicated")
 			}
 			familyRefs[ref] = struct{}{}
 		}
-		for _, ref := range route.RequiredCapabilityRefs {
+		for _, ref := range route.ProvidedCapabilityRefs {
 			if _, duplicate := capabilityRefs[ref]; duplicate {
-				return errors.New("composition required capability is duplicated")
+				return errors.New("composition provided capability is duplicated")
 			}
 			capabilityRefs[ref] = struct{}{}
 		}
@@ -217,7 +217,7 @@ func validateComposition(value FullImageComposition, routing CompositionRouting)
 		!boundedOperationalRef(value.DeploymentTarget.TargetRef, 512) ||
 		value.DeploymentTarget.Provider != "daytona" || value.DeploymentTarget.Platform.OS != "linux" ||
 		value.DeploymentTarget.Platform.Architecture != "amd64" ||
-		multi.Mode != "explicit_multi_executor" || multi.Routing != "capability_family_partition" ||
+		multi.Mode != "explicit_multi_executor" || multi.Routing != "capability_coverage_map" ||
 		len(multi.Executors) != len(packExecutables) ||
 		multi.RoutingReceipt != (Pin{Ref: routing.RoutingRef, Digest: routing.Digest}) {
 		return errors.New("runtime capability full-image composition is invalid")
