@@ -55,6 +55,17 @@ type SpecialistRenderProvider interface {
 	Execute(context.Context, ProviderExecutionInput) (ProviderExecutionResult, error)
 }
 
+// StreamingSpecialistRenderProvider is the bounded alternative for callers
+// that must inspect large browser/document artifacts without retaining them all
+// in memory.
+type StreamingSpecialistRenderProvider interface {
+	ExecuteToCustody(
+		context.Context,
+		ProviderExecutionInput,
+		ProviderResponseCustody,
+	) (ProviderResponseObservation, error)
+}
+
 // ProviderRequest materializes and validates the exact existing Runner wire
 // header. Copies prevent a caller from mutating payload bytes after admission.
 func ProviderRequest(input ProviderExecutionInput) (specialistrender.Request, []byte, []byte, error) {

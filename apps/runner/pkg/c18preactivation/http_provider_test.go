@@ -75,6 +75,15 @@ func TestHTTPProviderUsesExactRunnerTransport(t *testing.T) {
 		!bytes.Equal(result.Files[0].Bytes, payload) {
 		t.Fatal("HTTP provider result differs")
 	}
+	custody := &hashingResponseCustody{}
+	observation, err := provider.ExecuteToCustody(context.Background(), input, custody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !custody.committed || custody.aborted || observation.WireSHA256 == "" ||
+		observation.Receipt.ReceiptDigest != result.Receipt.ReceiptDigest {
+		t.Fatal("streaming HTTP provider did not commit exact response custody")
+	}
 }
 
 func TestHTTPProviderConfigurationMatchesBackendCredentialRules(t *testing.T) {
@@ -140,8 +149,14 @@ func TestHTTPProviderRejectsRedirectAndStatusOutcomeDisagreement(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := provider.Execute(context.Background(), testProviderInput(t, requestBytes, sourceBytes)); err == nil {
+			custody := &hashingResponseCustody{}
+			if _, err := provider.ExecuteToCustody(
+				context.Background(), testProviderInput(t, requestBytes, sourceBytes), custody,
+			); err == nil {
 				t.Fatal("invalid HTTP settlement was admitted")
+			}
+			if custody.committed || !custody.aborted {
+				t.Fatal("invalid HTTP settlement did not abort custody")
 			}
 		})
 	}
