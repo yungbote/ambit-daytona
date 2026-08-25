@@ -16,6 +16,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,6 +38,12 @@ const (
 	maximumReceiptBytes    = 32 * 1024
 	maximumDeletionBytes   = 32 * 1024
 	maximumArchiveOverhead = 1024 * 1024
+	// Each admitted path can require an extended-name header, its padded
+	// payload, the concrete entry header, and one padding block. The additional
+	// MiB admits Docker-owned global archive metadata while keeping malformed
+	// metadata streams bounded independently from file payload bytes.
+	maximumRosterArchiveOverhead   = (MaximumRosterEntries+1)*4*1024 + 1024*1024
+	stoppedDirectoryRosterContract = "ambit.working-copy-stopped-directory-roster/v1"
 )
 
 var (
@@ -232,6 +239,75 @@ func (s *Service) Capture(
 	}
 
 	return s.resumeCapture(ctx, zonePath, intent)
+}
+
+// StoppedDirectoryRoster reads one bounded, byte-free directory inventory from
+// the exact terminal container generation already admitted by an anchor
+// WorkingCopy binding. It never contacts the container toolbox and never
+// restarts the stopped generation.
+func (s *Service) StoppedDirectoryRoster(
+	ctx context.Context,
+	sandboxID string,
+	request StoppedDirectoryRosterRequest,
+) (StoppedDirectoryRosterReceipt, error) {
+	zonePath, err := s.validateStoppedDirectoryRosterRequest(sandboxID, request)
+	if err != nil {
+		return StoppedDirectoryRosterReceipt{}, err
+	}
+
+	beforeStop, err := s.requireCurrentStop(ctx, request.Anchor)
+	if err != nil {
+		return StoppedDirectoryRosterReceipt{}, err
+	}
+	terminal := request.Anchor.StopAuthority.TerminalGeneration
+	if beforeStop.TerminalGeneration != terminal {
+		return StoppedDirectoryRosterReceipt{}, fmt.Errorf("%w: stopped generation changed before directory roster", ErrConflict)
+	}
+	containerID := terminal.ContainerID
+	before, err := s.statDirectoryPathChain(ctx, containerID, zonePath)
+	if err != nil {
+		return StoppedDirectoryRosterReceipt{}, err
+	}
+	rootBefore := before[len(before)-1]
+	archive, copyStat, err := s.containers.CopyFromContainer(ctx, containerID, zonePath)
+	if err != nil {
+		return StoppedDirectoryRosterReceipt{}, dockerReadError("open stopped-directory Docker archive", err)
+	}
+	defer archive.Close()
+	if !samePathStat(rootBefore, copyStat) {
+		return StoppedDirectoryRosterReceipt{}, fmt.Errorf("%w: directory descriptor changed before archive read", ErrConflict)
+	}
+	entries, err := readStoppedDirectoryRosterTar(ctx, archive, path.Base(zonePath), request)
+	if err != nil {
+		return StoppedDirectoryRosterReceipt{}, err
+	}
+	after, err := s.statDirectoryPathChain(ctx, containerID, zonePath)
+	if err != nil {
+		return StoppedDirectoryRosterReceipt{}, err
+	}
+	if !samePathStatChain(before, after) {
+		return StoppedDirectoryRosterReceipt{}, fmt.Errorf("%w: directory path changed during roster read", ErrConflict)
+	}
+	afterStop, err := s.requireCurrentStop(ctx, request.Anchor)
+	if err != nil {
+		return StoppedDirectoryRosterReceipt{}, err
+	}
+	if afterStop.TerminalGeneration != terminal {
+		return StoppedDirectoryRosterReceipt{}, fmt.Errorf("%w: stopped generation changed during directory roster", ErrConflict)
+	}
+
+	digest, err := stoppedDirectoryRosterDigest(request, terminal, entries)
+	if err != nil {
+		return StoppedDirectoryRosterReceipt{}, fmt.Errorf("%w: canonicalize stopped-directory roster: %v", ErrUnavailable, err)
+	}
+	observedAt := s.now().UTC().Truncate(time.Millisecond).Format("2006-01-02T15:04:05.000Z07:00")
+	return StoppedDirectoryRosterReceipt{
+		Request:            request,
+		TerminalGeneration: terminal,
+		Entries:            entries,
+		RosterDigest:       digest,
+		ObservedAt:         observedAt,
+	}, nil
 }
 
 func (s *Service) Observe(
@@ -736,6 +812,201 @@ func (s *Service) statPathChain(
 	return stats, nil
 }
 
+func (s *Service) validateStoppedDirectoryRosterRequest(
+	sandboxID string,
+	request StoppedDirectoryRosterRequest,
+) (string, error) {
+	anchorPath, err := s.validateBinding(sandboxID, request.Anchor)
+	if err != nil {
+		return "", err
+	}
+	if request.Selector.SemanticZoneRef != request.Anchor.Selector.SemanticZoneRef {
+		return "", invalidf("directory roster selector must remain in the anchor semantic zone")
+	}
+	root, ok := semanticZoneRoot(request.Selector.SemanticZoneRef)
+	if !ok || !canonicalRelativePath(request.Selector.ZoneRelativePath) {
+		return "", invalidf("directory roster selector is not a bounded canonical relative path")
+	}
+	zonePath := root + "/" + request.Selector.ZoneRelativePath
+	if !strings.HasPrefix(anchorPath, zonePath+"/") {
+		return "", invalidf("directory roster anchor is not a descendant of its selector")
+	}
+	if request.MaximumDepth < 1 || request.MaximumDepth > MaximumRosterDepth ||
+		request.MaximumEntries < 1 || request.MaximumEntries > MaximumRosterEntries ||
+		request.MaximumFileBytes < 1 || request.MaximumFileBytes > MaximumRosterFileBytes ||
+		request.MaximumAggregateBytes < request.MaximumFileBytes ||
+		request.MaximumAggregateBytes > MaximumRosterAggregateBytes {
+		return "", invalidf("directory roster bounds are invalid")
+	}
+	return zonePath, nil
+}
+
+func (s *Service) statDirectoryPathChain(
+	ctx context.Context,
+	containerID string,
+	zonePath string,
+) ([]containertypes.PathStat, error) {
+	parts := strings.Split(strings.TrimPrefix(zonePath, "/"), "/")
+	stats := make([]containertypes.PathStat, 0, len(parts))
+	current := ""
+	for _, part := range parts {
+		current += "/" + part
+		stat, err := s.containers.ContainerStatPath(ctx, containerID, current)
+		if err != nil {
+			return nil, dockerReadError("stat admitted directory path", err)
+		}
+		if stat.Name != part || stat.LinkTarget != "" || stat.Mode&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("%w: directory path contains a symlink or mismatched descriptor", ErrConflict)
+		}
+		if !stat.Mode.IsDir() {
+			return nil, fmt.Errorf("%w: directory roster path contains a non-directory component", ErrConflict)
+		}
+		stats = append(stats, stat)
+	}
+	if len(stats) == 0 {
+		return nil, invalidf("directory roster path is empty")
+	}
+	return stats, nil
+}
+
+func readStoppedDirectoryRosterTar(
+	ctx context.Context,
+	archive io.Reader,
+	rootName string,
+	request StoppedDirectoryRosterRequest,
+) ([]StoppedDirectoryRosterEntry, error) {
+	maximumArchiveBytes := request.MaximumAggregateBytes + maximumRosterArchiveOverhead
+	reader := tar.NewReader(io.LimitReader(archive, maximumArchiveBytes+1))
+	root, err := reader.Next()
+	if err != nil {
+		return nil, dockerReadError("read stopped-directory root archive header", err)
+	}
+	if !canonicalRosterArchiveName(root.Name) || path.Clean(root.Name) != rootName ||
+		root.Linkname != "" || root.Typeflag != tar.TypeDir || !root.FileInfo().Mode().IsDir() {
+		return nil, fmt.Errorf("%w: stopped-directory archive root is invalid", ErrConflict)
+	}
+	if _, err := io.Copy(io.Discard, reader); err != nil {
+		return nil, dockerReadError("read stopped-directory root archive body", err)
+	}
+
+	entries := make([]StoppedDirectoryRosterEntry, 0)
+	aggregateBytes := int64(0)
+	anchorFound := false
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("%w: stopped-directory roster cancelled: %v", ErrUnavailable, err)
+		}
+		header, nextErr := reader.Next()
+		if errors.Is(nextErr, io.EOF) {
+			break
+		}
+		if nextErr != nil {
+			return nil, dockerReadError("read stopped-directory archive header", nextErr)
+		}
+		if !canonicalRosterArchiveName(header.Name) ||
+			!strings.HasPrefix(path.Clean(header.Name), rootName+"/") ||
+			header.Linkname != "" {
+			return nil, fmt.Errorf("%w: stopped-directory archive entry escaped its root", ErrConflict)
+		}
+		relativePath := strings.TrimPrefix(path.Clean(header.Name), rootName+"/")
+		if !canonicalRelativePath(relativePath) {
+			return nil, fmt.Errorf("%w: stopped-directory archive entry path is invalid", ErrConflict)
+		}
+		zoneRelativePath := request.Selector.ZoneRelativePath + "/" + relativePath
+		if !canonicalRelativePath(zoneRelativePath) {
+			return nil, fmt.Errorf("%w: stopped-directory semantic path is invalid", ErrConflict)
+		}
+		depth := len(strings.Split(relativePath, "/"))
+		if depth > request.MaximumDepth {
+			return nil, invalidf("stopped-directory archive exceeds maximum depth")
+		}
+		if len(entries) == request.MaximumEntries {
+			return nil, invalidf("stopped-directory archive exceeds maximum entries")
+		}
+
+		info := header.FileInfo()
+		mode := fmt.Sprintf("%04o", info.Mode().Perm())
+		entry := StoppedDirectoryRosterEntry{
+			ZoneRelativePath: zoneRelativePath,
+			Name:             path.Base(zoneRelativePath),
+			Mode:             &mode,
+		}
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if !info.Mode().IsDir() || header.Size != 0 {
+				return nil, fmt.Errorf("%w: stopped-directory archive directory is invalid", ErrConflict)
+			}
+			if depth >= request.MaximumDepth {
+				return nil, invalidf("stopped-directory archive exceeds maximum depth")
+			}
+			entry.Kind = "directory"
+			entry.Size = 0
+		case tar.TypeReg, tar.TypeRegA:
+			if !info.Mode().IsRegular() || header.Size < 0 || header.Size > request.MaximumFileBytes {
+				return nil, invalidf("stopped-directory regular file exceeds its bound")
+			}
+			aggregateBytes += header.Size
+			if aggregateBytes < 0 || aggregateBytes > request.MaximumAggregateBytes {
+				return nil, invalidf("stopped-directory archive exceeds aggregate bytes")
+			}
+			entry.Kind = "regular_file"
+			entry.Size = header.Size
+			if zoneRelativePath == request.Anchor.Selector.ZoneRelativePath {
+				anchorFound = true
+			}
+		default:
+			return nil, fmt.Errorf("%w: stopped-directory archive contains a symlink, hardlink, or special file", ErrConflict)
+		}
+		readBytes, readErr := io.Copy(io.Discard, reader)
+		if readErr != nil {
+			return nil, dockerReadError("read stopped-directory archive entry", readErr)
+		}
+		if readBytes != header.Size {
+			return nil, fmt.Errorf("%w: stopped-directory archive entry size changed", ErrConflict)
+		}
+		entries = append(entries, entry)
+	}
+	if !anchorFound {
+		return nil, fmt.Errorf("%w: stopped-directory roster omitted its anchor file", ErrConflict)
+	}
+	sort.Slice(entries, func(left, right int) bool {
+		return entries[left].ZoneRelativePath < entries[right].ZoneRelativePath
+	})
+	for index := 1; index < len(entries); index++ {
+		if entries[index-1].ZoneRelativePath == entries[index].ZoneRelativePath {
+			return nil, fmt.Errorf("%w: stopped-directory roster repeats a path", ErrConflict)
+		}
+	}
+	return entries, nil
+}
+
+func canonicalRosterArchiveName(value string) bool {
+	if value == "" || strings.HasPrefix(value, "/") || strings.Contains(value, "\\") ||
+		strings.ContainsRune(value, '\x00') || path.Clean(value) == "." {
+		return false
+	}
+	trimmed := strings.TrimSuffix(value, "/")
+	return path.Clean(value) == trimmed && !strings.HasPrefix(trimmed, "../")
+}
+
+func stoppedDirectoryRosterDigest(
+	request StoppedDirectoryRosterRequest,
+	terminal generationstop.TerminalGeneration,
+	entries []StoppedDirectoryRosterEntry,
+) (string, error) {
+	payload := map[string]any{
+		"contract":           stoppedDirectoryRosterContract,
+		"request":            request,
+		"terminalGeneration": terminal,
+		"entries":            entries,
+	}
+	canonical, err := generationstop.CanonicalJSON(payload)
+	if err != nil {
+		return "", err
+	}
+	return sha256Digest(canonical), nil
+}
+
 func (s *Service) readIntent(
 	ctx context.Context,
 	bindingRoot string,
@@ -1012,10 +1283,7 @@ func (s *Service) validateBinding(sandboxID string, binding CaptureBinding) (str
 		binding.Source.ExpectedRuntimeKind != "full_image_runtime_pack" {
 		return "", invalidf("source address is not an admitted managed container")
 	}
-	root, ok := map[string]string{
-		"ambit.workspace-zone/work@1":    "/workspace/work",
-		"ambit.workspace-zone/outputs@1": "/workspace/outputs",
-	}[binding.Selector.SemanticZoneRef]
+	root, ok := semanticZoneRoot(binding.Selector.SemanticZoneRef)
 	if !ok {
 		return "", invalidf("semantic zone is not admitted for capture")
 	}
@@ -1024,6 +1292,14 @@ func (s *Service) validateBinding(sandboxID string, binding CaptureBinding) (str
 		return "", invalidf("zoneRelativePath is not a bounded canonical relative path")
 	}
 	return root + "/" + relative, nil
+}
+
+func semanticZoneRoot(semanticZoneRef string) (string, bool) {
+	root, ok := map[string]string{
+		"ambit.workspace-zone/work@1":    "/workspace/work",
+		"ambit.workspace-zone/outputs@1": "/workspace/outputs",
+	}[semanticZoneRef]
+	return root, ok
 }
 
 func validateAuthority(authority CaptureAuthority) error {

@@ -112,6 +112,213 @@ func TestCaptureAllowsZeroBytesAndOutputsZone(t *testing.T) {
 	}
 }
 
+func TestStoppedDirectoryRosterUsesExactTerminalDockerGeneration(t *testing.T) {
+	t.Parallel()
+	request := validStoppedDirectoryRosterRequest()
+	containers := newFakeContainer(nil)
+	containers.copyStatMode = os.ModeDir | 0o755
+	containers.archive = tarArchive(
+		tarEntry{name: "site/", typeflag: tar.TypeDir, mode: 0o755},
+		tarEntry{name: "site/index.html", typeflag: tar.TypeReg, mode: 0o640, body: []byte("entrypoint bytes")},
+		tarEntry{name: "site/assets/", typeflag: tar.TypeDir, mode: 0o750},
+		tarEntry{name: "site/assets/app.js", typeflag: tar.TypeReg, mode: 0o600, body: []byte("script bytes")},
+	)
+	objects := newFakeObjectStore()
+	service := mustService(t, containers, objects, request.Anchor.Authority)
+	service.now = func() time.Time { return time.Date(2026, 8, 25, 12, 34, 56, 789123456, time.UTC) }
+
+	receipt, err := service.StoppedDirectoryRoster(
+		context.Background(),
+		request.Anchor.Source.ProviderResourceID,
+		request,
+	)
+	if err != nil {
+		t.Fatalf("stopped-directory roster failed: %v", err)
+	}
+	if receipt.Request != request || receipt.TerminalGeneration != request.Anchor.StopAuthority.TerminalGeneration {
+		t.Fatalf("roster lost exact request or terminal generation: %#v", receipt)
+	}
+	if receipt.ObservedAt != "2026-08-25T12:34:56.789Z" {
+		t.Fatalf("unexpected millisecond observation time: %s", receipt.ObservedAt)
+	}
+	want := []StoppedDirectoryRosterEntry{
+		{ZoneRelativePath: "site/assets", Name: "assets", Kind: "directory", Size: 0, Mode: stringPointer("0750")},
+		{ZoneRelativePath: "site/assets/app.js", Name: "app.js", Kind: "regular_file", Size: 12, Mode: stringPointer("0600")},
+		{ZoneRelativePath: "site/index.html", Name: "index.html", Kind: "regular_file", Size: 16, Mode: stringPointer("0640")},
+	}
+	if !equalRosterEntries(receipt.Entries, want) {
+		t.Fatalf("unexpected canonical roster: %#v", receipt.Entries)
+	}
+	digest, err := stoppedDirectoryRosterDigest(request, receipt.TerminalGeneration, receipt.Entries)
+	if err != nil || receipt.RosterDigest != digest {
+		t.Fatalf("roster digest is not canonical: %q, %v", receipt.RosterDigest, err)
+	}
+	if containers.copyCalls != 1 || containers.copyPaths[0] != "/workspace/work/site" ||
+		containers.copyContainerIDs[0] != containers.generation.ID {
+		t.Fatalf("roster did not use exact Docker host authority: paths=%#v ids=%#v", containers.copyPaths, containers.copyContainerIDs)
+	}
+	if len(objects.objects) != 0 {
+		t.Fatal("read-only roster unexpectedly wrote private capture storage")
+	}
+	encoded, err := json.Marshal(receipt)
+	if err != nil || bytes.Contains(encoded, []byte("entrypoint bytes")) || bytes.Contains(encoded, []byte("script bytes")) {
+		t.Fatalf("roster exposed file bytes: %s, %v", encoded, err)
+	}
+}
+
+func TestStoppedDirectoryRosterRejectsLinksSpecialFilesAndEscapes(t *testing.T) {
+	t.Parallel()
+	tests := map[string]tarEntry{
+		"file-symlink":      {name: "site/link.js", typeflag: tar.TypeSymlink, linkname: "app.js"},
+		"directory-symlink": {name: "site/link-dir", typeflag: tar.TypeSymlink, linkname: "assets"},
+		"hardlink":          {name: "site/hard.js", typeflag: tar.TypeLink, linkname: "site/app.js"},
+		"fifo":              {name: "site/fifo", typeflag: tar.TypeFifo},
+		"device":            {name: "site/device", typeflag: tar.TypeChar},
+		"escape":            {name: "site/../escape.js", typeflag: tar.TypeReg, body: []byte("x")},
+	}
+	for name, unsafeEntry := range tests {
+		unsafeEntry := unsafeEntry
+		t.Run(name, func(t *testing.T) {
+			request := validStoppedDirectoryRosterRequest()
+			containers := newFakeContainer(nil)
+			containers.copyStatMode = os.ModeDir | 0o755
+			containers.archive = tarArchive(
+				tarEntry{name: "site/", typeflag: tar.TypeDir, mode: 0o755},
+				unsafeEntry,
+				tarEntry{name: "site/index.html", typeflag: tar.TypeReg, body: []byte("x")},
+			)
+			service := mustService(t, containers, newFakeObjectStore(), request.Anchor.Authority)
+			_, err := service.StoppedDirectoryRoster(context.Background(), request.Anchor.Source.ProviderResourceID, request)
+			if !errors.Is(err, ErrConflict) {
+				t.Fatalf("expected unsafe roster conflict, got %v", err)
+			}
+		})
+	}
+}
+
+func TestStoppedDirectoryRosterEnforcesEveryRequestedBoundWhileStreaming(t *testing.T) {
+	t.Parallel()
+	tests := map[string]func(*StoppedDirectoryRosterRequest, *fakeContainer){
+		"depth": func(request *StoppedDirectoryRosterRequest, container *fakeContainer) {
+			request.MaximumDepth = 1
+			container.archive = rosterArchive(
+				tarEntry{name: "site/nested/", typeflag: tar.TypeDir},
+			)
+		},
+		"entries": func(request *StoppedDirectoryRosterRequest, container *fakeContainer) {
+			request.MaximumEntries = 1
+			container.archive = rosterArchive(
+				tarEntry{name: "site/app.js", typeflag: tar.TypeReg, body: []byte("x")},
+			)
+		},
+		"file-bytes": func(request *StoppedDirectoryRosterRequest, container *fakeContainer) {
+			request.MaximumFileBytes = 1
+			container.archive = rosterArchive(
+				tarEntry{name: "site/app.js", typeflag: tar.TypeReg, body: []byte("xx")},
+			)
+		},
+		"aggregate-bytes": func(request *StoppedDirectoryRosterRequest, container *fakeContainer) {
+			request.MaximumFileBytes = 4
+			request.MaximumAggregateBytes = 5
+			container.archive = rosterArchive(
+				tarEntry{name: "site/app.js", typeflag: tar.TypeReg, body: []byte("xxx")},
+				tarEntry{name: "site/other.js", typeflag: tar.TypeReg, body: []byte("xxx")},
+			)
+		},
+	}
+	for name, configure := range tests {
+		configure := configure
+		t.Run(name, func(t *testing.T) {
+			request := validStoppedDirectoryRosterRequest()
+			containers := newFakeContainer(nil)
+			containers.copyStatMode = os.ModeDir | 0o755
+			configure(&request, containers)
+			service := mustService(t, containers, newFakeObjectStore(), request.Anchor.Authority)
+			_, err := service.StoppedDirectoryRoster(context.Background(), request.Anchor.Source.ProviderResourceID, request)
+			if !errors.Is(err, ErrInvalidRequest) {
+				t.Fatalf("expected bounded roster rejection, got %v", err)
+			}
+		})
+	}
+}
+
+func TestStoppedDirectoryRosterRejectsAnchorAndGenerationDrift(t *testing.T) {
+	t.Parallel()
+	t.Run("anchor-outside-directory", func(t *testing.T) {
+		request := validStoppedDirectoryRosterRequest()
+		request.Selector.ZoneRelativePath = "other"
+		containers := newFakeContainer(nil)
+		service := mustService(t, containers, newFakeObjectStore(), request.Anchor.Authority)
+		_, err := service.StoppedDirectoryRoster(context.Background(), request.Anchor.Source.ProviderResourceID, request)
+		if !errors.Is(err, ErrInvalidRequest) || containers.copyCalls != 0 {
+			t.Fatalf("invalid anchor reached Docker: %v", err)
+		}
+	})
+
+	t.Run("generation-before", func(t *testing.T) {
+		request := validStoppedDirectoryRosterRequest()
+		containers := newFakeContainer(nil)
+		containers.copyStatMode = os.ModeDir | 0o755
+		mutated := containers.generation
+		mutated.RestartCount++
+		containers.inspectMutations[1] = mutated
+		service := mustService(t, containers, newFakeObjectStore(), request.Anchor.Authority)
+		_, err := service.StoppedDirectoryRoster(context.Background(), request.Anchor.Source.ProviderResourceID, request)
+		if !errors.Is(err, ErrConflict) || containers.copyCalls != 0 {
+			t.Fatalf("generation drift reached archive: %v", err)
+		}
+	})
+
+	t.Run("generation-after", func(t *testing.T) {
+		request := validStoppedDirectoryRosterRequest()
+		containers := newFakeContainer(nil)
+		containers.copyStatMode = os.ModeDir | 0o755
+		containers.archive = rosterArchive()
+		mutated := containers.generation
+		mutated.RestartCount++
+		containers.inspectMutations[2] = mutated
+		service := mustService(t, containers, newFakeObjectStore(), request.Anchor.Authority)
+		_, err := service.StoppedDirectoryRoster(context.Background(), request.Anchor.Source.ProviderResourceID, request)
+		if !errors.Is(err, ErrConflict) || containers.copyCalls != 1 {
+			t.Fatalf("post-read generation drift was not rejected: %v", err)
+		}
+	})
+}
+
+func TestStoppedDirectoryRosterRejectsSymlinkedDirectoryPathAndCancellation(t *testing.T) {
+	t.Parallel()
+	t.Run("symlinked-directory-path", func(t *testing.T) {
+		request := validStoppedDirectoryRosterRequest()
+		containers := newFakeContainer(nil)
+		containers.statMutation = func(stat containertypes.PathStat) containertypes.PathStat {
+			if stat.Name == "site" {
+				stat.Mode = os.ModeSymlink | 0o777
+				stat.LinkTarget = "/workspace/work/other"
+			}
+			return stat
+		}
+		service := mustService(t, containers, newFakeObjectStore(), request.Anchor.Authority)
+		_, err := service.StoppedDirectoryRoster(context.Background(), request.Anchor.Source.ProviderResourceID, request)
+		if !errors.Is(err, ErrConflict) || containers.copyCalls != 0 {
+			t.Fatalf("symlinked directory reached archive: %v", err)
+		}
+	})
+
+	t.Run("cancelled-stream", func(t *testing.T) {
+		request := validStoppedDirectoryRosterRequest()
+		containers := newFakeContainer(nil)
+		containers.copyStatMode = os.ModeDir | 0o755
+		containers.archive = rosterArchive()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		service := mustService(t, containers, newFakeObjectStore(), request.Anchor.Authority)
+		_, err := service.StoppedDirectoryRoster(ctx, request.Anchor.Source.ProviderResourceID, request)
+		if !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("cancelled roster was not unavailable: %v", err)
+		}
+	})
+}
+
 func TestCaptureRejectsUnadmittedSelectorsBeforeDockerOrStorage(t *testing.T) {
 	t.Parallel()
 	tests := []CaptureSelector{
@@ -1022,6 +1229,7 @@ type fakeContainer struct {
 	content           []byte
 	archive           []byte
 	statSizeOverride  int64
+	copyStatMode      os.FileMode
 	inspectCalls      int
 	copyCalls         int
 	statCalls         int
@@ -1237,6 +1445,12 @@ func (f *fakeContainer) CopyFromContainer(
 		Mode:  0o600,
 		Mtime: time.Date(2026, 8, 23, 1, 2, 3, 0, time.UTC),
 	}
+	if f.copyStatMode != 0 {
+		stat.Mode = f.copyStatMode
+		if f.copyStatMode.IsDir() {
+			stat.Size = 0
+		}
+	}
 	return io.NopCloser(bytes.NewReader(f.archive)), stat, nil
 }
 
@@ -1427,6 +1641,39 @@ func tarArchive(entries ...tarEntry) []byte {
 		panic(fmt.Sprintf("close test tar: %v", err))
 	}
 	return buffer.Bytes()
+}
+
+func rosterArchive(entries ...tarEntry) []byte {
+	return tarArchive(append(
+		[]tarEntry{{name: "site/", typeflag: tar.TypeDir, mode: 0o755}},
+		append(entries, tarEntry{name: "site/index.html", typeflag: tar.TypeReg, mode: 0o640, body: []byte("x")})...,
+	)...)
+}
+
+func validStoppedDirectoryRosterRequest() StoppedDirectoryRosterRequest {
+	anchor := validBinding()
+	anchor.Selector = CaptureSelector{
+		SemanticZoneRef:  "ambit.workspace-zone/work@1",
+		ZoneRelativePath: "site/index.html",
+	}
+	return StoppedDirectoryRosterRequest{
+		Anchor:                anchor,
+		Selector:              CaptureSelector{SemanticZoneRef: anchor.Selector.SemanticZoneRef, ZoneRelativePath: "site"},
+		MaximumDepth:          MaximumRosterDepth,
+		MaximumEntries:        MaximumRosterEntries,
+		MaximumFileBytes:      MaximumRosterFileBytes,
+		MaximumAggregateBytes: MaximumRosterAggregateBytes,
+	}
+}
+
+func stringPointer(value string) *string {
+	return &value
+}
+
+func equalRosterEntries(left, right []StoppedDirectoryRosterEntry) bool {
+	leftJSON, leftErr := json.Marshal(left)
+	rightJSON, rightErr := json.Marshal(right)
+	return leftErr == nil && rightErr == nil && bytes.Equal(leftJSON, rightJSON)
 }
 
 func validBinding() CaptureBinding {

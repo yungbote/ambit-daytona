@@ -6,8 +6,12 @@ package workingcopy
 import "github.com/daytonaio/runner/pkg/generationstop"
 
 const (
-	MaximumCaptureBytes int64 = 64 * 1024 * 1024
-	MaximumReadBytes    int64 = 1 * 1024 * 1024
+	MaximumCaptureBytes         int64 = 64 * 1024 * 1024
+	MaximumReadBytes            int64 = 1 * 1024 * 1024
+	MaximumRosterDepth                = 32
+	MaximumRosterEntries              = 1024
+	MaximumRosterFileBytes      int64 = 8 * 1024 * 1024
+	MaximumRosterAggregateBytes int64 = 16 * 1024 * 1024
 )
 
 type CaptureAuthorityArtifact struct {
@@ -88,4 +92,29 @@ type CaptureExistsResponse struct {
 	Status  string          `json:"status" validate:"required"`
 	Exists  bool            `json:"exists"`
 	Receipt *CaptureReceipt `json:"receipt,omitempty"`
+}
+
+type StoppedDirectoryRosterEntry struct {
+	ZoneRelativePath string  `json:"zoneRelativePath" validate:"required"`
+	Name             string  `json:"name" validate:"required"`
+	Kind             string  `json:"kind" validate:"required"`
+	Size             int64   `json:"size" validate:"required"`
+	Mode             *string `json:"mode" validate:"required"`
+}
+
+type StoppedDirectoryRosterRequest struct {
+	Anchor                CaptureBinding  `json:"anchor" validate:"required"`
+	Selector              CaptureSelector `json:"selector" validate:"required"`
+	MaximumDepth          int             `json:"maximumDepth" validate:"required"`
+	MaximumEntries        int             `json:"maximumEntries" validate:"required"`
+	MaximumFileBytes      int64           `json:"maximumFileBytes" validate:"required"`
+	MaximumAggregateBytes int64           `json:"maximumAggregateBytes" validate:"required"`
+}
+
+type StoppedDirectoryRosterReceipt struct {
+	Request            StoppedDirectoryRosterRequest     `json:"request" validate:"required"`
+	TerminalGeneration generationstop.TerminalGeneration `json:"terminalGeneration" validate:"required"`
+	Entries            []StoppedDirectoryRosterEntry     `json:"entries" validate:"required"`
+	RosterDigest       string                            `json:"rosterDigest" validate:"required"`
+	ObservedAt         string                            `json:"observedAt" validate:"required"`
 }

@@ -120,6 +120,41 @@ func ReadWorkingCopyCapture(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, response)
 }
 
+// StoppedWorkingCopyDirectoryRoster godoc
+//
+//	@Tags			sandbox
+//	@Summary		List one bounded directory from an exact stopped sandbox generation
+//	@Description	Stream and validate a byte-free regular-file/directory roster through Docker host authority; symlinks, hardlinks, special files, escapes, and bound overflows fail closed.
+//	@Param			sandboxId	path	string										true	"Sandbox ID"
+//	@Param			body		body	workingcopy.StoppedDirectoryRosterRequest	true	"Exact anchor, directory selector, and bounds"
+//	@Produce		json
+//	@Success		200	{object}	workingcopy.StoppedDirectoryRosterReceipt
+//	@Failure		400	{object}	common_errors.ErrorResponse
+//	@Failure		401	{object}	common_errors.ErrorResponse
+//	@Failure		409	{object}	common_errors.ErrorResponse
+//	@Failure		503	{object}	common_errors.ErrorResponse
+//	@Router			/sandboxes/{sandboxId}/working-copy-captures/stopped-directory-roster [post]
+//
+//	@id				StoppedWorkingCopyDirectoryRoster
+func StoppedWorkingCopyDirectoryRoster(ctx *gin.Context) {
+	var request workingcopy.StoppedDirectoryRosterRequest
+	if err := decodeExactCaptureBody(ctx, &request); err != nil {
+		ctx.Error(common_errors.NewInvalidBodyRequestError(err))
+		return
+	}
+	service, err := workingCopyCaptureService()
+	if err != nil {
+		writeWorkingCopyCaptureError(ctx, err)
+		return
+	}
+	receipt, err := service.StoppedDirectoryRoster(ctx.Request.Context(), ctx.Param("sandboxId"), request)
+	if err != nil {
+		writeWorkingCopyCaptureError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, receipt)
+}
+
 // DeleteWorkingCopyCapture godoc
 //
 //	@Tags		sandbox
