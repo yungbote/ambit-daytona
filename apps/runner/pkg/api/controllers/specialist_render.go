@@ -129,7 +129,7 @@ func ObserveSpecialistRender(ctx *gin.Context) {
 		writeSpecialistRenderError(ctx, err)
 		return
 	}
-	ctx.JSON(http.StatusOK, observation)
+	writeCanonicalJSONResponse(ctx, http.StatusOK, observation)
 }
 
 func specialistRenderService() (*specialistrender.Service, error) {

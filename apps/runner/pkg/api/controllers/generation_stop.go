@@ -53,7 +53,7 @@ func ObserveSandboxGeneration(ctx *gin.Context) {
 		writeGenerationStopError(ctx, err)
 		return
 	}
-	ctx.JSON(http.StatusOK, observation)
+	writeCanonicalJSONResponse(ctx, http.StatusOK, observation)
 }
 
 // ObserveCurrentSandboxGeneration godoc
@@ -91,7 +91,7 @@ func ObserveCurrentSandboxGeneration(ctx *gin.Context) {
 		writeGenerationStopError(ctx, err)
 		return
 	}
-	ctx.JSON(http.StatusOK, observation)
+	writeCanonicalJSONResponse(ctx, http.StatusOK, observation)
 }
 
 // StopSandboxGenerationOnce godoc
