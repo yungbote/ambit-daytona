@@ -14,6 +14,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/daytonaio/runner/pkg/generationstop"
 	"github.com/daytonaio/runner/pkg/specialistrender"
+	imagetypes "github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"golang.org/x/sys/unix"
 )
@@ -56,19 +58,34 @@ func run() int {
 	compositionPath := flag.String("composition", "", "absolute exact full-image composition v2 document")
 	routingPath := flag.String("routing", "", "absolute exact composition routing v1 document")
 	sourceRoot := flag.String("source-root", "", "absolute C18 specialist source root")
-	seccompPath := flag.String("seccomp", "", "absolute canonical specialist seccomp profile")
-	output := flag.String("output", "", "absolute output policy-set path")
+	seccompPath := flag.String("seccomp", "", "absolute canonical specialist seccomp source profile")
+	seccompRuntimePath := flag.String("seccomp-runtime-path", "", "absolute fixed in-container seccomp path")
+	outputRoot := flag.String("output-root", "", "absolute new authority directory")
+	sourceRevision := flag.String("revision", "", "exact Daytona source revision")
+	sourceTree := flag.String("tree", "", "exact Daytona source tree")
+	sourceSetDigest := flag.String("source-set", "", "exact C18 source-set SHA-256")
+	registryInspectAuthority := flag.String("registry-inspect-authority", "", "host registry authority used only to pull and inspect exact image digests")
 	flag.Parse()
-	if !filepath.IsAbs(*sourceRoot) || !filepath.IsAbs(*seccompPath) || !filepath.IsAbs(*output) ||
-		!filepath.IsAbs(*compositionPath) || !filepath.IsAbs(*routingPath) {
-		fmt.Fprintln(os.Stderr, "exact source, seccomp, output, composition, and routing documents are required")
+	if flag.NArg() != 0 || !absoluteNormalizedPath(*sourceRoot) || !absoluteNormalizedPath(*seccompPath) ||
+		!absoluteNormalizedPath(*compositionPath) || !absoluteNormalizedPath(*routingPath) ||
+		!absoluteNormalizedPath(*outputRoot) || *seccompRuntimePath != runtimeSeccompPath ||
+		!gitObject(*sourceRevision) || !gitObject(*sourceTree) || !exactSHA256(*sourceSetDigest) ||
+		!registryAuthority(*registryInspectAuthority) {
+		fmt.Fprintln(os.Stderr, "exact source identity, source inputs, runtime seccomp path, and new output root are required")
 		return 64
 	}
-	compositionBytes, err := os.ReadFile(*compositionPath)
+	if err := preflightAuthorityOutputRoot(*outputRoot); err != nil {
+		return fail(err)
+	}
+	sourceRootInfo, err := os.Lstat(*sourceRoot)
+	if err != nil || !sourceRootInfo.IsDir() || sourceRootInfo.Mode()&os.ModeSymlink != 0 {
+		return fail(errors.New("specialist source root is invalid"))
+	}
+	compositionBytes, err := readRegularFileSnapshot(*compositionPath, 1024*1024)
 	if err != nil {
 		return fail(err)
 	}
-	routingBytes, err := os.ReadFile(*routingPath)
+	routingBytes, err := readRegularFileSnapshot(*routingPath, 512*1024)
 	if err != nil {
 		return fail(err)
 	}
@@ -77,7 +94,15 @@ func run() int {
 		return fail(err)
 	}
 
-	interfaceData, err := os.ReadFile(filepath.Join(*sourceRoot, "protocol/specialist-render-interface.lock.json"))
+	sourceContractsBytes, err := readRegularFileSnapshot(filepath.Join(*sourceRoot, "source-contracts.sha256"), 16*1024*1024)
+	if err != nil || digestBytes(sourceContractsBytes) != *sourceSetDigest {
+		return fail(errors.New("source contracts file differs from the exact source set"))
+	}
+	generatorBytes, err := readExecutableSnapshot()
+	if err != nil {
+		return fail(err)
+	}
+	interfaceData, err := readRegularFileSnapshot(filepath.Join(*sourceRoot, "protocol/specialist-render-interface.lock.json"), 1024*1024)
 	if err != nil {
 		return fail(err)
 	}
@@ -95,7 +120,7 @@ func run() int {
 		interfaceContract.InterfaceRef != specialistrender.InterfaceRef {
 		return fail(errors.New("specialist-render interface lock is invalid"))
 	}
-	seccomp, err := os.ReadFile(*seccompPath)
+	seccomp, err := readRegularFileSnapshot(*seccompPath, 4*1024*1024)
 	if err != nil {
 		return fail(err)
 	}
@@ -125,20 +150,42 @@ func run() int {
 	packs := specialistrender.SortedCompositionPacks(composition)
 	documents := make([]specialistrender.PolicyDocument, 0, len(packs))
 	policies := make([]specialistrender.Policy, 0, len(packs))
+	images := make([]policyReceiptImage, 0, len(packs))
+	runtimeRegistryAuthority := ""
 	for _, pack := range packs {
 		if pack != "data-research" && pack != "office-authoring" && pack != "pdf-ocr" && pack != "web-browser" {
 			return fail(fmt.Errorf("unsupported pack %q", pack))
 		}
 		executorEvidence := composition.Executors[pack]
+		if executorEvidence.Image.SourceIdentity.Digest != *sourceSetDigest {
+			return fail(fmt.Errorf("%s composition source identity differs", pack))
+		}
 		imageRef := executorEvidence.Image.OCIReference
-		image, err := docker.ImageInspect(ctx, imageRef)
+		inspectImageRef, observedRuntimeAuthority, manifestDigest, err := rewriteRegistryAuthority(
+			imageRef, *registryInspectAuthority,
+		)
+		if err != nil || manifestDigest != executorEvidence.Image.IndexDigest ||
+			(runtimeRegistryAuthority != "" && observedRuntimeAuthority != runtimeRegistryAuthority) {
+			return fail(fmt.Errorf("%s registry authority or manifest differs", pack))
+		}
+		if runtimeRegistryAuthority == "" {
+			runtimeRegistryAuthority = observedRuntimeAuthority
+		}
+		if err := pullExactImage(ctx, docker, inspectImageRef); err != nil {
+			return fail(fmt.Errorf("pull %s exact image: %w", pack, err))
+		}
+		image, err := docker.ImageInspect(ctx, inspectImageRef)
 		if err != nil || image.ID != executorEvidence.Image.ConfigDigest ||
+			!contains(image.RepoDigests, inspectImageRef) ||
 			image.Config == nil || image.Config.User != "1000:1000" ||
 			image.Config.Labels["io.ambit.runtime-pack"] != "ambit.runtime-pack/"+pack+"@1" ||
-			image.Config.Labels["io.ambit.activation"] != "provider-policy-and-composition-bound-only" {
+			image.Config.Labels["io.ambit.activation"] != "provider-policy-and-composition-bound-only" ||
+			image.Config.Labels["org.opencontainers.image.revision"] != *sourceRevision ||
+			image.Config.Labels["io.ambit.source-tree"] != *sourceTree ||
+			image.Config.Labels["io.ambit.source-set-sha256"] != strings.TrimPrefix(*sourceSetDigest, "sha256:") {
 			return fail(fmt.Errorf("image %q identity or activation differs", imageRef))
 		}
-		executorData, err := os.ReadFile(filepath.Join(*sourceRoot, pack, "executor.lock.json"))
+		executorData, err := readRegularFileSnapshot(filepath.Join(*sourceRoot, pack, "executor.lock.json"), 1024*1024)
 		if err != nil {
 			return fail(err)
 		}
@@ -189,13 +236,17 @@ func run() int {
 			return fail(err)
 		}
 		policies = append(policies, policy)
+		images = append(images, policyReceiptImage{
+			PackID: pack, RuntimeImageRef: imageRef, InspectImageRef: inspectImageRef,
+			ManifestDigest: manifestDigest, ConfigDigest: image.ID,
+		})
 		documents = append(documents, specialistrender.PolicyDocument{
 			Authority: policy.Authority, Composition: policy.Composition,
 			Image: policy.Image, Interface: policy.Interface, Executor: policy.Executor,
 			Executable: policy.Executable, ProcessExecutablePath: policy.ProcessExecutablePath,
 			ProcessExecutableDigest: policy.ProcessExecutableDigest,
 			EnvironmentDigest:       policy.EnvironmentDigest,
-			SeccompPath:             *seccompPath, SeccompDigest: seccompDigest,
+			SeccompPath:             *seccompRuntimePath, SeccompDigest: seccompDigest,
 			PIDsLimit: policy.PIDsLimit, MemoryBytes: policy.MemoryBytes, NanoCPUs: policy.NanoCPUs,
 			WorkspaceSize: policy.WorkspaceSize, ScratchSize: policy.ScratchSize,
 			ShmSize: policy.ShmSize, Runtime: policy.Runtime,
@@ -214,10 +265,65 @@ func run() int {
 	if err != nil {
 		return fail(err)
 	}
-	if err := writeAtomic(*output, encoded); err != nil {
+	receipt, err := sealPolicyGenerationReceipt(policyGenerationReceipt{
+		ObservedAt: time.Now().UTC().Truncate(time.Millisecond).Format("2006-01-02T15:04:05.000Z"),
+		Source: policyReceiptSource{
+			Revision: *sourceRevision, Tree: *sourceTree, SourceSetDigest: *sourceSetDigest,
+			SourceContractsFileSHA256: digestBytes(sourceContractsBytes),
+		},
+		Generator: policyReceiptGenerator{ExecutableSHA256: digestBytes(generatorBytes)},
+		Registry: policyReceiptRegistry{
+			InspectAuthority: *registryInspectAuthority, RuntimeAuthority: runtimeRegistryAuthority,
+		},
+		Inputs: policyReceiptInputs{
+			CompositionFileSHA256: digestBytes(compositionBytes), RoutingFileSHA256: digestBytes(routingBytes),
+			SeccompSourceFileSHA256: seccompDigest, SeccompCopiedFileSHA256: digestBytes(seccomp),
+			SeccompRuntimePath: *seccompRuntimePath,
+		},
+		Images: images,
+		Policy: policyReceiptPolicy{Schema: specialistrender.PolicySetSchema, RowCount: len(documents), FileSHA256: digestBytes(encoded)},
+	})
+	if err != nil {
+		return fail(err)
+	}
+	receiptBytes, err := generationstop.CanonicalJSON(receipt)
+	if err != nil {
+		return fail(err)
+	}
+	if err := publishAuthorityDirectory(*outputRoot, encoded, receiptBytes, seccomp); err != nil {
 		return fail(err)
 	}
 	return 0
+}
+
+func pullExactImage(ctx context.Context, docker *client.Client, imageRef string) error {
+	stream, err := docker.ImagePull(ctx, imageRef, imagetypes.PullOptions{})
+	if err != nil {
+		return err
+	}
+	defer stream.Close()
+	const maximumProgressBytes = 64 * 1024 * 1024
+	progress, err := io.ReadAll(io.LimitReader(stream, maximumProgressBytes+1))
+	if err != nil || len(progress) > maximumProgressBytes {
+		return errors.New("exact image pull progress is invalid")
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(progress)))
+	for {
+		var message struct {
+			Error       string `json:"error"`
+			ErrorDetail *struct {
+				Message string `json:"message"`
+			} `json:"errorDetail"`
+		}
+		if err := decoder.Decode(&message); errors.Is(err, io.EOF) {
+			return nil
+		} else if err != nil {
+			return errors.New("exact image pull progress is malformed")
+		}
+		if message.Error != "" || message.ErrorDetail != nil {
+			return errors.New("exact image pull failed")
+		}
+	}
 }
 
 func probeProcessExecutable(ctx context.Context, imageID string, seccomp []byte) (string, string, error) {
@@ -273,48 +379,6 @@ func sealedMemfd(name string, value []byte) (*os.File, error) {
 		return nil, err
 	}
 	return file, nil
-}
-
-func writeAtomic(path string, value []byte) error {
-	if _, err := os.Lstat(path); err == nil {
-		return fmt.Errorf("policy output already exists: %s", path)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	directory := filepath.Dir(path)
-	temporary, err := os.CreateTemp(directory, ".specialist-render-policy-*")
-	if err != nil {
-		return err
-	}
-	name := temporary.Name()
-	defer os.Remove(name)
-	if err := temporary.Chmod(0o600); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if _, err := temporary.Write(value); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	if err := unix.Renameat2(unix.AT_FDCWD, name, unix.AT_FDCWD, path, unix.RENAME_NOREPLACE); err != nil {
-		if errors.Is(err, unix.EEXIST) {
-			return fmt.Errorf("policy output already exists: %s", path)
-		}
-		return err
-	}
-	directoryHandle, err := os.Open(directory)
-	if err != nil {
-		return err
-	}
-	defer directoryHandle.Close()
-	return directoryHandle.Sync()
 }
 
 func digestBytes(value []byte) string {
