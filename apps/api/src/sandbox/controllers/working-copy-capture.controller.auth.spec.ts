@@ -21,7 +21,7 @@ import { WorkingCopyCaptureController } from './working-copy-capture.controller'
 describe('[AUTH] WorkingCopyCaptureController', () => {
   const trackMethod = createCoverageTracker(WorkingCopyCaptureController)
 
-  for (const method of ['capture', 'observe', 'read', 'delete', 'exists'] as const) {
+  for (const method of ['capture', 'observe', 'read', 'stoppedDirectoryRoster', 'delete', 'exists'] as const) {
     it(method, () => {
       const methodName = trackMethod(method)
       expect(isPublicEndpoint(WorkingCopyCaptureController, methodName)).toBe(false)
