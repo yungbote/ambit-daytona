@@ -9,6 +9,7 @@ import json
 import os
 import re
 import secrets
+import select
 import signal
 import stat
 import sys
@@ -154,6 +155,8 @@ class FramedControlAdmission:
         self._lock = threading.Lock()
         self._closed = False
         self._error: BaseException | None = None
+        self._started = False
+        self._stop = threading.Event()
         self._thread = threading.Thread(
             target=self._watch,
             name="ambit-specialist-framed-control",
@@ -162,9 +165,21 @@ class FramedControlAdmission:
 
     def start(self) -> None:
         self._thread.start()
+        self._started = True
 
     def _watch(self) -> None:
         try:
+            try:
+                descriptor = self._stream.fileno()
+            except (AttributeError, OSError):
+                descriptor = -1
+            if descriptor >= 0:
+                while not self._stop.is_set():
+                    readable, _, _ = select.select([descriptor], [], [], 0.1)
+                    if readable:
+                        break
+                if self._stop.is_set():
+                    return
             frame = read_line(self._stream)
             value = decode_line(frame)
             admit_cancel_frame(value, self._nonce)
@@ -202,10 +217,32 @@ class FramedControlAdmission:
             if self._error is not None:
                 raise self._error
             self._closed = True
+        self._stop_reader(required=True)
 
     def abandon(self) -> None:
         with self._lock:
             self._closed = True
+        self._stop_reader(required=False)
+
+    def _stop_reader(self, *, required: bool) -> None:
+        if not self._started or self._thread is threading.current_thread():
+            return
+        self._stop.set()
+        self._thread.join(timeout=2)
+        if self._thread.is_alive():
+            try:
+                descriptor = self._stream.fileno()
+            except (AttributeError, OSError):
+                descriptor = -1
+            if descriptor >= 0:
+                try:
+                    os.close(descriptor)
+                except OSError as error:
+                    if error.errno != errno.EBADF:
+                        raise
+            self._thread.join(timeout=2)
+        if required and self._thread.is_alive():
+            raise FramedRenderError("framed control reader did not stop")
 
 
 class OpenHow(ctypes.Structure):

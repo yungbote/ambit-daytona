@@ -50,6 +50,21 @@ from render_runner import (  # noqa: E402
 
 
 class RenderRunnerTests(unittest.TestCase):
+    def test_terminal_selection_stops_the_control_reader(self) -> None:
+        reader, writer = os.pipe()
+        stream = os.fdopen(reader, "rb", buffering=0)
+        control = FramedControlAdmission(stream, "a" * 32)
+        try:
+            control.start()
+            control.select_terminal()
+            self.assertFalse(control._thread.is_alive())
+        finally:
+            os.close(writer)
+            try:
+                stream.close()
+            except OSError:
+                pass
+
     def test_prepares_one_owner_only_task_scratch_root_and_rejects_substitution(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             parent = Path(directory)
