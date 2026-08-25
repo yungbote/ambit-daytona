@@ -375,6 +375,11 @@ func TestRequestRejectsNoncanonicalEndpointAndRoster(t *testing.T) {
 	if err := ValidateRequest(valid); err == nil {
 		t.Fatal("image tag detached from the source revision was admitted")
 	}
+	valid, _ = testRequest(t, server.URL, archiveVariation{})
+	valid.Registry.RuntimeAuthority = "127.0.0.1:6000"
+	if err := ValidateRequest(valid); err == nil {
+		t.Fatal("loopback runtime registry authority was admitted")
+	}
 }
 
 func TestReadRequestRequiresCanonicalPinnedRegularFile(t *testing.T) {

@@ -145,7 +145,7 @@ func ValidateRequest(value Request) error {
 	if _, err := parsePublicationOrigin(value.Registry.PublicationOrigin); err != nil {
 		return err
 	}
-	if !registryAuthority(value.Registry.RuntimeAuthority) ||
+	if !runtimeRegistryAuthority(value.Registry.RuntimeAuthority) ||
 		value.Registry.RuntimeAuthority == strings.TrimPrefix(value.Registry.PublicationOrigin, "http://") {
 		return errors.New("publication and runtime registry authorities are invalid")
 	}
@@ -310,7 +310,7 @@ func parsePublicationOrigin(value string) (*url.URL, error) {
 	}
 	ip := net.ParseIP(parsed.Hostname())
 	port, portErr := strconv.Atoi(parsed.Port())
-	if ip == nil || !ip.IsLoopback() || portErr != nil || port < 1 || port > 65535 ||
+	if ip == nil || ip.To4() == nil || !ip.IsLoopback() || portErr != nil || port < 1 || port > 65535 ||
 		strconv.Itoa(port) != parsed.Port() {
 		return nil, errors.New("publication origin must use a literal loopback address and explicit port")
 	}
@@ -333,6 +333,18 @@ func registryAuthority(value string) bool {
 		return ip.String() == host
 	}
 	return validHostname(host)
+}
+
+func runtimeRegistryAuthority(value string) bool {
+	if !registryAuthority(value) {
+		return false
+	}
+	host, _, err := net.SplitHostPort(value)
+	if err != nil || host == "localhost" {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip == nil || !ip.IsLoopback()
 }
 
 func validHostname(value string) bool {
