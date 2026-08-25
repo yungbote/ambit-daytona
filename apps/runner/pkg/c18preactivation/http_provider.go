@@ -4,6 +4,7 @@
 package c18preactivation
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -11,12 +12,15 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 	"unicode"
 
+	"github.com/daytonaio/runner/pkg/generationstop"
 	"github.com/daytonaio/runner/pkg/specialistrender"
 )
 
 const specialistRenderMediaType = "application/vnd.ambit.runtime-provider-specialist-render+jsonl;version=1"
+const defaultProviderSettlementTimeout = 30 * time.Second
 
 type HTTPProviderConfig struct {
 	BaseURL        *url.URL
@@ -25,8 +29,9 @@ type HTTPProviderConfig struct {
 }
 
 type HTTPProvider struct {
-	config HTTPProviderConfig
-	client *http.Client
+	config            HTTPProviderConfig
+	client            *http.Client
+	settlementTimeout time.Duration
 }
 
 // HTTPStatusError is deliberately value-blind. Provider response bodies are
@@ -34,6 +39,18 @@ type HTTPProvider struct {
 type HTTPStatusError struct {
 	StatusCode int
 }
+
+type ProviderSettlementError struct {
+	Kind        string
+	Observation *specialistrender.Observation
+	Cause       error
+}
+
+func (err *ProviderSettlementError) Error() string {
+	return "Daytona specialist-render settlement is " + err.Kind
+}
+
+func (err *ProviderSettlementError) Unwrap() error { return err.Cause }
 
 func (err *HTTPStatusError) Error() string {
 	return fmt.Sprintf("Daytona specialist-render request failed with status %d", err.StatusCode)
@@ -56,7 +73,7 @@ func NewHTTPProvider(config HTTPProviderConfig, client *http.Client) (*HTTPProvi
 	client.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
-	return &HTTPProvider{config: parsed, client: client}, nil
+	return &HTTPProvider{config: parsed, client: client, settlementTimeout: defaultProviderSettlementTimeout}, nil
 }
 
 // HTTPProviderConfigFromEnvironment applies the same value-blind credential
@@ -101,7 +118,7 @@ func (provider *HTTPProvider) Execute(
 	for index, descriptor := range observation.Receipt.Files {
 		files[index] = ProviderOutput{
 			Descriptor: descriptor,
-			Bytes:      append([]byte(nil), custody.files[index].Bytes()...),
+			Bytes:      custody.files[index].Bytes(),
 		}
 	}
 	return ProviderExecutionResult{Receipt: observation.Receipt, Files: files}, nil
@@ -111,12 +128,18 @@ func (provider *HTTPProvider) ExecuteToCustody(
 	ctx context.Context,
 	input ProviderExecutionInput,
 	custody ProviderResponseCustody,
-) (ProviderResponseObservation, error) {
+) (_ ProviderResponseObservation, err error) {
 	if custody == nil {
 		custody = DiscardProviderResponseCustody()
 	}
 	guardedCustody := &guardedResponseCustody{delegate: custody}
-	defer guardedCustody.Abort()
+	defer func() {
+		cleanupCtx, cancel := providerResponseCleanupContext(ctx)
+		defer cancel()
+		if abortErr := guardedCustody.Abort(cleanupCtx); abortErr != nil {
+			err = errors.Join(err, abortErr)
+		}
+	}()
 	if provider == nil || provider.client == nil {
 		return ProviderResponseObservation{}, errors.New("C18 Daytona provider is unavailable")
 	}
@@ -135,9 +158,7 @@ func (provider *HTTPProvider) ExecuteToCustody(
 		encoded <- err
 	}()
 
-	endpoint := provider.config.BaseURL.ResolveReference(&url.URL{
-		Path: "sandbox/" + url.PathEscape(requestAuthority.Source.ProviderResourceID) + "/specialist-renders",
-	})
+	endpoint := provider.endpoint(requestAuthority.Source.ProviderResourceID, "specialist-renders")
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), reader)
 	if err != nil {
 		_ = reader.CloseWithError(err)
@@ -152,40 +173,174 @@ func (provider *HTTPProvider) ExecuteToCustody(
 		request.Header.Set("X-Daytona-Organization-ID", provider.config.OrganizationID)
 	}
 	response, requestErr := provider.client.Do(request)
+	if requestErr != nil {
+		_ = reader.CloseWithError(requestErr)
+	} else {
+		_ = reader.Close()
+	}
 	encodeErr := <-encoded
 	if requestErr != nil {
-		return ProviderResponseObservation{}, fmt.Errorf("execute C18 Daytona request: %w", requestErr)
+		if response != nil && response.Body != nil {
+			_ = response.Body.Close()
+		}
+		return ProviderResponseObservation{}, provider.reconcile(ctx, requestAuthority, requestErr)
 	}
 	defer response.Body.Close()
 	if encodeErr != nil {
-		return ProviderResponseObservation{}, fmt.Errorf("encode C18 Daytona request: %w", encodeErr)
+		_ = response.Body.Close()
+		return ProviderResponseObservation{}, provider.reconcile(ctx, requestAuthority, encodeErr)
 	}
 	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusUnprocessableEntity {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64*1024+1))
-		return ProviderResponseObservation{}, &HTTPStatusError{StatusCode: response.StatusCode}
+		_ = response.Body.Close()
+		return ProviderResponseObservation{}, provider.reconcile(
+			ctx,
+			requestAuthority,
+			&HTTPStatusError{StatusCode: response.StatusCode},
+		)
 	}
 	if response.Header.Get("Content-Type") != specialistRenderMediaType {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64*1024+1))
-		return ProviderResponseObservation{}, errors.New("C18 Daytona response media type is invalid")
+		_ = response.Body.Close()
+		return ProviderResponseObservation{}, provider.reconcile(
+			ctx,
+			requestAuthority,
+			errors.New("C18 Daytona response media type is invalid"),
+		)
 	}
 	statusCustody := &httpStatusResponseCustody{delegate: guardedCustody, statusCode: response.StatusCode}
 	observation, err := ObserveProviderResponseStream(ctx, response.Body, requestAuthority, statusCustody)
 	if err != nil {
-		return ProviderResponseObservation{}, fmt.Errorf("decode C18 Daytona response: %w", err)
+		_ = response.Body.Close()
+		return ProviderResponseObservation{}, provider.reconcile(ctx, requestAuthority, err)
 	}
 	return observation, nil
 }
 
+func (provider *HTTPProvider) reconcile(
+	ctx context.Context,
+	request specialistrender.Request,
+	cause error,
+) error {
+	timeout := provider.settlementTimeout
+	if timeout <= 0 {
+		timeout = defaultProviderSettlementTimeout
+	}
+	settlementCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancel()
+	observation, err := provider.observe(settlementCtx, request)
+	if err != nil {
+		return &ProviderSettlementError{Kind: "ambiguous", Cause: errors.Join(cause, err)}
+	}
+	switch observation.Status {
+	case generationstop.ObservationAbsent:
+		return &ProviderSettlementError{Kind: "not_admitted", Observation: &observation, Cause: cause}
+	case generationstop.ObservationPartial:
+		return &ProviderSettlementError{Kind: "partial", Observation: &observation, Cause: cause}
+	case generationstop.ObservationComplete:
+		return &ProviderSettlementError{Kind: "complete_output_unadmitted", Observation: &observation, Cause: cause}
+	default:
+		return &ProviderSettlementError{Kind: "ambiguous", Cause: cause}
+	}
+}
+
+func (provider *HTTPProvider) observe(
+	ctx context.Context,
+	request specialistrender.Request,
+) (specialistrender.Observation, error) {
+	observeRequest := specialistrender.ObserveRequest{
+		Schema: specialistrender.ObserveRequestSchema, OperationID: request.OperationID,
+		RequestFingerprint: request.RequestFingerprint, Source: request.Source,
+		Owner: request.Owner, Fence: request.Fence,
+	}
+	body, err := generationstop.CanonicalJSON(observeRequest)
+	if err != nil {
+		return specialistrender.Observation{}, err
+	}
+	httpRequest, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		provider.endpoint(request.Source.ProviderResourceID, "specialist-renders/observe").String(),
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return specialistrender.Observation{}, err
+	}
+	httpRequest.Header.Set("Accept", "application/json")
+	httpRequest.Header.Set("Authorization", "Bearer "+provider.config.Credential)
+	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("X-Daytona-Source", "ambit-backend")
+	if provider.config.OrganizationID != "" {
+		httpRequest.Header.Set("X-Daytona-Organization-ID", provider.config.OrganizationID)
+	}
+	response, err := provider.client.Do(httpRequest)
+	if err != nil {
+		return specialistrender.Observation{}, err
+	}
+	defer response.Body.Close()
+	contentType := response.Header.Get("Content-Type")
+	if response.StatusCode != http.StatusOK ||
+		(contentType != "application/json; charset=utf-8" && contentType != "application/json") {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64*1024+1))
+		return specialistrender.Observation{}, errors.New("Daytona specialist-render observation failed")
+	}
+	encoded, err := io.ReadAll(io.LimitReader(response.Body, 256*1024+1))
+	if err != nil || len(encoded) == 0 || len(encoded) > 256*1024 {
+		return specialistrender.Observation{}, errors.New("Daytona specialist-render observation exceeds its bound")
+	}
+	var observation specialistrender.Observation
+	if err := generationstop.DecodeCanonicalJSON(encoded, &observation); err != nil {
+		return specialistrender.Observation{}, fmt.Errorf("decode Daytona specialist-render observation: %w", err)
+	}
+	if observation.Schema != specialistrender.ObservationSchema ||
+		(observation.Status != generationstop.ObservationAbsent &&
+			observation.Status != generationstop.ObservationPartial &&
+			observation.Status != generationstop.ObservationComplete) {
+		return specialistrender.Observation{}, errors.New("Daytona specialist-render observation is invalid")
+	}
+	if observation.Status == generationstop.ObservationComplete {
+		if observation.Receipt == nil || specialistrender.ValidateReceipt(*observation.Receipt) != nil ||
+			!canonicalEqual(observation.Receipt.Request, request) {
+			return specialistrender.Observation{}, errors.New("Daytona complete specialist-render observation is invalid")
+		}
+	} else if observation.Receipt != nil {
+		return specialistrender.Observation{}, errors.New("Daytona incomplete specialist-render observation carried a receipt")
+	}
+	return observation, nil
+}
+
+func (provider *HTTPProvider) endpoint(providerResourceID, suffix string) *url.URL {
+	return provider.config.BaseURL.ResolveReference(&url.URL{
+		Path:    "sandbox/" + providerResourceID + "/" + suffix,
+		RawPath: "sandbox/" + url.PathEscape(providerResourceID) + "/" + suffix,
+	})
+}
+
 type guardedResponseCustody struct {
 	delegate ProviderResponseCustody
+	admitted bool
 	settled  bool
+}
+
+func (custody *guardedResponseCustody) AdmitReceipt(
+	ctx context.Context,
+	receipt specialistrender.Receipt,
+) error {
+	if custody.admitted || custody.settled {
+		return errors.New("C18 response custody receipt state is invalid")
+	}
+	if err := custody.delegate.AdmitReceipt(ctx, receipt); err != nil {
+		return err
+	}
+	custody.admitted = true
+	return nil
 }
 
 func (custody *guardedResponseCustody) OpenFile(
 	ctx context.Context,
 	descriptor specialistrender.OutputFile,
-) (io.Writer, error) {
-	if custody.settled {
+) (ProviderResponseFileWriter, error) {
+	if !custody.admitted || custody.settled {
 		return nil, errors.New("C18 response custody is already settled")
 	}
 	return custody.delegate.OpenFile(ctx, descriptor)
@@ -195,7 +350,7 @@ func (custody *guardedResponseCustody) Commit(
 	ctx context.Context,
 	observation ProviderResponseObservation,
 ) error {
-	if custody.settled {
+	if !custody.admitted || custody.settled {
 		return errors.New("C18 response custody is already settled")
 	}
 	if err := custody.delegate.Commit(ctx, observation); err != nil {
@@ -205,23 +360,25 @@ func (custody *guardedResponseCustody) Commit(
 	return nil
 }
 
-func (custody *guardedResponseCustody) Abort() {
-	if custody.settled {
-		return
-	}
-	custody.settled = true
-	custody.delegate.Abort()
-}
-
 type httpStatusResponseCustody struct {
 	delegate   ProviderResponseCustody
 	statusCode int
 }
 
+func (custody *httpStatusResponseCustody) AdmitReceipt(
+	ctx context.Context,
+	receipt specialistrender.Receipt,
+) error {
+	if (custody.statusCode == http.StatusOK) != (receipt.Outcome == "succeeded") {
+		return errors.New("C18 Daytona status and receipt outcome disagree")
+	}
+	return custody.delegate.AdmitReceipt(ctx, receipt)
+}
+
 func (custody *httpStatusResponseCustody) OpenFile(
 	ctx context.Context,
 	descriptor specialistrender.OutputFile,
-) (io.Writer, error) {
+) (ProviderResponseFileWriter, error) {
 	return custody.delegate.OpenFile(ctx, descriptor)
 }
 
@@ -229,14 +386,19 @@ func (custody *httpStatusResponseCustody) Commit(
 	ctx context.Context,
 	observation ProviderResponseObservation,
 ) error {
-	if (custody.statusCode == http.StatusOK) != (observation.Receipt.Outcome == "succeeded") {
-		return errors.New("C18 Daytona status and receipt outcome disagree")
-	}
 	return custody.delegate.Commit(ctx, observation)
 }
 
-func (custody *httpStatusResponseCustody) Abort() {
-	custody.delegate.Abort()
+func (custody *httpStatusResponseCustody) Abort(ctx context.Context) error {
+	return custody.delegate.Abort(ctx)
+}
+
+func (custody *guardedResponseCustody) Abort(ctx context.Context) error {
+	if custody.settled {
+		return nil
+	}
+	custody.settled = true
+	return custody.delegate.Abort(ctx)
 }
 
 func validateHTTPProviderConfig(config HTTPProviderConfig) (HTTPProviderConfig, error) {
@@ -246,7 +408,9 @@ func validateHTTPProviderConfig(config HTTPProviderConfig) (HTTPProviderConfig, 
 	}
 	baseURL := *config.BaseURL
 	if (baseURL.Scheme != "http" && baseURL.Scheme != "https") || baseURL.Host == "" ||
-		baseURL.User != nil || baseURL.RawQuery != "" || baseURL.Fragment != "" {
+		baseURL.User != nil || baseURL.Opaque != "" || baseURL.RawPath != "" ||
+		baseURL.RawQuery != "" || baseURL.ForceQuery || baseURL.Fragment != "" ||
+		strings.Contains(baseURL.Path, `\`) {
 		return HTTPProviderConfig{}, errors.New("C18 Daytona host API URL is invalid")
 	}
 	if !strings.HasSuffix(baseURL.Path, "/") {

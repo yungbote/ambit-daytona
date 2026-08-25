@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -188,13 +189,9 @@ func (adapter *Adapter) Execute(
 	var collector *specialistrender.HelperSession
 	defer func() {
 		if err != nil {
-			if collector != nil {
-				collector.Cleanup()
-			}
-			cleanupErr := adapter.cleanupContainer(containerID)
-			if cleanupErr != nil {
-				err = fmt.Errorf("%w: %v; cleanup: %v", specialistrender.ErrOutcomeUnknown, err, cleanupErr)
-			}
+			err = cleanupProviderFailure(err, collector, func() error {
+				return adapter.cleanupContainer(containerID)
+			})
 		} else if !removed {
 			err = fmt.Errorf("%w: provider returned before exact child removal", specialistrender.ErrOutcomeUnknown)
 		}
@@ -219,34 +216,20 @@ func (adapter *Adapter) Execute(
 	}
 	locked := &lockedWriter{writer: attach.Conn}
 	cancelDone := make(chan struct{})
+	cancelWatcherDone := make(chan struct{})
 	ready := make(chan struct{})
+	requestDone := make(chan struct{})
 	var cancelOnce sync.Once
-	var cancelGate sync.Mutex
-	terminalObserved := false
-	stopCancelWatcher := func() { cancelOnce.Do(func() { close(cancelDone) }) }
+	cancelState := &helperCancellationState{}
+	stopCancelWatcher := func() {
+		cancelOnce.Do(func() { close(cancelDone) })
+		<-cancelWatcherDone
+	}
 	defer stopCancelWatcher()
-	go func() {
-		select {
-		case <-executionCtx.Done():
-			select {
-			case <-ready:
-				cancelGate.Lock()
-				defer cancelGate.Unlock()
-				if terminalObserved {
-					return
-				}
-				_ = specialistrender.WriteHelperCancel(locked, request.Nonce)
-				_ = attach.Conn.SetDeadline(time.Now().Add(cancellationGrace))
-			case <-time.After(cancellationGrace):
-				// No input is valid before ready. Force the broken/pre-admission
-				// transport closed and let cleanup prove child absence without
-				// claiming an exact cancelled terminal.
-				_ = attach.Conn.SetDeadline(time.Now())
-			case <-cancelDone:
-			}
-		case <-cancelDone:
-		}
-	}()
+	go runHelperCancellationWatcher(
+		executionCtx, attach.Conn, locked, request.Nonce, ready, requestDone,
+		cancelDone, cancelWatcherDone, cancelState, time.Now,
+	)
 	launch, err := adapter.observeLaunch(
 		settlementCtx, containerID, name, command, environmentDigest,
 		digestBytes(runtimeStatusBytes), request, parentMount, parentPID,
@@ -266,17 +249,17 @@ func (adapter *Adapter) Execute(
 	close(ready)
 
 	writeErr := bridge.WriteRequest(&contextWriter{ctx: executionCtx, writer: locked}, request)
+	cancelState.markRequest(writeErr == nil)
+	close(requestDone)
 	result, collectErr := bridge.Collect(attach.Reader)
-	cancelGate.Lock()
-	terminalObserved = collectErr == nil
-	if terminalObserved {
+	cancelState.markTerminal(collectErr == nil)
+	stopCancelWatcher()
+	if collectErr == nil {
 		if deadline, ok := settlementCtx.Deadline(); ok {
 			_ = attach.Conn.SetDeadline(deadline)
 		}
 	}
-	cancelGate.Unlock()
-	stopCancelWatcher()
-	if writeErr != nil && !(executionCtx.Err() != nil && result.TerminalOutcome == "cancelled") {
+	if writeErr != nil {
 		return specialistrender.ProviderExecution{}, fmt.Errorf("%w: write helper request: %v", specialistrender.ErrOutcomeUnknown, writeErr)
 	}
 	if collectErr != nil {
@@ -316,6 +299,122 @@ func (adapter *Adapter) Execute(
 		TerminalOutcome: result.TerminalOutcome, HelperExitCode: result.ExitCode,
 		Files: result.Files, Quiescence: quiescence,
 	}, nil
+}
+
+type helperCancellationState struct {
+	mu               sync.Mutex
+	requestCoherent  bool
+	terminalObserved bool
+}
+
+func (state *helperCancellationState) markRequest(coherent bool) {
+	state.mu.Lock()
+	state.requestCoherent = coherent
+	state.mu.Unlock()
+}
+
+func (state *helperCancellationState) markTerminal(observed bool) {
+	state.mu.Lock()
+	state.terminalObserved = observed
+	state.mu.Unlock()
+}
+
+func (state *helperCancellationState) snapshot() (requestCoherent, terminalObserved bool) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.requestCoherent, state.terminalObserved
+}
+
+func runHelperCancellationWatcher(
+	executionCtx context.Context,
+	connection net.Conn,
+	writer io.Writer,
+	nonce string,
+	ready <-chan struct{},
+	requestDone <-chan struct{},
+	cancelDone <-chan struct{},
+	watcherDone chan<- struct{},
+	state *helperCancellationState,
+	now func() time.Time,
+) {
+	defer close(watcherDone)
+	select {
+	case <-executionCtx.Done():
+	case <-cancelDone:
+		return
+	}
+
+	// Interrupt blocked request or cancel writes without acquiring the writer
+	// mutex they may already hold. The single timer bounds this whole terminal
+	// selection, rather than granting a fresh grace interval at each step.
+	deadline := now().Add(cancellationGrace)
+	if err := connection.SetDeadline(deadline); err != nil {
+		_ = connection.Close()
+		return
+	}
+	timer := time.NewTimer(cancellationGrace)
+	defer timer.Stop()
+	wait := func(signal <-chan struct{}) bool {
+		select {
+		case <-signal:
+			return true
+		case <-timer.C:
+			if err := connection.SetDeadline(now()); err != nil {
+				_ = connection.Close()
+			}
+			return false
+		case <-cancelDone:
+			return false
+		}
+	}
+	if !wait(ready) || !wait(requestDone) {
+		return
+	}
+	requestCoherent, terminalObserved := state.snapshot()
+	if terminalObserved {
+		return
+	}
+	if !requestCoherent {
+		if err := connection.SetDeadline(now()); err != nil {
+			_ = connection.Close()
+		}
+		return
+	}
+	if err := specialistrender.WriteHelperCancel(writer, nonce); err != nil {
+		_ = connection.SetDeadline(now())
+		_ = connection.Close()
+	}
+}
+
+func joinProviderCleanupErrors(primary, collector, container error) error {
+	cleanupErr := errors.Join(collector, container)
+	if cleanupErr == nil {
+		return primary
+	}
+	return errors.Join(
+		primary,
+		fmt.Errorf("%w: clean specialist-render provider: %w", specialistrender.ErrOutcomeUnknown, cleanupErr),
+	)
+}
+
+type providerFailureCleaner interface {
+	Cleanup() error
+}
+
+func cleanupProviderFailure(
+	primary error,
+	collector providerFailureCleaner,
+	cleanupContainer func() error,
+) error {
+	var collectorErr error
+	if collector != nil {
+		collectorErr = collector.Cleanup()
+	}
+	var containerErr error
+	if cleanupContainer != nil {
+		containerErr = cleanupContainer()
+	}
+	return joinProviderCleanupErrors(primary, collectorErr, containerErr)
 }
 
 func validateImage(image imagetypes.InspectResponse, policy specialistrender.Policy) error {

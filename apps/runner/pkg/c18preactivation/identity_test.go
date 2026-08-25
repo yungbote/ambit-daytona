@@ -37,4 +37,32 @@ func TestProviderOperationIDRejectsInvalidAuthority(t *testing.T) {
 	if _, err := DeriveProviderOperationIDV2("sha256:"+strings.Repeat("a", 64), "ambit://samples/one", "unknown"); err == nil {
 		t.Fatal("unknown journey stage was admitted")
 	}
+	for _, ref := range []string{
+		"ambit:///missing-authority", "ambit://Bad/one", "ambit://samples//one",
+		"ambit://user@samples/one", "ambit://samples:80/one", "ambit://samples/one?",
+		"ambit://samples/a/../b", "ambit://samples/a/.", "ambit://samples/a/%2e%2e/b",
+		"ambit://samples/a b", "ambit://samples/%broken", "ambit://samples/a\\b",
+		"ambit://samples/a%5cb",
+	} {
+		if _, err := DeriveProviderOperationIDV2("sha256:"+strings.Repeat("a", 64), ref, "source"); err == nil {
+			t.Fatalf("noncanonical operational ref was admitted: %q", ref)
+		}
+	}
+}
+
+func TestOperationalRefsMatchBackendURLCanonicalizationVectors(t *testing.T) {
+	for _, ref := range []string{
+		"ambit://samples/one",
+		"ambit://samples/a%2fb",
+		"ambit://samples/a%2Fb",
+		"ambit://samples/%41",
+		"ambit://samples/one?a=b",
+		"ambit://samples/one?x=\\",
+		"ambit://samples/one#evidence",
+		"ambit://samples/one#x\\",
+	} {
+		if !validOperationalRef(ref) {
+			t.Fatalf("backend-canonical operational ref was rejected: %q", ref)
+		}
+	}
 }

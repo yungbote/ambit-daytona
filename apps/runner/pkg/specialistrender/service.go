@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/daytonaio/runner/pkg/c18oci"
 	"github.com/daytonaio/runner/pkg/generationstop"
 	"github.com/google/uuid"
 )
@@ -143,7 +144,7 @@ func (service *Service) ExecuteAdmitted(
 	request Request,
 	requestInput Input,
 	sourceInput Input,
-) (ExecutionResult, error) {
+) (result ExecutionResult, err error) {
 	if admission == nil || admission.service != service {
 		return ExecutionResult{}, invalidf("specialist-render admission lease is invalid")
 	}
@@ -203,7 +204,13 @@ func (service *Service) ExecuteAdmitted(
 	accepted := false
 	defer func() {
 		if !accepted {
-			cleanupPayloads(execution.Files)
+			if cleanupErr := CleanupPayloads(execution.Files); cleanupErr != nil {
+				result = ExecutionResult{}
+				err = errors.Join(
+					err,
+					fmt.Errorf("%w: clean rejected provider output: %w", ErrOutcomeUnknown, cleanupErr),
+				)
+			}
 		}
 	}()
 
@@ -253,7 +260,7 @@ func (service *Service) ExecuteAdmitted(
 	if err := ValidateReceiptWithPolicy(receipt, policy); err != nil {
 		return ExecutionResult{}, fmt.Errorf("%w: constructed receipt is invalid: %v", ErrOutcomeUnknown, err)
 	}
-	result, err := service.publishResult(
+	result, err = service.publishResult(
 		settlementCtx,
 		keys,
 		ExecutionResult{Receipt: receipt, Files: execution.Files},
@@ -334,7 +341,7 @@ func ValidateRequest(request Request) error {
 	if !exactDigest(request.Executor.Digest) || !boundedOperationalRef(request.Executor.Ref, 512) {
 		return invalidf("executor pin is invalid")
 	}
-	if !exactDigest(request.Image.ConfigDigest) || !immutableOCIReference(request.Image.Ref) ||
+	if !exactDigest(request.Image.ConfigDigest) || !c18oci.ValidImmutableReference(request.Image.Ref) ||
 		request.Image.PackID == "" || len(request.Image.PackID) > 64 ||
 		!boundedOperationalRef(request.Image.PackRef, 512) {
 		return invalidf("image pin is invalid")
@@ -489,7 +496,7 @@ func ValidateReceipt(receipt Receipt) error {
 		completed.Sub(quiesced) > 5*time.Second {
 		return invalidf("receipt provider times are out of order or exceed the commit bound")
 	}
-	if len(receipt.Files) > MaximumOutputFiles {
+	if receipt.Files == nil || len(receipt.Files) > MaximumOutputFiles {
 		return invalidf("receipt file count exceeds the bound")
 	}
 	var total int64
@@ -521,9 +528,9 @@ func ValidateReceipt(receipt Receipt) error {
 	if total != receipt.TotalOutputBytes {
 		return invalidf("receipt total output bytes differ from its roster")
 	}
-	if receipt.TerminalOutcome == "cancelled" {
+	if receipt.TerminalOutcome == "cancelled" || receipt.TerminalOutcome == "timed_out" {
 		if len(receipt.Files) != 0 || receipt.TotalOutputBytes != 0 {
-			return invalidf("cancelled receipt cannot contain output files")
+			return invalidf("receipt-only settlement cannot contain output files")
 		}
 	} else if len(receipt.Files) == 0 || receipt.TotalOutputBytes <= 0 || receipt.Files[0].Role != "result" ||
 		receipt.Files[0].MediaType != "application/vnd.ambit.c18-specialist-render-command-result+json" {
@@ -718,7 +725,7 @@ func validateProviderExecution(
 		launchTime.Before(startedAt.UTC().Truncate(time.Millisecond)) || quiescenceTime.Before(launchTime) {
 		return fmt.Errorf("%w: provider launch/quiescence times are invalid", ErrOutcomeUnknown)
 	}
-	if len(execution.Files) > MaximumOutputFiles {
+	if execution.Files == nil || len(execution.Files) > MaximumOutputFiles {
 		return fmt.Errorf("%w: output file count exceeds the bound", ErrOutcomeUnknown)
 	}
 	var total int64
@@ -737,9 +744,9 @@ func validateProviderExecution(
 			return fmt.Errorf("%w: provider output bytes exceed the bound", ErrOutcomeUnknown)
 		}
 	}
-	if execution.TerminalOutcome == "cancelled" {
+	if execution.TerminalOutcome == "cancelled" || execution.TerminalOutcome == "timed_out" {
 		if len(execution.Files) != 0 {
-			return fmt.Errorf("%w: cancelled provider execution retained output", ErrOutcomeUnknown)
+			return fmt.Errorf("%w: receipt-only provider execution retained output", ErrOutcomeUnknown)
 		}
 	} else if len(execution.Files) == 0 || execution.Files[0].File.Role != "result" {
 		return fmt.Errorf("%w: provider execution has no committed result", ErrOutcomeUnknown)
@@ -830,18 +837,6 @@ func boundedOperationalRef(value string, maximum int) bool {
 	return true
 }
 
-func immutableOCIReference(value string) bool {
-	if !boundedOperationalRef(value, 512) {
-		return false
-	}
-	separator := strings.LastIndex(value, "@sha256:")
-	if separator <= 0 || separator+len("@sha256:")+64 != len(value) {
-		return false
-	}
-	_, err := hex.DecodeString(value[separator+len("@sha256:"):])
-	return err == nil && strings.ToLower(value) == value
-}
-
 func contains(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {
@@ -851,12 +846,16 @@ func contains(values []string, target string) bool {
 	return false
 }
 
-func cleanupPayloads(payloads []Payload) {
+// CleanupPayloads releases every provider-private payload and joins all
+// failures so callers never lose cleanup uncertainty behind a primary error.
+func CleanupPayloads(payloads []Payload) error {
+	var cleanupErr error
 	for _, payload := range payloads {
 		if payload.Cleanup != nil {
-			_ = payload.Cleanup()
+			cleanupErr = errors.Join(cleanupErr, payload.Cleanup())
 		}
 	}
+	return cleanupErr
 }
 
 func cloneRequest(value Request) Request {
@@ -872,7 +871,9 @@ func cloneReceipt(value Receipt) Receipt {
 	value.Launch.Command = append([]string(nil), value.Launch.Command...)
 	value.Launch.CapDrop = append([]string(nil), value.Launch.CapDrop...)
 	value.Launch.Tmpfs = cloneStringMap(value.Launch.Tmpfs)
-	value.Files = append([]OutputFile(nil), value.Files...)
+	if value.Files != nil {
+		value.Files = append(make([]OutputFile, 0, len(value.Files)), value.Files...)
+	}
 	return value
 }
 

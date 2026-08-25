@@ -178,6 +178,7 @@ type helperCollector struct {
 	frameCount   int
 	projected    int64
 	lastRole     string
+	removeAll    func(string) error
 }
 
 type helperOpenFile struct {
@@ -236,8 +237,8 @@ func (session *HelperSession) Collect(reader *bufio.Reader) (HelperResult, error
 	return session.collector.collect(reader)
 }
 
-func (session *HelperSession) Cleanup() {
-	session.collector.cleanup()
+func (session *HelperSession) Cleanup() error {
+	return session.collector.cleanup()
 }
 
 func newHelperCollector(
@@ -272,16 +273,32 @@ func newHelperCollector(
 		root:         root,
 		paths:        make(map[string]struct{}),
 		streamHash:   sha256.New(),
+		removeAll:    os.RemoveAll,
 	}, nil
 }
 
-func (collector *helperCollector) cleanup() {
+func (collector *helperCollector) cleanup() error {
+	var cleanupErr error
 	if collector.current != nil && collector.current.file != nil {
-		_ = collector.current.file.Close()
+		cleanupErr = errors.Join(cleanupErr, collector.current.file.Close())
+		collector.current.file = nil
 	}
-	_ = os.RemoveAll(collector.root)
-	collector.root = ""
+	if collector.root != "" {
+		removeAll := collector.removeAll
+		if removeAll == nil {
+			removeAll = os.RemoveAll
+		}
+		if err := removeAll(collector.root); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+		} else {
+			collector.root = ""
+		}
+	}
 	collector.files = nil
+	if cleanupErr != nil {
+		return fmt.Errorf("clean specialist helper custody: %w", cleanupErr)
+	}
+	return nil
 }
 
 func (collector *helperCollector) readReady(reader *bufio.Reader) error {
@@ -308,7 +325,7 @@ func (collector *helperCollector) readReady(reader *bufio.Reader) error {
 func (collector *helperCollector) collect(reader *bufio.Reader) (_ helperResult, err error) {
 	defer func() {
 		if err != nil {
-			collector.cleanup()
+			err = errors.Join(err, collector.cleanup())
 		}
 	}()
 	for {
@@ -471,17 +488,21 @@ func (collector *helperCollector) acceptEnd(line []byte) (helperResult, error) {
 		collector.projected != start.TotalBytes || collector.files[0].File.Role != "result" {
 		return helperResult{}, errors.New("helper response_end identity or aggregate differs")
 	}
-	if err := collector.validateSemantics(*start); err != nil {
-		return helperResult{}, err
-	}
 	outcome := frame.Outcome
+	files := append([]Payload(nil), collector.files...)
 	if frame.ExitCode == 124 {
 		outcome = "timed_out"
+		if err := collector.cleanup(); err != nil {
+			return helperResult{}, err
+		}
+		files = []Payload{}
+	} else if err := collector.validateSemantics(*start); err != nil {
+		return helperResult{}, err
 	}
 	return helperResult{
 		ReadyDigest: collector.readyDigest, TerminalDigest: sha256Digest(line),
 		TerminalKind: frame.Kind, TerminalOutcome: outcome, ExitCode: frame.ExitCode,
-		Files: append([]Payload(nil), collector.files...),
+		Files: files,
 	}, nil
 }
 
@@ -499,7 +520,9 @@ func (collector *helperCollector) acceptCancelled(line []byte) (helperResult, er
 	}
 	// Cancellation never commits a partial response, even if file frames raced
 	// before the helper selected its terminal.
-	collector.cleanup()
+	if err := collector.cleanup(); err != nil {
+		return helperResult{}, err
+	}
 	return helperResult{
 		ReadyDigest: collector.readyDigest, TerminalDigest: sha256Digest(line),
 		TerminalKind: frame.Kind, TerminalOutcome: frame.Outcome, ExitCode: frame.ExitCode,

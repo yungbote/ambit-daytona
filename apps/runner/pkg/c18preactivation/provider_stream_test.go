@@ -9,11 +9,14 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"hash"
 	"io"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/daytonaio/runner/pkg/generationstop"
 	"github.com/daytonaio/runner/pkg/specialistrender"
@@ -46,6 +49,22 @@ func TestProviderRequestStreamRejectsPayloadSubstitution(t *testing.T) {
 	}
 }
 
+func TestProviderRequestStreamRejectsShortWriter(t *testing.T) {
+	request, requestBytes, sourceBytes := testProviderRequest(t)
+	if err := EncodeProviderRequestStream(shortProviderWriter{}, request, requestBytes, sourceBytes); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("short provider write was not surfaced: %v", err)
+	}
+}
+
+type shortProviderWriter struct{}
+
+func (shortProviderWriter) Write(value []byte) (int, error) {
+	if len(value) == 0 {
+		return 0, nil
+	}
+	return len(value) - 1, nil
+}
+
 func TestProviderResponseStreamRoundTripsThroughRunnerEncoder(t *testing.T) {
 	request, _, _ := testProviderRequest(t)
 	payload := bytes.Repeat([]byte("result-byte-"), 9_000)
@@ -75,6 +94,61 @@ func TestProviderResponseStreamRoundTripsThroughRunnerEncoder(t *testing.T) {
 	}
 }
 
+func TestProviderResponseEncoderWithholdsTerminalUntilPayloadCleanup(t *testing.T) {
+	request, _, _ := testProviderRequest(t)
+	payload := []byte("provider result")
+	receipt := testProviderReceipt(t, request, payload)
+	cleanupFailure := errors.New("injected response cleanup failure")
+	result := specialistrender.ExecutionResult{
+		Receipt: receipt,
+		Files: []specialistrender.Payload{{
+			File: receipt.Files[0],
+			Open: func(context.Context) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(payload)), nil
+			},
+			Cleanup: func() error { return cleanupFailure },
+		}},
+	}
+	var encoded bytes.Buffer
+	if err := specialistrender.EncodeResponseStream(context.Background(), &encoded, result); !errors.Is(err, cleanupFailure) {
+		t.Fatalf("response encoder discarded cleanup failure: %v", err)
+	}
+	if bytes.Contains(encoded.Bytes(), []byte(`"kind":"provider_response_end"`)) {
+		t.Fatal("response encoder emitted a committable terminal before cleanup succeeded")
+	}
+	custody := &hashingResponseCustody{}
+	if _, err := ObserveProviderResponseStream(
+		context.Background(), io.NopCloser(bytes.NewReader(encoded.Bytes())), request, custody,
+	); err == nil || custody.committed || !custody.aborted {
+		t.Fatalf("unterminated cleanup failure was admitted: committed=%t aborted=%t err=%v", custody.committed, custody.aborted, err)
+	}
+}
+
+func TestProviderResponseEncoderJoinsReadAndCleanupFailures(t *testing.T) {
+	request, _, _ := testProviderRequest(t)
+	payload := []byte("provider result")
+	receipt := testProviderReceipt(t, request, payload)
+	readFailure := errors.New("injected response read failure")
+	cleanupFailure := errors.New("injected response cleanup failure")
+	var encoded bytes.Buffer
+	err := specialistrender.EncodeResponseStream(context.Background(), &encoded, specialistrender.ExecutionResult{
+		Receipt: receipt,
+		Files: []specialistrender.Payload{{
+			File: receipt.Files[0],
+			Open: func(context.Context) (io.ReadCloser, error) {
+				return nil, readFailure
+			},
+			Cleanup: func() error { return cleanupFailure },
+		}},
+	})
+	if !errors.Is(err, readFailure) || !errors.Is(err, cleanupFailure) {
+		t.Fatalf("response encoder did not join read and cleanup failures: %v", err)
+	}
+	if bytes.Contains(encoded.Bytes(), []byte(`"kind":"provider_response_end"`)) {
+		t.Fatal("failed response encoder emitted a terminal frame")
+	}
+}
+
 func TestProviderResponseObserverStreamsTransactionalCustodyAndHashesExactWire(t *testing.T) {
 	request, _, _ := testProviderRequest(t)
 	payload := bytes.Repeat([]byte("stream-without-retention-"), 8_000)
@@ -95,7 +169,7 @@ func TestProviderResponseObserverStreamsTransactionalCustodyAndHashesExactWire(t
 	}
 	custody := &hashingResponseCustody{}
 	observation, err := ObserveProviderResponseStream(
-		context.Background(), bytes.NewReader(encoded.Bytes()), request, custody,
+		context.Background(), io.NopCloser(bytes.NewReader(encoded.Bytes())), request, custody,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +201,7 @@ func TestProviderResponseObserverAbortsCustodyBeforeCommitOnInvalidTail(t *testi
 	}
 	corrupt := append(append([]byte(nil), encoded.Bytes()...), 'x')
 	custody := &hashingResponseCustody{}
-	if _, err := ObserveProviderResponseStream(context.Background(), bytes.NewReader(corrupt), request, custody); err == nil {
+	if _, err := ObserveProviderResponseStream(context.Background(), io.NopCloser(bytes.NewReader(corrupt)), request, custody); err == nil {
 		t.Fatal("response with an invalid tail was admitted")
 	}
 	if custody.committed || !custody.aborted {
@@ -155,11 +229,58 @@ func TestProviderResponseObserverRejectsCRLFFraming(t *testing.T) {
 	}
 	crlf := bytes.Replace(encoded.Bytes(), []byte{'\n'}, []byte{'\r', '\n'}, 1)
 	custody := &hashingResponseCustody{}
-	if _, err := ObserveProviderResponseStream(context.Background(), bytes.NewReader(crlf), request, custody); err == nil {
+	if _, err := ObserveProviderResponseStream(context.Background(), io.NopCloser(bytes.NewReader(crlf)), request, custody); err == nil {
 		t.Fatal("CRLF provider framing was admitted")
 	}
 	if custody.committed || !custody.aborted {
 		t.Fatal("CRLF response custody was not aborted")
+	}
+}
+
+func TestProviderResponseObserverRejectsNoncanonicalChunkPartition(t *testing.T) {
+	request, _, _ := testProviderRequest(t)
+	payload := []byte("result")
+	receipt := testProviderReceipt(t, request, payload)
+	var encoded bytes.Buffer
+	if err := specialistrender.EncodeResponseStream(context.Background(), &encoded, specialistrender.ExecutionResult{
+		Receipt: receipt,
+		Files: []specialistrender.Payload{{
+			File: receipt.Files[0], Open: func(context.Context) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(payload)), nil
+			}, Cleanup: func() error { return nil },
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lines := bytes.Split(encoded.Bytes(), []byte{'\n'})
+	mutated := false
+	for index, line := range lines {
+		var kind frameKind
+		if json.Unmarshal(line, &kind) != nil || kind.Kind != "file_chunk" {
+			continue
+		}
+		var chunk providerFileChunk
+		if err := generationstop.DecodeCanonicalJSON(line, &chunk); err != nil {
+			t.Fatal(err)
+		}
+		chunk.Bytes = 1
+		chunk.Base64 = base64Of(payload[:1])
+		chunk.Digest = sha256Digest(payload[:1])
+		lines[index], _ = generationstop.CanonicalJSON(chunk)
+		mutated = true
+		break
+	}
+	if !mutated {
+		t.Fatal("test response had no file chunk")
+	}
+	custody := &hashingResponseCustody{}
+	if _, err := ObserveProviderResponseStream(
+		context.Background(), io.NopCloser(bytes.NewReader(bytes.Join(lines, []byte{'\n'}))), request, custody,
+	); err == nil {
+		t.Fatal("one-byte frame amplification was admitted")
+	}
+	if custody.committed || !custody.aborted {
+		t.Fatal("noncanonical chunk partition did not abort custody")
 	}
 }
 
@@ -220,6 +341,147 @@ func TestProviderResponseStreamHonorsCancellation(t *testing.T) {
 	cancel()
 	if _, err := DecodeProviderResponseStream(ctx, &encoded, request); err == nil {
 		t.Fatal("cancelled response decode completed")
+	}
+}
+
+func TestProviderResponseObserverAdmitsExactReceiptOnlySettlements(t *testing.T) {
+	request, _, _ := testProviderRequest(t)
+	for _, outcome := range []string{"cancelled", "timed_out"} {
+		t.Run(outcome, func(t *testing.T) {
+			receipt := receiptOnlyProviderReceipt(t, request, outcome)
+			var encoded bytes.Buffer
+			if err := specialistrender.EncodeResponseStream(
+				context.Background(), &encoded, specialistrender.ExecutionResult{
+					Receipt: receipt, Files: []specialistrender.Payload{},
+				},
+			); err != nil {
+				t.Fatal(err)
+			}
+			observation, err := ObserveProviderResponseStream(
+				context.Background(), io.NopCloser(bytes.NewReader(encoded.Bytes())),
+				request, DiscardProviderResponseCustody(),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if observation.Receipt.Outcome != outcome || len(observation.Receipt.Files) != 0 ||
+				observation.WireSHA256 != sha256Digest(encoded.Bytes()) {
+				t.Fatal("receipt-only transport changed settlement authority")
+			}
+		})
+	}
+}
+
+func TestProviderResponseObserverCancelsBlockedFirstRead(t *testing.T) {
+	request, _, _ := testProviderRequest(t)
+	reader := newBlockingReadCloser(nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := ObserveProviderResponseStream(ctx, reader, request, DiscardProviderResponseCustody())
+		result <- err
+	}()
+	awaitSignal(t, reader.started)
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("blocked first read returned the wrong error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blocked first read did not cancel")
+	}
+}
+
+func TestProviderResponseObserverUsesActiveBoundedCleanupAfterCancellation(t *testing.T) {
+	request, _, _ := testProviderRequest(t)
+	reader := newBlockingReadCloser(nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	custody := &activeCleanupCustody{}
+	completed := make(chan error, 1)
+	go func() {
+		_, err := ObserveProviderResponseStream(ctx, reader, request, custody)
+		completed <- err
+	}()
+	awaitSignal(t, reader.started)
+	cancel()
+	select {
+	case err := <-completed:
+		if !errors.Is(err, context.Canceled) || !custody.aborted || custody.cancelledContext {
+			t.Fatalf("response cleanup inherited cancelled operation context: aborted=%t cancelled=%t err=%v", custody.aborted, custody.cancelledContext, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled response cleanup leaked")
+	}
+}
+
+func TestProviderResponseObserverCancelsBlockedTailRead(t *testing.T) {
+	request, _, _ := testProviderRequest(t)
+	payload := []byte("result")
+	receipt := testProviderReceipt(t, request, payload)
+	var encoded bytes.Buffer
+	if err := specialistrender.EncodeResponseStream(context.Background(), &encoded, specialistrender.ExecutionResult{
+		Receipt: receipt,
+		Files: []specialistrender.Payload{{
+			File: receipt.Files[0], Open: func(context.Context) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(payload)), nil
+			}, Cleanup: func() error { return nil },
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reader := newBlockingReadCloser(encoded.Bytes())
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := ObserveProviderResponseStream(ctx, reader, request, DiscardProviderResponseCustody())
+		result <- err
+	}()
+	awaitSignal(t, reader.started)
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("blocked tail read returned the wrong error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blocked tail read did not cancel")
+	}
+}
+
+func TestProviderResponseObserverCancelsCustodyWriter(t *testing.T) {
+	request, _, _ := testProviderRequest(t)
+	payload := []byte("result")
+	receipt := testProviderReceipt(t, request, payload)
+	var encoded bytes.Buffer
+	if err := specialistrender.EncodeResponseStream(context.Background(), &encoded, specialistrender.ExecutionResult{
+		Receipt: receipt,
+		Files: []specialistrender.Payload{{
+			File: receipt.Files[0], Open: func(context.Context) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(payload)), nil
+			}, Cleanup: func() error { return nil },
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	custody := &blockingWriterCustody{started: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := ObserveProviderResponseStream(
+			ctx, io.NopCloser(bytes.NewReader(encoded.Bytes())), request, custody,
+		)
+		result <- err
+	}()
+	awaitSignal(t, custody.started)
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) || !custody.aborted {
+			t.Fatalf("blocked custody writer was not cancelled and aborted: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blocked custody writer did not cancel")
 	}
 }
 
@@ -344,9 +606,24 @@ func base64Of(value []byte) string {
 
 type hashingResponseCustody struct {
 	files       []*hashingResponseFile
+	admitted    bool
 	committed   bool
 	aborted     bool
 	observation ProviderResponseObservation
+}
+
+func (custody *hashingResponseCustody) AdmitReceipt(
+	ctx context.Context,
+	_ specialistrender.Receipt,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if custody.admitted || custody.committed || custody.aborted {
+		return errors.New("hashing custody receipt state is invalid")
+	}
+	custody.admitted = true
+	return nil
 }
 
 type hashingResponseFile struct {
@@ -358,8 +635,8 @@ type hashingResponseFile struct {
 func (custody *hashingResponseCustody) OpenFile(
 	_ context.Context,
 	descriptor specialistrender.OutputFile,
-) (io.Writer, error) {
-	if custody.committed || custody.aborted || descriptor.Ordinal != len(custody.files) {
+) (ProviderResponseFileWriter, error) {
+	if !custody.admitted || custody.committed || custody.aborted || descriptor.Ordinal != len(custody.files) {
 		return nil, errors.New("hashing custody descriptor order is invalid")
 	}
 	file := &hashingResponseFile{descriptor: descriptor, hash: sha256.New()}
@@ -371,7 +648,7 @@ func (custody *hashingResponseCustody) Commit(
 	_ context.Context,
 	observation ProviderResponseObservation,
 ) error {
-	if custody.committed || custody.aborted {
+	if !custody.admitted || custody.committed || custody.aborted {
 		return errors.New("hashing custody terminal state is invalid")
 	}
 	for _, file := range custody.files {
@@ -385,12 +662,117 @@ func (custody *hashingResponseCustody) Commit(
 	return nil
 }
 
-func (custody *hashingResponseCustody) Abort() {
+func (custody *hashingResponseCustody) Abort(context.Context) error {
 	custody.aborted = true
+	return nil
 }
 
-func (file *hashingResponseFile) Write(value []byte) (int, error) {
+func (file *hashingResponseFile) WriteContext(ctx context.Context, value []byte) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	written, err := file.hash.Write(value)
 	file.bytes += int64(written)
 	return written, err
+}
+
+type blockingReadCloser struct {
+	reader  *bytes.Reader
+	started chan struct{}
+	closed  chan struct{}
+	start   sync.Once
+	close   sync.Once
+}
+
+func newBlockingReadCloser(value []byte) *blockingReadCloser {
+	return &blockingReadCloser{
+		reader: bytes.NewReader(value), started: make(chan struct{}), closed: make(chan struct{}),
+	}
+}
+
+func (reader *blockingReadCloser) Read(target []byte) (int, error) {
+	if reader.reader.Len() > 0 {
+		return reader.reader.Read(target)
+	}
+	reader.start.Do(func() { close(reader.started) })
+	<-reader.closed
+	return 0, errors.New("blocked reader closed")
+}
+
+func (reader *blockingReadCloser) Close() error {
+	reader.close.Do(func() { close(reader.closed) })
+	return nil
+}
+
+type blockingWriterCustody struct {
+	started chan struct{}
+	start   sync.Once
+	aborted bool
+}
+
+type activeCleanupCustody struct {
+	aborted          bool
+	cancelledContext bool
+}
+
+func (*activeCleanupCustody) AdmitReceipt(context.Context, specialistrender.Receipt) error {
+	return errors.New("active cleanup custody unexpectedly admitted a receipt")
+}
+
+func (*activeCleanupCustody) OpenFile(
+	context.Context,
+	specialistrender.OutputFile,
+) (ProviderResponseFileWriter, error) {
+	return nil, errors.New("active cleanup custody unexpectedly opened a file")
+}
+
+func (*activeCleanupCustody) Commit(context.Context, ProviderResponseObservation) error {
+	return errors.New("active cleanup custody unexpectedly committed")
+}
+
+func (custody *activeCleanupCustody) Abort(ctx context.Context) error {
+	custody.aborted = true
+	custody.cancelledContext = ctx.Err() != nil
+	if custody.cancelledContext {
+		return errors.New("cleanup context is cancelled")
+	}
+	return nil
+}
+
+func (custody *blockingWriterCustody) AdmitReceipt(
+	ctx context.Context,
+	_ specialistrender.Receipt,
+) error {
+	return ctx.Err()
+}
+
+func (custody *blockingWriterCustody) OpenFile(
+	context.Context,
+	specialistrender.OutputFile,
+) (ProviderResponseFileWriter, error) {
+	return custody, nil
+}
+
+func (custody *blockingWriterCustody) WriteContext(ctx context.Context, _ []byte) (int, error) {
+	custody.start.Do(func() { close(custody.started) })
+	<-ctx.Done()
+	return 0, ctx.Err()
+}
+
+func (*blockingWriterCustody) Commit(context.Context, ProviderResponseObservation) error {
+	return errors.New("blocking writer custody unexpectedly committed")
+}
+
+func (custody *blockingWriterCustody) Abort(context.Context) error {
+	custody.aborted = true
+	return nil
+}
+
+func awaitSignal(t *testing.T, signal <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(time.Second):
+		t.Fatal("test operation did not reach its blocking boundary")
+	}
 }

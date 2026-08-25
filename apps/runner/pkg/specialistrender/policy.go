@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/daytonaio/runner/pkg/c18oci"
 	"github.com/daytonaio/runner/pkg/generationstop"
 )
 
@@ -152,7 +153,7 @@ func validatePolicy(policy Policy) error {
 		!boundedOperationalRef(policy.Authority.Ref, 512) || !exactDigest(policy.Authority.Digest) ||
 		!boundedOperationalRef(policy.Composition.Ref, 512) || !exactDigest(policy.Composition.Digest) ||
 		policy.Interface.Ref != InterfaceRef || !exactDigest(policy.Interface.Digest) ||
-		!immutableOCIReference(policy.Image.Ref) || !exactDigest(policy.Image.ConfigDigest) ||
+		!c18oci.ValidImmutableReference(policy.Image.Ref) || !exactDigest(policy.Image.ConfigDigest) ||
 		!boundedOperationalRef(policy.Image.PackRef, 512) ||
 		!boundedOperationalRef(policy.Executor.Ref, 512) || !exactDigest(policy.Executor.Digest) ||
 		policy.ProcessExecutablePath == "" || !exactDigest(policy.ProcessExecutableDigest) ||

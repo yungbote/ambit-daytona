@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf16"
 
 	"github.com/daytonaio/runner/pkg/generationstop"
 	"github.com/daytonaio/runner/pkg/specialistrender"
@@ -29,12 +30,21 @@ const (
 	RenderPreviewMediaType  = "application/vnd.ambit.c18-specialist-artifact-preview+json"
 )
 
-const maximumRenderCommandBytes = 2 * 1024 * 1024
+const (
+	maximumRenderCommandBytes     = 2 * 1024 * 1024
+	maximumRenderEvidenceBytes    = 1024 * 1024
+	maximumAggregateEvidenceBytes = 16 * 1024 * 1024
+)
 
 var (
-	canonicalToken     = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$`)
-	canonicalMediaType = regexp.MustCompile(`^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$`)
-	canonicalUUID      = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	canonicalToken                = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$`)
+	canonicalMediaType            = regexp.MustCompile(`^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$`)
+	canonicalUUID                 = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	rendererAuthorityRef          = regexp.MustCompile(`^ambit\.renderer/[a-z0-9][a-z0-9._/-]*@[1-9][0-9]*$`)
+	validationAuthorityRef        = regexp.MustCompile(`^ambit\.validation-policy/[a-z0-9][a-z0-9._/-]*@[1-9][0-9]*$`)
+	runtimePackAuthorityRef       = regexp.MustCompile(`^ambit\.runtime-pack/[a-z0-9][a-z0-9._/-]*@[1-9][0-9]*$`)
+	runtimeProfileAuthorityRef    = regexp.MustCompile(`^ambit\.workspace-runtime/[a-z0-9][a-z0-9._/-]*@[1-9][0-9]*$`)
+	workspaceManifestAuthorityRef = regexp.MustCompile(`^workspace-execution-manifest:sha256:[0-9a-f]{64}$`)
 )
 
 type RenderCommandV2 struct {
@@ -186,9 +196,10 @@ func validateRenderCommand(command RenderCommandV2, sourceBytes []byte) error {
 	if err := verifySealedDigest(command, command.Digest); err != nil {
 		return err
 	}
-	executable := facetExecutable(command.Facet)
-	if executable == "" || command.Renderer.ExecutablePath != executable {
-		return errors.New("C18 render command facet or executable is invalid")
+	policy, foundPolicy := runtimePolicyForCommand(command)
+	if !foundPolicy || !rendererMatchesRuntimePolicy(command.Renderer, policy) ||
+		!canonicalEqual(command.PackRequiredChecks, policy.CheckLabels) {
+		return errors.New("C18 render command differs from the exact runtime policy")
 	}
 	jobID := strings.TrimPrefix(command.JobRef, "ambit://artifact-render-jobs/")
 	if !canonicalUUID.MatchString(jobID) || command.JobRoot != "/workspace/.ambit/render-jobs/"+jobID {
@@ -202,7 +213,7 @@ func validateRenderCommand(command RenderCommandV2, sourceBytes []byte) error {
 	}
 	if len(sourceBytes) == 0 || int64(len(sourceBytes)) != command.Source.ByteLength ||
 		sha256Digest(sourceBytes) != command.Source.Digest || command.Source.ByteLength > specialistrender.MaximumSourceBytes ||
-		!canonicalMediaType.MatchString(command.Source.MediaType) || !printable(command.Source.Ref, 512) {
+		!canonicalMediaTypeValue(command.Source.MediaType) || !validOperationalRef(command.Source.Ref) {
 		return errors.New("C18 render command source authority differs from its bytes")
 	}
 	if !safeZonePath(command.RequestPath, "inputs") || !safeZonePath(command.Source.Path, "inputs") ||
@@ -216,28 +227,40 @@ func validateRenderCommand(command RenderCommandV2, sourceBytes []byte) error {
 	if command.Output.PreviewMediaType != RenderPreviewMediaType || command.Output.MaximumPreviewBytes < 1 ||
 		command.Output.MaximumPreviewBytes > 8*1024*1024 || command.Output.MaximumImagePixels < 1 ||
 		command.Output.MaximumImagePixels > 8*1024*1024 || command.Output.MaximumAggregateImagePixels < 1 ||
-		command.Output.MaximumAggregateImagePixels > 32*1024*1024 {
+		command.Output.MaximumAggregateImagePixels > 32*1024*1024 ||
+		command.Output.MaximumAggregateImagePixels < command.Output.MaximumImagePixels {
 		return errors.New("C18 render command output policy is invalid")
 	}
-	if !printable(command.Renderer.RendererRef, 512) || !printable(command.Renderer.ValidationPolicyRef, 512) ||
-		!canonicalToken.MatchString(command.Renderer.Representation) || !canonicalToken.MatchString(command.Renderer.RenderMode) {
+	if !rendererAuthorityRef.MatchString(command.Renderer.RendererRef) ||
+		!validationAuthorityRef.MatchString(command.Renderer.ValidationPolicyRef) ||
+		!canonicalTokenValue(command.Renderer.Representation) || !canonicalTokenValue(command.Renderer.RenderMode) {
 		return errors.New("C18 render command renderer policy is invalid")
 	}
-	if len(command.PackRequiredChecks) == 0 || len(command.PackRequiredChecks) > 256 {
+	if !canonicalEqual(command.Source.SchemaURI, policy.RequiredSchemaURI) {
+		return errors.New("C18 render command source schema differs from the runtime policy")
+	}
+	if command.Source.SchemaURI != nil && !validOperationalRef(*command.Source.SchemaURI) {
+		return errors.New("C18 render command source schema authority is invalid")
+	}
+	if command.PackRequiredChecks == nil || len(command.PackRequiredChecks) == 0 || len(command.PackRequiredChecks) > 256 {
 		return errors.New("C18 render command check roster is invalid")
 	}
 	checkNames := make([]string, len(command.PackRequiredChecks))
 	for index, check := range command.PackRequiredChecks {
-		if !canonicalToken.MatchString(check.Check) || !printable(check.Label, 512) {
+		if !canonicalTokenValue(check.Check) || !printableBounded(check.Label, 512, 2_048) {
 			return errors.New("C18 render command check is invalid")
 		}
 		checkNames[index] = check.Check
 	}
-	if !sortedUnique(checkNames) || len(command.Runtime.PackRevisions) == 0 || len(command.Runtime.PackRevisions) > 32 ||
-		!sortedUniquePins(command.Runtime.PackRevisions) ||
-		!validPin(command.Runtime.ProfileRevision.Ref, command.Runtime.ProfileRevision.Digest) ||
-		!validPin(command.Runtime.WorkspaceExecutionManifest.Ref, command.Runtime.WorkspaceExecutionManifest.Digest) {
+	if !sortedUnique(checkNames) || command.Runtime.PackRevisions == nil ||
+		len(command.Runtime.PackRevisions) == 0 || len(command.Runtime.PackRevisions) > 32 ||
+		!sortedUniquePinsWithPattern(command.Runtime.PackRevisions, runtimePackAuthorityRef) ||
+		!validPinWithPattern(command.Runtime.ProfileRevision, runtimeProfileAuthorityRef) ||
+		!validPinWithPattern(command.Runtime.WorkspaceExecutionManifest, workspaceManifestAuthorityRef) {
 		return errors.New("C18 render command checks or runtime authority are invalid")
+	}
+	if !containsPinRef(command.Runtime.PackRevisions, policy.ExecutorPackRevisionRef) {
+		return errors.New("C18 render command omits its exact executor pack")
 	}
 	return nil
 }
@@ -258,25 +281,45 @@ func ParseRenderResultV2(command RenderCommandV2, encoded []byte) (RenderResultV
 	if err := verifySealedDigest(result, result.Digest); err != nil {
 		return RenderResultV2{}, err
 	}
+	if result.Checks == nil {
+		return RenderResultV2{}, errors.New("C18 render result check roster is null")
+	}
 	if !validPin(result.Execution.ExecutorRevision.Ref, result.Execution.ExecutorRevision.Digest) ||
 		!exactMillisecondInstant(result.Execution.StartedAt) || !exactMillisecondInstant(result.Execution.CompletedAt) ||
-		result.Execution.CompletedAt < result.Execution.StartedAt {
+		result.Execution.CompletedAt < result.Execution.StartedAt ||
+		(result.Outcome == "succeeded" && result.Execution.CompletedAt > command.DeadlineAt) {
 		return RenderResultV2{}, errors.New("C18 render result execution authority is invalid")
 	}
 	requested := renderCheckNames(command)
 	observed := make([]string, len(result.Checks))
 	for index, check := range result.Checks {
-		if !canonicalToken.MatchString(check.Check) || !containsString(requested, check.Check) ||
+		if !canonicalTokenValue(check.Check) || !containsString(requested, check.Check) ||
 			(check.Outcome != "blocked" && check.Outcome != "failed" && check.Outcome != "passed") {
 			return RenderResultV2{}, errors.New("C18 render result check is invalid")
 		}
-		if check.Evidence != nil && !validEvidenceDescriptor(*check.Evidence) {
+		if check.Evidence != nil &&
+			(!validEvidenceDescriptor(*check.Evidence) || check.Evidence.ByteLength > maximumRenderEvidenceBytes) {
 			return RenderResultV2{}, errors.New("C18 render result evidence descriptor is invalid")
 		}
 		observed[index] = check.Check
 	}
 	if !sortedUnique(observed) {
 		return RenderResultV2{}, errors.New("C18 render result checks are not sorted and unique")
+	}
+	evidencePaths := make(map[string]struct{}, len(result.Checks))
+	for _, check := range result.Checks {
+		if check.Evidence == nil {
+			continue
+		}
+		path := check.Evidence.Path
+		if !strings.HasPrefix(path, command.Output.JobOutputRoot+"/") || path == command.Output.PreviewPath ||
+			path == command.Output.ResultPath || path == command.Source.Path {
+			return RenderResultV2{}, errors.New("C18 render result evidence path is invalid")
+		}
+		if _, exists := evidencePaths[path]; exists {
+			return RenderResultV2{}, errors.New("C18 render result evidence paths are not unique")
+		}
+		evidencePaths[path] = struct{}{}
 	}
 	switch result.Outcome {
 	case "succeeded":
@@ -291,8 +334,8 @@ func ParseRenderResultV2(command RenderCommandV2, encoded []byte) (RenderResultV
 		if !validPreview(*result.Preview, command.Output) {
 			return RenderResultV2{}, errors.New("successful C18 render preview is invalid")
 		}
-	case "failed", "cancelled":
-		if result.Failure == nil || result.Preview != nil || !canonicalToken.MatchString(result.Failure.Code) ||
+	case "failed":
+		if result.Failure == nil || result.Preview != nil || !canonicalTokenValue(result.Failure.Code) ||
 			!printable(result.Failure.Message, 2_048) {
 			return RenderResultV2{}, errors.New("non-success C18 render result relation is invalid")
 		}
@@ -309,6 +352,7 @@ func ParseRenderCheckEvidenceV1(
 	encoded []byte,
 ) (RenderCheckEvidenceV1, error) {
 	if !validEvidenceDescriptor(descriptor) || descriptor.MediaType != RenderEvidenceMediaType ||
+		descriptor.ByteLength > maximumRenderEvidenceBytes ||
 		int64(len(encoded)) != descriptor.ByteLength || sha256Digest(encoded) != descriptor.Digest {
 		return RenderCheckEvidenceV1{}, errors.New("C18 check evidence differs from its descriptor")
 	}
@@ -326,16 +370,21 @@ func ParseRenderCheckEvidenceV1(
 	if err := verifySealedDigest(evidence, evidence.Digest); err != nil {
 		return RenderCheckEvidenceV1{}, err
 	}
+	if evidence.Facts == nil || evidence.Artifacts == nil {
+		return RenderCheckEvidenceV1{}, errors.New("C18 check evidence roster is null")
+	}
 	factKeys := make([]string, len(evidence.Facts))
 	for index, fact := range evidence.Facts {
-		if !canonicalToken.MatchString(fact.Key) || !printable(fact.Value, 256) {
+		if !canonicalTokenValue(fact.Key) || !printableBounded(fact.Value, 256, 1_024) {
 			return RenderCheckEvidenceV1{}, errors.New("C18 check evidence fact is invalid")
 		}
 		factKeys[index] = fact.Key
 	}
 	artifactPaths := make([]string, len(evidence.Artifacts))
 	for index, artifact := range evidence.Artifacts {
-		if !validEvidenceDescriptor(artifact) || !strings.HasPrefix(artifact.Path, command.Output.JobOutputRoot+"/") {
+		if !validEvidenceDescriptor(artifact) || !strings.HasPrefix(artifact.Path, command.Output.JobOutputRoot+"/") ||
+			artifact.Path == command.Output.PreviewPath || artifact.Path == command.Output.ResultPath ||
+			artifact.Path == command.Source.Path {
 			return RenderCheckEvidenceV1{}, errors.New("C18 check evidence artifact is invalid")
 		}
 		artifactPaths[index] = artifact.Path
@@ -353,84 +402,30 @@ func ParseRenderCheckEvidenceV1(
 func AdmitRenderExecution(
 	commandBytes []byte,
 	sourceBytes []byte,
+	expectedRequest specialistrender.Request,
 	provider ProviderExecutionResult,
 ) (RenderResultV2, []RenderCheckEvidenceV1, error) {
-	command, err := ParseRenderCommandV2(commandBytes, sourceBytes)
-	if err != nil {
-		return RenderResultV2{}, nil, err
+	if len(provider.Files) != len(provider.Receipt.Files) {
+		return RenderResultV2{}, nil, errors.New("memory provider output roster differs from its receipt")
 	}
-	if provider.Receipt.Request.RequestDigest != sha256Digest(commandBytes) ||
-		provider.Receipt.Request.SourceDigest != command.Source.Digest ||
-		provider.Receipt.Request.Executable != command.Renderer.ExecutablePath ||
-		provider.Receipt.Request.Executor.Ref == "" ||
-		len(provider.Receipt.Files) != len(provider.Files) {
-		return RenderResultV2{}, nil, errors.New("provider receipt changed C18 render command authority")
-	}
-	byPath := make(map[string]ProviderOutput, len(provider.Files))
 	for index, file := range provider.Files {
 		if file.Descriptor != provider.Receipt.Files[index] ||
 			int64(len(file.Bytes)) != file.Descriptor.ByteLength ||
 			sha256Digest(file.Bytes) != file.Descriptor.Digest {
-			return RenderResultV2{}, nil, errors.New("provider output differs from its receipt")
+			return RenderResultV2{}, nil, errors.New("memory provider output bytes differ from their receipt")
 		}
-		if _, exists := byPath[file.Descriptor.Path]; exists {
-			return RenderResultV2{}, nil, errors.New("provider output custody is invalid")
-		}
-		byPath[file.Descriptor.Path] = file
 	}
-	resultFile, exists := byPath[command.Output.ResultPath]
-	if !exists || resultFile.Descriptor.Role != "result" || resultFile.Descriptor.MediaType != RenderResultMediaType {
-		return RenderResultV2{}, nil, errors.New("provider result file is absent")
-	}
-	result, err := ParseRenderResultV2(command, resultFile.Bytes)
+	admitted, err := AdmitRenderCustody(
+		commandBytes,
+		sourceBytes,
+		expectedRequest,
+		provider.Receipt,
+		memoryProviderOutputReader{files: provider.Files},
+	)
 	if err != nil {
 		return RenderResultV2{}, nil, err
 	}
-	if provider.Receipt.Outcome != result.Outcome ||
-		result.Execution.ExecutorRevision != provider.Receipt.Request.Executor {
-		return RenderResultV2{}, nil, errors.New("provider receipt and helper result outcomes disagree")
-	}
-	owned := map[string]struct{}{command.Output.ResultPath: {}}
-	if result.Preview != nil {
-		preview, exists := byPath[result.Preview.Path]
-		if !exists || preview.Descriptor.Role != "preview" || preview.Descriptor.MediaType != result.Preview.MediaType ||
-			preview.Descriptor.ByteLength != result.Preview.ByteLength || preview.Descriptor.Digest != result.Preview.BytesDigest {
-			return RenderResultV2{}, nil, errors.New("provider preview differs from helper result")
-		}
-		owned[result.Preview.Path] = struct{}{}
-	}
-	evidence := make([]RenderCheckEvidenceV1, 0, len(result.Checks))
-	for _, check := range result.Checks {
-		if check.Evidence == nil {
-			continue
-		}
-		file, exists := byPath[check.Evidence.Path]
-		if !exists || file.Descriptor.Role != "evidence" || file.Descriptor.MediaType != check.Evidence.MediaType ||
-			file.Descriptor.ByteLength != check.Evidence.ByteLength || file.Descriptor.Digest != check.Evidence.Digest {
-			return RenderResultV2{}, nil, errors.New("provider check evidence differs from helper result")
-		}
-		parsed, err := ParseRenderCheckEvidenceV1(command, provider.Receipt.Request.Executor, *check.Evidence, file.Bytes)
-		if err != nil || parsed.Check != check.Check || parsed.Outcome != check.Outcome {
-			if err != nil {
-				return RenderResultV2{}, nil, err
-			}
-			return RenderResultV2{}, nil, errors.New("nested check evidence differs from helper result")
-		}
-		owned[check.Evidence.Path] = struct{}{}
-		for _, artifact := range parsed.Artifacts {
-			file, exists := byPath[artifact.Path]
-			if !exists || file.Descriptor.Role != "artifact" || file.Descriptor.MediaType != artifact.MediaType ||
-				file.Descriptor.ByteLength != artifact.ByteLength || file.Descriptor.Digest != artifact.Digest {
-				return RenderResultV2{}, nil, errors.New("provider evidence artifact differs from nested evidence")
-			}
-			owned[artifact.Path] = struct{}{}
-		}
-		evidence = append(evidence, parsed)
-	}
-	if len(owned) != len(provider.Files) {
-		return RenderResultV2{}, nil, errors.New("provider returned an unowned output file")
-	}
-	return result, evidence, nil
+	return admitted.Result, admitted.Evidence, nil
 }
 
 func renderCheckNames(command RenderCommandV2) []string {
@@ -443,7 +438,7 @@ func renderCheckNames(command RenderCommandV2) []string {
 
 func validEvidenceDescriptor(value RenderEvidenceDescriptor) bool {
 	return value.ByteLength > 0 && value.ByteLength <= specialistrender.MaximumOutputBytes &&
-		exactSHA256.MatchString(value.Digest) && canonicalMediaType.MatchString(value.MediaType) &&
+		exactSHA256.MatchString(value.Digest) && canonicalMediaTypeValue(value.MediaType) &&
 		safeZonePath(value.Path, "outputs")
 }
 
@@ -485,7 +480,7 @@ func exactMillisecondInstant(value string) bool {
 }
 
 func printable(value string, maximum int) bool {
-	if value == "" || len([]rune(value)) > maximum || value != strings.TrimSpace(value) ||
+	if value == "" || utf16CodeUnits(value) > maximum || value != strings.TrimSpace(value) ||
 		!norm.NFC.IsNormalString(value) {
 		return false
 	}
@@ -495,6 +490,14 @@ func printable(value string, maximum int) bool {
 		}
 	}
 	return true
+}
+
+func utf16CodeUnits(value string) int {
+	length := 0
+	for _, character := range value {
+		length += utf16.RuneLen(character)
+	}
+	return length
 }
 
 func sortedUnique(values []string) bool {
@@ -520,6 +523,29 @@ func sortedUniquePins(values []specialistrender.Pin) bool {
 	return sortedUnique(refs)
 }
 
+func sortedUniquePinsWithPattern(values []specialistrender.Pin, pattern *regexp.Regexp) bool {
+	refs := make([]string, len(values))
+	for index, pin := range values {
+		if !validPinWithPattern(pin, pattern) {
+			return false
+		}
+		refs[index] = pin.Ref
+	}
+	return sortedUnique(refs)
+}
+
+func validPinWithPattern(pin specialistrender.Pin, pattern *regexp.Regexp) bool {
+	return pattern.MatchString(pin.Ref) && exactSHA256.MatchString(pin.Digest)
+}
+
+func canonicalTokenValue(value string) bool {
+	return len(value) <= 128 && canonicalToken.MatchString(value)
+}
+
+func canonicalMediaTypeValue(value string) bool {
+	return len(value) <= 128 && canonicalMediaType.MatchString(value)
+}
+
 func containsString(values []string, expected string) bool {
 	index := sort.SearchStrings(values, expected)
 	return index < len(values) && values[index] == expected
@@ -529,17 +555,11 @@ func equalStrings(left, right []string) bool {
 	return bytes.Equal([]byte(strings.Join(left, "\x00")), []byte(strings.Join(right, "\x00")))
 }
 
-func facetExecutable(facet string) string {
-	switch facet {
-	case "data_analysis", "research":
-		return "/opt/ambit/runtime-pack/data-research/bin/ambit-specialist-render"
-	case "pdf":
-		return "/opt/ambit/runtime-pack/pdf-ocr/bin/ambit-specialist-render"
-	case "presentation", "spreadsheet":
-		return "/opt/ambit/runtime-pack/office-authoring/bin/ambit-specialist-render"
-	case "web_application":
-		return "/opt/ambit/runtime-pack/web-browser/bin/ambit-specialist-render"
-	default:
-		return ""
+func containsPinRef(pins []specialistrender.Pin, expected string) bool {
+	for _, pin := range pins {
+		if pin.Ref == expected {
+			return true
+		}
 	}
+	return false
 }

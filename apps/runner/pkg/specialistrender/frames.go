@@ -17,6 +17,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/daytonaio/runner/pkg/generationstop"
 )
@@ -88,36 +89,113 @@ type frameKind struct {
 // RequestStream owns bounded request/source bytes in a private host directory.
 // Close is idempotent and removes only that directory.
 type RequestStream struct {
-	Request Request
-	Input   Input
-	Source  Input
-	root    string
+	Request   Request
+	Input     Input
+	Source    Input
+	mu        sync.Mutex
+	root      string
+	removeAll func(string) error
 }
 
 func (stream *RequestStream) Close() error {
-	if stream == nil || stream.root == "" {
+	if stream == nil {
 		return nil
 	}
-	root := stream.root
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	if stream.root == "" {
+		return nil
+	}
+	removeAll := stream.removeAll
+	if removeAll == nil {
+		removeAll = os.RemoveAll
+	}
+	if err := removeAll(stream.root); err != nil {
+		return fmt.Errorf("%w: remove private input custody: %w", ErrOutcomeUnknown, err)
+	}
 	stream.root = ""
-	return os.RemoveAll(root)
+	stream.Input = Input{}
+	stream.Source = Input{}
+	return nil
+}
+
+type requestDecodeCustody struct {
+	root        string
+	requestFile io.Closer
+	sourceFile  io.Closer
+	removeAll   func(string) error
+}
+
+func (custody *requestDecodeCustody) closeFiles() error {
+	var cleanupErr error
+	if custody.requestFile != nil {
+		if err := custody.requestFile.Close(); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+		} else {
+			custody.requestFile = nil
+		}
+	}
+	if custody.sourceFile != nil {
+		if err := custody.sourceFile.Close(); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+		} else {
+			custody.sourceFile = nil
+		}
+	}
+	return cleanupErr
+}
+
+func (custody *requestDecodeCustody) cleanup() error {
+	closeErr := custody.closeFiles()
+	var removeErr error
+	if custody.root != "" {
+		removeAll := custody.removeAll
+		if removeAll == nil {
+			removeAll = os.RemoveAll
+		}
+		if err := removeAll(custody.root); err != nil {
+			removeErr = fmt.Errorf("remove private input custody: %w", err)
+		} else {
+			custody.root = ""
+		}
+	}
+	if closeErr != nil {
+		closeErr = fmt.Errorf("close private input custody: %w", closeErr)
+	}
+	return errors.Join(closeErr, removeErr)
 }
 
 // DecodeRequestStream admits one complete canonical provider JSONL request,
 // writes payload bytes only to provider-private host custody, and rejects any
 // byte after provider_request_end.
 func DecodeRequestStream(reader io.Reader) (_ *RequestStream, err error) {
+	return decodeRequestStream(reader, os.RemoveAll)
+}
+
+func decodeRequestStream(
+	reader io.Reader,
+	removeAll func(string) error,
+) (_ *RequestStream, err error) {
 	root, err := os.MkdirTemp("", "ambit-specialist-render-input-")
 	if err != nil {
 		return nil, fmt.Errorf("%w: create private input root: %v", ErrUnavailable, err)
 	}
 	if err := os.Chmod(root, 0o700); err != nil {
-		_ = os.RemoveAll(root)
-		return nil, fmt.Errorf("%w: protect private input root: %v", ErrUnavailable, err)
+		protectErr := fmt.Errorf("%w: protect private input root: %v", ErrUnavailable, err)
+		if cleanupErr := removeAll(root); cleanupErr != nil {
+			return nil, errors.Join(protectErr, fmt.Errorf("remove unprotected private input root: %w", cleanupErr))
+		}
+		return nil, protectErr
 	}
+	custody := &requestDecodeCustody{root: root, removeAll: removeAll}
 	defer func() {
 		if err != nil {
-			_ = os.RemoveAll(root)
+			if cleanupErr := custody.cleanup(); cleanupErr != nil {
+				err = errors.Join(
+					err,
+					fmt.Errorf("%w: clean rejected provider input: %w", ErrOutcomeUnknown, cleanupErr),
+				)
+			}
 		}
 	}()
 
@@ -127,12 +205,12 @@ func DecodeRequestStream(reader io.Reader) (_ *RequestStream, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: create private request object: %v", ErrUnavailable, err)
 	}
-	defer requestFile.Close()
+	custody.requestFile = requestFile
 	sourceFile, err := os.OpenFile(sourcePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("%w: create private source object: %v", ErrUnavailable, err)
 	}
-	defer sourceFile.Close()
+	custody.sourceFile = sourceFile
 
 	lines := bufio.NewReaderSize(reader, MaximumFrameBytes+1)
 	first, err := readFrameLine(lines)
@@ -196,8 +274,10 @@ func DecodeRequestStream(reader io.Reader) (_ *RequestStream, err error) {
 				if requestBytes > start.Request.RequestBytes || requestBytes > MaximumRequestBytes {
 					return nil, invalidf("request bytes exceed the declared bound")
 				}
-				if _, err := requestFile.Write(decoded); err != nil {
+				if written, err := requestFile.Write(decoded); err != nil {
 					return nil, fmt.Errorf("%w: write private request object: %v", ErrUnavailable, err)
+				} else if written != len(decoded) {
+					return nil, fmt.Errorf("%w: write private request object: %v", ErrUnavailable, io.ErrShortWrite)
 				}
 				_, _ = requestHash.Write(decoded)
 			} else {
@@ -210,8 +290,10 @@ func DecodeRequestStream(reader io.Reader) (_ *RequestStream, err error) {
 				if sourceBytes > start.Request.SourceBytes || sourceBytes > MaximumSourceBytes {
 					return nil, invalidf("source bytes exceed the declared bound")
 				}
-				if _, err := sourceFile.Write(decoded); err != nil {
+				if written, err := sourceFile.Write(decoded); err != nil {
 					return nil, fmt.Errorf("%w: write private source object: %v", ErrUnavailable, err)
+				} else if written != len(decoded) {
+					return nil, fmt.Errorf("%w: write private source object: %v", ErrUnavailable, io.ErrShortWrite)
 				}
 				_, _ = sourceHash.Write(decoded)
 			}
@@ -246,11 +328,15 @@ func DecodeRequestStream(reader io.Reader) (_ *RequestStream, err error) {
 			if err := sourceFile.Sync(); err != nil {
 				return nil, fmt.Errorf("%w: sync private source object: %v", ErrUnavailable, err)
 			}
+			if closeErr := custody.closeFiles(); closeErr != nil {
+				return nil, fmt.Errorf("%w: close admitted private input custody: %w", ErrOutcomeUnknown, closeErr)
+			}
 			return &RequestStream{
-				Request: start.Request,
-				Input:   fileInput(requestPath, requestBytes, start.Request.RequestDigest),
-				Source:  fileInput(sourcePath, sourceBytes, start.Request.SourceDigest),
-				root:    root,
+				Request:   start.Request,
+				Input:     fileInput(requestPath, requestBytes, start.Request.RequestDigest),
+				Source:    fileInput(sourcePath, sourceBytes, start.Request.SourceDigest),
+				root:      root,
+				removeAll: removeAll,
 			}, nil
 		default:
 			return nil, invalidf("provider request frame kind or order is invalid")
@@ -260,7 +346,18 @@ func DecodeRequestStream(reader io.Reader) (_ *RequestStream, err error) {
 
 // EncodeResponseStream emits an already-committed receipt and its provider-
 // private bytes. The returned stream digest excludes provider_response_end.
-func EncodeResponseStream(ctx context.Context, writer io.Writer, result ExecutionResult) error {
+func EncodeResponseStream(ctx context.Context, writer io.Writer, result ExecutionResult) (err error) {
+	cleaned := false
+	defer func() {
+		if !cleaned {
+			if cleanupErr := CleanupPayloads(result.Files); cleanupErr != nil {
+				err = errors.Join(
+					err,
+					fmt.Errorf("%w: clean provider response custody: %w", ErrOutcomeUnknown, cleanupErr),
+				)
+			}
+		}
+	}()
 	if result.Receipt.Schema != ReceiptSchema || len(result.Files) != len(result.Receipt.Files) {
 		return fmt.Errorf("%w: response receipt and payload custody differ", ErrOutcomeUnknown)
 	}
@@ -278,8 +375,13 @@ func EncodeResponseStream(ctx context.Context, writer io.Writer, result Executio
 		if len(line)+1 > MaximumFrameBytes {
 			return errors.New("provider response frame exceeds its bound")
 		}
-		if _, err := writer.Write(append(line, '\n')); err != nil {
+		framed := append(line, '\n')
+		written, err := writer.Write(framed)
+		if err != nil {
 			return err
+		}
+		if written != len(framed) {
+			return io.ErrShortWrite
 		}
 		writeHashedLine(streamHash, line)
 		frameCount++
@@ -297,7 +399,7 @@ func EncodeResponseStream(ctx context.Context, writer io.Writer, result Executio
 		}
 		reader, err := payload.Open(ctx)
 		if err != nil {
-			return fmt.Errorf("%w: open provider-private output: %v", ErrOutcomeUnknown, err)
+			return fmt.Errorf("%w: open provider-private output: %w", ErrOutcomeUnknown, err)
 		}
 		fileHash := sha256.New()
 		remaining := payload.File.ByteLength
@@ -309,8 +411,10 @@ func EncodeResponseStream(ctx context.Context, writer io.Writer, result Executio
 			}
 			chunk := make([]byte, int(size))
 			if _, err := io.ReadFull(reader, chunk); err != nil {
-				_ = reader.Close()
-				return fmt.Errorf("%w: read provider-private output: %v", ErrOutcomeUnknown, err)
+				return errors.Join(
+					fmt.Errorf("%w: read provider-private output: %w", ErrOutcomeUnknown, err),
+					closeProviderOutputReader(reader),
+				)
 			}
 			_, _ = fileHash.Write(chunk)
 			if err := write(providerFileChunk{
@@ -319,8 +423,7 @@ func EncodeResponseStream(ctx context.Context, writer io.Writer, result Executio
 				Ordinal:     ordinal, Index: index, Bytes: len(chunk),
 				Digest: sha256Digest(chunk), Base64: base64.StdEncoding.EncodeToString(chunk),
 			}); err != nil {
-				_ = reader.Close()
-				return err
+				return errors.Join(err, closeProviderOutputReader(reader))
 			}
 			remaining -= int64(len(chunk))
 			index++
@@ -330,8 +433,26 @@ func EncodeResponseStream(ctx context.Context, writer io.Writer, result Executio
 		closeErr := reader.Close()
 		if count != 0 || (readErr != nil && !errors.Is(readErr, io.EOF)) || closeErr != nil ||
 			hashDigest(fileHash) != payload.File.Digest {
-			return fmt.Errorf("%w: provider-private output differs from receipt", ErrOutcomeUnknown)
+			identityErr := fmt.Errorf("%w: provider-private output differs from receipt", ErrOutcomeUnknown)
+			if closeErr != nil {
+				identityErr = errors.Join(
+					identityErr,
+					fmt.Errorf("%w: close provider-private output: %w", ErrOutcomeUnknown, closeErr),
+				)
+			}
+			if readErr != nil && !errors.Is(readErr, io.EOF) {
+				identityErr = errors.Join(
+					identityErr,
+					fmt.Errorf("%w: read provider-private output tail: %w", ErrOutcomeUnknown, readErr),
+				)
+			}
+			return identityErr
 		}
+	}
+	cleanupErr := CleanupPayloads(result.Files)
+	cleaned = true
+	if cleanupErr != nil {
+		return fmt.Errorf("%w: clean provider response custody before terminal: %w", ErrOutcomeUnknown, cleanupErr)
 	}
 	end := providerResponseEnd{
 		Schema: ProviderFrameSchema, Kind: "provider_response_end",
@@ -347,8 +468,22 @@ func EncodeResponseStream(ctx context.Context, writer io.Writer, result Executio
 	if len(line)+1 > MaximumFrameBytes {
 		return errors.New("provider response end exceeds its bound")
 	}
-	_, err = writer.Write(append(line, '\n'))
-	return err
+	framed := append(line, '\n')
+	written, err := writer.Write(framed)
+	if err != nil {
+		return err
+	}
+	if written != len(framed) {
+		return io.ErrShortWrite
+	}
+	return nil
+}
+
+func closeProviderOutputReader(reader io.Closer) error {
+	if err := reader.Close(); err != nil {
+		return fmt.Errorf("%w: close provider-private output: %w", ErrOutcomeUnknown, err)
+	}
+	return nil
 }
 
 func readFrameLine(reader *bufio.Reader) ([]byte, error) {

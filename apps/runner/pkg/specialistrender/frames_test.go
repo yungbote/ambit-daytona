@@ -7,7 +7,9 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"io"
+	"os"
 	"testing"
 
 	"github.com/daytonaio/runner/pkg/generationstop"
@@ -90,6 +92,95 @@ func TestValidateRequestRejectsZeroByteInputs(t *testing.T) {
 	if err := ValidateRequest(request); err == nil {
 		t.Fatal("zero-byte provider request was accepted")
 	}
+}
+
+func TestRequestStreamCloseRetriesExactRemoveTarget(t *testing.T) {
+	root, err := os.MkdirTemp("", "ambit-request-stream-close-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	removeFailure := errors.New("injected request stream remove failure")
+	calls := 0
+	stream := &RequestStream{
+		Input: Input{ByteLength: 1}, Source: Input{ByteLength: 1}, root: root,
+		removeAll: func(path string) error {
+			calls++
+			if path != root {
+				t.Fatalf("request stream changed cleanup target: %q", path)
+			}
+			if calls == 1 {
+				return removeFailure
+			}
+			return os.RemoveAll(path)
+		},
+	}
+	if err := stream.Close(); !errors.Is(err, removeFailure) || stream.root != root || stream.Input.ByteLength != 1 {
+		t.Fatalf("request stream discarded failed cleanup target: root=%q err=%v", stream.root, err)
+	}
+	if err := stream.Close(); err != nil || stream.root != "" || stream.Input.ByteLength != 0 {
+		t.Fatalf("request stream cleanup retry failed: root=%q err=%v", stream.root, err)
+	}
+	if err := stream.Close(); err != nil || calls != 2 {
+		t.Fatalf("request stream close is not idempotent: calls=%d err=%v", calls, err)
+	}
+}
+
+func TestRequestDecodeCustodyRetriesCloseThenRemoveFailures(t *testing.T) {
+	root, err := os.MkdirTemp("", "ambit-request-decode-cleanup-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeFailure := errors.New("injected request descriptor close failure")
+	removeFailure := errors.New("injected request root remove failure")
+	closer := &retryCloser{failure: closeFailure}
+	removeCalls := 0
+	custody := &requestDecodeCustody{
+		root: root, requestFile: closer, sourceFile: &retryCloser{},
+		removeAll: func(path string) error {
+			removeCalls++
+			if removeCalls == 1 {
+				return removeFailure
+			}
+			return os.RemoveAll(path)
+		},
+	}
+	if err := custody.cleanup(); !errors.Is(err, closeFailure) || !errors.Is(err, removeFailure) ||
+		removeCalls != 1 || custody.root != root {
+		t.Fatalf("decode custody did not attempt and retain cleanup authority: calls=%d root=%q err=%v", removeCalls, custody.root, err)
+	}
+	if err := custody.cleanup(); err != nil || removeCalls != 2 || custody.root != "" {
+		t.Fatalf("decode custody cleanup retry failed: calls=%d root=%q err=%v", removeCalls, custody.root, err)
+	}
+}
+
+func TestDecodeRequestStreamJoinsParseAndCleanupFailure(t *testing.T) {
+	cleanupFailure := errors.New("injected rejected-input cleanup failure")
+	var root string
+	_, err := decodeRequestStream(bytes.NewReader([]byte("invalid\n")), func(path string) error {
+		root = path
+		return cleanupFailure
+	})
+	defer func() {
+		if root != "" {
+			_ = os.RemoveAll(root)
+		}
+	}()
+	if err == nil || !errors.Is(err, cleanupFailure) || !errors.Is(err, ErrOutcomeUnknown) {
+		t.Fatalf("request decoder discarded parse or cleanup failure: %v", err)
+	}
+}
+
+type retryCloser struct {
+	failure error
+	calls   int
+}
+
+func (closer *retryCloser) Close() error {
+	closer.calls++
+	if closer.calls == 1 && closer.failure != nil {
+		return closer.failure
+	}
+	return nil
 }
 
 func providerRequestBytes(t *testing.T, request Request, command []byte, source []byte) []byte {

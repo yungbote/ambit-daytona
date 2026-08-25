@@ -313,7 +313,9 @@ func (service *Service) publishResult(
 		return ExecutionResult{}, fmt.Errorf("%w: reconcile immutable render receipt: %v", ErrOutcomeUnknown, err)
 	}
 	if stored.Receipt.ReceiptDigest != result.Receipt.ReceiptDigest {
-		cleanupPayloads(result.Files)
+		if cleanupErr := CleanupPayloads(result.Files); cleanupErr != nil {
+			return ExecutionResult{}, fmt.Errorf("%w: clean losing render attempt: %w", ErrOutcomeUnknown, cleanupErr)
+		}
 		return stored, nil
 	}
 	return result, nil

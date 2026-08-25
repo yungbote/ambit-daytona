@@ -69,14 +69,14 @@ type StreamingSpecialistRenderProvider interface {
 // ProviderRequest materializes and validates the exact existing Runner wire
 // header. Copies prevent a caller from mutating payload bytes after admission.
 func ProviderRequest(input ProviderExecutionInput) (specialistrender.Request, []byte, []byte, error) {
-	requestBytes := append([]byte(nil), input.RequestBytes...)
-	sourceBytes := append([]byte(nil), input.SourceBytes...)
-	if len(requestBytes) == 0 || len(requestBytes) > specialistrender.MaximumRequestBytes {
+	if len(input.RequestBytes) == 0 || len(input.RequestBytes) > specialistrender.MaximumRequestBytes {
 		return specialistrender.Request{}, nil, nil, fmt.Errorf("C18 provider request bytes are outside their bound")
 	}
-	if len(sourceBytes) == 0 || len(sourceBytes) > specialistrender.MaximumSourceBytes {
+	if len(input.SourceBytes) == 0 || len(input.SourceBytes) > specialistrender.MaximumSourceBytes {
 		return specialistrender.Request{}, nil, nil, fmt.Errorf("C18 provider source bytes are outside their bound")
 	}
+	requestBytes := append([]byte(nil), input.RequestBytes...)
+	sourceBytes := append([]byte(nil), input.SourceBytes...)
 	request := specialistrender.Request{
 		Schema:                   specialistrender.RequestSchema,
 		OperationID:              input.OperationID,

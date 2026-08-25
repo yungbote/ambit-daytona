@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -193,6 +194,166 @@ func TestHelperCancellationDiscardsCompletedAndPartialResponseFiles(t *testing.T
 	if _, err := os.Stat(privateRoot); !os.IsNotExist(err) {
 		t.Fatalf("cancelled provider-private root remains: %v", err)
 	}
+}
+
+func TestHelperTimeoutDiscardsCompletedResultCustody(t *testing.T) {
+	result, privateRoot, err := collectGoldenFailureAtExit(t, 124, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TerminalOutcome != "timed_out" || len(result.Files) != 0 {
+		t.Fatalf("timed-out helper retained result custody: %#v", result)
+	}
+	if _, err := os.Stat(privateRoot); !os.IsNotExist(err) {
+		t.Fatalf("timed-out helper root remains: %v", err)
+	}
+}
+
+func TestHelperTimeoutSurfacesCustodyCleanupFailure(t *testing.T) {
+	cleanupFailure := errors.New("injected helper cleanup failure")
+	_, privateRoot, err := collectGoldenFailureAtExit(
+		t,
+		124,
+		func(string) error { return cleanupFailure },
+		nil,
+	)
+	defer os.RemoveAll(privateRoot)
+	if !errors.Is(err, cleanupFailure) {
+		t.Fatalf("helper cleanup failure was not surfaced: %v", err)
+	}
+}
+
+func TestHelperTimeoutDiscardsSemanticallyInvalidStagedResult(t *testing.T) {
+	result, privateRoot, err := collectGoldenFailureAtExit(t, 124, nil, []byte("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TerminalOutcome != "timed_out" || len(result.Files) != 0 {
+		t.Fatalf("timed-out invalid result was not reduced to receipt-only settlement: %#v", result)
+	}
+	if _, err := os.Stat(privateRoot); !os.IsNotExist(err) {
+		t.Fatalf("timed-out invalid result root remains: %v", err)
+	}
+}
+
+func collectGoldenFailureAtExit(
+	t *testing.T,
+	exitCode int,
+	removeAll func(string) error,
+	resultBody []byte,
+) (helperResult, string, error) {
+	t.Helper()
+	golden := loadRenderGolden(t)
+	policy := testPolicy(t)
+	policy.Image.PackID = "office-authoring"
+	policy.Image.PackRef = "ambit.runtime-pack/office-authoring@1"
+	policy.Executor = Pin{
+		Ref:    "ambit://specialist-render-executors/office-authoring@1",
+		Digest: "sha256:" + strings.Repeat("0", 63) + "5",
+	}
+	policy.Executable = "/opt/ambit/runtime-pack/office-authoring/bin/ambit-specialist-render"
+	policy.Authority.Ref = "ambit.runtime-provider/specialist-render-office-authoring@1"
+	policy.Authority.Digest, _ = ComputePolicyDigest(policy)
+	request := testRequest(t, policy)
+	request.ArtifactRenderJobRef = "ambit://artifact-render-jobs/018f6f56-7b2c-7d20-8a1f-abcdef123456"
+	request.RequestBytes = int64(len(golden.Request))
+	request.RequestChunkCount = 1
+	request.RequestDigest = golden.RequestDigest
+	request.SourceBytes = 25
+	request.SourceChunkCount = 1
+	request.SourceDigest = "sha256:df68d1d60e0bb3549243031d40bd261c14c7cfc6a894e4330bc06cd83b8175f8"
+	request.RequestFingerprint, _ = ComputeRequestFingerprint(request)
+	nonce := strings.Repeat("d", 32)
+	process := ProcessIdentity{PID: 1, StartTicks: "123"}
+	executionRequest := ProviderExecutionRequest{
+		OperationID: request.OperationID, Nonce: nonce, Authority: request, Policy: policy,
+		Request: Input{ByteLength: int64(len(golden.Request)), Digest: golden.RequestDigest, Open: func() (io.ReadCloser, error) {
+			return io.NopCloser(strings.NewReader(golden.Request)), nil
+		}},
+		Source: Input{ByteLength: 25, Digest: request.SourceDigest, Open: func() (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(make([]byte, 25))), nil
+		}},
+	}
+	collector, err := newHelperCollector(nonce, policy, executionRequest, process)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateRoot := collector.root
+	if removeAll != nil {
+		collector.removeAll = removeAll
+	}
+	var semanticResult helperSemanticResult
+	if err := json.Unmarshal([]byte(golden.Failure), &semanticResult); err != nil {
+		t.Fatal(err)
+	}
+	resultDigest := semanticResult.Digest
+	if resultBody == nil {
+		resultBody = []byte(golden.Failure)
+	} else {
+		resultDigest = sha256Digest(resultBody)
+	}
+	files := []struct {
+		role, path, mediaType string
+		body                  []byte
+		digest                string
+	}{
+		{role: "result", path: "outputs/render/result.json", mediaType: "application/vnd.ambit.c18-specialist-render-command-result+json", body: resultBody, digest: sha256Digest(resultBody)},
+		{role: "evidence", path: golden.FailureEvidence.Descriptor.Path, mediaType: golden.FailureEvidence.Descriptor.MediaType, body: []byte(golden.FailureEvidence.Body), digest: golden.FailureEvidence.Descriptor.Digest},
+	}
+	total := int64(len(files[0].body) + len(files[1].body))
+	start := helperResponseStart{
+		ExecutorRevision: pinToHelper(policy.Executor), ExitCode: exitCode, FileCount: len(files),
+		Kind: "response_start", Nonce: nonce, Outcome: "failed",
+		Request:      helperRequestIdentity{Digest: semanticResult.Request.Digest, JobRef: semanticResult.Request.JobRef, JobRoot: semanticResult.Request.JobRoot},
+		ResultDigest: resultDigest, Schema: FrameSchema, TotalBytes: total,
+	}
+	ready := helperReady{
+		CancellationExitCode: 130, ChunkBytes: RequestChunkBytes, Executable: policy.Executable,
+		ExecutorRevision: pinToHelper(policy.Executor), Interface: pinToHelper(policy.Interface),
+		Kind: "ready", Nonce: nonce, ProcessIdentity: helperProcessIdentity(process), Schema: FrameSchema,
+	}
+	frames := []any{start}
+	for index, file := range files {
+		ordinal := index + 1
+		frames = append(frames,
+			helperFileStart{
+				ByteLength: int64(len(file.body)), ChunkBytes: RequestChunkBytes, ChunkCount: 1,
+				Kind: "file_start", MediaType: file.mediaType, Nonce: nonce, Ordinal: ordinal,
+				Path: file.path, Role: file.role, Schema: FrameSchema, Digest: file.digest,
+			},
+			helperFileChunk{
+				Base64: base64.StdEncoding.EncodeToString(file.body), Bytes: len(file.body),
+				ChunkIndex: 0, Kind: "file_chunk", Nonce: nonce, Ordinal: ordinal,
+				Schema: FrameSchema, Digest: sha256Digest(file.body),
+			},
+		)
+	}
+	streamHash := sha256.New()
+	var wire bytes.Buffer
+	writeCanonicalLine(t, &wire, ready)
+	for _, frame := range frames {
+		line, err := generationstop.CanonicalJSON(frame)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wire.Write(line)
+		wire.WriteByte('\n')
+		writeHashedLine(streamHash, line)
+	}
+	end := helperResponseEnd{
+		ExecutorRevision: start.ExecutorRevision, ExitCode: exitCode, FileCount: len(files),
+		FrameCount: len(frames), Kind: "response_end", Nonce: nonce, Outcome: "failed",
+		PrivateRootCleanup: "completed", ProcessIdentity: helperProcessIdentity(process),
+		Request: start.Request, ResultDigest: start.ResultDigest, Schema: FrameSchema,
+		StreamDigest: hashDigest(streamHash), TerminalSelection: "helper-selected", TotalBytes: total,
+	}
+	writeCanonicalLine(t, &wire, end)
+	reader := bufio.NewReaderSize(bytes.NewReader(wire.Bytes()), MaximumFrameBytes+1)
+	if err := collector.readReady(reader); err != nil {
+		t.Fatal(err)
+	}
+	result, err := collector.collect(reader)
+	return result, privateRoot, err
 }
 
 type renderGolden struct {

@@ -74,7 +74,9 @@ func TestServiceExecutesOnceAndReplaysDurableResult(t *testing.T) {
 		t.Fatalf("first execution was not committed exactly once: calls=%d outcome=%q", provider.calls, result.Receipt.Outcome)
 	}
 	firstDigest := result.Receipt.ReceiptDigest
-	cleanupPayloads(result.Files)
+	if err := CleanupPayloads(result.Files); err != nil {
+		t.Fatal(err)
+	}
 
 	times = []time.Time{mustProviderTime(t, "2026-08-24T01:00:00.000Z")}
 	replayed, err := service.Execute(
@@ -229,7 +231,7 @@ func TestServiceSettlesAndPersistsExactCancellationAfterCallerContextEnds(t *tes
 	execution.TerminalKind = "cancelled"
 	execution.TerminalOutcome = "cancelled"
 	execution.HelperExitCode = 130
-	execution.Files = nil
+	execution.Files = []Payload{}
 	ctx, cancel := context.WithCancel(context.Background())
 	provider := &fakeProvider{execution: execution, beforeReturn: cancel}
 	generations := &fakeGenerations{observation: testGenerationObservation(request)}
@@ -410,6 +412,98 @@ func testGenerationObservation(request Request) generationstop.ProviderGeneratio
 	return generationstop.ProviderGenerationObservation{
 		Source: request.Source, Owner: request.Owner, Fence: request.Fence,
 		Generation: request.ExpectedParentGeneration, State: "running", ObservedAt: "2026-08-24T00:00:00Z",
+	}
+}
+
+func TestReceiptOnlyDigestRoundTripsForCancelledAndTimedOut(t *testing.T) {
+	policy := testPolicy(t)
+	request := testRequest(t, policy)
+	for _, test := range []struct {
+		outcome string
+		kind    string
+		exit    int
+	}{
+		{outcome: "cancelled", kind: "cancelled", exit: 130},
+		{outcome: "timed_out", kind: "response_end", exit: 124},
+	} {
+		t.Run(test.outcome, func(t *testing.T) {
+			execution := testExecution(request, policy)
+			execution.TerminalOutcome = test.outcome
+			execution.TerminalKind = test.kind
+			execution.HelperExitCode = test.exit
+			execution.Files = []Payload{}
+			receipt := receiptFromExecution(t, request, policy, execution)
+			if err := ValidateReceipt(receipt); err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := generationstop.CanonicalJSON(receipt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(encoded, []byte(`"files":[]`)) || bytes.Contains(encoded, []byte(`"files":null`)) {
+				t.Fatalf("receipt-only file roster changed shape: %s", encoded)
+			}
+			var reparsed Receipt
+			if err := generationstop.DecodeCanonicalJSON(encoded, &reparsed); err != nil {
+				t.Fatal(err)
+			}
+			if err := ValidateReceipt(reparsed); err != nil || reparsed.ReceiptDigest != receipt.ReceiptDigest {
+				t.Fatalf("receipt-only digest did not round trip: %v", err)
+			}
+		})
+	}
+	nullFiles := receiptFromExecution(t, request, policy, func() ProviderExecution {
+		execution := testExecution(request, policy)
+		execution.TerminalOutcome = "cancelled"
+		execution.TerminalKind = "cancelled"
+		execution.HelperExitCode = 130
+		execution.Files = []Payload{}
+		return execution
+	}())
+	nullFiles.Files = nil
+	nullFiles.ReceiptDigest, _ = ComputeReceiptDigest(nullFiles)
+	if err := ValidateReceipt(nullFiles); err == nil {
+		t.Fatal("receipt files:null was admitted")
+	}
+
+	withOutput := testExecution(request, policy)
+	withOutput.TerminalOutcome = "timed_out"
+	withOutput.TerminalKind = "response_end"
+	withOutput.HelperExitCode = 124
+	receipt := receiptFromExecution(t, request, policy, withOutput)
+	if err := ValidateReceipt(receipt); err == nil {
+		t.Fatal("timed-out receipt retained result output")
+	}
+}
+
+func TestServiceJoinsRejectedPayloadCleanupFailure(t *testing.T) {
+	policy := testPolicy(t)
+	request := testRequest(t, policy)
+	cleanupFailure := errors.New("injected provider payload cleanup failure")
+	execution := testExecution(request, policy)
+	execution.Launch.ImageID = "sha256:" + strings.Repeat("f", 64)
+	execution.Files[0].Cleanup = func() error { return cleanupFailure }
+	registry, err := NewStaticPolicyRegistry([]Policy{policy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(
+		&fakeProvider{execution: execution},
+		&fakeGenerations{observation: testGenerationObservation(request)},
+		registry,
+		newFakeOperationStore(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.nonce = func() (string, error) { return strings.Repeat("a", 32), nil }
+	service.now = func() time.Time { return mustProviderTime(t, "2026-08-24T00:00:00.000Z") }
+	_, executeErr := service.Execute(
+		context.Background(), request, bytesInput([]byte("r")), bytesInput([]byte("s")),
+	)
+	if executeErr == nil || !errors.Is(executeErr, cleanupFailure) ||
+		!errors.Is(executeErr, ErrOutcomeUnknown) {
+		t.Fatalf("service discarded primary or payload cleanup failure: %v", executeErr)
 	}
 }
 

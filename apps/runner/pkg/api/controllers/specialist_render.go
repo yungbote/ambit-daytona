@@ -58,20 +58,27 @@ func ExecuteSpecialistRender(ctx *gin.Context) {
 		writeSpecialistRenderError(ctx, err)
 		return
 	}
-	defer stream.Close()
 	if stream.Request.Source.ProviderResourceID != ctx.Param("sandboxId") {
-		writeSpecialistRenderError(ctx, fmt.Errorf("%w: source providerResourceId differs from sandbox", specialistrender.ErrInvalidRequest))
+		requestErr := fmt.Errorf("%w: source providerResourceId differs from sandbox", specialistrender.ErrInvalidRequest)
+		writeSpecialistRenderError(ctx, errors.Join(requestErr, stream.Close()))
 		return
 	}
 	result, executeErr := service.ExecuteAdmitted(
 		ctx.Request.Context(), admission, stream.Request, stream.Input, stream.Source,
 	)
-	if executeErr != nil && !errors.Is(executeErr, specialistrender.ErrRenderFailed) {
+	closeErr := stream.Close()
+	if closeErr != nil {
+		executeErr = errors.Join(executeErr, closeErr)
+	}
+	if closeErr != nil || (executeErr != nil && !errors.Is(executeErr, specialistrender.ErrRenderFailed)) {
+		if cleanupErr := specialistrender.CleanupPayloads(result.Files); cleanupErr != nil {
+			executeErr = errors.Join(
+				executeErr,
+				fmt.Errorf("%w: clean unencoded specialist-render output: %w", specialistrender.ErrOutcomeUnknown, cleanupErr),
+			)
+		}
 		writeSpecialistRenderError(ctx, executeErr)
 		return
-	}
-	for _, payload := range result.Files {
-		defer payload.Cleanup()
 	}
 	ctx.Header("Content-Type", specialistRenderContentType)
 	ctx.Header("X-Content-Type-Options", "nosniff")
@@ -82,11 +89,17 @@ func ExecuteSpecialistRender(ctx *gin.Context) {
 	ctx.Status(status)
 	if err := specialistrender.EncodeResponseStream(ctx.Request.Context(), ctx.Writer, result); err != nil {
 		// Headers have already committed. Plaintext or JSON would corrupt the
-		// typed stream, so only abort the transport; the client must discard it
-		// without provider_response_end.
-		ctx.Abort()
+		// typed stream. The encoder withholds provider_response_end until its
+		// payload cleanup succeeds, so record the failure and abort; the client
+		// must discard and reconcile the unterminated response.
+		abortSpecialistRenderStream(ctx, err)
 		return
 	}
+}
+
+func abortSpecialistRenderStream(ctx *gin.Context, err error) {
+	_ = ctx.Error(err)
+	ctx.Abort()
 }
 
 // ObserveSpecialistRender godoc

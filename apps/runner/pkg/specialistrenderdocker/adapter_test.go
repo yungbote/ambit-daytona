@@ -5,11 +5,16 @@ package specialistrenderdocker
 
 import (
 	"context"
+	"errors"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/daytonaio/runner/pkg/generationstop"
 	"github.com/daytonaio/runner/pkg/specialistrender"
@@ -73,6 +78,195 @@ func TestContextWriterStopsPayloadAfterCancellation(t *testing.T) {
 	writer := &contextWriter{ctx: ctx, writer: &target}
 	if _, err := writer.Write([]byte("payload")); err == nil || target.Len() != 0 {
 		t.Fatalf("cancelled context wrote payload: len=%d err=%v", target.Len(), err)
+	}
+}
+
+func TestCancellationInterruptsBlockedRequestWithoutSplicingCancelFrame(t *testing.T) {
+	connection := newDeadlineBlockingConn()
+	writer := &lockedWriter{writer: connection}
+	requestWriteDone := make(chan struct{})
+	go func() {
+		_, _ = writer.Write([]byte("partial request frame"))
+		close(requestWriteDone)
+	}()
+	awaitDockerSignal(t, connection.writeStarted)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ready := closedSignal()
+	requestDone := make(chan struct{})
+	cancelDone := make(chan struct{})
+	watcherDone := make(chan struct{})
+	state := &helperCancellationState{}
+	go runHelperCancellationWatcher(
+		ctx, connection, writer, strings.Repeat("a", 32), ready, requestDone,
+		cancelDone, watcherDone, state, time.Now,
+	)
+	cancel()
+	awaitDockerSignal(t, requestWriteDone)
+	state.markRequest(false)
+	close(requestDone)
+	awaitDockerSignal(t, watcherDone)
+	if connection.writeCount() != 1 {
+		t.Fatalf("cancel frame was spliced after partial request: writes=%d", connection.writeCount())
+	}
+}
+
+func TestCancellationBoundsBlockedCancelWriteAfterCompleteRequest(t *testing.T) {
+	connection := newDeadlineBlockingConn()
+	writer := &lockedWriter{writer: connection}
+	ctx, cancel := context.WithCancel(context.Background())
+	state := &helperCancellationState{}
+	state.markRequest(true)
+	ready := closedSignal()
+	requestDone := closedSignal()
+	cancelDone := make(chan struct{})
+	watcherDone := make(chan struct{})
+	go runHelperCancellationWatcher(
+		ctx, connection, writer, strings.Repeat("a", 32), ready, requestDone,
+		cancelDone, watcherDone, state, time.Now,
+	)
+	cancel()
+	awaitDockerSignal(t, watcherDone)
+	if connection.writeCount() != 1 || connection.deadlineCount() < 1 {
+		t.Fatalf("complete request cancellation was not bounded: writes=%d deadlines=%d", connection.writeCount(), connection.deadlineCount())
+	}
+}
+
+func TestTerminalSelectionRestoresDeadlineOnlyAfterWatcherStops(t *testing.T) {
+	connection := newDeadlineBlockingConn()
+	ctx, cancel := context.WithCancel(context.Background())
+	state := &helperCancellationState{}
+	state.markRequest(true)
+	state.markTerminal(true)
+	watcherDone := make(chan struct{})
+	go runHelperCancellationWatcher(
+		ctx, connection, &lockedWriter{writer: connection}, strings.Repeat("a", 32),
+		closedSignal(), closedSignal(), make(chan struct{}), watcherDone, state, time.Now,
+	)
+	cancel()
+	awaitDockerSignal(t, watcherDone)
+	settlementDeadline := time.Now().Add(time.Minute)
+	if err := connection.SetDeadline(settlementDeadline); err != nil {
+		t.Fatal(err)
+	}
+	if connection.writeCount() != 0 || !connection.lastDeadline().Equal(settlementDeadline) {
+		t.Fatalf("terminal race left a stale cancellation deadline or cancel frame: writes=%d deadline=%v", connection.writeCount(), connection.lastDeadline())
+	}
+}
+
+func TestJoinProviderCleanupErrorsPreservesPrimaryAndEveryCleanupFailure(t *testing.T) {
+	primary := errors.New("primary execution failure")
+	collector := errors.New("collector cleanup failure")
+	container := errors.New("container cleanup failure")
+	cleaner := &injectedProviderCleaner{err: collector}
+	containerCalled := false
+	err := cleanupProviderFailure(primary, cleaner, func() error {
+		containerCalled = true
+		return container
+	})
+	if !errors.Is(err, primary) || !errors.Is(err, collector) || !errors.Is(err, container) ||
+		!errors.Is(err, specialistrender.ErrOutcomeUnknown) || !cleaner.called || !containerCalled {
+		t.Fatalf("adapter discarded a primary or cleanup failure: %v", err)
+	}
+}
+
+type injectedProviderCleaner struct {
+	err    error
+	called bool
+}
+
+func (cleaner *injectedProviderCleaner) Cleanup() error {
+	cleaner.called = true
+	return cleaner.err
+}
+
+type deadlineBlockingConn struct {
+	writeStarted chan struct{}
+	deadlineSet  chan struct{}
+	writeOnce    sync.Once
+	deadlineOnce sync.Once
+	mu           sync.Mutex
+	writes       int
+	deadlines    int
+	last         time.Time
+}
+
+func newDeadlineBlockingConn() *deadlineBlockingConn {
+	return &deadlineBlockingConn{writeStarted: make(chan struct{}), deadlineSet: make(chan struct{})}
+}
+
+func (connection *deadlineBlockingConn) Read([]byte) (int, error) { return 0, io.EOF }
+
+func (connection *deadlineBlockingConn) Write([]byte) (int, error) {
+	connection.mu.Lock()
+	connection.writes++
+	connection.mu.Unlock()
+	connection.writeOnce.Do(func() { close(connection.writeStarted) })
+	<-connection.deadlineSet
+	return 0, os.ErrDeadlineExceeded
+}
+
+func (*deadlineBlockingConn) Close() error { return nil }
+
+func (*deadlineBlockingConn) LocalAddr() net.Addr  { return dockerTestAddr("local") }
+func (*deadlineBlockingConn) RemoteAddr() net.Addr { return dockerTestAddr("remote") }
+
+func (connection *deadlineBlockingConn) SetDeadline(deadline time.Time) error {
+	return connection.setDeadline(deadline)
+}
+
+func (connection *deadlineBlockingConn) setDeadline(deadline time.Time) error {
+	connection.mu.Lock()
+	connection.deadlines++
+	connection.last = deadline
+	connection.mu.Unlock()
+	connection.deadlineOnce.Do(func() { close(connection.deadlineSet) })
+	return nil
+}
+
+func (connection *deadlineBlockingConn) SetReadDeadline(deadline time.Time) error {
+	return connection.SetDeadline(deadline)
+}
+
+func (connection *deadlineBlockingConn) SetWriteDeadline(deadline time.Time) error {
+	return connection.SetDeadline(deadline)
+}
+
+func (connection *deadlineBlockingConn) writeCount() int {
+	connection.mu.Lock()
+	defer connection.mu.Unlock()
+	return connection.writes
+}
+
+func (connection *deadlineBlockingConn) deadlineCount() int {
+	connection.mu.Lock()
+	defer connection.mu.Unlock()
+	return connection.deadlines
+}
+
+func (connection *deadlineBlockingConn) lastDeadline() time.Time {
+	connection.mu.Lock()
+	defer connection.mu.Unlock()
+	return connection.last
+}
+
+type dockerTestAddr string
+
+func (address dockerTestAddr) Network() string { return string(address) }
+func (address dockerTestAddr) String() string  { return string(address) }
+
+func closedSignal() chan struct{} {
+	result := make(chan struct{})
+	close(result)
+	return result
+}
+
+func awaitDockerSignal(t *testing.T, signal <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(time.Second):
+		t.Fatal("cancellation state machine leaked or exceeded its bound")
 	}
 }
 

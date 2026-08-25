@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"time"
 
 	"github.com/daytonaio/runner/pkg/generationstop"
 	"github.com/daytonaio/runner/pkg/specialistrender"
@@ -94,26 +95,54 @@ type ProviderResponseObservation struct {
 }
 
 // ProviderResponseCustody owns transactional staging for streamed provider
-// files. OpenFile must return a fresh writer for the exact descriptor. Commit
-// is invoked only after every byte, digest, frame, terminal field, and EOF has
-// been validated. Abort is invoked on every non-committed path.
+// files. AdmitReceipt is invoked exactly once after receipt/request validation
+// and before any file is opened, allowing transport and semantic policy to
+// reject without staging. OpenFile must return a fresh writer for the exact
+// admitted descriptor. Commit is invoked only after every byte, digest, frame,
+// terminal field, and EOF has been validated. Abort is invoked with the
+// operation context on every non-committed path; concrete disk custody uses a
+// separate bounded cleanup context when the operation is already cancelled.
 type ProviderResponseCustody interface {
-	OpenFile(context.Context, specialistrender.OutputFile) (io.Writer, error)
+	AdmitReceipt(context.Context, specialistrender.Receipt) error
+	OpenFile(context.Context, specialistrender.OutputFile) (ProviderResponseFileWriter, error)
 	Commit(context.Context, ProviderResponseObservation) error
-	Abort()
+	Abort(context.Context) error
+}
+
+type ProviderResponseFileWriter interface {
+	WriteContext(context.Context, []byte) (int, error)
+}
+
+const providerResponseCleanupTimeout = 30 * time.Second
+
+func providerResponseCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), providerResponseCleanupTimeout)
 }
 
 type discardProviderResponseCustody struct{}
 
-func (discardProviderResponseCustody) OpenFile(context.Context, specialistrender.OutputFile) (io.Writer, error) {
-	return io.Discard, nil
+func (discardProviderResponseCustody) AdmitReceipt(ctx context.Context, _ specialistrender.Receipt) error {
+	return ctx.Err()
+}
+
+func (discardProviderResponseCustody) OpenFile(context.Context, specialistrender.OutputFile) (ProviderResponseFileWriter, error) {
+	return discardProviderResponseWriter{}, nil
 }
 
 func (discardProviderResponseCustody) Commit(context.Context, ProviderResponseObservation) error {
 	return nil
 }
 
-func (discardProviderResponseCustody) Abort() {}
+func (discardProviderResponseCustody) Abort(context.Context) error { return nil }
+
+type discardProviderResponseWriter struct{}
+
+func (discardProviderResponseWriter) WriteContext(ctx context.Context, value []byte) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	return len(value), nil
+}
 
 // DiscardProviderResponseCustody returns the explicit zero-retention sink.
 func DiscardProviderResponseCustody() ProviderResponseCustody {
@@ -148,8 +177,13 @@ func EncodeProviderRequestStream(
 		if len(line)+1 > specialistrender.MaximumFrameBytes {
 			return errors.New("specialist-render request frame exceeds its bound")
 		}
-		if _, err := writer.Write(append(line, '\n')); err != nil {
+		framed := append(line, '\n')
+		written, err := writer.Write(framed)
+		if err != nil {
 			return fmt.Errorf("write specialist-render request frame: %w", err)
+		}
+		if written != len(framed) {
+			return io.ErrShortWrite
 		}
 		writeHashedLine(streamHash, line)
 		frameCount++
@@ -182,8 +216,13 @@ func EncodeProviderRequestStream(
 	if len(line)+1 > specialistrender.MaximumFrameBytes {
 		return errors.New("specialist-render request end exceeds its bound")
 	}
-	if _, err := writer.Write(append(line, '\n')); err != nil {
+	framed := append(line, '\n')
+	written, err := writer.Write(framed)
+	if err != nil {
 		return fmt.Errorf("write specialist-render request end: %w", err)
+	}
+	if written != len(framed) {
+		return io.ErrShortWrite
 	}
 	return nil
 }
@@ -222,7 +261,7 @@ func DecodeProviderResponseStream(
 	expected specialistrender.Request,
 ) (ProviderExecutionResult, error) {
 	custody := newMemoryProviderResponseCustody()
-	observation, err := ObserveProviderResponseStream(ctx, reader, expected, custody)
+	observation, err := ObserveProviderResponseStream(ctx, io.NopCloser(reader), expected, custody)
 	if err != nil {
 		return ProviderExecutionResult{}, err
 	}
@@ -230,7 +269,7 @@ func DecodeProviderResponseStream(
 	for index, descriptor := range observation.Receipt.Files {
 		files[index] = ProviderOutput{
 			Descriptor: descriptor,
-			Bytes:      append([]byte(nil), custody.files[index].Bytes()...),
+			Bytes:      custody.files[index].Bytes(),
 		}
 	}
 	return ProviderExecutionResult{Receipt: observation.Receipt, Files: files}, nil
@@ -240,10 +279,13 @@ func DecodeProviderResponseStream(
 // response without accumulating payload bytes in this package.
 func ObserveProviderResponseStream(
 	ctx context.Context,
-	reader io.Reader,
+	reader io.ReadCloser,
 	expected specialistrender.Request,
 	custody ProviderResponseCustody,
 ) (_ ProviderResponseObservation, err error) {
+	if err := ctx.Err(); err != nil {
+		return ProviderResponseObservation{}, err
+	}
 	if err := specialistrender.ValidateRequest(expected); err != nil {
 		return ProviderResponseObservation{}, fmt.Errorf("expected specialist-render request is invalid: %w", err)
 	}
@@ -253,12 +295,28 @@ func ObserveProviderResponseStream(
 	committed := false
 	defer func() {
 		if !committed {
-			custody.Abort()
+			cleanupCtx, cancel := providerResponseCleanupContext(ctx)
+			defer cancel()
+			if abortErr := custody.Abort(cleanupCtx); abortErr != nil {
+				err = errors.Join(err, abortErr)
+			}
 		}
 	}()
+	cancelWatchDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = reader.Close()
+		case <-cancelWatchDone:
+		}
+	}()
+	defer close(cancelWatchDone)
 	lines := bufio.NewReaderSize(reader, specialistrender.MaximumFrameBytes+1)
 	first, err := readFrameLine(lines)
 	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return ProviderResponseObservation{}, contextErr
+		}
 		return ProviderResponseObservation{}, err
 	}
 	var start providerResponseStart
@@ -275,6 +333,9 @@ func ObserveProviderResponseStream(
 	if !canonicalEqual(start.Receipt.Request, expected) {
 		return ProviderResponseObservation{}, errors.New("specialist-render receipt changed the exact request")
 	}
+	if err := custody.AdmitReceipt(ctx, start.Receipt); err != nil {
+		return ProviderResponseObservation{}, fmt.Errorf("specialist-render receipt was not admitted: %w", err)
+	}
 	streamHash := sha256.New()
 	writeHashedLine(streamHash, first)
 	wireHash := sha256.New()
@@ -283,7 +344,7 @@ func ObserveProviderResponseStream(
 	fileHashes := make([]hash.Hash, len(start.Receipt.Files))
 	fileIndexes := make([]int, len(start.Receipt.Files))
 	fileBytes := make([]int64, len(start.Receipt.Files))
-	fileWriters := make([]io.Writer, len(start.Receipt.Files))
+	fileWriters := make([]ProviderResponseFileWriter, len(start.Receipt.Files))
 	for index, descriptor := range start.Receipt.Files {
 		fileHashes[index] = sha256.New()
 		writer, err := custody.OpenFile(ctx, descriptor)
@@ -302,6 +363,9 @@ func ObserveProviderResponseStream(
 		}
 		line, err := readFrameLine(lines)
 		if err != nil {
+			if contextErr := ctx.Err(); contextErr != nil {
+				return ProviderResponseObservation{}, contextErr
+			}
 			return ProviderResponseObservation{}, err
 		}
 		var kind frameKind
@@ -316,12 +380,23 @@ func ObserveProviderResponseStream(
 			}
 			if chunk.Schema != specialistrender.ProviderFrameSchema || chunk.OperationID != expected.OperationID ||
 				chunk.Ordinal < 0 || chunk.Ordinal >= len(start.Receipt.Files) || chunk.Ordinal < currentOrdinal ||
-				chunk.Index != fileIndexes[chunk.Ordinal] {
+				chunk.Ordinal > currentOrdinal+1 || chunk.Index != fileIndexes[chunk.Ordinal] {
 				return ProviderResponseObservation{}, errors.New("specialist-render file chunk authority or order differs")
+			}
+			if chunk.Ordinal > currentOrdinal {
+				previous := start.Receipt.Files[currentOrdinal]
+				if fileBytes[currentOrdinal] != previous.ByteLength ||
+					fileIndexes[currentOrdinal] != responseChunkCount(previous.ByteLength) {
+					return ProviderResponseObservation{}, errors.New("specialist-render file ordinal advanced before exact completion")
+				}
 			}
 			currentOrdinal = chunk.Ordinal
 			decoded, err := decodeCanonicalBase64(chunk.Base64, chunk.Bytes)
-			if err != nil || chunk.Bytes > specialistrender.RequestChunkBytes || chunk.Digest != sha256Digest(decoded) {
+			descriptor := start.Receipt.Files[chunk.Ordinal]
+			expectedChunks := responseChunkCount(descriptor.ByteLength)
+			expectedBytes := responseChunkBytes(descriptor.ByteLength, chunk.Index)
+			if err != nil || chunk.Index >= expectedChunks || chunk.Bytes != expectedBytes ||
+				chunk.Digest != sha256Digest(decoded) {
 				return ProviderResponseObservation{}, errors.New("specialist-render file chunk bytes or digest are invalid")
 			}
 			fileBytes[chunk.Ordinal] += int64(len(decoded))
@@ -329,7 +404,7 @@ func ObserveProviderResponseStream(
 				return ProviderResponseObservation{}, errors.New("specialist-render file bytes exceed their descriptor")
 			}
 			_, _ = fileHashes[chunk.Ordinal].Write(decoded)
-			written, writeErr := fileWriters[chunk.Ordinal].Write(decoded)
+			written, writeErr := fileWriters[chunk.Ordinal].WriteContext(ctx, decoded)
 			if writeErr != nil {
 				return ProviderResponseObservation{}, fmt.Errorf("write specialist-render response custody: %w", writeErr)
 			}
@@ -354,7 +429,8 @@ func ObserveProviderResponseStream(
 			var aggregate int64
 			for index, descriptor := range start.Receipt.Files {
 				aggregate += fileBytes[index]
-				if fileBytes[index] != descriptor.ByteLength || hashDigest(fileHashes[index]) != descriptor.Digest {
+				if fileBytes[index] != descriptor.ByteLength || fileIndexes[index] != responseChunkCount(descriptor.ByteLength) ||
+					hashDigest(fileHashes[index]) != descriptor.Digest {
 					return ProviderResponseObservation{}, errors.New("specialist-render output differs from its receipt")
 				}
 			}
@@ -362,7 +438,13 @@ func ObserveProviderResponseStream(
 				return ProviderResponseObservation{}, errors.New("specialist-render aggregate output bytes differ")
 			}
 			writeHashedLine(wireHash, line)
+			if err := ctx.Err(); err != nil {
+				return ProviderResponseObservation{}, err
+			}
 			if err := requireStreamEOF(lines); err != nil {
+				if contextErr := ctx.Err(); contextErr != nil {
+					return ProviderResponseObservation{}, contextErr
+				}
 				return ProviderResponseObservation{}, err
 			}
 			observation := ProviderResponseObservation{
@@ -379,8 +461,29 @@ func ObserveProviderResponseStream(
 	}
 }
 
+func responseChunkCount(byteLength int64) int {
+	return int((byteLength + int64(specialistrender.RequestChunkBytes) - 1) / int64(specialistrender.RequestChunkBytes))
+}
+
+func responseChunkBytes(byteLength int64, index int) int {
+	count := responseChunkCount(byteLength)
+	if index < 0 || index >= count {
+		return 0
+	}
+	if index < count-1 {
+		return specialistrender.RequestChunkBytes
+	}
+	remaining := int(byteLength % int64(specialistrender.RequestChunkBytes))
+	if remaining == 0 {
+		return specialistrender.RequestChunkBytes
+	}
+	return remaining
+}
+
 type memoryProviderResponseCustody struct {
 	files     []*bytes.Buffer
+	receipt   specialistrender.Receipt
+	admitted  bool
 	committed bool
 }
 
@@ -388,30 +491,64 @@ func newMemoryProviderResponseCustody() *memoryProviderResponseCustody {
 	return &memoryProviderResponseCustody{}
 }
 
+func (custody *memoryProviderResponseCustody) AdmitReceipt(
+	ctx context.Context,
+	receipt specialistrender.Receipt,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if custody.admitted || custody.committed {
+		return errors.New("memory provider custody receipt state is invalid")
+	}
+	custody.receipt = receipt
+	custody.admitted = true
+	return nil
+}
+
 func (custody *memoryProviderResponseCustody) OpenFile(
 	_ context.Context,
 	descriptor specialistrender.OutputFile,
-) (io.Writer, error) {
-	if custody.committed || descriptor.Ordinal != len(custody.files) {
+) (ProviderResponseFileWriter, error) {
+	if !custody.admitted || custody.committed || descriptor.Ordinal != len(custody.files) ||
+		descriptor.Ordinal >= len(custody.receipt.Files) || custody.receipt.Files[descriptor.Ordinal] != descriptor {
 		return nil, errors.New("memory provider custody descriptor order is invalid")
 	}
 	file := bytes.NewBuffer(make([]byte, 0, descriptor.ByteLength))
 	custody.files = append(custody.files, file)
-	return file, nil
+	return memoryProviderResponseWriter{file}, nil
 }
 
-func (custody *memoryProviderResponseCustody) Commit(context.Context, ProviderResponseObservation) error {
-	if custody.committed {
+func (custody *memoryProviderResponseCustody) Commit(
+	ctx context.Context,
+	observation ProviderResponseObservation,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !custody.admitted || custody.committed || !canonicalEqual(custody.receipt, observation.Receipt) {
 		return errors.New("memory provider custody was already committed")
 	}
 	custody.committed = true
 	return nil
 }
 
-func (custody *memoryProviderResponseCustody) Abort() {
+func (custody *memoryProviderResponseCustody) Abort(ctx context.Context) error {
 	if !custody.committed {
 		custody.files = nil
+		custody.receipt = specialistrender.Receipt{}
+		custody.admitted = false
 	}
+	return nil
+}
+
+type memoryProviderResponseWriter struct{ target *bytes.Buffer }
+
+func (writer memoryProviderResponseWriter) WriteContext(ctx context.Context, value []byte) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	return writer.target.Write(value)
 }
 
 func readFrameLine(reader *bufio.Reader) ([]byte, error) {
