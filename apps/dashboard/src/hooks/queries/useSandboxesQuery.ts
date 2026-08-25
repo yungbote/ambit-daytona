@@ -113,6 +113,8 @@ export function useSandboxesQuery(params: SandboxQueryParams) {
         filters.createdAtBefore,
         filters.lastEventAfter,
         filters.lastEventBefore,
+        undefined,
+        undefined,
         sorting.field,
         sorting.direction,
       )
