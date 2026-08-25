@@ -50,6 +50,25 @@ from render_runner import (  # noqa: E402
 
 
 class RenderRunnerTests(unittest.TestCase):
+    def test_prequeued_cancel_wins_before_execution_admission(self) -> None:
+        reader, writer = os.pipe()
+        stream = os.fdopen(reader, "rb", buffering=0)
+        nonce = "a" * 32
+        os.write(
+            writer,
+            frame_line(
+                {"schema": FRAME_SCHEMA, "kind": "cancel", "nonce": nonce}
+            ),
+        )
+        control = FramedControlAdmission(stream, nonce)
+        try:
+            with self.assertRaises(CommandCancelled):
+                control.start()
+            self.assertFalse(control._thread.is_alive())
+        finally:
+            os.close(writer)
+            stream.close()
+
     def test_terminal_selection_stops_the_control_reader(self) -> None:
         reader, writer = os.pipe()
         stream = os.fdopen(reader, "rb", buffering=0)

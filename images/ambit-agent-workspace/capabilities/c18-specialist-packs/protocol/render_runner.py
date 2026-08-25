@@ -164,6 +164,22 @@ class FramedControlAdmission:
         )
 
     def start(self) -> None:
+        if self._started:
+            raise FramedRenderError("framed control reader was already started")
+        try:
+            descriptor = self._stream.fileno()
+        except (AttributeError, OSError):
+            descriptor = -1
+        if descriptor >= 0:
+            readable, _, _ = select.select([descriptor], [], [], 0)
+            if readable:
+                # The request and source share this descriptor with control.
+                # A cancel already queued behind source_end therefore arrived
+                # before execution admission and must win synchronously; it
+                # cannot be allowed to lose merely because the new reader
+                # thread was scheduled after a fast renderer completed.
+                self.offer_line(read_line(self._stream))
+                self.raise_pending()
         self._thread.start()
         self._started = True
 
