@@ -516,15 +516,18 @@ def run_case(args: argparse.Namespace, mode: str) -> dict[str, Any]:
             raise RuntimeError("framed helper omitted ready")
         collector.accept(raw)
         ready = collector.ready_frame
-        process.write(
-            encoded_lines(request_frames(nonce, canonical_bytes(request), source))
+        request_stream = encoded_lines(
+            request_frames(nonce, canonical_bytes(request), source)
         )
         if mode == "cancel":
-            process.write(
-                frame_line(
-                    {"schema": FRAME_SCHEMA, "kind": "cancel", "nonce": nonce}
-                )
+            # A cancel-mode run proves the actual terminal path; accepting a
+            # fast success would measure only that the request completed. The
+            # cancel shares one ordered transport write with source_end so the
+            # helper's synchronous pre-execution admission must observe it.
+            request_stream += frame_line(
+                {"schema": FRAME_SCHEMA, "kind": "cancel", "nonce": nonce}
             )
+        process.write(request_stream)
         collected = None
         while collected is None:
             raw = process.read_line(300)
@@ -532,6 +535,13 @@ def run_case(args: argparse.Namespace, mode: str) -> dict[str, Any]:
                 raise RuntimeError("framed helper omitted terminal response")
             collected = collector.accept(raw)
         terminal = collected.terminal
+        if mode == "cancel" and (
+            terminal["kind"] != "cancelled"
+            or terminal["outcome"] != "cancelled"
+            or terminal["exitCode"] != 130
+            or collected.files
+        ):
+            raise ValueError("cancel mode did not exercise the exact cancelled terminal")
         files = verify_semantic_response(request, terminal, collected.files)
         if process.read_line(30) is not None:
             raise ValueError("framed helper emitted data after its terminal frame")
@@ -547,7 +557,7 @@ def run_case(args: argparse.Namespace, mode: str) -> dict[str, Any]:
         if not absent:
             raise RuntimeError("framed provider container did not quiesce")
         return {
-            "schema": "ambit.runtime-provider-specialist-render-receipt/v1",
+            "schema": "ambit.specialist-render-framed-runtime-conformance/v1",
             "outcome": "passed",
             "mode": mode,
             "image": args.image,

@@ -1919,7 +1919,12 @@ def main(pack_root: Path, argv: list[str] | None = None) -> int:
             return _framed_main(
                 pack_root,
                 arguments[2],
-                sys.stdin.buffer,
+                # FileIO preserves the exact frame boundary between request
+                # collection and control admission. BufferedReader may read a
+                # queued cancel past source_end into its private buffer, where
+                # descriptor readiness and the control reader cannot observe
+                # it before a fast renderer selects success.
+                sys.stdin.buffer.raw,
                 sys.stdout.buffer,
             )
         except BaseException:
