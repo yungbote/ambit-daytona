@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Body, Controller, HttpCode, Param, Post, Req, UseGuards } from '@nestjs/common'
+import { Body, Controller, HttpCode, Param, Post, Req, Res, UseGuards } from '@nestjs/common'
 import { ApiBearerAuth, ApiHeader, ApiOAuth2, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger'
-import { IncomingMessage } from 'node:http'
+import { IncomingMessage, ServerResponse } from 'node:http'
 
 import { Audit } from '../../audit/decorators/audit.decorator'
 import { AuditAction } from '../../audit/enums/audit-action.enum'
@@ -122,8 +122,14 @@ export class WorkingCopyCaptureController {
     @Param('sandboxIdOrName') sandboxIdOrName: string,
     @Body() request: StoppedWorkingCopyDirectoryRosterRequestDto,
     @Req() incoming: IncomingMessage,
+    @Res({ passthrough: true }) outgoing: ServerResponse<IncomingMessage>,
   ): Promise<StoppedWorkingCopyDirectoryRosterReceiptDto> {
-    return this.captures.stoppedDirectoryRoster(auth.organizationId, sandboxIdOrName, request, requestSignal(incoming))
+    return this.captures.stoppedDirectoryRoster(
+      auth.organizationId,
+      sandboxIdOrName,
+      request,
+      responseSignal(incoming, outgoing),
+    )
   }
 
   @Post('delete')
@@ -167,9 +173,13 @@ export class WorkingCopyCaptureController {
   }
 }
 
-function requestSignal(request: IncomingMessage): AbortSignal {
+function responseSignal(request: IncomingMessage, response: ServerResponse<IncomingMessage>): AbortSignal {
   const controller = new AbortController()
+  const abort = () => controller.abort()
   if (request.aborted || request.destroyed) controller.abort()
-  else request.once('aborted', () => controller.abort())
+  else request.once('aborted', abort)
+  response.once('close', () => {
+    if (!response.writableEnded) abort()
+  })
   return controller.signal
 }

@@ -4,7 +4,7 @@
  */
 
 import { EventEmitter } from 'node:events'
-import { IncomingMessage } from 'node:http'
+import { IncomingMessage, ServerResponse } from 'node:http'
 
 import type { OrganizationAuthContext } from '../../common/interfaces/organization-auth-context.interface'
 import type { StoppedWorkingCopyDirectoryRosterRequestDto } from '../dto/working-copy-capture.dto'
@@ -12,7 +12,7 @@ import type { WorkingCopyCaptureService } from '../services/working-copy-capture
 import { WorkingCopyCaptureController } from './working-copy-capture.controller'
 
 describe(`${WorkingCopyCaptureController.name} cancellation`, () => {
-  it('propagates an aborted inbound request to the stopped runner traversal', async () => {
+  it('cancels the stopped runner traversal when a fully received caller disconnects from the response', async () => {
     let forwardedSignal: AbortSignal | undefined
     const aborted = new Error('runner traversal aborted')
     const captures = {
@@ -31,14 +31,20 @@ describe(`${WorkingCopyCaptureController.name} cancellation`, () => {
       aborted: { configurable: true, value: false },
       destroyed: { configurable: true, value: false },
     })
+    const outgoing = new EventEmitter() as ServerResponse<IncomingMessage>
+    Object.defineProperty(outgoing, 'writableEnded', {
+      configurable: true,
+      value: false,
+    })
 
     const pending = controller.stoppedDirectoryRoster(
       { organizationId: 'daytona-org-1' } as OrganizationAuthContext,
       'sandbox-1',
       {} as StoppedWorkingCopyDirectoryRosterRequestDto,
       incoming,
+      outgoing,
     )
-    incoming.emit('aborted')
+    outgoing.emit('close')
 
     await expect(pending).rejects.toBe(aborted)
     expect(forwardedSignal?.aborted).toBe(true)
