@@ -143,8 +143,9 @@ export class RunnerAdapterV2 implements RunnerAdapter {
   async stoppedWorkingCopyDirectoryRoster(
     sandboxId: string,
     request: StoppedWorkingCopyDirectoryRosterRequestDto,
+    signal?: AbortSignal,
   ): Promise<StoppedWorkingCopyDirectoryRosterReceiptDto> {
-    const response = await this.captureApi().stoppedWorkingCopyDirectoryRoster(sandboxId, request)
+    const response = await this.captureApi().stoppedWorkingCopyDirectoryRoster(sandboxId, request, { signal })
     return response.data as StoppedWorkingCopyDirectoryRosterReceiptDto
   }
 

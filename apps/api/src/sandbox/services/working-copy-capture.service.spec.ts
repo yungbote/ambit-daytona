@@ -289,12 +289,15 @@ describe(WorkingCopyCaptureService.name, () => {
   it('forwards and re-proves an exact bounded stopped-generation directory roster', async () => {
     const request = validRosterRequest()
     const receipt = validRosterReceipt(request)
+    const signal = new AbortController().signal
     adapter.stoppedWorkingCopyDirectoryRoster.mockResolvedValue(receipt)
 
-    await expect(service.stoppedDirectoryRoster('daytona-org-1', 'friendly-name', request)).resolves.toEqual(receipt)
+    await expect(service.stoppedDirectoryRoster('daytona-org-1', 'friendly-name', request, signal)).resolves.toEqual(
+      receipt,
+    )
 
     expect(sandboxService.findOneByIdOrName).toHaveBeenCalledWith('friendly-name', 'daytona-org-1')
-    expect(adapter.stoppedWorkingCopyDirectoryRoster).toHaveBeenCalledWith('sandbox-1', request)
+    expect(adapter.stoppedWorkingCopyDirectoryRoster).toHaveBeenCalledWith('sandbox-1', request, signal)
     expect(receipt.entries).toEqual([
       {
         zoneRelativePath: 'site/assets',
@@ -302,6 +305,7 @@ describe(WorkingCopyCaptureService.name, () => {
         kind: 'directory',
         size: 0,
         mode: null,
+        sha256: null,
       },
       {
         zoneRelativePath: 'site/assets/app.js',
@@ -309,6 +313,7 @@ describe(WorkingCopyCaptureService.name, () => {
         kind: 'regular_file',
         size: 5,
         mode: '0644',
+        sha256: `sha256:${'1'.repeat(64)}`,
       },
       {
         zoneRelativePath: 'site/index.html',
@@ -316,6 +321,7 @@ describe(WorkingCopyCaptureService.name, () => {
         kind: 'regular_file',
         size: 13,
         mode: '0644',
+        sha256: `sha256:${'2'.repeat(64)}`,
       },
     ])
   })
@@ -330,6 +336,7 @@ describe(WorkingCopyCaptureService.name, () => {
         kind: 'regular_file',
         size: 13,
         mode: '0644',
+        sha256: `sha256:${'2'.repeat(64)}`,
       },
       {
         zoneRelativePath: 'site/\uE000.js',
@@ -337,6 +344,7 @@ describe(WorkingCopyCaptureService.name, () => {
         kind: 'regular_file',
         size: 1,
         mode: '0644',
+        sha256: `sha256:${'3'.repeat(64)}`,
       },
       {
         zoneRelativePath: 'site/😀.js',
@@ -344,6 +352,7 @@ describe(WorkingCopyCaptureService.name, () => {
         kind: 'regular_file',
         size: 1,
         mode: '0644',
+        sha256: `sha256:${'4'.repeat(64)}`,
       },
     ]
     receipt.rosterDigest = rosterDigest(receipt.request, receipt.terminalGeneration, receipt.entries)
@@ -429,6 +438,12 @@ describe(WorkingCopyCaptureService.name, () => {
       },
       (receipt) => {
         receipt.entries[0].mode = 'not-a-mode'
+      },
+      (receipt) => {
+        receipt.entries[0].sha256 = `sha256:${'5'.repeat(64)}`
+      },
+      (receipt) => {
+        receipt.entries[1].sha256 = 'sha256:wrong'
       },
       (receipt) => {
         receipt.entries = receipt.entries.filter(
@@ -938,6 +953,7 @@ function validRosterReceipt(
       kind: 'directory',
       size: 0,
       mode: null,
+      sha256: null,
     },
     {
       zoneRelativePath: 'site/assets/app.js',
@@ -945,6 +961,7 @@ function validRosterReceipt(
       kind: 'regular_file',
       size: 5,
       mode: '0644',
+      sha256: `sha256:${'1'.repeat(64)}`,
     },
     {
       zoneRelativePath: 'site/index.html',
@@ -952,6 +969,7 @@ function validRosterReceipt(
       kind: 'regular_file',
       size: 13,
       mode: '0644',
+      sha256: `sha256:${'2'.repeat(64)}`,
     },
   ]
   const exactRequest = structuredClone(request)

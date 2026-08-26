@@ -140,6 +140,9 @@ models/ssh-access-dto.ts
 models/ssh-access-validation-dto.ts
 models/stop-sandbox-generation-request.ts
 models/stopped-sandbox-generation-receipt.ts
+models/stopped-working-copy-directory-roster-entry.ts
+models/stopped-working-copy-directory-roster-receipt.ts
+models/stopped-working-copy-directory-roster-request.ts
 models/storage-access-dto.ts
 models/string-filter.ts
 models/toolbox-proxy-url.ts

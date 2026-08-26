@@ -76,6 +76,10 @@ import type { StopSandboxGenerationRequest } from '../models';
 // @ts-ignore
 import type { StoppedSandboxGenerationReceipt } from '../models';
 // @ts-ignore
+import type { StoppedWorkingCopyDirectoryRosterReceipt } from '../models';
+// @ts-ignore
+import type { StoppedWorkingCopyDirectoryRosterRequest } from '../models';
+// @ts-ignore
 import type { ToolboxProxyUrl } from '../models';
 // @ts-ignore
 import type { TraceSpan } from '../models';
@@ -195,6 +199,55 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
             localVarRequestOptions.data = serializeDataIfNeeded(workingCopyCaptureBinding, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         *
+         * @summary List a bounded directory from an exact stopped sandbox generation
+         * @param {string} sandboxIdOrName
+         * @param {StoppedWorkingCopyDirectoryRosterRequest} stoppedWorkingCopyDirectoryRosterRequest
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        stoppedSandboxWorkingCopyDirectoryRoster: async (sandboxIdOrName: string, stoppedWorkingCopyDirectoryRosterRequest: StoppedWorkingCopyDirectoryRosterRequest, xDaytonaOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxIdOrName' is not null or undefined
+            assertParamExists('stoppedSandboxWorkingCopyDirectoryRoster', 'sandboxIdOrName', sandboxIdOrName)
+            // verify required parameter 'stoppedWorkingCopyDirectoryRosterRequest' is not null or undefined
+            assertParamExists('stoppedSandboxWorkingCopyDirectoryRoster', 'stoppedWorkingCopyDirectoryRosterRequest', stoppedWorkingCopyDirectoryRosterRequest)
+            const localVarPath = `/sandbox/{sandboxIdOrName}/working-copy-captures/stopped-directory-roster`
+                .replace(`{${"sandboxIdOrName"}}`, encodeURIComponent(String(sandboxIdOrName)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            if (xDaytonaOrganizationID != null) {
+                localVarHeaderParameter['X-Daytona-Organization-ID'] = String(xDaytonaOrganizationID);
+            }
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(stoppedWorkingCopyDirectoryRosterRequest, localVarRequestOptions, configuration)
 
             return {
                 url: toPathString(localVarUrlObj),
@@ -2968,6 +3021,21 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
+         *
+         * @summary List a bounded directory from an exact stopped sandbox generation
+         * @param {string} sandboxIdOrName
+         * @param {StoppedWorkingCopyDirectoryRosterRequest} stoppedWorkingCopyDirectoryRosterRequest
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async stoppedSandboxWorkingCopyDirectoryRoster(sandboxIdOrName: string, stoppedWorkingCopyDirectoryRosterRequest: StoppedWorkingCopyDirectoryRosterRequest, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<StoppedWorkingCopyDirectoryRosterReceipt>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.stoppedSandboxWorkingCopyDirectoryRoster(sandboxIdOrName, stoppedWorkingCopyDirectoryRosterRequest, xDaytonaOrganizationID, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.stoppedSandboxWorkingCopyDirectoryRoster']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
          * 
          * @summary Create sandbox backup
          * @param {string} sandboxIdOrName ID or name of the sandbox
@@ -3806,6 +3874,18 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.captureSandboxWorkingCopy(sandboxIdOrName, workingCopyCaptureBinding, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
+         *
+         * @summary List a bounded directory from an exact stopped sandbox generation
+         * @param {string} sandboxIdOrName
+         * @param {StoppedWorkingCopyDirectoryRosterRequest} stoppedWorkingCopyDirectoryRosterRequest
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        stoppedSandboxWorkingCopyDirectoryRoster(sandboxIdOrName: string, stoppedWorkingCopyDirectoryRosterRequest: StoppedWorkingCopyDirectoryRosterRequest, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<StoppedWorkingCopyDirectoryRosterReceipt> {
+            return localVarFp.stoppedSandboxWorkingCopyDirectoryRoster(sandboxIdOrName, stoppedWorkingCopyDirectoryRosterRequest, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
+        },
+        /**
          * 
          * @summary Create sandbox backup
          * @param {string} sandboxIdOrName ID or name of the sandbox
@@ -4488,6 +4568,19 @@ export class SandboxApi extends BaseAPI {
      */
     public captureSandboxWorkingCopy(sandboxIdOrName: string, workingCopyCaptureBinding: WorkingCopyCaptureBinding, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return SandboxApiFp(this.configuration).captureSandboxWorkingCopy(sandboxIdOrName, workingCopyCaptureBinding, xDaytonaOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     *
+     * @summary List a bounded directory from an exact stopped sandbox generation
+     * @param {string} sandboxIdOrName
+     * @param {StoppedWorkingCopyDirectoryRosterRequest} stoppedWorkingCopyDirectoryRosterRequest
+     * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public stoppedSandboxWorkingCopyDirectoryRoster(sandboxIdOrName: string, stoppedWorkingCopyDirectoryRosterRequest: StoppedWorkingCopyDirectoryRosterRequest, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).stoppedSandboxWorkingCopyDirectoryRoster(sandboxIdOrName, stoppedWorkingCopyDirectoryRosterRequest, xDaytonaOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

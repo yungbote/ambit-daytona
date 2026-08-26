@@ -152,6 +152,7 @@ export class WorkingCopyCaptureService {
     organizationId: string,
     sandboxIdOrName: string,
     request: StoppedWorkingCopyDirectoryRosterRequestDto,
+    signal?: AbortSignal,
   ): Promise<StoppedWorkingCopyDirectoryRosterReceiptDto> {
     assertStoppedDirectoryRosterRequest(request)
     const { sandbox, adapter } = await this.executionAuthority.authorize(
@@ -162,7 +163,7 @@ export class WorkingCopyCaptureService {
       request.anchor.stopAuthority.fence,
     )
     try {
-      const receipt = await adapter.stoppedWorkingCopyDirectoryRoster(sandbox.id, request)
+      const receipt = await adapter.stoppedWorkingCopyDirectoryRoster(sandbox.id, request, signal)
       assertStoppedDirectoryRosterReceipt(receipt, request)
       return receipt
     } catch (error) {
@@ -369,7 +370,12 @@ function assertStoppedDirectoryRosterEntry(
   entry: StoppedWorkingCopyDirectoryRosterEntryDto,
   request: StoppedWorkingCopyDirectoryRosterRequestDto,
 ): void {
-  assertExactKeys(entry, ['kind', 'mode', 'name', 'size', 'zoneRelativePath'], 'roster entry', ConflictException)
+  assertExactKeys(
+    entry,
+    ['kind', 'mode', 'name', 'sha256', 'size', 'zoneRelativePath'],
+    'roster entry',
+    ConflictException,
+  )
   const prefix = `${request.selector.zoneRelativePath}/`
   const relativePath = entry.zoneRelativePath.startsWith(prefix) ? entry.zoneRelativePath.slice(prefix.length) : ''
   const depth = relativePath ? relativePath.split('/').length : 0
@@ -380,8 +386,11 @@ function assertStoppedDirectoryRosterEntry(
     (entry.kind !== 'regular_file' && entry.kind !== 'directory') ||
     !Number.isSafeInteger(entry.size) ||
     entry.size < 0 ||
-    (entry.kind === 'directory' && entry.size !== 0) ||
-    (entry.kind === 'regular_file' && entry.size > request.maximumFileBytes) ||
+    (entry.kind === 'directory' && (entry.size !== 0 || entry.sha256 !== null)) ||
+    (entry.kind === 'regular_file' &&
+      (entry.size > request.maximumFileBytes ||
+        typeof entry.sha256 !== 'string' ||
+        !/^sha256:[0-9a-f]{64}$/.test(entry.sha256))) ||
     depth > request.maximumDepth ||
     (entry.kind === 'directory' && depth >= request.maximumDepth) ||
     (entry.mode !== null && (typeof entry.mode !== 'string' || !/^[0-7]{3,4}$/.test(entry.mode)))

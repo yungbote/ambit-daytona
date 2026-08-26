@@ -234,6 +234,7 @@ export interface RunnerAdapter {
   stoppedWorkingCopyDirectoryRoster(
     sandboxId: string,
     request: StoppedWorkingCopyDirectoryRosterRequestDto,
+    signal?: AbortSignal,
   ): Promise<StoppedWorkingCopyDirectoryRosterReceiptDto>
 
   observeSandboxGeneration(

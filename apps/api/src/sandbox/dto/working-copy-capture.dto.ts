@@ -294,6 +294,11 @@ export class StoppedWorkingCopyDirectoryRosterEntryDto {
   @ValidateIf((_object, value) => value !== null)
   @Matches(/^[0-7]{3,4}$/)
   mode: string | null
+
+  @ApiProperty({ nullable: true, pattern: '^sha256:[0-9a-f]{64}$' })
+  @ValidateIf((_object, value) => value !== null)
+  @Matches(/^sha256:[0-9a-f]{64}$/)
+  sha256: string | null
 }
 
 @ApiSchema({ name: 'StoppedWorkingCopyDirectoryRosterRequest' })
