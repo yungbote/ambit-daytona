@@ -124,7 +124,7 @@ func ReadWorkingCopyCapture(ctx *gin.Context) {
 //
 //	@Tags			sandbox
 //	@Summary		List one bounded directory from an exact stopped sandbox generation
-//	@Description	Stream and validate a byte-free regular-file/directory roster through Docker host authority; symlinks, hardlinks, special files, escapes, and bound overflows fail closed.
+//	@Description	Stream and validate a content-digested regular-file/directory roster through Docker host authority; archive link entries, special files, escapes, and bound overflows fail closed. Accepted regular-file entries are independent exact bytes; inode/link identity is not preserved.
 //	@Param			sandboxId	path	string										true	"Sandbox ID"
 //	@Param			body		body	workingcopy.StoppedDirectoryRosterRequest	true	"Exact anchor, directory selector, and bounds"
 //	@Produce		json

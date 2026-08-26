@@ -918,10 +918,10 @@ func readStoppedDirectoryRosterTar(
 		}
 		depth := len(strings.Split(relativePath, "/"))
 		if depth > request.MaximumDepth {
-			return nil, invalidf("stopped-directory archive exceeds maximum depth")
+			return nil, fmt.Errorf("%w: stopped-directory archive exceeds maximum depth", ErrConflict)
 		}
 		if len(entries) == request.MaximumEntries {
-			return nil, invalidf("stopped-directory archive exceeds maximum entries")
+			return nil, fmt.Errorf("%w: stopped-directory archive exceeds maximum entries", ErrConflict)
 		}
 
 		info := header.FileInfo()
@@ -937,17 +937,17 @@ func readStoppedDirectoryRosterTar(
 				return nil, fmt.Errorf("%w: stopped-directory archive directory is invalid", ErrConflict)
 			}
 			if depth >= request.MaximumDepth {
-				return nil, invalidf("stopped-directory archive exceeds maximum depth")
+				return nil, fmt.Errorf("%w: stopped-directory archive exceeds maximum depth", ErrConflict)
 			}
 			entry.Kind = "directory"
 			entry.Size = 0
 		case tar.TypeReg, tar.TypeRegA:
 			if !info.Mode().IsRegular() || header.Size < 0 || header.Size > request.MaximumFileBytes {
-				return nil, invalidf("stopped-directory regular file exceeds its bound")
+				return nil, fmt.Errorf("%w: stopped-directory regular file exceeds its bound", ErrConflict)
 			}
 			aggregateBytes += header.Size
 			if aggregateBytes < 0 || aggregateBytes > request.MaximumAggregateBytes {
-				return nil, invalidf("stopped-directory archive exceeds aggregate bytes")
+				return nil, fmt.Errorf("%w: stopped-directory archive exceeds aggregate bytes", ErrConflict)
 			}
 			entry.Kind = "regular_file"
 			entry.Size = header.Size
@@ -955,9 +955,20 @@ func readStoppedDirectoryRosterTar(
 				anchorFound = true
 			}
 		default:
-			return nil, fmt.Errorf("%w: stopped-directory archive contains a symlink, hardlink, or special file", ErrConflict)
+			return nil, fmt.Errorf("%w: stopped-directory archive contains a link entry or special file", ErrConflict)
 		}
-		readBytes, readErr := io.Copy(io.Discard, reader)
+		var readBytes int64
+		var readErr error
+		if entry.Kind == "regular_file" {
+			digest := sha256.New()
+			readBytes, readErr = io.Copy(digest, reader)
+			if readErr == nil {
+				value := "sha256:" + hex.EncodeToString(digest.Sum(nil))
+				entry.SHA256 = &value
+			}
+		} else {
+			readBytes, readErr = io.Copy(io.Discard, reader)
+		}
 		if readErr != nil {
 			return nil, dockerReadError("read stopped-directory archive entry", readErr)
 		}

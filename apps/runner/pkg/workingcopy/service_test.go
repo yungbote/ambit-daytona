@@ -143,9 +143,9 @@ func TestStoppedDirectoryRosterUsesExactTerminalDockerGeneration(t *testing.T) {
 		t.Fatalf("unexpected millisecond observation time: %s", receipt.ObservedAt)
 	}
 	want := []StoppedDirectoryRosterEntry{
-		{ZoneRelativePath: "site/assets", Name: "assets", Kind: "directory", Size: 0, Mode: stringPointer("0750")},
-		{ZoneRelativePath: "site/assets/app.js", Name: "app.js", Kind: "regular_file", Size: 12, Mode: stringPointer("0600")},
-		{ZoneRelativePath: "site/index.html", Name: "index.html", Kind: "regular_file", Size: 16, Mode: stringPointer("0640")},
+		{ZoneRelativePath: "site/assets", Name: "assets", Kind: "directory", Size: 0, Mode: stringPointer("0750"), SHA256: nil},
+		{ZoneRelativePath: "site/assets/app.js", Name: "app.js", Kind: "regular_file", Size: 12, Mode: stringPointer("0600"), SHA256: stringPointer(sha256Digest([]byte("script bytes")))},
+		{ZoneRelativePath: "site/index.html", Name: "index.html", Kind: "regular_file", Size: 16, Mode: stringPointer("0640"), SHA256: stringPointer(sha256Digest([]byte("entrypoint bytes")))},
 	}
 	if !equalRosterEntries(receipt.Entries, want) {
 		t.Fatalf("unexpected canonical roster: %#v", receipt.Entries)
@@ -267,7 +267,7 @@ func TestStoppedDirectoryRosterEnforcesEveryRequestedBoundWhileStreaming(t *test
 			configure(&request, containers)
 			service := mustService(t, containers, newFakeObjectStore(), request.Anchor.Authority)
 			_, err := service.StoppedDirectoryRoster(context.Background(), request.Anchor.Source.ProviderResourceID, request)
-			if !errors.Is(err, ErrInvalidRequest) {
+			if !errors.Is(err, ErrConflict) {
 				t.Fatalf("expected bounded roster rejection, got %v", err)
 			}
 		})

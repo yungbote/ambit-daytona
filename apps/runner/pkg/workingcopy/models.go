@@ -99,7 +99,8 @@ type StoppedDirectoryRosterEntry struct {
 	Name             string  `json:"name" validate:"required"`
 	Kind             string  `json:"kind" validate:"required"`
 	Size             int64   `json:"size" validate:"required"`
-	Mode             *string `json:"mode" validate:"required"`
+	Mode             *string `json:"mode" validate:"required" extensions:"x-nullable"`
+	SHA256           *string `json:"sha256" validate:"required" extensions:"x-nullable"`
 }
 
 type StoppedDirectoryRosterRequest struct {

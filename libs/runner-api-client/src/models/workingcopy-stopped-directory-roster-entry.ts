@@ -15,8 +15,9 @@
 
 export interface WorkingcopyStoppedDirectoryRosterEntry {
     'kind': string;
-    'mode': string;
+    'mode': string | null;
     'name': string;
+    'sha256': string | null;
     'size': number;
     'zoneRelativePath': string;
 }

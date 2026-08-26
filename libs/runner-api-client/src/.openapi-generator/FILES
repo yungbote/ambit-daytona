@@ -63,3 +63,6 @@ models/workingcopy-capture-read-response.ts
 models/workingcopy-capture-receipt.ts
 models/workingcopy-capture-selector.ts
 models/workingcopy-source-address.ts
+models/workingcopy-stopped-directory-roster-entry.ts
+models/workingcopy-stopped-directory-roster-receipt.ts
+models/workingcopy-stopped-directory-roster-request.ts
