@@ -96,7 +96,7 @@ spec:
           # MinIO Community is source-only. Build the cited AGPL security
           # release, publish its corresponding source, and replace this image
           # with the resulting immutable digest before applying the overlay.
-          image: us-east4-docker.pkg.dev/mwcc-infrastructure/ambit/daytona-minio@sha256:e23cd8b73383664a40c00bd8c5dd41a62157a48b71525b5e17c2bf50d9966831
+          image: us-east4-docker.pkg.dev/mwcc-infrastructure/ambit/daytona-minio@sha256:d133395e21ea8954519f914368ba3c432e9c4c91c628e31d021c5923108db7b9
           imagePullPolicy: IfNotPresent
           command: ["/usr/bin/minio"]
           args:
