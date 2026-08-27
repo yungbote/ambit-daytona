@@ -59,7 +59,12 @@ func run(arguments []string, stderr io.Writer) int {
 	transport.Proxy = nil
 	transport.DisableCompression = true
 	transport.DialContext = (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext
-	transport.ResponseHeaderTimeout = 30 * time.Second
+	// No flat ResponseHeaderTimeout: a whole-layer PATCH only answers after
+	// its body has streamed, which legitimately takes minutes over a
+	// kubectl port-forward. The registry client already bounds every
+	// request by context (base timeout for small operations; a progress
+	// watchdog plus a size-scaled total timeout for transfers), and the
+	// client's overall Timeout caps the whole publication.
 	client := &http.Client{Transport: transport, Timeout: 45 * time.Minute}
 	publisher, err := c18imagepublication.NewPublisher(client, time.Now, executableSHA256)
 	if err != nil {
