@@ -123,7 +123,7 @@ for repository in "${component_repositories[@]}"; do
   fi
 done
 
-resolved_revision="$(git -C "$repo_root" rev-parse "$source_revision^{commit}" 2>/dev/null || true)"
+resolved_revision="$(git -C "$repo_root" rev-parse --verify "$source_revision^{commit}" 2>/dev/null || true)"
 if [[ -z "$resolved_revision" ]]; then
   # The operational infra repository carries a byte-identical derived copy of
   # this package, not Daytona's Git object database. Prove the public source
