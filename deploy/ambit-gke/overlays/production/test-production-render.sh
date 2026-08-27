@@ -57,6 +57,8 @@ redis_image='docker.io/library/redis@sha256:ff02b58f971e7d7d156a1267e283fcbbeee9
 [[ "$(grep -Fc 'REDIS_TLS: "false"' "$raw_render")" -eq 2 ]]
 [[ "$(grep -Fc 'name: daytona-api-secrets' "$raw_render")" -ge 2 ]]
 [[ "$(grep -Fc 'name: daytona-harbor-redis' "$raw_render")" -ge 2 ]]
+[[ "$(grep -Fc 'name: wait-for-internal-registry' "$raw_render")" -eq 1 ]]
+[[ "$(grep -Fc "const url = 'https://registry.daytona.ambit.sh/v2/'" "$raw_render")" -eq 1 ]]
 
 [[ "$(grep -Fc 'networking.gke.io/certmap: ambit-daytona-public' "$raw_render")" -eq 1 ]]
 [[ "$(grep -Fc 'value: ambit-daytona-gateway-ip' "$raw_render")" -eq 1 ]]

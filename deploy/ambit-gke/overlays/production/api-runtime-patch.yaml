@@ -15,6 +15,46 @@ spec:
       # the pod lifetime. Connector enforcement on Cloud SQL means the API has
       # no alternate direct-database path.
       initContainers:
+        # Daytona creates its general default snapshot during API bootstrap and
+        # immediately pushes it through this TLS registry authority. Waiting
+        # here turns Gateway/certificate propagation into an ordinary startup
+        # dependency instead of persisting an unretryable error snapshot.
+        - name: wait-for-internal-registry
+          image: daytona-api:build-required
+          imagePullPolicy: IfNotPresent
+          command: [node, -e]
+          args:
+            - |
+              const url = 'https://registry.daytona.ambit.sh/v2/'
+              const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+              ;(async () => {
+                for (;;) {
+                  try {
+                    const response = await fetch(url, {
+                      redirect: 'error',
+                      signal: AbortSignal.timeout(5000),
+                    })
+                    if (response.status === 200 || response.status === 401) process.exit(0)
+                    console.error(`registry readiness returned HTTP ${response.status}`)
+                  } catch (error) {
+                    console.error(`registry readiness failed: ${error.message}`)
+                  }
+                  await sleep(5000)
+                }
+              })()
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
         - name: cloud-sql-proxy
           image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.23.0@sha256:54e23cad9aeeedbf88ab75f993146631b878035f702b31c51885a932e0c7286c
           imagePullPolicy: IfNotPresent

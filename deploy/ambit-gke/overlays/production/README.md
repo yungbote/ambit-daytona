@@ -63,6 +63,12 @@ Do **not** apply the complete render as one unsequenced operation. Kubernetes
 does not wait for a Job merely because it appears earlier in a multi-document
 file. The release controller must reconcile foundations and state first, then
 run migrations and wait for completion before creating or updating API Pods.
+Harbor and the HTTPS Gateway registry route must also be healthy before the API
+bootstraps: the default snapshot is pulled by the runner and pushed through
+`https://registry.daytona.ambit.sh`. The API pod has a
+`wait-for-internal-registry` init container that accepts only a verified TLS
+response of 200 or the expected unauthenticated 401 from `/v2/`; this prevents
+an early Gateway race from persisting a general snapshot in `error` state.
 
 On an empty Daytona database, run the checked-in `daytona-migrate` Job (which
 uses `migration:run:init`) from the exact API image digest being released and
