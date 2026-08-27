@@ -41,13 +41,13 @@ patches:
 images:
   - name: daytona-api
     newName: us-east4-docker.pkg.dev/mwcc-infrastructure/ambit/daytona-api
-    digest: sha256:40d3d6ddd6b44b636b1886659125934630501c629163a6df5f3f11df7aa256b1
+    digest: sha256:dc09bc909df6ace3da7f0714ccfe0c5229665f1ab71f2fbbc37d00780e0da44a
   - name: daytona-proxy
     newName: us-east4-docker.pkg.dev/mwcc-infrastructure/ambit/daytona-proxy
-    digest: sha256:cf4ce09ed6688fd0a573b3a15fe3aa2bf24c227edb87d24687065724de4e021c
+    digest: sha256:33fd8fb149b987cb7b3710087551cab0720e33d4498dd60d6edd800f7eb11cda
   - name: daytona-runner
     newName: us-east4-docker.pkg.dev/mwcc-infrastructure/ambit/daytona-runner
-    digest: sha256:97fd059e8cef80405a73a0cadb17274878f140465886edf8ab0653d734a84de7
+    digest: sha256:dd71960cd768b59c10cf04d859162d61348dd347b33d114e8df0e0e3ae23fb7b
   - name: daytona-ssh-gateway
     newName: us-east4-docker.pkg.dev/mwcc-infrastructure/ambit/daytona-ssh-gateway
-    digest: sha256:f9edba2ed9d5449cbc33a4e72f9ab83ef7a95d76b9735530ecc0b735c0d123df
+    digest: sha256:c0268c2053297fe9d4e34d9a175d35824d95684aee51a5c31f138d996a4f15c7
