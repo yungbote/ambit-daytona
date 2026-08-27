@@ -48,7 +48,9 @@ metadata:
     app.kubernetes.io/component: object-storage
   annotations:
     ambit.sh/source-url: https://github.com/minio/minio
-    ambit.sh/source-revision: RELEASE.2025-10-15T17-29-55Z
+    # Must match cloudbuild.minio.yaml and the OCI revision on the admitted
+    # source-built image; a release tag is not an immutable Git identity.
+    ambit.sh/source-revision: 9e49d5e7a648f00e26f2246f4dc28e6b07f8c84a
 spec:
   serviceName: minio-headless
   replicas: 4

@@ -13,9 +13,9 @@ data:
   DB_PORT: "5432"
   DB_TLS_ENABLED: "false"
   DB_TLS_REJECT_UNAUTHORIZED: "false"
-  REDIS_HOST: 10.160.3.180
-  REDIS_PORT: "6378"
-  REDIS_TLS: "true"
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_TLS: "false"
   # Ambit is the user/tenant authority and calls Daytona with its scoped API
   # key. Google OIDC remains a replaceable JWT verification boundary for the
   # upstream control plane; signed previews do not expose this client flow.
@@ -46,9 +46,9 @@ metadata:
   name: daytona-proxy-config
   namespace: daytona-system
 data:
-  REDIS_HOST: 10.160.3.180
-  REDIS_PORT: "6378"
-  REDIS_TLS: "true"
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_TLS: "false"
   OIDC_CLIENT_ID: 411589140767-ct4tknprtvsg8v2ltkio27e3sf98mb1g.apps.googleusercontent.com
   OIDC_DOMAIN: https://accounts.google.com
   OIDC_PUBLIC_DOMAIN: https://accounts.google.com

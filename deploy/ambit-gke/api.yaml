@@ -29,7 +29,9 @@ metadata:
     app.kubernetes.io/component: api
   annotations:
     ambit.sh/source-url: https://github.com/yungbote/ambit-daytona
-    ambit.sh/source-revision: 9cfc0e9a2987b55489052e8b0479f6b33ed83d5a
+    # render-production.sh replaces this only after all four immutable
+    # component images prove one matching OCI source revision.
+    ambit.sh/source-revision: SOURCE_REVISION_REQUIRED
 spec:
   # First boot is intentionally serialized because c4 bootstraps its default
   # region/admin/registries/runner in-process. Scale to 2 only after bootstrap

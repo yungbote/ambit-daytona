@@ -40,7 +40,6 @@ updateStrategy:
   type: RollingUpdate
 logLevel: info
 secretKey: ""
-caBundleSecretName: daytona-harbor-redis-ca
 
 containerSecurityContext:
   privileged: false
@@ -191,9 +190,9 @@ database:
 redis:
   type: external
   external:
-    addr: 10.160.5.116:6378
+    addr: harbor-redis.daytona-state.svc.cluster.local:6379
     tlsOptions:
-      enable: true
+      enable: false
     coreDatabaseIndex: "0"
     jobserviceDatabaseIndex: "1"
     registryDatabaseIndex: "2"

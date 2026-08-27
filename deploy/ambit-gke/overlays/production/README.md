@@ -7,49 +7,57 @@ SPDX-License-Identifier: AGPL-3.0
 
 This overlay binds the provider-neutral Daytona base to Ambit's production GCP
 dependencies. It adds native GKE Secret Sync, Workload Identity, Cloud SQL Auth
-Proxy, Memorystore TLS trust, distributed MinIO, a GCS-backed internal OCI
-registry, and a global external GKE Gateway. Harbor supplies both that OCI
-registry and Daytona's required robot account API; there is no second registry
-compatibility layer. The overlay uses the platform-selected production static
-address and certificate map while retaining explicit gates for values the
-platform has not selected.
+Proxy, separate authenticated in-cluster Redis instances for Daytona and
+Harbor, distributed MinIO, a GCS-backed internal OCI registry, and a global
+external GKE Gateway. Harbor supplies both that OCI registry and Daytona's
+required robot account API; there is no second registry compatibility layer.
+The overlay uses the platform-selected production address resource and
+certificate map.
 
 ## Render and release gates
 
 Kustomize does not allow a nested overlay to import its ancestor
-Kustomization, so this overlay lists the base resource files explicitly. Render
-from the repository root with the local-file load restriction disabled:
+Kustomization, so this overlay lists the base resource files explicitly. The
+raw base carries `SOURCE_REVISION_REQUIRED`; do not invoke Kustomize directly
+for an admitted production release. Render from the repository root with:
 
 ```sh
-kubectl kustomize --load-restrictor LoadRestrictionsNone \
-  deploy/ambit-gke/overlays/production > rendered.yaml
+deploy/ambit-gke/overlays/production/render-production.sh > rendered.yaml
 ```
+
+The renderer reads the four immutable Daytona manifests from Artifact Registry,
+requires one canonical `org.opencontainers.image.source`, requires one shared
+full `org.opencontainers.image.revision` that resolves to an exact Git commit,
+and only then writes that revision into the five Daytona workload annotations.
+It also rejects every unresolved input, mutable image, retired `daytona-oss-*`
+repository, managed-Redis CA seam, or missing proxy apex/deep-wildcard route.
 
 The exact official Harbor 1.19.2 chart is vendored under `charts/`; its archive
 SHA-256 was verified against the official repository index and is recorded in
 `harbor-values.yaml`. Every resulting Harbor 2.15.2 runtime image is further
 pinned by digest. Harbor is deliberately not rendered by Kustomize: its chart
-uses a live-cluster `lookup` to read the Secret Sync-managed external Redis
+uses a live-cluster `lookup` to read the Secret Sync-managed cluster-local Redis
 credential. Rendering it offline silently produces passwordless Redis URLs.
 
 Before apply, the following command must return no output:
 
 ```sh
-rg 'REQUIRED_|build-required|source-build-required' rendered.yaml
+rg 'REQUIRED_|build-required|source-build-required|SOURCE_REVISION_REQUIRED' rendered.yaml
 ```
 
-The unresolved values are intentional release gates:
+The admitted render enforces these release invariants:
 
-- replace all four `daytona-*:build-required` images with immutable digests
-  produced from this public fork;
-- keep the selected OIDC issuer, client ID, and audience tied to the identity
+- all four Daytona components use the current `daytona-*` Artifact Registry
+  repositories and immutable digests produced from this public fork;
+- the selected OIDC issuer, client ID, and audience stay tied to the identity
   boundary Ambit actually uses; and
-- keep `DEFAULT_SNAPSHOT` on its immutable sandbox image digest.
+- `DEFAULT_SNAPSHOT` stays on its immutable sandbox image digest.
 
-The MinIO runtime is already pinned to the Artifact Registry digest built by
-`cloudbuild.minio.yaml` from public AGPL commit
-`9e49d5e7a648f00e26f2246f4dc28e6b07f8c84a`. Do not replace it with an
-unverifiable prebuilt Community image.
+The MinIO runtime reference is intended to be the Artifact Registry digest
+built by `cloudbuild.minio.yaml` from public AGPL commit
+`9e49d5e7a648f00e26f2246f4dc28e6b07f8c84a`. Immutability alone does not prove
+that lineage: verify the digest exists and exposes the expected source labels
+before apply. Do not replace it with an unverifiable prebuilt Community image.
 
 Do **not** apply the complete render as one unsequenced operation. Kubernetes
 does not wait for a Job merely because it appears earlier in a multi-document
@@ -69,11 +77,10 @@ name each phased Job by release; it must never run two migration Jobs at once.
 After Secret Sync has created all of
 `daytona-harbor-admin`, `daytona-harbor-shared`, `daytona-harbor-xsrf`,
 `daytona-harbor-token`, `daytona-harbor-registry-credentials`,
-`daytona-harbor-db`, `daytona-harbor-redis`, and
-`daytona-harbor-redis-ca` in `daytona-state`, install Harbor as a live Helm
-release. The repository-scoped Helm 4 post-renderer applies the Cloud SQL Auth
-Proxy sidecars without copying the chart or its generated resources back into
-Kustomize:
+`daytona-harbor-db`, and `daytona-harbor-redis` in `daytona-state`, install
+Harbor as a live Helm release. The repository-scoped Helm 4 post-renderer
+applies the Cloud SQL Auth Proxy sidecars without copying the chart or its
+generated resources back into Kustomize:
 
 ```sh
 OVERLAY="$PWD/deploy/ambit-gke/overlays/production"
@@ -120,7 +127,6 @@ HARBOR_SECRET_PRINCIPAL="principal://iam.googleapis.com/projects/${PROJECT_NUMBE
 for SECRET in \
   ambit-daytona-registry-password \
   ambit-daytona-harbor-redis-auth \
-  ambit-daytona-harbor-redis-ca \
   ambit-daytona-harbor-shared-secret \
   ambit-daytona-harbor-xsrf-key \
   ambit-daytona-harbor-token-key \
@@ -173,9 +179,9 @@ stale bcrypt line therefore fails deployment instead of surfacing later as an
 image-push error.
 
 `DB_USERNAME=daytona`, `REDIS_USERNAME=default`, and the probe-only health key
-are non-secret runtime configuration. The production Redis password and CA,
-database password, encryption material, API keys, SSH keys, registry
-credentials, and MinIO root credentials all originate in Secret Manager.
+are non-secret runtime configuration. The production Redis passwords, database
+password, encryption material, API keys, SSH keys, registry credentials, and
+MinIO root credentials all originate in Secret Manager.
 
 Secret Sync updates Kubernetes Secret objects when `latest` changes. The
 current Daytona processes consume most values through environment variables
@@ -185,6 +191,16 @@ requires an overlap or coordinated cutover; do not treat the 60-second sync as
 application-level rotation by itself.
 
 ## State services
+
+`redis.yaml` owns two retained, authenticated Redis 7.4 instances. Daytona API
+and proxy share `daytona-system/redis` and the existing
+`ambit-daytona-redis-auth` secret; Harbor owns
+`daytona-state/harbor-redis` and `ambit-daytona-harbor-redis-auth`. Both use
+10 GiB retained `daytona-standard-rwo` claims, digest-pinned images, restricted
+pod security, authenticated health checks, and namespace-local ingress. They
+are single-replica services and therefore do not claim Redis high availability.
+The move removes managed-Redis TLS and CA distribution without removing
+password authentication.
 
 Daytona's object-storage service calls MinIO's
 `/minio/v1/assume-role` endpoint and hands one-hour, organization-prefix-scoped
@@ -200,10 +216,10 @@ The official Harbor 2.15.2 deployment owns both Daytona registry roles at
 `https://registry.daytona.ambit.sh`. Its registry uses GCS through Workload
 Identity; redirects are disabled, avoiding a separate `signBlob` permission.
 Its core and exporter use the same encrypted Cloud SQL connector boundary as
-Daytona, with a separate database, and all Harbor components use the existing
-TLS Memorystore endpoint. A small idempotent bootstrap Job creates the private
-`daytona` Harbor project before Daytona begins issuing one-hour robot push
-credentials through `POST /api/v2.0/robots`.
+Daytona, with a separate database, and all Harbor components use Harbor's
+cluster-local authenticated Redis Service. A small idempotent bootstrap Job
+creates the private `daytona` Harbor project before Daytona begins issuing
+one-hour robot push credentials through `POST /api/v2.0/robots`.
 
 This replaces the rejected two-registry design. Plain CNCF Distribution can
 serve OCI v2 but cannot implement Harbor's robot endpoint; keeping it for only
@@ -214,10 +230,11 @@ without enabling a capability Harbor does not already provide.
 
 `gateway.yaml` binds the global external Application Load Balancer class to the
 reserved global Premium IPv4 address `ambit-daytona-gateway-ip`
-(`34.149.100.225`) and Certificate Manager map `ambit-daytona-public`. HTTP is
-restricted to the declared hostnames and redirected to HTTPS with status 301.
-The HTTPS Routes preserve the original Host header and WebSocket upgrades and
-provide these backends:
+(observed as `136.69.63.102` on 2026-08-27) and Certificate Manager map
+`ambit-daytona-public`. The named address resource, not the documentation
+snapshot, is manifest authority. HTTP is restricted to the declared hostnames
+and redirected to HTTPS with status 301. The HTTPS Routes preserve the original
+Host header and WebSocket upgrades and provide these backends:
 
 | Public endpoint | Kubernetes backend |
 |---|---|
@@ -234,9 +251,13 @@ transport.
 
 The `daytona.ambit.sh` Cloud DNS zone must be delegated at the parent DNS
 provider. Before exposing the Gateway, verify that API, proxy apex, wildcard
-proxy, MinIO, and registry names all resolve publicly to `34.149.100.225`, and
-that every certificate and certificate-map entry is `ACTIVE`. The wildcard
-certificate does not cover the proxy apex, so both names require coverage.
+proxy, MinIO, and registry names all resolve publicly to the current value of
+`ambit-daytona-gateway-ip` (currently `136.69.63.102`), and that every
+certificate and certificate-map entry is `ACTIVE`. One-level
+`*.daytona.ambit.sh` coverage includes the proxy apex but does not include
+`*.proxy.daytona.ambit.sh`; the deep wildcard therefore requires its own
+Certificate Manager coverage and DNS record. Conversely, the deep wildcard
+does not cover the proxy apex. Both host patterns are mandatory.
 
 GKE's managed Gateway supports `HTTPRoute`, not TCP routing. The
 `daytona-ssh-gateway` Service therefore owns a separate regional external L4
@@ -259,7 +280,7 @@ and any future Cloud Armor policy remain the outer application boundary; broad
 Internet-to-Pod ingress is not allowed.
 
 The manifest render and client-side API decoding do not establish runtime
-correctness. Before cutover, exercise Cloud SQL migration, Redis TLS, MinIO
-STS policy scoping, volume backup/restore, registry push/pull/delete, Harbor
-robot expiry, arbitrary preview ports/WebSockets, SSH, secret rotation, and a
-real Ambit browser-to-agent journey.
+correctness. Before cutover, exercise Cloud SQL migration, Redis authentication
+and restart recovery, MinIO STS policy scoping, volume backup/restore, registry
+push/pull/delete, Harbor robot expiry, arbitrary preview ports/WebSockets, SSH,
+secret rotation, and a real Ambit browser-to-agent journey.
