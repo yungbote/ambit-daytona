@@ -89,6 +89,8 @@ go.work.sum
 # Java build outputs
 **/.gradle/
 **/build/
+# Image build inputs are source, not build outputs.
+!images/ambit-agent-workspace/**/build/
 *.class
 *.jar
 !**/gradle/wrapper/gradle-wrapper.jar
