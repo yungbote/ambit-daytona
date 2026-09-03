@@ -1,0 +1,17 @@
+{
+  "name": "ambit-agent-workspace-node-tools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pinned Node CLI toolchain for the Ambit agent workspace image (installed with `npm ci` at /opt/ambit/node).",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "esbuild": "0.28.2",
+    "eslint": "9.39.5",
+    "pnpm": "11.25.0",
+    "prettier": "3.9.6",
+    "ts-node": "10.9.2",
+    "tsx": "4.23.13",
+    "typescript": "5.9.3",
+    "yarn": "1.22.22"
+  }
+}
