@@ -12,6 +12,35 @@ import type { WorkingCopyCaptureService } from '../services/working-copy-capture
 import { WorkingCopyCaptureController } from './working-copy-capture.controller'
 
 describe(`${WorkingCopyCaptureController.name} cancellation`, () => {
+  it('does not abort a capture only because the request body was fully consumed', async () => {
+    let forwardedSignal: AbortSignal | undefined
+    const captures = {
+      stoppedDirectoryRoster: jest.fn(
+        async (_organizationId: string, _sandboxId: string, _request: unknown, signal?: AbortSignal) => {
+          forwardedSignal = signal
+          return { ok: true }
+        },
+      ),
+    }
+    const controller = new WorkingCopyCaptureController(captures as unknown as WorkingCopyCaptureService)
+    const incoming = new EventEmitter() as IncomingMessage
+    // Node marks a POST's IncomingMessage destroyed after autoDestroy consumed its body.
+    Object.defineProperties(incoming, {
+      aborted: { configurable: true, value: false },
+      destroyed: { configurable: true, value: true },
+    })
+    const outgoing = new EventEmitter() as ServerResponse<IncomingMessage>
+    Object.defineProperty(outgoing, 'writableEnded', { configurable: true, value: false })
+    await controller.stoppedDirectoryRoster(
+      { organizationId: 'org' } as OrganizationAuthContext,
+      'sandbox',
+      {} as StoppedWorkingCopyDirectoryRosterRequestDto,
+      incoming,
+      outgoing,
+    )
+    expect(forwardedSignal?.aborted).toBe(false)
+  })
+
   it('cancels the stopped runner traversal when a fully received caller disconnects from the response', async () => {
     let forwardedSignal: AbortSignal | undefined
     const aborted = new Error('runner traversal aborted')

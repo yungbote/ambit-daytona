@@ -176,7 +176,11 @@ export class WorkingCopyCaptureController {
 function responseSignal(request: IncomingMessage, response: ServerResponse<IncomingMessage>): AbortSignal {
   const controller = new AbortController()
   const abort = () => controller.abort()
-  if (request.aborted || request.destroyed) controller.abort()
+  // `request.destroyed` is true for every POST once its body has been read
+  // (Node 24 autoDestroy), which aborted every capture before it reached the
+  // runner ("ERR_CANCELED", 2026-09-03). Only a client that went away aborts:
+  // the request stream reporting `aborted`, or the response closing unsent.
+  if (request.aborted) controller.abort()
   else request.once('aborted', abort)
   response.once('close', () => {
     if (!response.writableEnded) abort()
