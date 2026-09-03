@@ -8,13 +8,32 @@ options:
 
 substitutions:
   _REGISTRY: us-east4-docker.pkg.dev/${PROJECT_ID}/ambit
-  # A caller can supply a release tag, but an omitted substitution must never
-  # overwrite a shared mutable development tag.
-  _TAG: ${BUILD_ID}
+  _SOURCE_URL: https://github.com/yungbote/ambit-daytona
+  # Triggered builds bind the human-readable tag and OCI provenance to the
+  # exact source commit. Manual submissions must provide the same full SHA as
+  # COMMIT_SHA; a build ID is not source identity.
+  _SOURCE_REVISION: ${COMMIT_SHA}
+  _TAG: ${COMMIT_SHA}
 
 steps:
+  - id: validate-source-revision
+    name: gcr.io/cloud-builders/git
+    entrypoint: bash
+    args:
+      - -ec
+      - |
+        [[ "${_SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]] || {
+          echo '_SOURCE_REVISION must be the full lowercase Git COMMIT_SHA' >&2
+          exit 1
+        }
+        [[ "${_TAG}" == "${_SOURCE_REVISION}" ]] || {
+          echo '_TAG must equal _SOURCE_REVISION for production component builds' >&2
+          exit 1
+        }
+
   - id: computer-use-image
     name: gcr.io/cloud-builders/docker
+    waitFor: [validate-source-revision]
     args:
       - build
       - --tag=computer-use-amd64:${BUILD_ID}
@@ -35,34 +54,40 @@ steps:
 
   - id: api
     name: gcr.io/cloud-builders/docker
-    waitFor: ['-']
+    waitFor: [validate-source-revision]
     env: [DOCKER_BUILDKIT=1]
     args:
       - build
       - --build-arg=VERSION=${_TAG}
-      - --tag=${_REGISTRY}/daytona-oss-api:${_TAG}
+      - --label=org.opencontainers.image.revision=${_SOURCE_REVISION}
+      - --label=org.opencontainers.image.source=${_SOURCE_URL}
+      - --tag=${_REGISTRY}/daytona-api:${_TAG}
       - --file=apps/api/Dockerfile
       - .
 
   - id: proxy
     name: gcr.io/cloud-builders/docker
-    waitFor: ['-']
+    waitFor: [validate-source-revision]
     env: [DOCKER_BUILDKIT=1]
     args:
       - build
       - --build-arg=VERSION=${_TAG}
-      - --tag=${_REGISTRY}/daytona-oss-proxy:${_TAG}
+      - --label=org.opencontainers.image.revision=${_SOURCE_REVISION}
+      - --label=org.opencontainers.image.source=${_SOURCE_URL}
+      - --tag=${_REGISTRY}/daytona-proxy:${_TAG}
       - --file=apps/proxy/Dockerfile
       - .
 
   - id: ssh-gateway
     name: gcr.io/cloud-builders/docker
-    waitFor: ['-']
+    waitFor: [validate-source-revision]
     env: [DOCKER_BUILDKIT=1]
     args:
       - build
       - --build-arg=VERSION=${_TAG}
-      - --tag=${_REGISTRY}/daytona-oss-ssh-gateway:${_TAG}
+      - --label=org.opencontainers.image.revision=${_SOURCE_REVISION}
+      - --label=org.opencontainers.image.source=${_SOURCE_URL}
+      - --tag=${_REGISTRY}/daytona-ssh-gateway:${_TAG}
       - --file=apps/ssh-gateway/Dockerfile
       - .
 
@@ -73,12 +98,14 @@ steps:
     args:
       - build
       - --build-arg=VERSION=${_TAG}
-      - --tag=${_REGISTRY}/daytona-oss-runner:${_TAG}
+      - --label=org.opencontainers.image.revision=${_SOURCE_REVISION}
+      - --label=org.opencontainers.image.source=${_SOURCE_URL}
+      - --tag=${_REGISTRY}/daytona-runner:${_TAG}
       - --file=apps/runner/Dockerfile
       - .
 
 images:
-  - ${_REGISTRY}/daytona-oss-api:${_TAG}
-  - ${_REGISTRY}/daytona-oss-proxy:${_TAG}
-  - ${_REGISTRY}/daytona-oss-runner:${_TAG}
-  - ${_REGISTRY}/daytona-oss-ssh-gateway:${_TAG}
+  - ${_REGISTRY}/daytona-api:${_TAG}
+  - ${_REGISTRY}/daytona-proxy:${_TAG}
+  - ${_REGISTRY}/daytona-runner:${_TAG}
+  - ${_REGISTRY}/daytona-ssh-gateway:${_TAG}

@@ -13,9 +13,9 @@ data:
   DB_PORT: "5432"
   DB_TLS_ENABLED: "false"
   DB_TLS_REJECT_UNAUTHORIZED: "false"
-  REDIS_HOST: 10.160.3.180
-  REDIS_PORT: "6378"
-  REDIS_TLS: "true"
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_TLS: "false"
   # Ambit is the user/tenant authority and calls Daytona with its scoped API
   # key. Google OIDC remains a replaceable JWT verification boundary for the
   # upstream control plane; signed previews do not expose this client flow.
@@ -27,7 +27,7 @@ data:
   # lifecycle events. Every API replica shares the Redis adapter, so the
   # gateway remains horizontally safe behind the GKE Gateway.
   NOTIFICATION_GATEWAY_DISABLED: "false"
-  DEFAULT_SNAPSHOT: docker.io/daytonaio/sandbox:0.6.0-slim@sha256:825533a16c854304facdff594bc1a0ff3eb223a25c2ff9b1b70b5e05fb754492
+  DEFAULT_SNAPSHOT: registry.daytona.ambit.sh/daytona/ambit-agent-workspace@sha256:cbf0fa07de030d3117816b98bf77fa27e122adc97058fdd63b3f6212766edd57
   TRANSIENT_REGISTRY_URL: https://registry.daytona.ambit.sh
   TRANSIENT_REGISTRY_PROJECT_ID: daytona
   INTERNAL_REGISTRY_URL: https://registry.daytona.ambit.sh
@@ -46,9 +46,9 @@ metadata:
   name: daytona-proxy-config
   namespace: daytona-system
 data:
-  REDIS_HOST: 10.160.3.180
-  REDIS_PORT: "6378"
-  REDIS_TLS: "true"
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_TLS: "false"
   OIDC_CLIENT_ID: 411589140767-ct4tknprtvsg8v2ltkio27e3sf98mb1g.apps.googleusercontent.com
   OIDC_DOMAIN: https://accounts.google.com
   OIDC_PUBLIC_DOMAIN: https://accounts.google.com

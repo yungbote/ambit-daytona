@@ -48,7 +48,9 @@ metadata:
     app.kubernetes.io/component: object-storage
   annotations:
     ambit.sh/source-url: https://github.com/minio/minio
-    ambit.sh/source-revision: RELEASE.2025-10-15T17-29-55Z
+    # Must match cloudbuild.minio.yaml and the OCI revision on the admitted
+    # source-built image; a release tag is not an immutable Git identity.
+    ambit.sh/source-revision: 9e49d5e7a648f00e26f2246f4dc28e6b07f8c84a
 spec:
   serviceName: minio-headless
   replicas: 4
@@ -94,7 +96,7 @@ spec:
           # MinIO Community is source-only. Build the cited AGPL security
           # release, publish its corresponding source, and replace this image
           # with the resulting immutable digest before applying the overlay.
-          image: us-east4-docker.pkg.dev/mwcc-infrastructure/ambit/daytona-minio@sha256:e23cd8b73383664a40c00bd8c5dd41a62157a48b71525b5e17c2bf50d9966831
+          image: us-east4-docker.pkg.dev/mwcc-infrastructure/ambit/daytona-minio@sha256:d133395e21ea8954519f914368ba3c432e9c4c91c628e31d021c5923108db7b9
           imagePullPolicy: IfNotPresent
           command: ["/usr/bin/minio"]
           args:

@@ -27,9 +27,23 @@ steps:
 
   - id: push-minio
     name: gcr.io/cloud-builders/docker
+    entrypoint: bash
     args:
-      - push
-      - us-east4-docker.pkg.dev/$PROJECT_ID/ambit/daytona-minio:release-2025-10-15-9e49d5e7a648
+      - -euo
+      - pipefail
+      - -c
+      - |
+        image=us-east4-docker.pkg.dev/$PROJECT_ID/ambit/daytona-minio:release-2025-10-15-9e49d5e7a648
+        for attempt in 1 2 3; do
+          if docker push "$$image"; then
+            exit 0
+          fi
+          if [ "$$attempt" -eq 3 ]; then
+            echo "MinIO image push failed after $$attempt attempts" >&2
+            exit 1
+          fi
+          sleep 5
+        done
     waitFor: [build-minio-from-source]
 
 images:

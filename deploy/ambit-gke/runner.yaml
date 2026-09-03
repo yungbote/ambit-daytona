@@ -35,7 +35,7 @@ metadata:
     app.kubernetes.io/component: runner
   annotations:
     ambit.sh/source-url: https://github.com/yungbote/ambit-daytona
-    ambit.sh/source-revision: 9cfc0e9a2987b55489052e8b0479f6b33ed83d5a
+    ambit.sh/source-revision: SOURCE_REVISION_REQUIRED
 spec:
   serviceName: daytona-runner
   replicas: 1

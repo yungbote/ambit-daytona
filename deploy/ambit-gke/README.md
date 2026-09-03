@@ -5,19 +5,20 @@ SPDX-License-Identifier: AGPL-3.0
 
 # Ambit Daytona on GKE Standard
 
-This package is an independently authored deployment boundary for Ambit's
-fork of Daytona at the last public AGPL source revision
-`c4e3f5d21e2a544314ca28c4ce875a37ad5abfc6`. It deploys only the Daytona
-control plane (`api`, `proxy`, and `ssh-gateway`), one logical runner, and the
-database migration job. PostgreSQL, Redis, S3-compatible object storage, OCI
-registries, identity, DNS, TLS, and public load balancing stay outside this
-package behind their native contracts.
+This package is an independently authored deployment boundary for Ambit's AGPL
+fork of Daytona. It deploys only the Daytona control plane (`api`, `proxy`, and
+`ssh-gateway`), one logical runner, and the database migration job. The raw
+base deliberately carries a source-revision template instead of a stale
+literal SHA. An environment overlay must bind the surrounding PostgreSQL,
+Redis, S3-compatible object storage, OCI registry, identity, DNS, TLS, and
+public-load-balancing contracts explicitly.
 
 It does **not** copy or depend on Daytona's later proprietary chart or source.
 All files in this directory are AGPL-3.0. Before serving network users, publish
-the complete corresponding fork source and point the `ambit.sh/source-url`
-annotations at that public repository. Keeping the intended URL in a manifest
-is not itself AGPL source availability.
+the complete corresponding fork source. The production render admits a
+revision only when all four immutable component images expose the canonical
+repository URL and the same full Git SHA through OCI labels. Keeping the URL in
+a manifest is not itself AGPL source availability.
 
 ## Why the boundary looks like this
 
@@ -64,7 +65,7 @@ Required external contracts:
 | Dependency | Required behavior |
 |---|---|
 | PostgreSQL | Private connectivity, TLS, backups/PITR, one Daytona database; credentials below. |
-| Redis | Private connectivity and durable production tier; credentials below (empty values are valid only when the service truly has no auth). |
+| Redis | Private connectivity, authentication, persistence, and an explicit availability/lifecycle contract; credentials below. |
 | S3-compatible storage | API and runner access to the same bucket; multipart upload and delete; TLS. |
 | Transient/internal OCI registries | Runner pull and API push/delete access; TLS; immutable production retention policy chosen outside this package. |
 | OIDC | HTTPS discovery/JWKS, stable issuer, client ID, and audience. Management API is deliberately disabled. |
@@ -174,10 +175,12 @@ to a tenant or a model sandbox.
 
 ## Release order
 
-Use an overlay directory, keep the base untouched, and render locally first:
+Use an overlay directory, keep the base untouched, and render locally first.
+For Ambit production, use its admission-aware renderer rather than invoking
+Kustomize directly:
 
 ```sh
-kubectl kustomize OVERLAY_DIRECTORY > rendered.yaml
+deploy/ambit-gke/overlays/production/render-production.sh > rendered.yaml
 ```
 
 Then follow this order in the deployment system:

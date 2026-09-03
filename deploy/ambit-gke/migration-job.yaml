@@ -10,7 +10,8 @@ metadata:
     app.kubernetes.io/name: daytona
     app.kubernetes.io/component: migration
   annotations:
-    ambit.sh/source-revision: 9cfc0e9a2987b55489052e8b0479f6b33ed83d5a
+    ambit.sh/source-url: https://github.com/yungbote/ambit-daytona
+    ambit.sh/source-revision: SOURCE_REVISION_REQUIRED
 spec:
   backoffLimit: 6
   activeDeadlineSeconds: 900

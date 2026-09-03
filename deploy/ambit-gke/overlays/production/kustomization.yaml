@@ -26,6 +26,7 @@ resources:
   - storage-class.yaml
   - minio.yaml
   - state-network-policies.yaml
+  - redis.yaml
   - gateway.yaml
   - gateway-backend-policies.yaml
 
@@ -39,14 +40,14 @@ patches:
 
 images:
   - name: daytona-api
-    newName: us-east4-docker.pkg.dev/mwcc-infrastructure/ambit/daytona-oss-api
-    digest: sha256:82ff866720392758b3e6a882411028963f79001591b3448c6e45f1b5032227b0
+    newName: us-east4-docker.pkg.dev/mwcc-infrastructure/ambit/daytona-api
+    digest: sha256:dc09bc909df6ace3da7f0714ccfe0c5229665f1ab71f2fbbc37d00780e0da44a
   - name: daytona-proxy
-    newName: us-east4-docker.pkg.dev/mwcc-infrastructure/ambit/daytona-oss-proxy
-    digest: sha256:e7de8d055aa75c87b8148e564734edd53b26e5fbbb2d9c5170d8fa24cc371ab8
+    newName: us-east4-docker.pkg.dev/mwcc-infrastructure/ambit/daytona-proxy
+    digest: sha256:33fd8fb149b987cb7b3710087551cab0720e33d4498dd60d6edd800f7eb11cda
   - name: daytona-runner
-    newName: us-east4-docker.pkg.dev/mwcc-infrastructure/ambit/daytona-oss-runner
-    digest: sha256:a2724bc13323c74744b35be5e46d14b8a85ed9fc4ff12b2347da5a9c1ab58a1d
+    newName: us-east4-docker.pkg.dev/mwcc-infrastructure/ambit/daytona-runner
+    digest: sha256:dd71960cd768b59c10cf04d859162d61348dd347b33d114e8df0e0e3ae23fb7b
   - name: daytona-ssh-gateway
-    newName: us-east4-docker.pkg.dev/mwcc-infrastructure/ambit/daytona-oss-ssh-gateway
-    digest: sha256:5ca5c65b9ab0416d4f1ec55936c2b1f88ec2a1a70a21e45b055950dfaff786c0
+    newName: us-east4-docker.pkg.dev/mwcc-infrastructure/ambit/daytona-ssh-gateway
+    digest: sha256:c0268c2053297fe9d4e34d9a175d35824d95684aee51a5c31f138d996a4f15c7

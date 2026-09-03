@@ -1,0 +1,93 @@
+{
+  "schema": "ambit.agent-workspace-toolchains-lock/v1",
+  "base": {
+    "image": "docker.io/daytonaio/sandbox:0.6.0-slim@sha256:825533a16c854304facdff594bc1a0ff3eb223a25c2ff9b1b70b5e05fb754492",
+    "invariants": {
+      "python3": "Python 3.11.14",
+      "node": "v22.14.0",
+      "user": "daytona",
+      "workspace": "/workspace"
+    }
+  },
+  "debian": {
+    "suite": "trixie",
+    "packages": {
+      "build-essential": "12.12",
+      "clang": "1:19.0-63",
+      "cmake": "3.31.6-2",
+      "git": "1:2.47.3-0+deb13u1",
+      "jq": "1.7.1-6+deb13u3",
+      "libgssapi-krb5-2": "1.21.3-5+deb13u1",
+      "libicu76": "76.1-4",
+      "make": "4.4.1-2",
+      "openjdk-21-jdk-headless": "21.0.12.1+1-1~deb13u1",
+      "php-cli": "2:8.4+96",
+      "php-curl": "2:8.4+96",
+      "php-mbstring": "2:8.4+96",
+      "php-sqlite3": "2:8.4+96",
+      "php-xml": "2:8.4+96",
+      "php-zip": "2:8.4+96",
+      "pkg-config": "1.8.1-4",
+      "ruby-bundler": "2.6.7-2",
+      "ruby-dev": "1:3.3+b1",
+      "ruby-full": "1:3.3",
+      "sqlite3": "3.46.1-7+deb13u1",
+      "unzip": "6.0-29+deb13u1",
+      "zip": "3.0-15+deb13u1"
+    }
+  },
+  "archives": [
+    {
+      "name": "go",
+      "kind": "go",
+      "version": "1.27.0",
+      "url": "https://go.dev/dl/go1.27.0.linux-amd64.tar.gz",
+      "sha256": "675c26c449cbb18fc24b74650de1eabbae6e16f64326fd85a283fb3b58280685",
+      "installRoot": "/usr/local/go"
+    },
+    {
+      "name": "rustup-init",
+      "kind": "rustup-init",
+      "version": "1.29.0",
+      "url": "https://static.rust-lang.org/rustup/archive/1.29.0/x86_64-unknown-linux-gnu/rustup-init",
+      "sha256": "4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10",
+      "toolchain": "1.98.0",
+      "profile": "minimal",
+      "components": ["rustfmt", "clippy"],
+      "rustupHome": "/usr/local/rustup",
+      "cargoHome": "/usr/local/cargo"
+    },
+    {
+      "name": "maven",
+      "kind": "maven",
+      "version": "3.9.16",
+      "url": "https://dlcdn.apache.org/maven/maven-3/3.9.16/binaries/apache-maven-3.9.16-bin.tar.gz",
+      "sha512": "831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6",
+      "installRoot": "/opt/maven"
+    },
+    {
+      "name": "gradle",
+      "kind": "gradle",
+      "version": "9.7.1",
+      "url": "https://services.gradle.org/distributions/gradle-9.7.1-bin.zip",
+      "sha256": "acd53f1edaf02f1a8ff99879f8a34b302661a057d9b063ae9e35b552f804d20a",
+      "installRoot": "/opt/gradle"
+    },
+    {
+      "name": "dotnet-sdk",
+      "kind": "dotnet-sdk",
+      "version": "8.0.424",
+      "url": "https://builds.dotnet.microsoft.com/dotnet/Sdk/8.0.424/dotnet-sdk-8.0.424-linux-x64.tar.gz",
+      "sha512": "6503fd9f464d5e3a4f43a881d2b74afc6a2c46ceda74d027f1565b7239f4b3ec884857c03c0dcd49eb52f384d5ae1fa5aaf135f0a6aabc5518103aceed643c74",
+      "installRoot": "/usr/share/dotnet"
+    },
+    {
+      "name": "composer",
+      "kind": "composer",
+      "version": "2.10.3",
+      "url": "https://getcomposer.org/download/2.10.3/composer.phar",
+      "sha256": "7a2d379d5b8ffdaa028580ef26494c36d2feef4b178d3dd1473a4dbc5e17c8d6",
+      "installPath": "/usr/local/bin/composer"
+    }
+  ]
+}
