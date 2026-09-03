@@ -177,6 +177,22 @@ export class AdminRunnerController {
     await this.runnerService.updateSchedulingStatus(id, unschedulable)
   }
 
+  @Patch(':id/capacity')
+  @ApiOperation({
+    summary: 'Update runner registered capacity',
+    operationId: 'updateRunnerCapacity',
+    description:
+      'Sets the CPU, memory and disk the reservation-aware placement and the runner scaler count against. The runner heartbeat does not report memory or disk, so this is the operator record of the node behind the runner.',
+  })
+  @ApiParam({ name: 'id', description: 'Runner ID', type: 'string' })
+  @ApiResponse({ status: 200, description: 'Capacity updated' })
+  async updateCapacity(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { cpu?: number; memoryGiB?: number; diskGiB?: number },
+  ): Promise<void> {
+    await this.runnerService.updateRegisteredCapacity(id, body)
+  }
+
   @Delete(':id')
   @HttpCode(204)
   @ApiOperation({

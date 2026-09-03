@@ -833,6 +833,28 @@ export class RunnerService {
     }
   }
 
+  /** Operator record of the node behind a runner; heartbeats report CPU only. */
+  async updateRegisteredCapacity(
+    id: string,
+    capacity: { cpu?: number; memoryGiB?: number; diskGiB?: number },
+  ): Promise<void> {
+    const runner = await this.findOne(id)
+    if (!runner) {
+      throw new NotFoundException(`Runner with ID ${id} not found`)
+    }
+    const update: Partial<Runner> = {}
+    for (const key of ['cpu', 'memoryGiB', 'diskGiB'] as const) {
+      const value = capacity[key]
+      if (value === undefined) continue
+      if (!Number.isFinite(value) || value <= 0) {
+        throw new BadRequestError(`Runner ${key} must be a positive number`)
+      }
+      update[key] = value
+    }
+    if (Object.keys(update).length === 0) return
+    await this.runnerRepository.update(id, update)
+  }
+
   async updateSchedulingStatus(id: string, unschedulable: boolean): Promise<Runner> {
     const runner = await this.findOneOrFail(id)
     runner.unschedulable = unschedulable
