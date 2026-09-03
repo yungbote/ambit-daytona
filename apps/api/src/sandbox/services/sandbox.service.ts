@@ -24,6 +24,7 @@ import { ResizeSandboxDto } from '../dto/resize-sandbox.dto'
 import { SandboxState } from '../enums/sandbox-state.enum'
 import { SandboxClass } from '../enums/sandbox-class.enum'
 import { isRegistryBasedSandboxClass } from '../utils/sandbox-class.util'
+import { getFallbackRegion } from '../constants/dedicated-regions.constant'
 import { OpenFeature } from '@openfeature/server-sdk'
 import { FeatureFlags } from '../../common/constants/feature-flags'
 import { SandboxDesiredState } from '../enums/sandbox-desired-state.enum'
@@ -928,6 +929,18 @@ export class SandboxService {
       throw new SandboxError('Runner not found for warm pool sandbox')
     }
 
+    const updatedSandbox = await this.sandboxRepository.update(warmPoolSandbox.id, {
+      updateData,
+      entity: warmPoolSandbox,
+    })
+
+    // The warm container was created before anyone owned it, so it carries no
+    // provider-authority labels, and Docker labels are immutable. The runner
+    // derives the sandbox's source and owner identity from those labels, so a
+    // claimed sandbox must hand over a container created from the claimed row.
+    // The image is already pulled; only the container is recreated.
+    await this.realizeClaimedWarmPoolContainer(updatedSandbox, organization)
+
     if (
       createSandboxDto.networkBlockAll !== undefined ||
       createSandboxDto.networkAllowList !== undefined ||
@@ -944,11 +957,6 @@ export class SandboxService {
         updateData.domainAllowList ?? undefined,
       )
     }
-
-    const updatedSandbox = await this.sandboxRepository.update(warmPoolSandbox.id, {
-      updateData,
-      entity: warmPoolSandbox,
-    })
 
     // Defensive invalidation of orgId cache since the sandbox moved from unassigned to a real organization
     this.sandboxLookupCacheInvalidationService.invalidateOrgId({
@@ -973,6 +981,46 @@ export class SandboxService {
       new SandboxStateUpdatedEvent(updatedSandbox, SandboxState.STARTED, SandboxState.STARTED),
     )
     return this.toSandboxDto(updatedSandbox)
+  }
+
+  /**
+   * Realizes a claimed warm-pool sandbox as a container whose physical identity
+   * equals the claim: the same runner and already-pulled image, a fresh
+   * container carrying the claimed labels, name, and organization. Runs under
+   * the sandbox's state-change lock so the state sync never observes the gap
+   * between destroy and create.
+   */
+  private async realizeClaimedWarmPoolContainer(sandbox: Sandbox, organization: Organization): Promise<void> {
+    if (!sandbox.runnerId) {
+      throw new SandboxError('Runner not found for warm pool sandbox')
+    }
+    const runner = await this.runnerService.findOneOrFail(sandbox.runnerId)
+    const runnerAdapter = await this.runnerAdapterFactory.create(runner)
+    const snapshot = await this.snapshotService.getSnapshotByName(sandbox.snapshot, sandbox.organizationId)
+    let registry: DockerRegistry | undefined
+    if (isRegistryBasedSandboxClass(snapshot.sandboxClass)) {
+      const regionForRegistry = getFallbackRegion(runner.region) ?? runner.region
+      const found = await this.dockerRegistryService.findInternalRegistryBySnapshotRef(snapshot.ref, regionForRegistry)
+      if (!found) {
+        throw new SandboxError('No registry found for the warm pool snapshot')
+      }
+      registry = found
+    }
+    const lockKey = getStateChangeLockKey(sandbox.id)
+    await this.redisLockProvider.waitForLock(lockKey, 60, 30000)
+    try {
+      await runnerAdapter.destroySandbox(sandbox.id)
+      await runnerAdapter.createSandbox(
+        sandbox,
+        snapshot.ref,
+        registry,
+        snapshot.entrypoint,
+        { ...organization?.sandboxMetadata, sandboxName: sandbox.name },
+        this.configService.get('otelCollector.endpointUrl'),
+      )
+    } finally {
+      await this.redisLockProvider.unlock(lockKey).catch(() => undefined)
+    }
   }
 
   async createFromBuildInfo(createSandboxDto: CreateSandboxDto, organization: Organization): Promise<SandboxDto> {
