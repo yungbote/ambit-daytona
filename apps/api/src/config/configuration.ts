@@ -341,6 +341,14 @@ const configuration = {
     // Absolute cap on the build's sandbox count per runner; 0 disables it.
     maxSandboxesPerRunner: parseInt(process.env.BUILD_INFO_MAX_SANDBOXES_PER_RUNNER || '0', 10),
   },
+  // Hard per-runner reservation for ordinary sandbox placement, as a fraction
+  // of the runner's registered capacity. 0 disables the check (score-only
+  // placement, the pre-2026-09 behaviour). Build placements keep their own
+  // BUILD_INFO_* limits on top.
+  runnerReservation: {
+    maxCpuUtilization: parseFloat(process.env.RUNNER_MAX_CPU_PERCENTAGE || '0') / 100,
+    maxMemUtilization: parseFloat(process.env.RUNNER_MAX_MEMORY_PERCENTAGE || '0') / 100,
+  },
   runnerScore: {
     thresholds: {
       declarativeBuild: parseInt(process.env.RUNNER_DECLARATIVE_BUILD_SCORE_THRESHOLD || '10', 10),

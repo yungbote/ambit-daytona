@@ -329,6 +329,27 @@ export class RunnerService {
       }
     }
 
+    // Reservation: a runner is not a candidate when its active sandboxes plus
+    // this request would exceed the configured fraction of its registered
+    // CPU or memory. The health score stays a tie-breaker; it is not a
+    // capacity model. Disabled while the limits are 0.
+    const reservation = {
+      maxCpuUtilization: Number(this.configService.get('runnerReservation.maxCpuUtilization') ?? 0),
+      maxMemUtilization: Number(this.configService.get('runnerReservation.maxMemUtilization') ?? 0),
+    }
+    if (
+      (reservation.maxCpuUtilization > 0 || reservation.maxMemUtilization > 0) &&
+      ((params.cpu ?? 0) > 0 || (params.mem ?? 0) > 0)
+    ) {
+      const overLimits = await this.getRunnersOverReservationLimits(reservation, {
+        cpu: params.cpu,
+        mem: params.mem,
+      })
+      for (const id of overLimits) {
+        excludedRunnerIds.add(id)
+      }
+    }
+
     if (params.snapshotRef !== undefined) {
       const snapshotRunners = await this.snapshotRunnerRepository.find({
         where: {
@@ -975,6 +996,66 @@ export class RunnerService {
     if (!buildInfoSnapshotRef) {
       return []
     }
+    return this.getRunnersOverLimits({ buildInfoSnapshotRef }, limits, requested)
+  }
+
+  /**
+   * Runners where placing one more sandbox with `requested` resources would
+   * exceed the configured fraction of the runner's registered CPU or memory,
+   * counting every active sandbox on the runner regardless of snapshot. The
+   * build-info limit above is this same query scoped to one snapshot.
+   */
+  async getRunnersOverReservationLimits(
+    limits: { maxCpuUtilization?: number; maxMemUtilization?: number },
+    requested: { cpu?: number; mem?: number } = {},
+  ): Promise<string[]> {
+    return this.getRunnersOverLimits({}, limits, requested)
+  }
+
+  /**
+   * Per-runner reservation view for operators and the runner scaler: the
+   * registered capacity next to what active sandboxes currently reserve.
+   */
+  async getRunnerCapacity(): Promise<RunnerCapacity[]> {
+    const runners = await this.runnerRepository.find({ order: { domain: 'ASC' } })
+    const rows: { runnerId: string; cpu: string; mem: string; count: string }[] = await this.sandboxRepository
+      .createQueryBuilder('sandbox')
+      .select('sandbox.runnerId', 'runnerId')
+      .addSelect('COALESCE(SUM(sandbox.cpu), 0)', 'cpu')
+      .addSelect('COALESCE(SUM(sandbox.mem), 0)', 'mem')
+      .addSelect('COUNT(*)', 'count')
+      .where('sandbox.runnerId IS NOT NULL')
+      .andWhere('sandbox.state IN (:...states)', { states: RESERVING_SANDBOX_STATES })
+      .groupBy('sandbox.runnerId')
+      .getRawMany()
+    const reserved = new Map(rows.map((row) => [row.runnerId, row]))
+    return runners.map((runner) => {
+      const row = reserved.get(runner.id)
+      return {
+        id: runner.id,
+        domain: runner.domain,
+        region: runner.region,
+        sandboxClass: runner.sandboxClass,
+        state: runner.state,
+        unschedulable: runner.unschedulable === true,
+        draining: runner.draining === true,
+        availabilityScore: runner.availabilityScore,
+        cpu: runner.cpu,
+        memoryGiB: runner.memoryGiB,
+        diskGiB: runner.diskGiB,
+        reservedCpu: Number(row?.cpu ?? 0),
+        reservedMemoryGiB: Number(row?.mem ?? 0),
+        activeSandboxes: Number(row?.count ?? 0),
+      }
+    })
+  }
+
+  private async getRunnersOverLimits(
+    scope: { buildInfoSnapshotRef?: string },
+    limits: { maxCpuUtilization?: number; maxMemUtilization?: number; maxSandboxCount?: number },
+    requested: { cpu?: number; mem?: number } = {},
+  ): Promise<string[]> {
+    const buildInfoSnapshotRef = scope.buildInfoSnapshotRef
 
     const havingClauses: string[] = []
     const params: Record<string, number> = {}
@@ -1006,28 +1087,17 @@ export class RunnerService {
       return []
     }
 
-    const activeStates: SandboxState[] = [
-      SandboxState.CREATING,
-      SandboxState.RESTORING,
-      SandboxState.STARTED,
-      SandboxState.STARTING,
-      SandboxState.STOPPING,
-      SandboxState.BUILDING_SNAPSHOT,
-      SandboxState.PULLING_SNAPSHOT,
-      SandboxState.UNKNOWN,
-      SandboxState.RESIZING,
-      SandboxState.SNAPSHOTTING,
-      SandboxState.FORKING,
-    ]
+    const activeStates: SandboxState[] = RESERVING_SANDBOX_STATES
 
     const query = this.sandboxRepository
       .createQueryBuilder('sandbox')
       .select('sandbox.runnerId', 'runnerId')
-      .where('sandbox.buildInfoSnapshotRef = :ref', { ref: buildInfoSnapshotRef })
-      .andWhere('sandbox.runnerId IS NOT NULL')
+      .where('sandbox.runnerId IS NOT NULL')
       .andWhere('sandbox.state IN (:...states)', { states: activeStates })
-      .groupBy('sandbox.runnerId')
-      .having(havingClauses.join(' OR '), params)
+    if (buildInfoSnapshotRef) {
+      query.andWhere('sandbox.buildInfoSnapshotRef = :ref', { ref: buildInfoSnapshotRef })
+    }
+    query.groupBy('sandbox.runnerId').having(havingClauses.join(' OR '), params)
 
     // The Runner join is only needed to read the runner's real CPU/memory
     // capacity; a count-only check never touches it.
@@ -1299,12 +1369,51 @@ export class RunnerService {
   }
 }
 
+/** Sandbox states that hold runner CPU/memory, for reservation accounting. */
+export const RESERVING_SANDBOX_STATES: SandboxState[] = [
+  SandboxState.CREATING,
+  SandboxState.RESTORING,
+  SandboxState.STARTED,
+  SandboxState.STARTING,
+  SandboxState.STOPPING,
+  SandboxState.BUILDING_SNAPSHOT,
+  SandboxState.PULLING_SNAPSHOT,
+  SandboxState.UNKNOWN,
+  SandboxState.RESIZING,
+  SandboxState.SNAPSHOTTING,
+  SandboxState.FORKING,
+]
+
+export type RunnerCapacity = {
+  id: string
+  domain: string
+  region: string
+  sandboxClass: SandboxClass
+  state: RunnerState
+  unschedulable: boolean
+  draining: boolean
+  availabilityScore: number
+  cpu: number
+  memoryGiB: number | null
+  diskGiB: number | null
+  reservedCpu: number
+  reservedMemoryGiB: number
+  activeSandboxes: number
+}
+
 export class GetRunnerParams {
   regions: string[]
   sandboxClass: SandboxClass
   snapshotRef?: string
   excludedRunnerIds?: string[]
   availabilityScoreThreshold?: number
+  /**
+   * Resources the sandbox about to be placed will reserve. When the
+   * runnerReservation limits are configured, runners whose active sandboxes
+   * plus this request would exceed their registered capacity are excluded.
+   */
+  cpu?: number
+  mem?: number
   // When > 0, only consider runners that have at least this much GPU capacity
   // and have not yet reached their GPU sandbox capacity (a runner with
   // runner.gpu = N can host up to N concurrent GPU sandboxes).

@@ -487,6 +487,8 @@ export class SandboxService {
         snapshotRef: snapshot.ref,
         gpu: sandbox.gpu,
         gpuType: sandbox.gpuType ?? null,
+        cpu: sandbox.cpu,
+        mem: sandbox.mem,
       })
 
       sandbox.runnerId = runner.id
@@ -695,6 +697,8 @@ export class SandboxService {
           snapshotRef: snapshot.ref,
           gpu,
           gpuType,
+          cpu,
+          mem,
         })
       }
 

@@ -28,7 +28,7 @@ import { RegionService } from '../../region/services/region.service'
 import { CreateRunnerResponseDto } from '../../sandbox/dto/create-runner-response.dto'
 import { RunnerFullDto } from '../../sandbox/dto/runner-full.dto'
 import { RunnerDto } from '../../sandbox/dto/runner.dto'
-import { RunnerService } from '../../sandbox/services/runner.service'
+import { RunnerService, RunnerCapacity } from '../../sandbox/services/runner.service'
 import { SystemRole } from '../../user/enums/system-role.enum'
 import { AuthStrategy } from '../../auth/decorators/auth-strategy.decorator'
 import { AuthStrategyType } from '../../auth/enums/auth-strategy-type.enum'
@@ -95,6 +95,18 @@ export class AdminRunnerController {
     })
 
     return CreateRunnerResponseDto.fromRunner(runner, apiKey)
+  }
+
+  @Get('capacity')
+  @ApiOperation({
+    summary: 'Runner capacity',
+    operationId: 'getRunnerCapacity',
+    description:
+      'Every runner with its registered CPU/memory next to what active sandboxes reserve; the runner scaler and operators read this.',
+  })
+  @ApiResponse({ status: 200, description: 'Per-runner reservation view' })
+  async getRunnerCapacity(): Promise<RunnerCapacity[]> {
+    return this.runnerService.getRunnerCapacity()
   }
 
   @Get(':id')
