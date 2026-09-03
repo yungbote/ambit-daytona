@@ -180,7 +180,7 @@ func (s *Observer) ObserveCurrent(
 		Fence:      request.Fence,
 		Generation: observed.Generation.ExpectedGeneration,
 		State:      state,
-		ObservedAt: s.now().UTC().Format(time.RFC3339Nano),
+		ObservedAt: formatUTCInstantMillis(s.now()),
 	}, nil
 }
 
