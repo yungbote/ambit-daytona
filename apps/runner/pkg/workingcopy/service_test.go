@@ -45,7 +45,7 @@ func TestCapturePersistsIntentBeforeOneStableStoppedContainerFile(t *testing.T) 
 	if receipt.TotalByteLength != 11 || receipt.ProviderSHA256Digest != sha256Digest([]byte("exact bytes")) {
 		t.Fatalf("unexpected receipt: %#v", receipt)
 	}
-	if receipt.CapturedAt != "2026-08-23T12:34:56.000000789Z" {
+	if receipt.CapturedAt != "2026-08-23T12:34:56.000Z" {
 		t.Fatalf("unexpected capture time: %s", receipt.CapturedAt)
 	}
 	if receipt.CaptureBinding != binding {

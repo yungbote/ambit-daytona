@@ -537,7 +537,7 @@ func (s *Service) publishReceipt(
 		ExitCode:            observed.Generation.ExitCode,
 		OOMKilled:           observed.Generation.OOMKilled,
 	}
-	stoppedAt := s.now().UTC().Format(time.RFC3339Nano)
+	stoppedAt := formatUTCInstantMillis(s.now())
 	receiptDigest, receiptRef, err := deriveReceiptIdentity(claim.Request, terminal, stoppedAt)
 	if err != nil {
 		return Receipt{}, err

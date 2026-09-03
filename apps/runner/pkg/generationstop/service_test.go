@@ -51,7 +51,7 @@ func TestStopOnceClaimsBeforeExactStopAndPublishesCanonicalReceipt(t *testing.T)
 	if receipt.Request.RequestFingerprint != request.RequestFingerprint ||
 		receipt.TerminalGeneration.ExpectedGeneration != request.ExpectedGeneration ||
 		receipt.TerminalGeneration.ExecutionFinishedAt != "2026-08-24T00:01:00Z" ||
-		receipt.StoppedAt != "2026-08-24T00:02:00Z" {
+		receipt.StoppedAt != "2026-08-24T00:02:00.000Z" {
 		t.Fatalf("receipt did not echo exact terminal authority: %#v", receipt)
 	}
 	digest, ref, err := deriveReceiptIdentity(request, receipt.TerminalGeneration, receipt.StoppedAt)
@@ -76,7 +76,7 @@ func TestCurrentGenerationIsReadOnlyAndRejectsProviderAuthorityDrift(t *testing.
 		t.Fatalf("current generation failed: %v", err)
 	}
 	if observed.Generation != request.ExpectedGeneration ||
-		observed.State != "running" || observed.ObservedAt != "2026-08-24T00:02:00Z" ||
+		observed.State != "running" || observed.ObservedAt != "2026-08-24T00:02:00.000Z" ||
 		containers.inspectCalls != 1 || containers.stopCalls != 0 || len(objects.objects) != 0 {
 		t.Fatalf("current generation was not a pure exact read: %#v", observed)
 	}
@@ -836,8 +836,8 @@ func TestCrossServiceConcurrentReceiptPublicationConvergesToWinner(t *testing.T)
 	if !receiptsEqual(firstResult.receipt, secondResult.receipt) {
 		t.Fatalf("cross-service callers did not converge to conditional-create winner:\n%#v\n%#v", firstResult.receipt, secondResult.receipt)
 	}
-	if firstResult.receipt.StoppedAt != "2026-08-24T00:02:00Z" &&
-		firstResult.receipt.StoppedAt != "2026-08-24T00:03:00Z" {
+	if firstResult.receipt.StoppedAt != "2026-08-24T00:02:00.000Z" &&
+		firstResult.receipt.StoppedAt != "2026-08-24T00:03:00.000Z" {
 		t.Fatalf("winner has an unexpected stoppedAt: %q", firstResult.receipt.StoppedAt)
 	}
 	if containers.stopCalls != 0 {

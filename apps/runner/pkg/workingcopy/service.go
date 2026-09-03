@@ -776,7 +776,7 @@ func (s *Service) captureStableFile(
 	return capturedFile{
 		bytes:      content,
 		digest:     sha256Digest(content),
-		capturedAt: s.now().UTC().Format(time.RFC3339Nano),
+		capturedAt: s.now().UTC().Truncate(time.Millisecond).Format("2006-01-02T15:04:05.000Z"),
 	}, nil
 }
 
