@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/containerd/errdefs"
 	"github.com/daytonaio/runner/pkg/generationstop"
@@ -183,11 +184,11 @@ func observation(
 		Generation: generationstop.ContainerGeneration{
 			ExpectedGeneration: generationstop.ExpectedGeneration{
 				ContainerID:        inspect.ID,
-				ContainerCreatedAt: inspect.Created,
-				ExecutionStartedAt: state.StartedAt,
+				ContainerCreatedAt: canonicalInstantMillis(inspect.Created),
+				ExecutionStartedAt: canonicalInstantMillis(state.StartedAt),
 				RestartCount:       inspect.RestartCount,
 			},
-			ExecutionFinishedAt: finishedAt,
+			ExecutionFinishedAt: canonicalInstantMillis(finishedAt),
 			ExitCode:            state.ExitCode,
 			OOMKilled:           state.OOMKilled,
 		},
@@ -227,4 +228,21 @@ func exactRunning(state generationstop.RuntimeState) bool {
 func exactExited(state generationstop.RuntimeState) bool {
 	return state.Status == "exited" && !state.Running && !state.Paused &&
 		!state.Restarting && !state.Dead && state.PID == 0
+}
+
+// canonicalInstantMillis renders a Docker RFC3339Nano timestamp as the
+// canonical UTC millisecond instant every consumer (the control plane's
+// generation custody, the capture identity digest) agrees on. Docker's
+// nanosecond precision otherwise leaks into generation identities and the
+// backend refuses them ("Workspace container creation time is invalid").
+// An empty or unparsable value is returned unchanged.
+func canonicalInstantMillis(value string) string {
+	if value == "" {
+		return value
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return value
+	}
+	return parsed.UTC().Truncate(time.Millisecond).Format("2006-01-02T15:04:05.000Z")
 }
