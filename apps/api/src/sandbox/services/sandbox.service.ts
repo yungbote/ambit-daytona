@@ -24,7 +24,6 @@ import { ResizeSandboxDto } from '../dto/resize-sandbox.dto'
 import { SandboxState } from '../enums/sandbox-state.enum'
 import { SandboxClass } from '../enums/sandbox-class.enum'
 import { isRegistryBasedSandboxClass } from '../utils/sandbox-class.util'
-import { getFallbackRegion } from '../constants/dedicated-regions.constant'
 import { OpenFeature } from '@openfeature/server-sdk'
 import { FeatureFlags } from '../../common/constants/feature-flags'
 import { SandboxDesiredState } from '../enums/sandbox-desired-state.enum'
@@ -637,6 +636,7 @@ export class SandboxService {
       // runner for their lifetime and are auto-deleted on first stop. Skip the
       // warm-pool path entirely so we always provision a fresh container on a
       // currently-unoccupied GPU runner.
+      let claimedWarmPoolSandbox: Sandbox | null = null
       if (
         gpu <= 0 &&
         !linkedSandbox &&
@@ -661,7 +661,15 @@ export class SandboxService {
           })
 
           if (warmPoolSandbox) {
-            return await this.assignWarmPoolSandbox(warmPoolSandbox, createSandboxDto, organization)
+            // Claim by replacement. The entry proves its runner holds the pulled
+            // image and a free slot, but its container was created before anyone
+            // owned it and Docker labels are immutable, so the runner would refuse
+            // the claimed identity (source and owner are read from container
+            // labels). The requested sandbox is therefore created on that runner
+            // through the ordinary labeled path, which is fast because the image
+            // is already present, and the entry is retired once the new row is
+            // inserted.
+            claimedWarmPoolSandbox = warmPoolSandbox
           }
         }
       }
@@ -688,6 +696,9 @@ export class SandboxService {
           )
         }
 
+        this.runnerService.assertRunnerCanHost(runner)
+      } else if (claimedWarmPoolSandbox?.runnerId) {
+        runner = await this.runnerService.findOneOrFail(claimedWarmPoolSandbox.runnerId)
         this.runnerService.assertRunnerCanHost(runner)
       } else {
         runner = await this.runnerService.getRandomAvailableRunner({
@@ -779,6 +790,10 @@ export class SandboxService {
 
       const insertedSandbox = await this.sandboxRepository.insert(sandbox)
 
+      if (claimedWarmPoolSandbox) {
+        await this.retireClaimedWarmPoolSandbox(claimedWarmPoolSandbox, organization)
+      }
+
       if (gpuRunnerAssignmentLockKey) {
         const key = gpuRunnerAssignmentLockKey
         gpuRunnerAssignmentLockKey = undefined
@@ -860,166 +875,35 @@ export class SandboxService {
     return linkedSandbox
   }
 
-  private async assignWarmPoolSandbox(
-    warmPoolSandbox: Sandbox,
-    createSandboxDto: CreateSandboxDto,
-    organization: Organization,
-  ): Promise<SandboxDto> {
-    const now = new Date()
-    const updateData: Partial<Sandbox> = {
-      public: createSandboxDto.public || false,
-      labels: createSandboxDto.labels || {},
-      organizationId: organization.id,
-      createdAt: now,
-    }
-
-    if (createSandboxDto.name) {
-      updateData.name = createSandboxDto.name
-    }
-
-    Object.assign(
-      updateData,
-      this.resolveAutoStopAndAutoPauseIntervals(
-        createSandboxDto,
-        warmPoolSandbox.sandboxClass,
-        isEphemeral({ autoDeleteInterval: createSandboxDto.autoDeleteInterval ?? warmPoolSandbox.autoDeleteInterval }),
-      ),
-    )
-
-    if (createSandboxDto.autoArchiveInterval !== undefined) {
-      updateData.autoArchiveInterval = this.resolveAutoArchiveInterval(createSandboxDto.autoArchiveInterval)
-    }
-
-    if (warmPoolSandbox.gpu > 0) {
-      if (createSandboxDto.autoDeleteInterval !== undefined && createSandboxDto.autoDeleteInterval !== 0) {
-        throw new BadRequestError('GPU sandboxes must be ephemeral - autoDeleteInterval must be 0')
-      }
-      updateData.autoDeleteInterval = 0
-    } else if (createSandboxDto.autoDeleteInterval !== undefined) {
-      updateData.autoDeleteInterval = createSandboxDto.autoDeleteInterval
-    }
-
-    updateData.autoDestroyAt = this.resolveAutoDestroyAt(createSandboxDto.ttlMinutes)
-
-    this.validateNetworkSettingsCompatibility(
-      createSandboxDto.networkBlockAll,
-      createSandboxDto.networkAllowList,
-      createSandboxDto.domainAllowList,
-    )
-
-    if (createSandboxDto.networkBlockAll !== undefined) {
-      updateData.networkBlockAll = createSandboxDto.networkBlockAll
-    }
-
-    if (createSandboxDto.networkAllowList !== undefined) {
-      updateData.networkAllowList =
-        createSandboxDto.networkAllowList.trim() === ''
-          ? null
-          : this.resolveNetworkAllowList(createSandboxDto.networkAllowList)
-    }
-
-    if (createSandboxDto.domainAllowList !== undefined) {
-      updateData.domainAllowList =
-        createSandboxDto.domainAllowList.trim() === ''
-          ? null
-          : this.resolveDomainAllowList(createSandboxDto.domainAllowList)
-    }
-
-    if (!warmPoolSandbox.runnerId) {
-      throw new SandboxError('Runner not found for warm pool sandbox')
-    }
-
-    const updatedSandbox = await this.sandboxRepository.update(warmPoolSandbox.id, {
-      updateData,
+  /**
+   * Retires a warm-pool entry whose runner and pulled image a new sandbox just
+   * claimed. The entry joins the claiming organization under a retired name so
+   * the ordinary destroy path can settle it; its slot is released when the
+   * runner reports the container gone.
+   */
+  private async retireClaimedWarmPoolSandbox(warmPoolSandbox: Sandbox, organization: Organization): Promise<void> {
+    await this.sandboxRepository.update(warmPoolSandbox.id, {
+      updateData: {
+        organizationId: organization.id,
+        name: `${warmPoolSandbox.id}-retired`,
+        labels: {},
+      },
       entity: warmPoolSandbox,
     })
-
-    // The warm container was created before anyone owned it, so it carries no
-    // provider-authority labels, and Docker labels are immutable. The runner
-    // derives the sandbox's source and owner identity from those labels, so a
-    // claimed sandbox must hand over a container created from the claimed row.
-    // The image is already pulled; only the container is recreated.
-    await this.realizeClaimedWarmPoolContainer(updatedSandbox, organization)
-
-    if (
-      createSandboxDto.networkBlockAll !== undefined ||
-      createSandboxDto.networkAllowList !== undefined ||
-      createSandboxDto.domainAllowList !== undefined ||
-      organization.sandboxLimitedNetworkEgress
-    ) {
-      const runner = await this.runnerService.findOneOrFail(warmPoolSandbox.runnerId)
-      const runnerAdapter = await this.runnerAdapterFactory.create(runner)
-      await runnerAdapter.updateNetworkSettings(
-        warmPoolSandbox.id,
-        updateData.networkBlockAll,
-        updateData.networkAllowList ?? undefined,
-        organization.sandboxLimitedNetworkEgress,
-        updateData.domainAllowList ?? undefined,
-      )
-    }
-
-    // Defensive invalidation of orgId cache since the sandbox moved from unassigned to a real organization
     this.sandboxLookupCacheInvalidationService.invalidateOrgId({
       sandboxId: warmPoolSandbox.id,
       organizationId: organization.id,
       name: warmPoolSandbox.name,
       previousOrganizationId: SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
     })
-
-    // The otel collector caches the resolved OTEL config by sandbox auth token. Drop the entry
-    // cached while the sandbox was in the warm pool so the config for the new organization is
-    // refetched immediately instead of after the cache TTL expires.
-    this.redis.del(`${OTEL_CONFIG_CACHE_KEY_PREFIX}${warmPoolSandbox.authToken}`).catch((error) => {
-      this.logger.warn(
-        `Failed to invalidate otel config cache for sandbox ${warmPoolSandbox.id}: ${error instanceof Error ? error.message : String(error)}`,
-      )
-    })
-
-    // Treat this as a newly started sandbox
-    this.eventEmitter.emit(
-      SandboxEvents.STATE_UPDATED,
-      new SandboxStateUpdatedEvent(updatedSandbox, SandboxState.STARTED, SandboxState.STARTED),
-    )
-    return this.toSandboxDto(updatedSandbox)
-  }
-
-  /**
-   * Realizes a claimed warm-pool sandbox as a container whose physical identity
-   * equals the claim: the same runner and already-pulled image, a fresh
-   * container carrying the claimed labels, name, and organization. Runs under
-   * the sandbox's state-change lock so the state sync never observes the gap
-   * between destroy and create.
-   */
-  private async realizeClaimedWarmPoolContainer(sandbox: Sandbox, organization: Organization): Promise<void> {
-    if (!sandbox.runnerId) {
-      throw new SandboxError('Runner not found for warm pool sandbox')
-    }
-    const runner = await this.runnerService.findOneOrFail(sandbox.runnerId)
-    const runnerAdapter = await this.runnerAdapterFactory.create(runner)
-    const snapshot = await this.snapshotService.getSnapshotByName(sandbox.snapshot, sandbox.organizationId)
-    let registry: DockerRegistry | undefined
-    if (isRegistryBasedSandboxClass(snapshot.sandboxClass)) {
-      const regionForRegistry = getFallbackRegion(runner.region) ?? runner.region
-      const found = await this.dockerRegistryService.findInternalRegistryBySnapshotRef(snapshot.ref, regionForRegistry)
-      if (!found) {
-        throw new SandboxError('No registry found for the warm pool snapshot')
-      }
-      registry = found
-    }
-    const lockKey = getStateChangeLockKey(sandbox.id)
-    await this.redisLockProvider.waitForLock(lockKey, 60, 30000)
     try {
-      await runnerAdapter.destroySandbox(sandbox.id)
-      await runnerAdapter.createSandbox(
-        sandbox,
-        snapshot.ref,
-        registry,
-        snapshot.entrypoint,
-        { ...organization?.sandboxMetadata, sandboxName: sandbox.name },
-        this.configService.get('otelCollector.endpointUrl'),
+      await this.destroy(warmPoolSandbox.id, organization.id)
+    } catch (error) {
+      this.logger.warn(
+        `Retired warm pool sandbox ${warmPoolSandbox.id} could not be destroyed yet: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
       )
-    } finally {
-      await this.redisLockProvider.unlock(lockKey).catch(() => undefined)
     }
   }
 
