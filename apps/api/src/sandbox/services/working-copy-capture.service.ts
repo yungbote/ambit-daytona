@@ -786,7 +786,11 @@ function assertExactKeys(
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Exception(`${label} is not an object.`)
   }
-  const actual = Object.keys(value).sort()
+  // A class-transformed DTO carries its declared optional fields as own
+  // properties valued undefined; only present values are part of the shape.
+  const actual = Object.keys(value)
+    .filter((key) => (value as Record<string, unknown>)[key] !== undefined)
+    .sort()
   const expected = [...keys].sort()
   if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
     throw new Exception(`${label} does not have the exact contract shape.`)
