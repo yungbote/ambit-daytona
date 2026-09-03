@@ -11,6 +11,7 @@ import {
   Injectable,
   NotFoundException,
   ServiceUnavailableException,
+  Logger,
 } from '@nestjs/common'
 
 import {
@@ -833,8 +834,26 @@ function translateRunnerCaptureError(error: unknown, mutating: boolean): unknown
             ? 'WORKING_COPY_CAPTURE_OUTCOME_UNKNOWN'
             : 'WORKING_COPY_CAPTURE_UNAVAILABLE',
       })
-    default:
+    default: {
+      // An unmapped runner status is the one case this translation used to
+      // erase: log the exact runner answer and carry a bounded copy of it so
+      // the class stays diagnosable from the caller's side.
+      const detail = `runner status ${error.statusCode ?? 'none'}${error.code ? ` code ${error.code}` : ''}: ${boundedRunnerMessage(error.message)}`
+      runnerCaptureLogger.warn(`Working-copy capture failed with an unmapped runner answer (${detail})`)
       if (mutating) return captureOutcomeUnknown()
-      return new ServiceUnavailableException('The sandbox runner could not complete working-copy capture.')
+      return new ServiceUnavailableException({
+        statusCode: 503,
+        message: `The sandbox runner could not complete working-copy capture (${detail}).`,
+        error: 'Service Unavailable',
+        code: 'WORKING_COPY_CAPTURE_UNAVAILABLE',
+      })
+    }
   }
+}
+
+const runnerCaptureLogger = new Logger('WorkingCopyCaptureRunner')
+
+function boundedRunnerMessage(message: string): string {
+  const printable = message.replace(/[^\x20-\x7e]/g, ' ').trim()
+  return printable.length > 240 ? `${printable.slice(0, 240)}...` : printable || '(no message)'
 }

@@ -826,8 +826,10 @@ describe(WorkingCopyCaptureService.name, () => {
     adapter.observeWorkingCopyCapture.mockRejectedValueOnce(new RunnerApiError('wire failure', 502, 'bad_gateway'))
     await expect(service.observe('daytona-org-1', 'sandbox-1', binding)).rejects.toMatchObject({
       response: expect.objectContaining({
-        message: 'The sandbox runner could not complete working-copy capture.',
+        message:
+          'The sandbox runner could not complete working-copy capture (runner status 502 code bad_gateway: wire failure).',
         statusCode: 503,
+        code: 'WORKING_COPY_CAPTURE_UNAVAILABLE',
       }),
     })
   })
