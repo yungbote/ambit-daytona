@@ -264,7 +264,7 @@ gs --version | sed 's/^/ghostscript /'
 qpdf --version | head -1
 exiftool -ver | sed 's/^/exiftool /'
 dot -V 2>&1 | head -1
-7z i 2>/dev/null | head -2 | tail -1
+7z i 2>/dev/null | awk 'NR == 2'
 fd --version
 whoami
 test -w /workspace && echo workspace-writable
