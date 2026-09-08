@@ -47,6 +47,42 @@ type CaptureBinding struct {
 	Selector           CaptureSelector              `json:"selector" validate:"required"`
 }
 
+// CaptureGenerationBinding admits a stopped generation independently from
+// selecting any individual file within it.
+type CaptureGenerationBinding struct {
+	ProviderName       string                       `json:"providerName" validate:"required"`
+	RequestFingerprint string                       `json:"requestFingerprint" validate:"required"`
+	Authority          CaptureAuthority             `json:"authority" validate:"required"`
+	Source             SourceAddress                `json:"source" validate:"required"`
+	Owner              CaptureOwner                 `json:"owner" validate:"required"`
+	StopAuthority      generationstop.StopAuthority `json:"stopAuthority" validate:"required"`
+}
+
+func (binding CaptureBinding) generationBinding() CaptureGenerationBinding {
+	return CaptureGenerationBinding{
+		ProviderName: binding.ProviderName, RequestFingerprint: binding.RequestFingerprint,
+		Authority: binding.Authority, Source: binding.Source,
+		Owner: binding.Owner, StopAuthority: binding.StopAuthority,
+	}
+}
+
+type StoppedWorkingTreeRequest struct {
+	Generation            CaptureGenerationBinding `json:"generation" validate:"required"`
+	ExcludedPaths         []string                 `json:"excludedPaths" validate:"required"`
+	MaximumDepth          int                      `json:"maximumDepth" validate:"required"`
+	MaximumEntries        int                      `json:"maximumEntries" validate:"required"`
+	MaximumFileBytes      int64                    `json:"maximumFileBytes" validate:"required"`
+	MaximumAggregateBytes int64                    `json:"maximumAggregateBytes" validate:"required"`
+}
+
+type StoppedWorkingTreeReceipt struct {
+	Request            StoppedWorkingTreeRequest         `json:"request" validate:"required"`
+	TerminalGeneration generationstop.TerminalGeneration `json:"terminalGeneration" validate:"required"`
+	Entries            []StoppedDirectoryRosterEntry     `json:"entries" validate:"required"`
+	RosterDigest       string                            `json:"rosterDigest" validate:"required"`
+	ObservedAt         string                            `json:"observedAt" validate:"required"`
+}
+
 type CaptureIdentity struct {
 	CaptureBinding
 	ProviderResourceID string `json:"providerResourceId" validate:"required"`

@@ -155,6 +155,40 @@ func StoppedWorkingCopyDirectoryRoster(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, receipt)
 }
 
+// StoppedWorkingCopyWorkingTree godoc
+//
+//	@Tags			sandbox
+//	@Summary		List user files from an exact stopped sandbox generation
+//	@Description	Stream a complete bounded working-tree roster without an anchor file. Managed runtime roots and exact host-provided mount paths are excluded; unsupported user links and special files fail closed.
+//	@Param			sandboxId	path	string	true	"Sandbox ID"
+//	@Param			body	body	workingcopy.StoppedWorkingTreeRequest	true	"Generation authority, exclusions, and bounds"
+//	@Produce		json
+//	@Success		200	{object}	workingcopy.StoppedWorkingTreeReceipt
+//	@Failure		400	{object}	common_errors.ErrorResponse
+//	@Failure		401	{object}	common_errors.ErrorResponse
+//	@Failure		409	{object}	common_errors.ErrorResponse
+//	@Failure		503	{object}	common_errors.ErrorResponse
+//	@Router			/sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree [post]
+//	@id				StoppedWorkingCopyWorkingTree
+func StoppedWorkingCopyWorkingTree(ctx *gin.Context) {
+	var request workingcopy.StoppedWorkingTreeRequest
+	if err := decodeExactCaptureBody(ctx, &request); err != nil {
+		ctx.Error(common_errors.NewInvalidBodyRequestError(err))
+		return
+	}
+	service, err := workingCopyCaptureService()
+	if err != nil {
+		writeWorkingCopyCaptureError(ctx, err)
+		return
+	}
+	receipt, err := service.StoppedWorkingTree(ctx.Request.Context(), ctx.Param("sandboxId"), request)
+	if err != nil {
+		writeWorkingCopyCaptureError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, receipt)
+}
+
 // DeleteWorkingCopyCapture godoc
 //
 //	@Tags		sandbox

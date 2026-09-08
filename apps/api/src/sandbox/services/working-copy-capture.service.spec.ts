@@ -4,6 +4,11 @@
  */
 
 import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { plainToInstance } from 'class-transformer'
+import { validateSync } from 'class-validator'
+import { Configuration, SandboxApiAxiosParamCreator } from '@daytona/runner-api-client'
 import {
   BadRequestException,
   ConflictException,
@@ -14,6 +19,11 @@ import {
 
 import {
   MAXIMUM_WORKING_COPY_CAPTURE_BYTES,
+  MAXIMUM_USER_FILE_CAPTURE_BYTES,
+  MAXIMUM_USER_FILE_READ_BYTES,
+  USER_FILES_SEMANTIC_ZONE_REF,
+  StoppedWorkingCopyWorkingTreeRequestDto,
+  StoppedWorkingCopyWorkingTreeReceiptDto,
   MAXIMUM_WORKING_COPY_CAPTURE_READ_BYTES,
   MAXIMUM_WORKING_COPY_ROSTER_AGGREGATE_BYTES,
   MAXIMUM_WORKING_COPY_ROSTER_DEPTH,
@@ -59,6 +69,7 @@ describe(WorkingCopyCaptureService.name, () => {
     adapter = {
       captureWorkingCopy: jest.fn(),
       stoppedWorkingCopyDirectoryRoster: jest.fn(),
+      stoppedWorkingCopyWorkingTree: jest.fn(),
       observeWorkingCopyCapture: jest.fn(),
       readWorkingCopyCapture: jest.fn(),
       deleteWorkingCopyCapture: jest.fn(),
@@ -833,7 +844,235 @@ describe(WorkingCopyCaptureService.name, () => {
       }),
     })
   })
+
+  it('admits the exact Go-produced empty working-tree receipt without a fabricated anchor', async () => {
+    const receipt = JSON.parse(
+      readFileSync(
+        resolve(__dirname, '../../../../runner/pkg/workingcopy/testdata/stopped-working-tree.canonical.json'),
+        'utf8',
+      ),
+    ) as StoppedWorkingCopyWorkingTreeReceiptDto
+    const sandbox = validSandbox()
+    sandbox.labels.ambitWorkspaceExecutionManifestRef =
+      receipt.request.generation.stopAuthority.fence.workspaceExecutionManifestRef
+    sandbox.labels.ambitRuntimeManifestRef = sandbox.labels.ambitWorkspaceExecutionManifestRef
+    ;(sandboxService.findOneByIdOrName as jest.Mock).mockResolvedValue(sandbox)
+    adapter.stoppedWorkingCopyWorkingTree.mockResolvedValue(receipt)
+    const signal = new AbortController().signal
+    await expect(
+      service.stoppedWorkingTree('daytona-org-1', 'friendly-name', receipt.request, signal),
+    ).resolves.toEqual(receipt)
+    expect(adapter.stoppedWorkingCopyWorkingTree).toHaveBeenCalledWith('sandbox-1', receipt.request, signal)
+    expect(receipt.entries).toEqual([])
+    expect(receipt.request.generation).not.toHaveProperty('selector')
+    expect(validateSync(plainToInstance(StoppedWorkingCopyWorkingTreeRequestDto, receipt.request))).toEqual([])
+    expect(validateSync(plainToInstance(StoppedWorkingCopyWorkingTreeReceiptDto, receipt))).toEqual([])
+  })
+
+  it('forwards a complete custom working tree with a large file through the existing adapter', async () => {
+    const request = validWorkingTreeRequest()
+    request.excludedPaths = ['mounted']
+    const receipt = validWorkingTreeReceipt(request)
+    adapter.stoppedWorkingCopyWorkingTree.mockResolvedValue(receipt)
+    await expect(service.stoppedWorkingTree('daytona-org-1', 'sandbox-1', request)).resolves.toEqual(receipt)
+    expect(receipt.entries[1].size).toBe(102 * 1024 * 1024)
+    expect(validateSync(plainToInstance(StoppedWorkingCopyWorkingTreeReceiptDto, receipt))).toEqual([])
+  })
+
+  it('uses the generated authenticated runner operation without changing the request shape', async () => {
+    const request = validWorkingTreeRequest()
+    const signal = new AbortController().signal
+    const call = await SandboxApiAxiosParamCreator(
+      new Configuration({ apiKey: 'Bearer fixture-runner-key' }),
+    ).stoppedWorkingCopyWorkingTree('sandbox/encoded', request, { signal })
+    expect(call.url).toBe('/sandboxes/sandbox%2Fencoded/working-copy-captures/stopped-working-tree')
+    expect(call.options.method).toBe('POST')
+    expect(call.options.signal).toBe(signal)
+    expect(call.options.headers).toEqual(expect.objectContaining({ Authorization: 'Bearer fixture-runner-key' }))
+    expect(JSON.parse(call.options.data as string)).toEqual(request)
+  })
+
+  it.each(
+    [[], [''], ['.'], ['../outside'], ['/workspace/x'], ['x/'], ['b', 'a'], ['a', 'a'], ['a', 'a/b'], ['e\u0301']].map(
+      (excludedPaths) => ({ excludedPaths }),
+    ),
+  )('enforces canonical working-tree exclusions $excludedPaths', async ({ excludedPaths }) => {
+    const request = validWorkingTreeRequest()
+    request.excludedPaths = excludedPaths
+    if (excludedPaths.length === 0) {
+      adapter.stoppedWorkingCopyWorkingTree.mockResolvedValue(validWorkingTreeReceipt(request))
+      await expect(service.stoppedWorkingTree('daytona-org-1', 'sandbox-1', request)).resolves.toBeDefined()
+    } else {
+      await expect(service.stoppedWorkingTree('daytona-org-1', 'sandbox-1', request)).rejects.toBeInstanceOf(
+        BadRequestException,
+      )
+      expect(adapter.stoppedWorkingCopyWorkingTree).not.toHaveBeenCalled()
+    }
+  })
+
+  it('rejects forged working-tree receipts even when their digest is recomputed', async () => {
+    const request = validWorkingTreeRequest()
+    request.excludedPaths = ['mounted']
+    const changes: Array<(receipt: StoppedWorkingCopyWorkingTreeReceiptDto) => void> = [
+      (r) => {
+        r.entries.reverse()
+      },
+      (r) => {
+        r.entries.push({ ...r.entries[1] })
+      },
+      (r) => {
+        r.entries.shift()
+      },
+      (r) => {
+        r.entries[1].zoneRelativePath = 'mounted/file'
+        r.entries[1].name = 'file'
+      },
+      (r) => {
+        r.entries[0].zoneRelativePath = '.ambit'
+        r.entries[0].name = '.ambit'
+      },
+      (r) => {
+        r.entries[1].size = MAXIMUM_USER_FILE_CAPTURE_BYTES + 1
+      },
+      (r) => {
+        r.entries[1].mode = '9999'
+      },
+      (r) => {
+        r.entries[1].kind = 'symlink' as never
+      },
+      (r) => {
+        r.entries[1].sha256 = null
+      },
+      (r) => {
+        r.terminalGeneration.restartCount++
+      },
+      (r) => {
+        r.request.generation.owner.userId = OTHER_ID
+      },
+    ]
+    for (const change of changes) {
+      const receipt = structuredClone(validWorkingTreeReceipt(request))
+      change(receipt)
+      receipt.rosterDigest = workingTreeDigest(receipt)
+      adapter.stoppedWorkingCopyWorkingTree.mockResolvedValueOnce(receipt)
+      await expect(service.stoppedWorkingTree('daytona-org-1', 'sandbox-1', request)).rejects.toBeInstanceOf(
+        ConflictException,
+      )
+    }
+  })
+
+  it('reuses the complete sandbox owner and manifest authority for root enumeration', async () => {
+    const request = validWorkingTreeRequest()
+    request.generation.owner.userId = OTHER_ID
+    await expect(service.stoppedWorkingTree('daytona-org-1', 'sandbox-1', request)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    )
+    expect(adapter.stoppedWorkingCopyWorkingTree).not.toHaveBeenCalled()
+  })
+
+  it('admits private large capture and range bounds while preserving existing zone limits', async () => {
+    const binding = validBinding()
+    binding.selector = { semanticZoneRef: USER_FILES_SEMANTIC_ZONE_REF, zoneRelativePath: 'customer.bin' }
+    const receipt = validReceipt(binding)
+    receipt.totalByteLength = 102 * 1024 * 1024
+    adapter.captureWorkingCopy.mockResolvedValue(receipt)
+    await expect(service.capture('daytona-org-1', 'sandbox-1', binding)).resolves.toEqual(receipt)
+    expect(validateSync(plainToInstance(WorkingCopyCaptureReceiptDto, receipt))).toEqual([])
+
+    const read = { ...validRead(), ...validIdentity(binding) }
+    read.expectedTotalByteLength = receipt.totalByteLength
+    read.offset = receipt.totalByteLength - 1
+    read.maximumBytes = MAXIMUM_USER_FILE_READ_BYTES
+    adapter.readWorkingCopyCapture.mockResolvedValue(validReadResponse(read, 'x'))
+    await expect(service.read('daytona-org-1', 'sandbox-1', read)).resolves.toMatchObject({ byteLength: 1, eof: true })
+    expect(validateSync(plainToInstance(WorkingCopyCaptureReadDto, read))).toEqual([])
+
+    const legacy = validRead()
+    legacy.maximumBytes = MAXIMUM_USER_FILE_READ_BYTES
+    await expect(service.read('daytona-org-1', 'sandbox-1', legacy)).rejects.toBeInstanceOf(BadRequestException)
+    for (const zone of ['ambit.workspace-zone/work@1', 'ambit.workspace-zone/outputs@1'] as const) {
+      const prior = validBinding()
+      prior.selector.semanticZoneRef = zone
+      adapter.captureWorkingCopy.mockResolvedValue({
+        ...validReceipt(prior),
+        totalByteLength: MAXIMUM_WORKING_COPY_CAPTURE_BYTES + 1,
+      })
+      await expect(service.capture('daytona-org-1', 'sandbox-1', prior)).rejects.toBeInstanceOf(
+        ServiceUnavailableException,
+      )
+    }
+  })
+
+  it('admits private 4096-byte paths and rejects managed runtime selectors before forwarding', async () => {
+    const binding = validBinding()
+    const relative = Array.from({ length: 12 }, () => 'a'.repeat(200)).join('/') + '/file'
+    binding.selector = { semanticZoneRef: USER_FILES_SEMANTIC_ZONE_REF, zoneRelativePath: relative }
+    adapter.captureWorkingCopy.mockResolvedValue(validReceipt(binding))
+    await expect(service.capture('daytona-org-1', 'sandbox-1', binding)).resolves.toBeDefined()
+    adapter.captureWorkingCopy.mockClear()
+    for (const relative of ['.ambit', '.ambit/config', '.ambit-skill-python/data', '../outside', 'e\u0301']) {
+      binding.selector.zoneRelativePath = relative
+      await expect(service.capture('daytona-org-1', 'sandbox-1', binding)).rejects.toBeInstanceOf(BadRequestException)
+    }
+    expect(adapter.captureWorkingCopy).not.toHaveBeenCalled()
+    const anchor = validRosterRequest()
+    anchor.anchor.selector.semanticZoneRef = USER_FILES_SEMANTIC_ZONE_REF
+    anchor.selector.semanticZoneRef = USER_FILES_SEMANTIC_ZONE_REF
+    await expect(service.stoppedDirectoryRoster('daytona-org-1', 'sandbox-1', anchor)).rejects.toBeInstanceOf(
+      BadRequestException,
+    )
+  })
 })
+
+function validWorkingTreeRequest(): StoppedWorkingCopyWorkingTreeRequestDto {
+  const { selector, ...generation } = validBinding()
+  void selector
+  return {
+    generation,
+    excludedPaths: [],
+    maximumDepth: 64,
+    maximumEntries: 4096,
+    maximumFileBytes: MAXIMUM_USER_FILE_CAPTURE_BYTES,
+    maximumAggregateBytes: 8 * 1024 * 1024 * 1024,
+  }
+}
+
+function validWorkingTreeReceipt(
+  request: StoppedWorkingCopyWorkingTreeRequestDto,
+): StoppedWorkingCopyWorkingTreeReceiptDto {
+  const receipt: StoppedWorkingCopyWorkingTreeReceiptDto = {
+    request,
+    terminalGeneration: { ...request.generation.stopAuthority.terminalGeneration },
+    entries: [
+      { zoneRelativePath: 'custom', name: 'custom', kind: 'directory', size: 0, mode: '0755', sha256: null },
+      {
+        zoneRelativePath: 'custom/customer.bin',
+        name: 'customer.bin',
+        kind: 'regular_file',
+        size: 102 * 1024 * 1024,
+        mode: '0644',
+        sha256: `sha256:${'a'.repeat(64)}`,
+      },
+    ],
+    rosterDigest: '',
+    observedAt: '2026-09-08T12:00:00.000Z',
+  }
+  receipt.rosterDigest = workingTreeDigest(receipt)
+  return receipt
+}
+
+function workingTreeDigest(receipt: StoppedWorkingCopyWorkingTreeReceiptDto): string {
+  return `sha256:${createHash('sha256')
+    .update(
+      testCanonicalJson({
+        contract: 'ambit.working-copy-stopped-working-tree/v1',
+        request: receipt.request,
+        terminalGeneration: receipt.terminalGeneration,
+        entries: receipt.entries,
+      }),
+    )
+    .digest('hex')}`
+}
 
 function validBinding(): WorkingCopyCaptureBindingDto {
   const protocolDigest = `sha256:${'7'.repeat(64)}`
