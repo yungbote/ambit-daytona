@@ -24,9 +24,12 @@ COPY --from=driver /opt/ambit/browser/licenses /opt/ambit/browser/licenses
 COPY --from=driver /opt/ambit/browser/Cargo.lock /opt/ambit/browser/Cargo.lock
 COPY --chmod=0755 runtime/agent-browser /usr/local/bin/agent-browser
 COPY README.md /opt/ambit/browser/README.md
+RUN --mount=type=bind,source=build/inspect-executables.py,target=/source/inspect-executables.py,ro \
+    python3 /source/inspect-executables.py > /opt/ambit/runtime-base/workspace/lineage/executables.json
 ARG BUILD_SOURCE_REVISION=unbound
 LABEL org.opencontainers.image.revision="${BUILD_SOURCE_REVISION}" \
       io.ambit.browser-lock="/opt/ambit/browser/browser.lock.json" \
+      io.ambit.executable-inventory="/opt/ambit/runtime-base/workspace/lineage/executables.json" \
       io.ambit.browser-lifecycle="supervised-workspace-process"
 USER daytona
 WORKDIR /workspace

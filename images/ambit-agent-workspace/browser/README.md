@@ -14,6 +14,8 @@ The launcher maps the Runner's proxy and CA configuration to the native driver's
 
 `browser.lock.json` names the exact workspace parent, fork revision and source archive checksum, Chrome archive version and checksum, and added Debian package versions. Cargo consumes the fork's committed lock with `--locked`. The final image records the lock, Cargo dependency lock, license notices, and installed Debian roster under `/opt/ambit/browser`. Source changes require a new lock and image digest. No installation or browser download occurs during a Run.
 
+The image also records `/opt/ambit/runtime-base/workspace/lineage/executables.json`, derived from the existing locked Python console scripts, Node package bins, Debian command ownership and archive toolchains. Entries must resolve to those actual installed paths; optional Rustup shims without an installed component are excluded. This includes Python, PyMuPDF, Poppler and the other existing workspace tools alongside the browser. The file is build evidence for the existing runtime profile's optional executable descriptors, not a capability grant or a substitute for C18 qualification. Help argv provides the normal CLI entrypoint; detailed use remains discoverable from the tool itself.
+
 Prepare the exact Git source archive with `git archive --format=tar.gz --prefix=agent-browser/ REVISION` and download the Chrome URL in the lock into a task-local directory. Their filenames and SHA-256 values must equal the lock; the build refuses different bytes. Build from this directory after the fork revision is published:
 
 ```sh
