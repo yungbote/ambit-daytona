@@ -115,6 +115,18 @@ def collect_python(programs, libraries, python, lock_root):
                     programs, entry.name, distribution.version,
                     venv / "bin" / entry.name,
                 )
+        # Wheels may ship native executables as installed scripts without a
+        # Python console entry point. RECORD identifies the owning distribution;
+        # only executable files in this environment's bin directory qualify.
+        for record in distribution.files or ():
+            installed_path = Path(distribution.locate_file(record))
+            if installed_path.parent.resolve() != (venv / "bin").resolve():
+                continue
+            if installed_path.is_file() and os.access(installed_path, os.X_OK):
+                add_program(
+                    programs, installed_path.name, distribution.version,
+                    installed_path,
+                )
     if missing := pinned.keys() - installed.keys():
         raise ValueError(
             f"Locked Python distributions are not installed: {', '.join(sorted(missing))}"

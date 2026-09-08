@@ -155,6 +155,30 @@ class InventoryTests(unittest.TestCase):
         self.assertNotIn("@scope/library", [item["name"] for item in observed["executables"]])
         self.assertEqual(len(observed["libraries"]), 3)
 
+    def test_native_wheel_scripts_use_record_ownership_and_executable_bin_boundary(self):
+        root = self.root / "native-component"
+        python = self.python_environment(root, {"native-package": "4.2"}, {})
+        venv = root / "python"
+        native = venv / "bin/native-command"
+        self.executable(native)
+        (self.bin / "native-command").symlink_to(native)
+        (venv / "bin/not-executable").write_text("not a command")
+        outside = venv / "lib/python3.13/site-packages/library-script"
+        self.executable(outside)
+        metadata = venv / "lib/python3.13/site-packages/native-package-4.2.dist-info"
+        (metadata / "RECORD").write_text(
+            "../../../bin/native-command,,\n"
+            "../../../bin/not-executable,,\n"
+            "../../../bin/missing-command,,\n"
+            "library-script,,\n"
+        )
+        component = self.component(root, {"python": python})
+        programs = {entry["name"]: entry for entry in inventory.collect_executables([component])["executables"]}
+        self.assertEqual(programs["native-command"]["version"], "4.2")
+        self.assertNotIn("not-executable", programs)
+        self.assertNotIn("missing-command", programs)
+        self.assertNotIn("library-script", programs)
+
     def test_separate_python_environments_retain_different_library_versions(self):
         root = self.root / "component"
         python = self.python_environment(root, {"base-library": "9.0"}, {})
