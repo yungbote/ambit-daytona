@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Exercise installed tools as a non-root user with networking disabled."""
 import importlib.metadata
+import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
+import signal
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -21,6 +25,47 @@ def run(argv, *, cwd, env=None, timeout=60):
         raise AssertionError({"argv": argv, "exit": result.returncode,
                               "stderr": result.stderr[-4000:]})
     return result.stdout, time.monotonic() - started
+
+
+def measured_run(argv, *, cwd, timeout=60):
+    """Linux wait4 gives this command's actual peak RSS, not a sampled estimate.
+
+    Capture into files to avoid pipe backpressure. A deadline kills the command's
+    process group, including any ordinary child tools, before reaping the owner.
+    These are conformance measurements, not a new workspace execution policy.
+    """
+    started = time.monotonic()
+    with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+        process = subprocess.Popen(argv, cwd=cwd, stdout=stdout, stderr=stderr,
+                                   start_new_session=True)
+        cancelled = False
+        while True:
+            waited, status, usage = os.wait4(process.pid, os.WNOHANG)
+            if waited:
+                break
+            if time.monotonic() - started >= timeout:
+                cancelled = True
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass  # The command can finish between wait4 and the signal.
+                _, status, usage = os.wait4(process.pid, 0)
+                break
+            time.sleep(0.01)
+        process.returncode = os.waitstatus_to_exitcode(status)
+        elapsed = time.monotonic() - started
+        stdout.seek(0)
+        stderr.seek(0)
+        return {"argv": argv, "exit": process.returncode, "seconds": elapsed,
+                "peak_rss_kib": usage.ru_maxrss, "cancelled": cancelled,
+                "process_group": process.pid,
+                "stdout": stdout.read().decode(errors="replace"),
+                "stderr": stderr.read().decode(errors="replace")}
+
+
+def command_evidence(result):
+    return {key: value for key, value in result.items()
+            if key not in {"stdout", "stderr", "process_group"}}
 
 
 results = []
@@ -65,19 +110,67 @@ with tempfile.TemporaryDirectory(prefix="ambit-file-tools-") as name:
     pdf_path = directory / "image-only.pdf"
     pdf.save(pdf_path)
     pdf.close()
+    originals = {path: hashlib.sha256(path.read_bytes()).hexdigest()
+                 for path in (source, opaque, image_path, pdf_path)}
     traps = directory / "traps"
     traps.mkdir()
     trap = traps / "tesseract"
-    marker = directory / "unexpected-ocr"
-    trap.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$OCR_PROBE_MARKER\"\nexit 73\n")
+    marker = directory / "tesseract-invocations.jsonl"
+    real_tesseract = shutil.which("tesseract")
+    assert real_tesseract
+    # Tika 4.0.0 initializes TesseractOCRParser by invoking tesseract with no
+    # arguments (hasTesseract), even when skipOcr disables extraction. Record
+    # exact argv and delegate unchanged: an unavailable fake OCR binary would
+    # make this negative test pass for the wrong reason.
+    # https://github.com/apache/tika/blob/4.0.0/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-ocr-module/src/main/java/org/apache/tika/parser/ocr/TesseractOCRParser.java
+    trap.write_text(f"#!{sys.executable}\nimport json, os, sys\n"
+                    "with open(os.environ['OCR_PROBE_MARKER'], 'a') as f:\n"
+                    "    f.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+                    "os.execv(os.environ['OCR_PROBE_EXECUTABLE'], "
+                    "[os.environ['OCR_PROBE_EXECUTABLE'], *sys.argv[1:]])\n")
     trap.chmod(0o755)
     environment = {**os.environ, "PATH": str(traps) + ":" + os.environ["PATH"],
-                   "OCR_PROBE_MARKER": str(marker)}
-    text, elapsed = run(["tika", "--text", pdf_path.name], cwd=directory,
-                        env=environment, timeout=30)
-    assert "RASTER EVIDENCE" not in text
-    assert not marker.exists(), "Default Tika extraction unexpectedly invoked OCR"
-    results.append({"check": "image-only input does not trigger hidden OCR", "seconds": elapsed, "passed": True})
+                   "OCR_PROBE_MARKER": str(marker),
+                   "OCR_PROBE_EXECUTABLE": real_tesseract}
+    # Include an image itself: PDF NO_OCR alone does not disable the image parser.
+    for raster in (pdf_path, image_path):
+        marker.unlink(missing_ok=True)
+        text, elapsed = run(["tika", "--text", raster.name], cwd=directory,
+                            env=environment, timeout=30)
+        calls = [json.loads(line) for line in marker.read_text().splitlines()]
+        assert calls, "The availability probe must actually exercise the spy"
+        assert all(args == [] for args in calls), {"unexpected OCR argv": calls}
+        assert "RASTER EVIDENCE" not in text
+        results.append({"check": "default extraction performs no OCR",
+                        "input": raster.name, "seconds": elapsed,
+                        "tesseract_argv": calls, "passed": True})
+
+    marker.unlink()
+    text, elapsed = run(["tesseract", image_path.name, "stdout", "--psm", "6"],
+                        cwd=directory, env=environment, timeout=30)
+    calls = [json.loads(line) for line in marker.read_text().splitlines()]
+    assert calls == [[image_path.name, "stdout", "--psm", "6"]]
+    assert "RASTER EVIDENCE 427" in text, text
+    results.append({"check": "explicit OCR remains usable and is observed",
+                    "seconds": elapsed, "tesseract_argv": calls,
+                    "text": text.strip(), "passed": True})
+
+    explicit_config = directory / "explicit-ocr.json"
+    explicit_config.write_text(json.dumps({"parsers": [
+        {"pdf-parser": {"ocr": {"strategy": "OCR_ONLY"}}},
+        {"tesseract-ocr-parser": {"skipOcr": False}},
+        {"default-parser": {}},
+    ]}))
+    marker.unlink()
+    text, elapsed = run(["tika", "--config=" + explicit_config.name, "--text", pdf_path.name],
+                        cwd=directory, env=environment, timeout=30)
+    calls = [json.loads(line) for line in marker.read_text().splitlines()]
+    assert any(args and args[0] not in {"--version", "--list-langs"}
+               for args in calls), calls
+    assert "RASTER EVIDENCE 427" in text, text
+    results.append({"check": "explicit Tika config can enable OCR",
+                    "seconds": elapsed, "tesseract_argv": calls,
+                    "text": text.strip(), "passed": True})
 
     version, _ = run(["vips", "--version"], cwd=directory)
     assert "8.16.1" in version
@@ -86,5 +179,65 @@ with tempfile.TemporaryDirectory(prefix="ambit-file-tools-") as name:
         assert region.size == (1000, 200)
         assert region.tobytes() == image.crop((80, 80, 1080, 280)).tobytes()
     results.append({"check": "exact image region", "passed": True})
+
+    # 160 MP tiled input exceeds the host vision limit. General file tools must
+    # still be able to inspect a small chosen region without a full-image copy.
+    run(["vips", "black", "large.v", "16000", "10000", "--bands", "3"], cwd=directory)
+    run(["vips", "draw_rect", "large.v", "24 96 168", "12340", "8765", "720", "360", "--fill"], cwd=directory)
+    run(["vips", "tiffsave", "large.v", "large.tiff", "--tile", "--compression", "deflate"], cwd=directory)
+    (directory / "large.v").unlink()
+    large_hash = hashlib.sha256((directory / "large.tiff").read_bytes()).hexdigest()
+    region_result = measured_run(["vips", "crop", "large.tiff", "large-region.png", "12280", "8725", "800", "450"], cwd=directory)
+    assert region_result["exit"] == 0 and not region_result["cancelled"], region_result
+    # A regression bound for this exact tiled fixture, not a universal RSS SLA.
+    assert region_result["peak_rss_kib"] < 256 * 1024, region_result
+    expected = Image.new("RGB", (800, 450), "black")
+    ImageDraw.Draw(expected).rectangle((60, 40, 779, 399), fill=(24, 96, 168))
+    with Image.open(directory / "large-region.png") as region:
+        assert region.size == expected.size
+        assert region.convert("RGB").tobytes() == expected.tobytes()
+    assert hashlib.sha256((directory / "large.tiff").read_bytes()).hexdigest() == large_hash
+    results.append({"check": "large tiled input exact region and peak RSS",
+                    "source_pixels": 160_000_000,
+                    "region_pixels": 800 * 450,
+                    **command_evidence(region_result), "passed": True})
+
+    malformed = directory / "broken.png"
+    malformed.write_bytes(image_path.read_bytes()[:40])
+    bad_image = measured_run(["vips", "copy", malformed.name, "broken-output.png"], cwd=directory, timeout=10)
+    assert bad_image["exit"] != 0 and not bad_image["cancelled"], bad_image
+    assert bad_image["stderr"].strip(), bad_image
+    broken_pdf = directory / "broken.pdf"
+    broken_pdf.write_bytes(b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\n")
+    bad_pdf = measured_run(["qpdf", "--check", broken_pdf.name], cwd=directory, timeout=10)
+    assert bad_pdf["exit"] != 0 and not bad_pdf["cancelled"], bad_pdf
+    results.append({"check": "malformed image and PDF return bounded errors",
+                    "commands": [command_evidence(bad_image), command_evidence(bad_pdf)],
+                    "passed": True})
+
+    cancelled = measured_run(["vips", "gaussnoise", "cancelled.partial.tiff", "16000", "10000"], cwd=directory, timeout=0.2)
+    assert cancelled["cancelled"] and cancelled["exit"] == -signal.SIGKILL, cancelled
+    assert cancelled["seconds"] < 3, cancelled
+    try:
+        os.killpg(cancelled["process_group"], 0)
+    except ProcessLookupError:
+        pass
+    else:
+        raise AssertionError("Cancelled tool process group remains alive")
+    # Partial output is explicitly uncommitted; killing a general CLI need not
+    # remove its files. The ordinary Run/artifact owner decides publication.
+    partial = directory / "cancelled.partial.tiff"
+    partial_bytes = partial.stat().st_size if partial.exists() else 0
+    partial.unlink(missing_ok=True)
+    run(["vips", "crop", str(image_path), "after-cancel.png", "80", "80", "1000", "200"], cwd=directory)
+    with Image.open(directory / "after-cancel.png") as recovered:
+        assert recovered.tobytes() == image.crop((80, 80, 1080, 280)).tobytes()
+    results.append({"check": "active tool cancellation and subsequent work",
+                    **command_evidence(cancelled), "partial_bytes": partial_bytes,
+                    "passed": True})
+
+    assert all(hashlib.sha256(path.read_bytes()).hexdigest() == digest
+               for path, digest in originals.items())
+    results.append({"check": "original files unchanged", "passed": True})
 
 print(json.dumps({"checks": results, "passed": len(results)}, indent=2))
