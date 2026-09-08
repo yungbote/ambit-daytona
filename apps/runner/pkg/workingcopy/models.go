@@ -6,8 +6,10 @@ package workingcopy
 import "github.com/daytonaio/runner/pkg/generationstop"
 
 const (
-	MaximumCaptureBytes         int64 = 64 * 1024 * 1024
-	MaximumReadBytes            int64 = 1 * 1024 * 1024
+	// Bound per-capture temporary disk custody independently from the fixed
+	// streaming buffer. Larger files require a deliberate capacity decision.
+	MaximumCaptureBytes         int64 = 1024 * 1024 * 1024
+	MaximumReadBytes            int64 = 4 * 1024 * 1024
 	MaximumRosterDepth                = 32
 	MaximumRosterEntries              = 1024
 	MaximumRosterFileBytes      int64 = 8 * 1024 * 1024

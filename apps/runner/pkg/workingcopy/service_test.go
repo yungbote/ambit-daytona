@@ -7,15 +7,20 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1200,6 +1205,435 @@ func TestTransientDockerFailuresAreUnavailableNotConflicts(t *testing.T) {
 	}
 }
 
+func TestStreamingCapturePreservesLargeFilesWithBoundedMemoryAndRanges(t *testing.T) {
+	for _, size := range []int64{64 << 20, 102 << 20, 104 << 20} {
+		t.Run(fmt.Sprintf("%dMiB", size>>20), func(t *testing.T) {
+			scratch := t.TempDir()
+			t.Setenv("TMPDIR", scratch)
+			fixture := newStreamingCaptureFixture(t, size)
+			expectedDigest := generatedDigest(size)
+			runtime.GC()
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			receipt, err := fixture.capture(context.Background())
+			runtime.ReadMemStats(&after)
+			if err != nil {
+				t.Fatalf("large streaming capture failed: %v", err)
+			}
+			if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 16<<20 {
+				t.Fatalf("capture allocated %d bytes for %d-byte file; streaming scratch must stay bounded", allocated, size)
+			}
+			if receipt.TotalByteLength != size || receipt.ProviderSHA256Digest != expectedDigest {
+				t.Fatalf("large capture receipt differs: %#v", receipt)
+			}
+			if fixture.maximumArchiveRead > captureStreamBufferBytes || fixture.objects.maximumStreamWrite > captureStreamBufferBytes {
+				t.Fatalf("unbounded transfer: Docker=%d storage=%d", fixture.maximumArchiveRead, fixture.objects.maximumStreamWrite)
+			}
+			if !fixture.archive.closed.Load() {
+				t.Fatal("Docker archive was left open")
+			}
+			assertNoCaptureScratch(t, scratch)
+
+			// Existing 1 MiB callers remain valid; a final 4 MiB range proves
+			// large offsets and EOF without reading the entire captured object.
+			for _, bounds := range [][2]int64{{0, 1 << 20}, {size - MaximumReadBytes, MaximumReadBytes}} {
+				request := CaptureReadRequest{
+					CaptureIdentity:              receipt.CaptureIdentity,
+					ExpectedTotalByteLength:      size,
+					ExpectedProviderSHA256Digest: expectedDigest,
+					Offset:                       bounds[0], MaximumBytes: bounds[1],
+				}
+				response, err := fixture.service.Read(context.Background(), fixture.binding.Source.ProviderResourceID, request)
+				if err != nil {
+					t.Fatalf("large range read failed: %v", err)
+				}
+				actual, err := base64.StdEncoding.DecodeString(response.BytesBase64)
+				if err != nil {
+					t.Fatal(err)
+				}
+				expected := make([]byte, bounds[1])
+				_, _ = (&generatedFileReader{offset: bounds[0], remaining: bounds[1]}).Read(expected)
+				if !bytes.Equal(actual, expected) || response.ByteLength != bounds[1] || response.Offset != bounds[0] || response.EOF != (bounds[0]+bounds[1] == size) {
+					t.Fatalf("range did not preserve exact bytes, offset and EOF: offset=%d length=%d eof=%t", response.Offset, response.ByteLength, response.EOF)
+				}
+			}
+			replayed, err := fixture.capture(context.Background())
+			if err != nil || replayed != receipt || fixture.containers.copyCalls != 1 || fixture.objects.streamWrites != 1 {
+				t.Fatalf("complete replay repeated a capture effect: copies=%d writes=%d error=%v", fixture.containers.copyCalls, fixture.objects.streamWrites, err)
+			}
+			if fixture.objects.fullContentReads != 0 {
+				t.Fatal("large content reached a buffered storage read")
+			}
+		})
+	}
+}
+
+func TestStreamingCaptureReconcilesLostContentResponseAndPartialReceipt(t *testing.T) {
+	for _, failure := range []string{"lost-content-response", "partial-receipt"} {
+		t.Run(failure, func(t *testing.T) {
+			fixture := newStreamingCaptureFixture(t, 102<<20)
+			if failure == "lost-content-response" {
+				fixture.objects.failAfterStoreSuffix = "/content.bin"
+			} else {
+				fixture.objects.failBeforeStoreSuffix = "/receipt.json"
+			}
+			receipt, err := fixture.capture(context.Background())
+			if failure == "partial-receipt" {
+				if !errors.Is(err, ErrOutcomeUnknown) {
+					t.Fatalf("partial publication did not retain unknown outcome: %v", err)
+				}
+				observation, err := fixture.service.Observe(context.Background(), fixture.binding.Source.ProviderResourceID, fixture.binding)
+				if err != nil || observation.Status != "partial" {
+					t.Fatalf("partial content is not recoverable: %#v %v", observation, err)
+				}
+				fixture.objects.failBeforeStoreSuffix = ""
+				runtime.GC()
+				var before, after runtime.MemStats
+				runtime.ReadMemStats(&before)
+				receipt, err = fixture.capture(context.Background())
+				runtime.ReadMemStats(&after)
+				if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 16<<20 {
+					t.Fatalf("recovery materialized %d bytes instead of hashing the stream", allocated)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err != nil {
+				t.Fatalf("lost stream response did not reconcile: %v", err)
+			}
+			if receipt.TotalByteLength != 102<<20 || receipt.ProviderSHA256Digest != generatedDigest(102<<20) || fixture.containers.copyCalls != 1 || fixture.objects.streamWrites != 1 || fixture.objects.streamReads != 1 {
+				t.Fatalf("recovery changed bytes or repeated effects: copies=%d writes=%d reads=%d", fixture.containers.copyCalls, fixture.objects.streamWrites, fixture.objects.streamReads)
+			}
+			if fixture.objects.maximumStreamRead > captureStreamBufferBytes {
+				t.Fatalf("recovery requested %d-byte reads", fixture.objects.maximumStreamRead)
+			}
+		})
+	}
+}
+
+func TestStreamingRecoveryRejectsCorruptTruncatedAndOverlongContent(t *testing.T) {
+	for _, corruption := range []string{"same-length-drift", "truncated", "overlong"} {
+		t.Run(corruption, func(t *testing.T) {
+			fixture := newStreamingCaptureFixture(t, 104<<20)
+			fixture.objects.failBeforeStoreSuffix = "/receipt.json"
+			if _, err := fixture.capture(context.Background()); !errors.Is(err, ErrOutcomeUnknown) {
+				t.Fatalf("could not seed partial capture: %v", err)
+			}
+			key, _ := fixture.objects.findSuffix("/content.bin")
+			object := fixture.objects.objects[key]
+			file, err := os.OpenFile(object.filePath, os.O_WRONLY, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch corruption {
+			case "same-length-drift":
+				_, err = file.WriteAt([]byte{255}, object.fileSize-1)
+			case "truncated":
+				err = file.Truncate(object.fileSize - 1)
+			case "overlong":
+				_, err = file.WriteAt([]byte{1}, object.fileSize)
+			}
+			_ = file.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			fixture.objects.failBeforeStoreSuffix = ""
+			if _, err := fixture.capture(context.Background()); !errors.Is(err, ErrConflict) {
+				t.Fatalf("%s staged stream was admitted: %v", corruption, err)
+			}
+			if fixture.containers.copyCalls != 1 || fixture.objects.streamWrites != 1 {
+				t.Fatal("recovery replaced corrupt immutable custody")
+			}
+			if _, exists := fixture.objects.findSuffix("/receipt.json"); exists {
+				t.Fatal("corrupt content received a completion receipt")
+			}
+		})
+	}
+}
+
+func TestCaptureCancellationClosesBlockedArchiveAndReleasesScratch(t *testing.T) {
+	scratch := t.TempDir()
+	t.Setenv("TMPDIR", scratch)
+	fixture := newStreamingCaptureFixture(t, 102<<20)
+	blocked := make(chan struct{})
+	closed := make(chan struct{})
+	var once sync.Once
+	fixture.containers.archiveReader = func(context.Context) io.ReadCloser {
+		return &blockingCaptureArchive{
+			header:  bytes.NewReader(generatedTarHeader(102 << 20)),
+			blocked: blocked, closed: closed, closeOnce: &once,
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	completed := make(chan error, 1)
+	go func() { _, err := fixture.capture(ctx); completed <- err }()
+	select {
+	case <-blocked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("capture did not reach blocked body read")
+	}
+	cancel()
+	select {
+	case err := <-completed:
+		if !errors.Is(err, ErrUnavailable) || !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancellation lost its cause or availability classification: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancellation did not close the blocked Docker archive")
+	}
+	assertNoCaptureScratch(t, scratch)
+	if _, exists := fixture.objects.findSuffix("/content.bin"); exists {
+		t.Fatal("cancelled capture published partial content")
+	}
+}
+
+func TestStreamingRecoveryCancellationPreservesPartialCustody(t *testing.T) {
+	fixture := newStreamingCaptureFixture(t, 102<<20)
+	fixture.objects.failBeforeStoreSuffix = "/receipt.json"
+	if _, err := fixture.capture(context.Background()); !errors.Is(err, ErrOutcomeUnknown) {
+		t.Fatalf("could not seed partial capture: %v", err)
+	}
+	fixture.objects.failBeforeStoreSuffix = ""
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var opened *observedReadCloser
+	fixture.objects.wrapContentReader = func(reader io.ReadCloser) io.ReadCloser {
+		opened = &observedReadCloser{ReadCloser: reader, observe: func(_, count int) {
+			if count > 0 {
+				cancel()
+			}
+		}}
+		return opened
+	}
+	if _, err := fixture.capture(ctx); !errors.Is(err, ErrUnavailable) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled recovery did not preserve cause: %v", err)
+	}
+	if opened == nil || !opened.closed.Load() {
+		t.Fatal("cancelled staged stream was left open")
+	}
+	if _, exists := fixture.objects.findSuffix("/receipt.json"); exists {
+		t.Fatal("cancelled verification published a receipt")
+	}
+	fixture.objects.wrapContentReader = nil
+	if _, err := fixture.capture(context.Background()); err != nil {
+		t.Fatalf("uncancelled recovery could not resume: %v", err)
+	}
+	if fixture.containers.copyCalls != 1 || fixture.objects.streamWrites != 1 {
+		t.Fatal("cancelled verification repeated the capture effect")
+	}
+}
+
+func TestStreamingUploadCancellationLeavesNoPartialObjectOrScratch(t *testing.T) {
+	scratch := t.TempDir()
+	t.Setenv("TMPDIR", scratch)
+	fixture := newStreamingCaptureFixture(t, 102<<20)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fixture.objects.afterStreamRead = func(count int) {
+		if count > 0 {
+			cancel()
+		}
+	}
+	if _, err := fixture.capture(ctx); !errors.Is(err, ErrOutcomeUnknown) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled conditional write lost its outcome or cause: %v", err)
+	}
+	assertNoCaptureScratch(t, scratch)
+	files, err := os.ReadDir(fixture.objects.directory)
+	if err != nil || len(files) != 0 {
+		t.Fatalf("cancelled stream left a partial object: %v %v", files, err)
+	}
+	for _, suffix := range []string{"/content.bin", "/receipt.json"} {
+		if _, exists := fixture.objects.findSuffix(suffix); exists {
+			t.Fatalf("cancelled stream published %s", suffix)
+		}
+	}
+	observation, err := fixture.service.Observe(context.Background(), fixture.binding.Source.ProviderResourceID, fixture.binding)
+	if err != nil || observation.Status != "partial" {
+		t.Fatalf("cancelled upload lost its admitted capture intent: %#v %v", observation, err)
+	}
+	fixture.objects.afterStreamRead = nil
+	if _, err := fixture.capture(context.Background()); err != nil {
+		t.Fatalf("partial upload could not resume: %v", err)
+	}
+	if fixture.containers.copyCalls != 2 || fixture.objects.streamWrites != 2 {
+		t.Fatal("unpublished capture did not repeat exactly the missing content effect")
+	}
+}
+
+func TestCaptureRequiresExistingStreamingStorageCapability(t *testing.T) {
+	binding := validBinding()
+	containers := newFakeContainer(nil)
+	// Embedding the base interface deliberately hides the concrete fake's
+	// streaming methods, matching an older storage implementation.
+	baseOnly := struct {
+		storage.PrivateObjectStorageClient
+	}{newFakeObjectStore()}
+	_, err := NewService(containers, baseOnly, &fakeStoppedGenerationAuthority{container: containers}, binding.Authority)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("buffer-only storage was admitted: %v", err)
+	}
+}
+
+func TestStreamingCaptureRejectsArchiveTruncationTrailingDataAndTransportFailure(t *testing.T) {
+	for _, failure := range []string{"header-truncated", "body-truncated", "trailing-content", "excess-padding", "transport-failure"} {
+		t.Run(failure, func(t *testing.T) {
+			binding := validBinding()
+			objects := newFakeObjectStore()
+			containers := newFakeContainer([]byte("x"))
+			archive := containers.archive
+			expected := ErrConflict
+			containers.archiveReader = func(context.Context) io.ReadCloser {
+				var reader io.Reader = bytes.NewReader(archive)
+				switch failure {
+				case "header-truncated":
+					reader = bytes.NewReader(archive[:511])
+				case "body-truncated":
+					reader = bytes.NewReader(archive[:512])
+				case "trailing-content":
+					reader = io.MultiReader(reader, strings.NewReader("hidden second archive"))
+				case "excess-padding":
+					reader = io.MultiReader(reader, io.LimitReader(&zeroReader{}, maximumArchiveOverhead))
+					expected = ErrInvalidRequest
+				case "transport-failure":
+					reader = io.MultiReader(reader, failedCaptureReader{})
+					expected = ErrUnavailable
+				}
+				return io.NopCloser(reader)
+			}
+			service := mustService(t, containers, objects, binding.Authority)
+			if _, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding); !errors.Is(err, expected) {
+				t.Fatalf("%s archive got wrong error: %v", failure, err)
+			}
+			if _, exists := objects.findSuffix("/content.bin"); exists {
+				t.Fatal("malformed archive published content")
+			}
+		})
+	}
+}
+
+type observedReadCloser struct {
+	io.ReadCloser
+	observe   func(requested, count int)
+	closed    atomic.Bool
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func (reader *observedReadCloser) Read(buffer []byte) (int, error) {
+	count, err := reader.ReadCloser.Read(buffer)
+	if reader.observe != nil {
+		reader.observe(len(buffer), count)
+	}
+	return count, err
+}
+
+func (reader *observedReadCloser) Close() error {
+	reader.closeOnce.Do(func() {
+		reader.closeErr = reader.ReadCloser.Close()
+		reader.closed.Store(true)
+	})
+	return reader.closeErr
+}
+
+type streamingCaptureFixture struct {
+	binding            CaptureBinding
+	service            *Service
+	containers         *fakeContainer
+	objects            *fakeObjectStore
+	archive            *observedReadCloser
+	maximumArchiveRead int
+}
+
+func newStreamingCaptureFixture(t *testing.T, size int64) *streamingCaptureFixture {
+	t.Helper()
+	fixture := &streamingCaptureFixture{binding: validBinding(), objects: newFakeObjectStore(), containers: newFakeContainer(nil)}
+	fixture.objects.directory = t.TempDir()
+	fixture.containers.statSizeOverride = size
+	fixture.containers.archiveReader = func(context.Context) io.ReadCloser {
+		padding := make([]byte, (512-size%512)%512+1024)
+		fixture.archive = &observedReadCloser{
+			ReadCloser: io.NopCloser(io.MultiReader(bytes.NewReader(generatedTarHeader(size)), &generatedFileReader{remaining: size}, bytes.NewReader(padding))),
+			observe:    func(requested, _ int) { fixture.maximumArchiveRead = max(fixture.maximumArchiveRead, requested) },
+		}
+		return fixture.archive
+	}
+	fixture.service = mustService(t, fixture.containers, fixture.objects, fixture.binding.Authority)
+	return fixture
+}
+
+func (fixture *streamingCaptureFixture) capture(ctx context.Context) (CaptureReceipt, error) {
+	return fixture.service.Capture(ctx, fixture.binding.Source.ProviderResourceID, fixture.binding)
+}
+
+type generatedFileReader struct{ offset, remaining int64 }
+
+func (reader *generatedFileReader) Read(buffer []byte) (int, error) {
+	if reader.remaining == 0 {
+		return 0, io.EOF
+	}
+	count := min(int64(len(buffer)), reader.remaining)
+	for index := int64(0); index < count; index++ {
+		buffer[index] = byte((reader.offset + index) % 251)
+	}
+	reader.offset += count
+	reader.remaining -= count
+	return int(count), nil
+}
+
+func generatedDigest(size int64) string {
+	hasher := sha256.New()
+	_, _ = io.CopyBuffer(hasher, &generatedFileReader{remaining: size}, make([]byte, captureStreamBufferBytes))
+	return "sha256:" + hex.EncodeToString(hasher.Sum(nil))
+}
+
+func generatedTarHeader(size int64) []byte {
+	var header bytes.Buffer
+	if err := tar.NewWriter(&header).WriteHeader(&tar.Header{Name: "report.txt", Size: size, Mode: 0o600, Typeflag: tar.TypeReg, Format: tar.FormatUSTAR}); err != nil {
+		panic(err)
+	}
+	return header.Bytes()
+}
+
+func assertNoCaptureScratch(t *testing.T, directory string) {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join(directory, "ambit-working-copy-*"))
+	if err != nil || len(files) != 0 {
+		t.Fatalf("capture scratch names survived: %v %v", files, err)
+	}
+}
+
+type blockingCaptureArchive struct {
+	header    *bytes.Reader
+	blocked   chan struct{}
+	closed    chan struct{}
+	closeOnce *sync.Once
+}
+
+func (reader *blockingCaptureArchive) Read(buffer []byte) (int, error) {
+	if reader.header.Len() > 0 {
+		return reader.header.Read(buffer)
+	}
+	close(reader.blocked)
+	<-reader.closed
+	return 0, context.Canceled
+}
+
+func (reader *blockingCaptureArchive) Close() error {
+	reader.closeOnce.Do(func() { close(reader.closed) })
+	return nil
+}
+
+type zeroReader struct{}
+
+func (*zeroReader) Read(buffer []byte) (int, error) { clear(buffer); return len(buffer), nil }
+
+type failedCaptureReader struct{}
+
+func (failedCaptureReader) Read([]byte) (int, error) {
+	return 0, errors.New("archive transport interrupted")
+}
+
 func TestDecodeExactJSONRejectsDuplicateMissingZeroAndNullFields(t *testing.T) {
 	t.Parallel()
 	binding := validBinding()
@@ -1275,6 +1709,7 @@ type fakeContainer struct {
 	statErrors        []error
 	copyErrors        []error
 	beforeCopy        func() error
+	archiveReader     func(context.Context) io.ReadCloser
 }
 
 func newFakeContainer(content []byte) *fakeContainer {
@@ -1448,7 +1883,7 @@ func (f *fakeContainer) ContainerStatPath(
 }
 
 func (f *fakeContainer) CopyFromContainer(
-	_ context.Context,
+	ctx context.Context,
 	containerID string,
 	containerPath string,
 ) (io.ReadCloser, containertypes.PathStat, error) {
@@ -1483,11 +1918,16 @@ func (f *fakeContainer) CopyFromContainer(
 			stat.Size = 0
 		}
 	}
+	if f.archiveReader != nil {
+		return f.archiveReader(ctx), stat, nil
+	}
 	return io.NopCloser(bytes.NewReader(f.archive)), stat, nil
 }
 
 type fakeStoredObject struct {
 	data          []byte
+	filePath      string
+	fileSize      int64
 	contentSHA256 string
 	metadata      map[string]string
 }
@@ -1508,6 +1948,14 @@ type fakeObjectStore struct {
 	deletedKeys           map[string]bool
 	rangeReads            []fakeRangeRead
 	fullContentReads      int
+	directory             string
+	failBeforeStoreSuffix string
+	streamWrites          int
+	streamReads           int
+	maximumStreamWrite    int
+	maximumStreamRead     int
+	wrapContentReader     func(io.ReadCloser) io.ReadCloser
+	afterStreamRead       func(int)
 }
 
 func newFakeObjectStore() *fakeObjectStore {
@@ -1527,6 +1975,9 @@ func (f *fakeObjectStore) CreatePrivateObject(
 ) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failBeforeStoreSuffix != "" && strings.HasSuffix(key, f.failBeforeStoreSuffix) {
+		return errors.New("simulated object-store failure before publication")
+	}
 	if _, exists := f.objects[key]; exists {
 		return storage.ErrPrivateObjectAlreadyExists
 	}
@@ -1542,6 +1993,126 @@ func (f *fakeObjectStore) CreatePrivateObject(
 	return nil
 }
 
+func (f *fakeObjectStore) CreatePrivateObjectStream(
+	ctx context.Context,
+	key string,
+	reader io.Reader,
+	size int64,
+	contentType string,
+	metadata map[string]string,
+) error {
+	if f.directory == "" {
+		data, err := io.ReadAll(reader)
+		if err != nil {
+			return err
+		}
+		if int64(len(data)) != size {
+			return errors.New("streamed object size differs")
+		}
+		return f.CreatePrivateObject(ctx, key, data, contentType, metadata)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, exists := f.objects[key]; exists {
+		return storage.ErrPrivateObjectAlreadyExists
+	}
+	f.streamWrites++
+	file, err := os.CreateTemp(f.directory, "streamed-object-*")
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.Remove(file.Name())
+		}
+	}()
+	hasher := sha256.New()
+	writer := io.MultiWriter(file, hasher)
+	// Deliberately ask for more than the capture buffer to prove that the
+	// service bounds the bytes a storage implementation can pull at once.
+	buffer := make([]byte, 2*captureStreamBufferBytes)
+	var written int64
+	for {
+		count, readErr := reader.Read(buffer)
+		f.maximumStreamWrite = max(f.maximumStreamWrite, count)
+		if count > 0 {
+			if _, err := writer.Write(buffer[:count]); err != nil {
+				return err
+			}
+			written += int64(count)
+		}
+		if f.afterStreamRead != nil {
+			f.afterStreamRead(count)
+		}
+		if readErr != nil {
+			if !errors.Is(readErr, io.EOF) {
+				return readErr
+			}
+			break
+		}
+	}
+	if written != size {
+		return errors.New("streamed object size differs")
+	}
+	f.objects[key] = fakeStoredObject{
+		filePath: file.Name(), fileSize: size,
+		contentSHA256: "sha256:" + hex.EncodeToString(hasher.Sum(nil)),
+		metadata:      lowerMetadata(metadata),
+	}
+	committed = true
+	if f.failAfterStoreSuffix != "" && strings.HasSuffix(key, f.failAfterStoreSuffix) {
+		return errors.New("simulated lost object-store response")
+	}
+	return nil
+}
+
+func (f *fakeObjectStore) OpenPrivateObject(ctx context.Context, key string) (io.ReadCloser, storage.PrivateObjectInfo, error) {
+	info, err := f.StatPrivateObject(ctx, key)
+	if err != nil {
+		return nil, storage.PrivateObjectInfo{}, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.streamReads++
+	object := f.objects[key]
+	var reader io.ReadCloser
+	if object.filePath != "" {
+		reader, err = os.Open(object.filePath)
+		if err != nil {
+			return nil, storage.PrivateObjectInfo{}, err
+		}
+	} else {
+		reader = io.NopCloser(bytes.NewReader(append([]byte(nil), object.data...)))
+	}
+	reader = &observedReadCloser{ReadCloser: reader, observe: func(requested, _ int) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.maximumStreamRead = max(f.maximumStreamRead, requested)
+	}}
+	if f.wrapContentReader != nil {
+		reader = f.wrapContentReader(reader)
+	}
+	return reader, info, nil
+}
+
+func (f *fakeObjectStore) ListPrivateObjects(_ context.Context, prefix string, maximum int) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var keys []string
+	for key := range f.objects {
+		if strings.HasPrefix(key, prefix) {
+			keys = append(keys, key)
+		}
+	}
+	if len(keys) > maximum {
+		return nil, storage.ErrPrivateObjectListTooLarge
+	}
+	slices.Sort(keys)
+	return keys, nil
+}
+
 func (f *fakeObjectStore) GetPrivateObject(
 	_ context.Context,
 	key string,
@@ -1552,6 +2123,9 @@ func (f *fakeObjectStore) GetPrivateObject(
 	object, exists := f.objects[key]
 	if !exists {
 		return nil, storage.ErrPrivateObjectNotFound
+	}
+	if object.filePath != "" {
+		return nil, errors.New("large content reached buffered object API")
 	}
 	if int64(len(object.data)) > maximumBytes {
 		return nil, storage.ErrPrivateObjectTooLarge
@@ -1574,11 +2148,25 @@ func (f *fakeObjectStore) GetPrivateObjectRange(
 	if !exists {
 		return nil, storage.ErrPrivateObjectNotFound
 	}
-	if offset < 0 || maximumBytes <= 0 || offset > int64(len(object.data)) {
+	size := int64(len(object.data))
+	if object.filePath != "" {
+		size = object.fileSize
+	}
+	if offset < 0 || maximumBytes <= 0 || offset > size {
 		return nil, storage.ErrPrivateObjectTooLarge
 	}
 	f.rangeReads = append(f.rangeReads, fakeRangeRead{key: key, offset: offset, maximumBytes: maximumBytes})
-	end := min(offset+maximumBytes, int64(len(object.data)))
+	end := min(offset+maximumBytes, size)
+	if object.filePath != "" {
+		file, err := os.Open(object.filePath)
+		if err != nil {
+			return nil, err
+		}
+		defer file.Close()
+		data := make([]byte, end-offset)
+		_, err = file.ReadAt(data, offset)
+		return data, err
+	}
 	return append([]byte(nil), object.data[offset:end]...), nil
 }
 
@@ -1601,8 +2189,12 @@ func (f *fakeObjectStore) StatPrivateObject(
 	if !exists {
 		return storage.PrivateObjectInfo{}, storage.ErrPrivateObjectNotFound
 	}
+	size := int64(len(object.data))
+	if object.filePath != "" {
+		size = object.fileSize
+	}
 	return storage.PrivateObjectInfo{
-		Size:          int64(len(object.data)),
+		Size:          size,
 		ContentSHA256: object.contentSHA256,
 		UserMetadata:  lowerMetadata(object.metadata),
 	}, nil
@@ -1613,6 +2205,11 @@ func (f *fakeObjectStore) DeletePrivateObject(_ context.Context, key string) err
 	defer f.mu.Unlock()
 	if f.failDeleteSuffix != "" && strings.HasSuffix(key, f.failDeleteSuffix) {
 		return errors.New("simulated delete cut")
+	}
+	if object, exists := f.objects[key]; exists && object.filePath != "" {
+		if err := os.Remove(object.filePath); err != nil {
+			return err
+		}
 	}
 	delete(f.objects, key)
 	f.deletedKeys[key] = true
