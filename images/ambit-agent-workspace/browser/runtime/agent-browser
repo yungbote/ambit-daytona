@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# The workspace is already scoped to its tenant, principal, Run, grant and
+# generation. Keep browser state inside that boundary and use the Runner's
+# network configuration; this launcher is not an authorization boundary.
+set -euo pipefail
+umask 077
+
+export AGENT_BROWSER_EXECUTABLE_PATH=/opt/ambit/browser/chrome/chrome
+export AGENT_BROWSER_REQUIRE_DAEMON=1
+export AGENT_BROWSER_REQUIRE_SANDBOX=1
+export AGENT_BROWSER_SOCKET_DIR=/workspace/.ambit/browser/sockets
+export AGENT_BROWSER_CONTENT_BOUNDARIES=1
+export AGENT_BROWSER_DOWNLOAD_PATH="${AGENT_BROWSER_DOWNLOAD_PATH:-/workspace/outputs/downloads}"
+export AGENT_BROWSER_SCREENSHOT_DIR="${AGENT_BROWSER_SCREENSHOT_DIR:-/workspace/work/browser/screenshots}"
+
+mkdir -p "$AGENT_BROWSER_SOCKET_DIR" "$AGENT_BROWSER_DOWNLOAD_PATH" "$AGENT_BROWSER_SCREENSHOT_DIR"
+
+# Chromium does not consume HTTP(S)_PROXY or SSL_CERT_FILE itself. The native
+# driver maps these existing provider settings to Chrome proxy/NSS trust. It
+# retains certificate verification; no proxy credentials are logged here.
+if [[ -z "${AGENT_BROWSER_PROXY:-}" ]]; then
+  browser_proxy="${HTTPS_PROXY:-${https_proxy:-${HTTP_PROXY:-${http_proxy:-}}}}"
+  if [[ -n "$browser_proxy" ]]; then
+    export AGENT_BROWSER_PROXY="$browser_proxy"
+  fi
+fi
+if [[ -z "${AGENT_BROWSER_PROXY_BYPASS:-}" && -n "${NO_PROXY:-${no_proxy:-}}" ]]; then
+  browser_proxy_bypass="${NO_PROXY:-${no_proxy:-}}"
+  export AGENT_BROWSER_PROXY_BYPASS="${browser_proxy_bypass//,/;}"
+fi
+if [[ -z "${AGENT_BROWSER_CA_CERT:-}" && -n "${SSL_CERT_FILE:-}" ]]; then
+  export AGENT_BROWSER_CA_CERT="$SSL_CERT_FILE"
+fi
+
+exec /opt/ambit/browser/bin/agent-browser "$@"

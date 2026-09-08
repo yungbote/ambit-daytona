@@ -1,0 +1,35 @@
+{
+  "schema": "ambit.workspace-browser-lock/v1",
+  "baseImage": "us-east4-docker.pkg.dev/mwcc-infrastructure/ambit/ambit-agent-workspace@sha256:1dbc9cac4326224679f4bae44402839f1c3c064db2bc2c34d62782aad625c950",
+  "agentBrowser": {
+    "repository": "https://github.com/yungbote/ambit-agent-browser",
+    "upstreamRepository": "https://github.com/vercel-labs/agent-browser",
+    "upstreamRevision": "72007a6788d863611b23bed0b59d0d659c638d8e",
+    "revision": "ad055e00d8d4e2a30dc46693452a2a559a3e0505",
+    "sourceTree": "6d6962367e250567ea9e6a064f21558c207c474c",
+    "version": "0.37.1",
+    "archiveName": "agent-browser-source.tar.gz",
+    "sha256": "e38f530055bade00d9d996065e07099582447e5898338368690dc7c41d264d4b"
+  },
+  "chrome": {
+    "version": "152.0.7977.82",
+    "url": "https://storage.googleapis.com/chrome-for-testing-public/152.0.7977.82/linux64/chrome-linux64.zip",
+    "archiveName": "chrome-linux64.zip",
+    "sha256": "0704631fb3e4f741092e08f55272f90abc3e307f991f05f332924364415b02e0"
+  },
+  "debianPackages": {
+    "at-spi2-common": "2.56.2-1+deb13u1",
+    "libatk1.0-0t64": "2.56.2-1+deb13u1",
+    "libatk-bridge2.0-0t64": "2.56.2-1+deb13u1",
+    "libatspi2.0-0t64": "2.56.2-1+deb13u1",
+    "libnss3-tools": "2:3.110-1+deb13u4",
+    "libxcomposite1": "1:0.4.6-1",
+    "libxdamage1": "1:1.1.6-1+b2"
+  },
+  "inheritedMaterializer": {
+    "path": "/opt/ambit/runtime-pack/core-document/bin/ambit-atomic-materialize",
+    "sha256": "d6d8bd4248570e7f66fe7e545e8117e558a1d6c1ce1e149a55a36c7f17c7748d",
+    "bytes": 2666622,
+    "sourceBuildProvenance": "not-established; retained as exact existing workspace image input"
+  }
+}
