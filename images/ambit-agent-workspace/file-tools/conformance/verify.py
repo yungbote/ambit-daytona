@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import subprocess
@@ -27,7 +28,7 @@ def run(argv, *, cwd, env=None, timeout=60):
     return result.stdout, time.monotonic() - started
 
 
-def measured_run(argv, *, cwd, timeout=60):
+def measured_run(argv, *, cwd, timeout=60, cancel_after_output=None):
     """Linux wait4 gives this command's actual peak RSS, not a sampled estimate.
 
     Capture into files to avoid pipe backpressure. A deadline kills the command's
@@ -39,17 +40,26 @@ def measured_run(argv, *, cwd, timeout=60):
         process = subprocess.Popen(argv, cwd=cwd, stdout=stdout, stderr=stderr,
                                    start_new_session=True)
         cancelled = False
+        cancellation = {}
         while True:
             waited, status, usage = os.wait4(process.pid, os.WNOHANG)
             if waited:
                 break
-            if time.monotonic() - started >= timeout:
+            output_bytes = (cancel_after_output.stat().st_size
+                            if cancel_after_output and cancel_after_output.exists() else 0)
+            if output_bytes or time.monotonic() - started >= timeout:
                 cancelled = True
+                cancel_started = time.monotonic()
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass  # The command can finish between wait4 and the signal.
                 _, status, usage = os.wait4(process.pid, 0)
+                cancellation = {
+                    "cancellation_trigger": "output_progress" if output_bytes else "deadline",
+                    "observed_output_bytes": output_bytes,
+                    "cancellation_seconds": time.monotonic() - cancel_started,
+                }
                 break
             time.sleep(0.01)
         process.returncode = os.waitstatus_to_exitcode(status)
@@ -58,6 +68,7 @@ def measured_run(argv, *, cwd, timeout=60):
         stderr.seek(0)
         return {"argv": argv, "exit": process.returncode, "seconds": elapsed,
                 "peak_rss_kib": usage.ru_maxrss, "cancelled": cancelled,
+                **cancellation,
                 "process_group": process.pid,
                 "stdout": stdout.read().decode(errors="replace"),
                 "stderr": stderr.read().decode(errors="replace")}
@@ -71,6 +82,7 @@ def command_evidence(result):
 results = []
 with tempfile.TemporaryDirectory(prefix="ambit-file-tools-") as name:
     directory = Path(name)
+    originals = {}
     assert os.getuid() != 0, "Exercise the actual non-root workspace user"
     assert importlib.metadata.version("mammoth") == "1.12.1"
     private_python = "/opt/ambit/file-tools/python/bin/python"
@@ -79,7 +91,7 @@ with tempfile.TemporaryDirectory(prefix="ambit-file-tools-") as name:
     results.append({"check": "isolated Python dependencies", "passed": True})
 
     doc = Document()
-    doc.add_heading("Workspace quantity check", 0)
+    doc.add_heading("Workspace quantity check", 1)
     doc.add_paragraph("The source material remains unchanged.")
     table = doc.add_table(rows=1, cols=2)
     table.rows[0].cells[0].text = "Material"
@@ -89,13 +101,17 @@ with tempfile.TemporaryDirectory(prefix="ambit-file-tools-") as name:
     row.cells[1].text = "18.75"
     source = directory / "source document.docx"
     doc.save(source)
+    originals[source] = hashlib.sha256(source.read_bytes()).hexdigest()
     markdown, elapsed = run(["markitdown", source.name], cwd=directory)
-    assert all(value in markdown for value in ["Workspace quantity check", "Copper", "18.75"])
+    assert re.search(r"(?m)^#\s+Workspace quantity check\s*$", markdown), markdown
+    assert re.search(r"(?m)^\|\s*Material\s*\|\s*Quantity\s*\|\s*$", markdown), markdown
+    assert re.search(r"(?m)^\|\s*Copper\s*\|\s*18\.75\s*\|\s*$", markdown), markdown
     results.append({"check": "MarkItDown structure", "seconds": elapsed, "passed": True})
 
     # Detection comes from content; this is not an application extension router.
     opaque = directory / "opaque.upload"
     opaque.write_bytes(source.read_bytes())
+    originals[opaque] = hashlib.sha256(opaque.read_bytes()).hexdigest()
     text, elapsed = run(["tika", "--text", opaque.name], cwd=directory)
     assert all(value in text for value in ["Workspace quantity check", "Copper", "18.75"])
     results.append({"check": "Tika content detection and relative path", "seconds": elapsed, "passed": True})
@@ -104,14 +120,14 @@ with tempfile.TemporaryDirectory(prefix="ambit-file-tools-") as name:
     ImageDraw.Draw(image).text((100, 100), "RASTER EVIDENCE 427", fill="black", font_size=60)
     image_path = directory / "image.png"
     image.save(image_path)
+    originals[image_path] = hashlib.sha256(image_path.read_bytes()).hexdigest()
     pdf = pymupdf.open()
     page = pdf.new_page(width=900, height=600)
     page.insert_image(page.rect, filename=str(image_path))
     pdf_path = directory / "image-only.pdf"
     pdf.save(pdf_path)
     pdf.close()
-    originals = {path: hashlib.sha256(path.read_bytes()).hexdigest()
-                 for path in (source, opaque, image_path, pdf_path)}
+    originals[pdf_path] = hashlib.sha256(pdf_path.read_bytes()).hexdigest()
     traps = directory / "traps"
     traps.mkdir()
     trap = traps / "tesseract"
@@ -215,9 +231,13 @@ with tempfile.TemporaryDirectory(prefix="ambit-file-tools-") as name:
                     "commands": [command_evidence(bad_image), command_evidence(bad_pdf)],
                     "passed": True})
 
-    cancelled = measured_run(["vips", "gaussnoise", "cancelled.partial.tiff", "16000", "10000"], cwd=directory, timeout=0.2)
+    partial = directory / "cancelled.partial.tiff"
+    cancelled = measured_run(["vips", "gaussnoise", partial.name, "16000", "10000"],
+                             cwd=directory, timeout=10, cancel_after_output=partial)
     assert cancelled["cancelled"] and cancelled["exit"] == -signal.SIGKILL, cancelled
-    assert cancelled["seconds"] < 3, cancelled
+    assert cancelled["cancellation_trigger"] == "output_progress", cancelled
+    assert cancelled["observed_output_bytes"] > 0, cancelled
+    assert cancelled["cancellation_seconds"] < 3, cancelled
     try:
         os.killpg(cancelled["process_group"], 0)
     except ProcessLookupError:
@@ -226,7 +246,6 @@ with tempfile.TemporaryDirectory(prefix="ambit-file-tools-") as name:
         raise AssertionError("Cancelled tool process group remains alive")
     # Partial output is explicitly uncommitted; killing a general CLI need not
     # remove its files. The ordinary Run/artifact owner decides publication.
-    partial = directory / "cancelled.partial.tiff"
     partial_bytes = partial.stat().st_size if partial.exists() else 0
     partial.unlink(missing_ok=True)
     run(["vips", "crop", str(image_path), "after-cancel.png", "80", "80", "1000", "200"], cwd=directory)
