@@ -1,4 +1,71 @@
 definitions:
+  workingcopy.StoppedWorkingTreeReceipt:
+    properties:
+      entries:
+        items:
+          $ref: '#/definitions/workingcopy.StoppedDirectoryRosterEntry'
+        type: array
+      observedAt:
+        type: string
+      request:
+        $ref: '#/definitions/workingcopy.StoppedWorkingTreeRequest'
+      rosterDigest:
+        type: string
+      terminalGeneration:
+        $ref: '#/definitions/generationstop.TerminalGeneration'
+    required:
+      - entries
+      - observedAt
+      - request
+      - rosterDigest
+      - terminalGeneration
+    type: object
+  workingcopy.StoppedWorkingTreeRequest:
+    properties:
+      excludedPaths:
+        items:
+          type: string
+        type: array
+      generation:
+        $ref: '#/definitions/workingcopy.CaptureGenerationBinding'
+      maximumAggregateBytes:
+        type: integer
+      maximumDepth:
+        type: integer
+      maximumEntries:
+        type: integer
+      maximumFileBytes:
+        type: integer
+    required:
+      - excludedPaths
+      - generation
+      - maximumAggregateBytes
+      - maximumDepth
+      - maximumEntries
+      - maximumFileBytes
+    type: object
+  workingcopy.CaptureGenerationBinding:
+    properties:
+      authority:
+        $ref: '#/definitions/workingcopy.CaptureAuthority'
+      owner:
+        $ref: '#/definitions/workingcopy.CaptureOwner'
+      providerName:
+        type: string
+      requestFingerprint:
+        type: string
+      source:
+        $ref: '#/definitions/workingcopy.SourceAddress'
+      stopAuthority:
+        $ref: '#/definitions/generationstop.StopAuthority'
+    required:
+      - authority
+      - owner
+      - providerName
+      - requestFingerprint
+      - source
+      - stopAuthority
+    type: object
   BuildSnapshotRequestDTO:
     properties:
       context:
@@ -1096,6 +1163,50 @@ info:
   title: Daytona Runner API
   version: v0.0.0-dev
 paths:
+  /sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree:
+    post:
+      description: Stream a complete bounded working-tree roster without an anchor
+        file. Managed runtime roots and exact host-provided mount paths are excluded;
+        unsupported user links and special files fail closed.
+      operationId: StoppedWorkingCopyWorkingTree
+      parameters:
+        - description: Sandbox ID
+          in: path
+          name: sandboxId
+          required: true
+          type: string
+        - description: Generation authority, exclusions, and bounds
+          in: body
+          name: body
+          required: true
+          schema:
+            $ref: '#/definitions/workingcopy.StoppedWorkingTreeRequest'
+      produces:
+        - application/json
+      responses:
+        '200':
+          description: OK
+          schema:
+            $ref: '#/definitions/workingcopy.StoppedWorkingTreeReceipt'
+        '400':
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '401':
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '409':
+          description: Conflict
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '503':
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+      summary: List user files from an exact stopped sandbox generation
+      tags:
+        - sandbox
   /:
     get:
       description: Health check

@@ -695,7 +695,7 @@ const docTemplate = `{
         },
         "/sandboxes/{sandboxId}/secrets": {
             "post": {
-                "description": "Pushes the sandbox's desired secret env (env var name -\u003e placeholder) so newly spawned processes in a running sandbox see it. A sandbox without secret-proxy wiring picks the change up on its next start instead.",
+                "description": "Pushes the sandbox's desired secret env (env var name -> placeholder) so newly spawned processes in a running sandbox see it. A sandbox without secret-proxy wiring picks the change up on its next start instead.",
                 "produces": [
                     "application/json"
                 ],
@@ -1627,6 +1627,69 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/workingcopy.StoppedDirectoryRosterReceipt"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree": {
+            "post": {
+                "description": "Stream a complete bounded working-tree roster without an anchor file. Managed runtime roots and exact host-provided mount paths are excluded; unsupported user links and special files fail closed.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sandbox"
+                ],
+                "summary": "List user files from an exact stopped sandbox generation",
+                "operationId": "StoppedWorkingCopyWorkingTree",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Sandbox ID",
+                        "name": "sandboxId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Generation authority, exclusions, and bounds",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/workingcopy.StoppedWorkingTreeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/workingcopy.StoppedWorkingTreeReceipt"
                         }
                     },
                     "400": {
@@ -3281,6 +3344,37 @@ const docTemplate = `{
                 }
             }
         },
+        "workingcopy.CaptureGenerationBinding": {
+            "type": "object",
+            "required": [
+                "authority",
+                "owner",
+                "providerName",
+                "requestFingerprint",
+                "source",
+                "stopAuthority"
+            ],
+            "properties": {
+                "authority": {
+                    "$ref": "#/definitions/workingcopy.CaptureAuthority"
+                },
+                "owner": {
+                    "$ref": "#/definitions/workingcopy.CaptureOwner"
+                },
+                "providerName": {
+                    "type": "string"
+                },
+                "requestFingerprint": {
+                    "type": "string"
+                },
+                "source": {
+                    "$ref": "#/definitions/workingcopy.SourceAddress"
+                },
+                "stopAuthority": {
+                    "$ref": "#/definitions/generationstop.StopAuthority"
+                }
+            }
+        },
         "workingcopy.CaptureIdentity": {
             "type": "object",
             "required": [
@@ -3662,6 +3756,70 @@ const docTemplate = `{
                 },
                 "selector": {
                     "$ref": "#/definitions/workingcopy.CaptureSelector"
+                }
+            }
+        },
+        "workingcopy.StoppedWorkingTreeReceipt": {
+            "type": "object",
+            "required": [
+                "entries",
+                "observedAt",
+                "request",
+                "rosterDigest",
+                "terminalGeneration"
+            ],
+            "properties": {
+                "entries": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workingcopy.StoppedDirectoryRosterEntry"
+                    }
+                },
+                "observedAt": {
+                    "type": "string"
+                },
+                "request": {
+                    "$ref": "#/definitions/workingcopy.StoppedWorkingTreeRequest"
+                },
+                "rosterDigest": {
+                    "type": "string"
+                },
+                "terminalGeneration": {
+                    "$ref": "#/definitions/generationstop.TerminalGeneration"
+                }
+            }
+        },
+        "workingcopy.StoppedWorkingTreeRequest": {
+            "type": "object",
+            "required": [
+                "excludedPaths",
+                "generation",
+                "maximumAggregateBytes",
+                "maximumDepth",
+                "maximumEntries",
+                "maximumFileBytes"
+            ],
+            "properties": {
+                "excludedPaths": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "generation": {
+                    "$ref": "#/definitions/workingcopy.CaptureGenerationBinding"
+                },
+                "maximumAggregateBytes": {
+                    "type": "integer"
+                },
+                "maximumDepth": {
+                    "type": "integer"
+                },
+                "maximumEntries": {
+                    "type": "integer"
+                },
+                "maximumFileBytes": {
+                    "type": "integer"
                 }
             }
         }

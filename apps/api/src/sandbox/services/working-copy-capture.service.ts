@@ -4,6 +4,7 @@
  */
 
 import { createHash } from 'node:crypto'
+import { toUSVString } from 'node:util'
 import { posix as posixPath } from 'node:path'
 import {
   BadRequestException,
@@ -16,6 +17,16 @@ import {
 
 import {
   MAXIMUM_WORKING_COPY_CAPTURE_BYTES,
+  MAXIMUM_USER_FILE_CAPTURE_BYTES,
+  MAXIMUM_USER_FILE_READ_BYTES,
+  MAXIMUM_WORKING_TREE_DEPTH,
+  MAXIMUM_WORKING_TREE_ENTRIES,
+  MAXIMUM_WORKING_TREE_AGGREGATE_BYTES,
+  MAXIMUM_WORKING_TREE_RECEIPT_BYTES,
+  USER_FILES_SEMANTIC_ZONE_REF,
+  WorkingCopyCaptureGenerationDto,
+  StoppedWorkingCopyWorkingTreeRequestDto,
+  StoppedWorkingCopyWorkingTreeReceiptDto,
   MAXIMUM_WORKING_COPY_CAPTURE_READ_BYTES,
   MAXIMUM_WORKING_COPY_ROSTER_AGGREGATE_BYTES,
   MAXIMUM_WORKING_COPY_ROSTER_DEPTH,
@@ -172,6 +183,29 @@ export class WorkingCopyCaptureService {
     }
   }
 
+  async stoppedWorkingTree(
+    organizationId: string,
+    sandboxIdOrName: string,
+    request: StoppedWorkingCopyWorkingTreeRequestDto,
+    signal?: AbortSignal,
+  ): Promise<StoppedWorkingCopyWorkingTreeReceiptDto> {
+    assertStoppedWorkingTreeRequest(request)
+    const { sandbox, adapter } = await this.executionAuthority.authorize(
+      organizationId,
+      sandboxIdOrName,
+      request.generation.source,
+      request.generation.owner,
+      request.generation.stopAuthority.fence,
+    )
+    try {
+      const receipt = await adapter.stoppedWorkingCopyWorkingTree(sandbox.id, request, signal)
+      assertStoppedWorkingTreeReceipt(receipt, request)
+      return receipt
+    } catch (error) {
+      throw translateRunnerCaptureError(error, false)
+    }
+  }
+
   async delete(
     organizationId: string,
     sandboxIdOrName: string,
@@ -286,6 +320,7 @@ function assertStoppedDirectoryRosterRequest(request: StoppedWorkingCopyDirector
   assertBinding(request.anchor)
   assertExactKeys(request.selector, ['semanticZoneRef', 'zoneRelativePath'], 'roster selector', BadRequestException)
   if (
+    request.selector.semanticZoneRef === USER_FILES_SEMANTIC_ZONE_REF ||
     request.selector.semanticZoneRef !== request.anchor.selector.semanticZoneRef ||
     !canonicalRelativePath(request.selector.zoneRelativePath) ||
     !request.anchor.selector.zoneRelativePath.startsWith(`${request.selector.zoneRelativePath}/`) ||
@@ -410,7 +445,7 @@ function assertBinding(binding: WorkingCopyCaptureBindingDto): void {
   assertBindingValues(binding)
 }
 
-function assertBindingValues(binding: WorkingCopyCaptureBindingDto): void {
+function assertGenerationValues(binding: WorkingCopyCaptureGenerationDto): void {
   if (!boundedRef(binding.providerName, 512) || !/^[0-9a-f]{64}$/.test(binding.requestFingerprint)) {
     throw new BadRequestException('Working-copy capture identity is not canonical.')
   }
@@ -449,10 +484,19 @@ function assertBindingValues(binding: WorkingCopyCaptureBindingDto): void {
   ) {
     throw new BadRequestException('Working-copy capture owner is not canonical.')
   }
+}
+
+function assertBindingValues(binding: WorkingCopyCaptureBindingDto): void {
+  assertGenerationValues(binding)
   assertExactKeys(binding.selector, ['semanticZoneRef', 'zoneRelativePath'], 'capture selector', BadRequestException)
   if (
-    !['ambit.workspace-zone/work@1', 'ambit.workspace-zone/outputs@1'].includes(binding.selector.semanticZoneRef) ||
-    !canonicalRelativePath(binding.selector.zoneRelativePath)
+    !['ambit.workspace-zone/work@1', 'ambit.workspace-zone/outputs@1', USER_FILES_SEMANTIC_ZONE_REF].includes(
+      binding.selector.semanticZoneRef,
+    ) ||
+    !(binding.selector.semanticZoneRef === USER_FILES_SEMANTIC_ZONE_REF
+      ? canonicalWorkingTreePath(binding.selector.zoneRelativePath) &&
+        !reservedWorkingTreePath(binding.selector.zoneRelativePath)
+      : canonicalRelativePath(binding.selector.zoneRelativePath))
   ) {
     throw new BadRequestException('Working-copy capture selector is not canonical.')
   }
@@ -537,12 +581,15 @@ function assertRead(request: WorkingCopyCaptureReadDto): void {
     !Number.isSafeInteger(request.maximumBytes) ||
     !Number.isSafeInteger(request.offset) ||
     request.expectedTotalByteLength < 0 ||
-    request.expectedTotalByteLength > MAXIMUM_WORKING_COPY_CAPTURE_BYTES ||
+    request.expectedTotalByteLength > captureByteLimit(request) ||
     !/^sha256:[0-9a-f]{64}$/.test(request.expectedProviderSha256Digest) ||
     request.offset < 0 ||
     request.offset > request.expectedTotalByteLength ||
     request.maximumBytes <= 0 ||
-    request.maximumBytes > MAXIMUM_WORKING_COPY_CAPTURE_READ_BYTES
+    request.maximumBytes >
+      (request.selector.semanticZoneRef === USER_FILES_SEMANTIC_ZONE_REF
+        ? MAXIMUM_USER_FILE_READ_BYTES
+        : MAXIMUM_WORKING_COPY_CAPTURE_READ_BYTES)
   ) {
     throw new BadRequestException('Working-copy capture read bounds are invalid.')
   }
@@ -572,7 +619,7 @@ function assertReceipt(receipt: WorkingCopyCaptureReceiptDto, expectedBinding: W
     !sameBinding(receipt, expectedBinding) ||
     !Number.isSafeInteger(receipt.totalByteLength) ||
     receipt.totalByteLength < 0 ||
-    receipt.totalByteLength > MAXIMUM_WORKING_COPY_CAPTURE_BYTES ||
+    receipt.totalByteLength > captureByteLimit(expectedBinding) ||
     !/^sha256:[0-9a-f]{64}$/.test(receipt.providerSha256Digest) ||
     !canonicalUtcTimestamp(receipt.capturedAt)
   ) {
@@ -701,11 +748,11 @@ function bindingData(value: WorkingCopyCaptureBindingDto): object {
   }
 }
 
-function canonicalRelativePath(value: unknown): value is string {
+function canonicalRelativePath(value: unknown, maximumBytes = 2048): value is string {
   if (
     typeof value !== 'string' ||
     value.length === 0 ||
-    Buffer.byteLength(value, 'utf8') > 2048 ||
+    Buffer.byteLength(value, 'utf8') > maximumBytes ||
     value.startsWith('/') ||
     value.endsWith('/') ||
     value.includes('\\') ||
@@ -714,7 +761,7 @@ function canonicalRelativePath(value: unknown): value is string {
     value === '..' ||
     [...value].some((character) => {
       const code = character.codePointAt(0) as number
-      return code < 32 || code === 127
+      return code < 32 || (code >= 127 && code <= 159)
     })
   ) {
     return false
@@ -732,7 +779,7 @@ function boundedRef(value: unknown, maximum: number): value is string {
     value === value.trim() &&
     ![...value].some((character) => {
       const code = character.codePointAt(0) as number
-      return code < 32 || code === 127
+      return code < 32 || (code >= 127 && code <= 159)
     })
   )
 }
@@ -856,4 +903,143 @@ const runnerCaptureLogger = new Logger('WorkingCopyCaptureRunner')
 function boundedRunnerMessage(message: string): string {
   const printable = message.replace(/[^\x20-\x7e]/g, ' ').trim()
   return printable.length > 240 ? `${printable.slice(0, 240)}...` : printable || '(no message)'
+}
+
+function captureByteLimit(binding: WorkingCopyCaptureBindingDto): number {
+  return binding.selector.semanticZoneRef === USER_FILES_SEMANTIC_ZONE_REF
+    ? MAXIMUM_USER_FILE_CAPTURE_BYTES
+    : MAXIMUM_WORKING_COPY_CAPTURE_BYTES
+}
+
+function canonicalWorkingTreePath(value: unknown): value is string {
+  return canonicalRelativePath(value, 4096) && toUSVString(value) === value && value.normalize('NFC') === value
+}
+
+function reservedWorkingTreePath(value: string): boolean {
+  const root = value.split('/')[0]
+  return root === '.ambit' || root.startsWith('.ambit-skill-')
+}
+
+function excludedWorkingTreePath(value: string, exclusions: ReadonlySet<string>): boolean {
+  if (reservedWorkingTreePath(value)) return true
+  for (let candidate = value; candidate !== '.'; candidate = posixPath.dirname(candidate)) {
+    if (exclusions.has(candidate)) return true
+  }
+  return false
+}
+
+function assertStoppedWorkingTreeRequest(request: StoppedWorkingCopyWorkingTreeRequestDto): void {
+  assertExactKeys(
+    request,
+    ['generation', 'excludedPaths', 'maximumDepth', 'maximumEntries', 'maximumFileBytes', 'maximumAggregateBytes'],
+    'working-tree request',
+    BadRequestException,
+  )
+  assertExactKeys(
+    request.generation,
+    ['authority', 'owner', 'providerName', 'requestFingerprint', 'source', 'stopAuthority'],
+    'working-tree generation',
+    BadRequestException,
+  )
+  assertGenerationValues(request.generation)
+  if (
+    !Array.isArray(request.excludedPaths) ||
+    request.excludedPaths.length > MAXIMUM_WORKING_TREE_ENTRIES ||
+    !Number.isSafeInteger(request.maximumDepth) ||
+    request.maximumDepth < 1 ||
+    request.maximumDepth > MAXIMUM_WORKING_TREE_DEPTH ||
+    !Number.isSafeInteger(request.maximumEntries) ||
+    request.maximumEntries < 1 ||
+    request.maximumEntries > MAXIMUM_WORKING_TREE_ENTRIES ||
+    !Number.isSafeInteger(request.maximumFileBytes) ||
+    request.maximumFileBytes < 1 ||
+    request.maximumFileBytes > MAXIMUM_USER_FILE_CAPTURE_BYTES ||
+    !Number.isSafeInteger(request.maximumAggregateBytes) ||
+    request.maximumAggregateBytes < request.maximumFileBytes ||
+    request.maximumAggregateBytes > MAXIMUM_WORKING_TREE_AGGREGATE_BYTES
+  ) {
+    throw new BadRequestException('Working-tree roster bounds or exclusions are invalid.')
+  }
+  const seen = new Set<string>()
+  for (const [index, excluded] of request.excludedPaths.entries()) {
+    if (
+      !canonicalWorkingTreePath(excluded) ||
+      (index > 0 && compareUtf8Lexicographic(request.excludedPaths[index - 1], excluded) >= 0)
+    ) {
+      throw new BadRequestException('Working-tree exclusions must be exact sorted unique relative paths.')
+    }
+    for (let parent = posixPath.dirname(excluded); parent !== '.'; parent = posixPath.dirname(parent)) {
+      if (seen.has(parent)) throw new BadRequestException('Working-tree exclusions repeat an excluded ancestor.')
+    }
+    seen.add(excluded)
+  }
+}
+
+function assertStoppedWorkingTreeReceipt(
+  receipt: StoppedWorkingCopyWorkingTreeReceiptDto,
+  request: StoppedWorkingCopyWorkingTreeRequestDto,
+): void {
+  assertExactKeys(
+    receipt,
+    ['entries', 'observedAt', 'request', 'rosterDigest', 'terminalGeneration'],
+    'working-tree receipt',
+    ConflictException,
+  )
+  if (
+    canonicalJson(receipt.request) !== canonicalJson(request) ||
+    canonicalJson(receipt.terminalGeneration) !== canonicalJson(request.generation.stopAuthority.terminalGeneration) ||
+    !Array.isArray(receipt.entries) ||
+    receipt.entries.length > request.maximumEntries ||
+    !/^sha256:[0-9a-f]{64}$/.test(receipt.rosterDigest) ||
+    !canonicalUtcTimestamp(receipt.observedAt) ||
+    Buffer.byteLength(JSON.stringify(receipt), 'utf8') > MAXIMUM_WORKING_TREE_RECEIPT_BYTES
+  ) {
+    throw new ConflictException('Runner returned a conflicting working-tree receipt.')
+  }
+  const excluded = new Set(request.excludedPaths)
+  const paths = new Map<string, string>()
+  let aggregate = 0
+  for (const [index, entry] of receipt.entries.entries()) {
+    assertExactKeys(
+      entry,
+      ['kind', 'mode', 'name', 'sha256', 'size', 'zoneRelativePath'],
+      'working-tree entry',
+      ConflictException,
+    )
+    if (
+      !canonicalWorkingTreePath(entry.zoneRelativePath) ||
+      excludedWorkingTreePath(entry.zoneRelativePath, excluded) ||
+      entry.name !== posixPath.basename(entry.zoneRelativePath) ||
+      entry.zoneRelativePath.split('/').length > request.maximumDepth ||
+      (entry.kind !== 'regular_file' && entry.kind !== 'directory') ||
+      !Number.isSafeInteger(entry.size) ||
+      entry.size < 0 ||
+      (entry.kind === 'directory' && (entry.size !== 0 || entry.sha256 !== null)) ||
+      (entry.kind === 'regular_file' &&
+        (entry.size > request.maximumFileBytes ||
+          typeof entry.sha256 !== 'string' ||
+          !/^sha256:[0-9a-f]{64}$/.test(entry.sha256))) ||
+      typeof entry.mode !== 'string' ||
+      !/^[0-7]{4}$/.test(entry.mode) ||
+      (index > 0 && compareUtf8Lexicographic(receipt.entries[index - 1].zoneRelativePath, entry.zoneRelativePath) >= 0)
+    ) {
+      throw new ConflictException('Runner returned an invalid working-tree entry.')
+    }
+    aggregate += entry.size
+    if (aggregate > request.maximumAggregateBytes)
+      throw new ConflictException('Runner working-tree roster exceeds its aggregate bound.')
+    for (let parent = posixPath.dirname(entry.zoneRelativePath); parent !== '.'; parent = posixPath.dirname(parent)) {
+      if (paths.get(parent) !== 'directory')
+        throw new ConflictException('Runner working-tree roster has no exact directory ancestry.')
+    }
+    paths.set(entry.zoneRelativePath, entry.kind)
+  }
+  const payload = {
+    contract: 'ambit.working-copy-stopped-working-tree/v1',
+    request,
+    terminalGeneration: receipt.terminalGeneration,
+    entries: receipt.entries,
+  }
+  const digest = `sha256:${createHash('sha256').update(canonicalJson(payload), 'utf8').digest('hex')}`
+  if (receipt.rosterDigest !== digest) throw new ConflictException('Runner working-tree roster digest changed.')
 }

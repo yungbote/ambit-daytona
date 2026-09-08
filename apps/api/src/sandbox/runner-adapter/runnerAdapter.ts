@@ -26,6 +26,8 @@ import {
   WorkingCopyCaptureReceiptDto,
   StoppedWorkingCopyDirectoryRosterRequestDto,
   StoppedWorkingCopyDirectoryRosterReceiptDto,
+  StoppedWorkingCopyWorkingTreeRequestDto,
+  StoppedWorkingCopyWorkingTreeReceiptDto,
 } from '../dto/working-copy-capture.dto'
 import {
   SandboxGenerationObservationDto,
@@ -236,6 +238,11 @@ export interface RunnerAdapter {
     request: StoppedWorkingCopyDirectoryRosterRequestDto,
     signal?: AbortSignal,
   ): Promise<StoppedWorkingCopyDirectoryRosterReceiptDto>
+  stoppedWorkingCopyWorkingTree(
+    sandboxId: string,
+    request: StoppedWorkingCopyWorkingTreeRequestDto,
+    signal?: AbortSignal,
+  ): Promise<StoppedWorkingCopyWorkingTreeReceiptDto>
 
   observeSandboxGeneration(
     sandboxId: string,

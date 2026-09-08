@@ -60,6 +60,9 @@ import {
   WorkingCopyCaptureReceiptDto,
   StoppedWorkingCopyDirectoryRosterRequestDto,
   StoppedWorkingCopyDirectoryRosterReceiptDto,
+  StoppedWorkingCopyWorkingTreeRequestDto,
+  StoppedWorkingCopyWorkingTreeReceiptDto,
+  MAXIMUM_WORKING_TREE_RECEIPT_BYTES,
 } from '../dto/working-copy-capture.dto'
 import {
   SandboxGenerationObservationDto,
@@ -147,6 +150,18 @@ export class RunnerAdapterV2 implements RunnerAdapter {
   ): Promise<StoppedWorkingCopyDirectoryRosterReceiptDto> {
     const response = await this.captureApi().stoppedWorkingCopyDirectoryRoster(sandboxId, request, { signal })
     return response.data as StoppedWorkingCopyDirectoryRosterReceiptDto
+  }
+
+  async stoppedWorkingCopyWorkingTree(
+    sandboxId: string,
+    request: StoppedWorkingCopyWorkingTreeRequestDto,
+    signal?: AbortSignal,
+  ): Promise<StoppedWorkingCopyWorkingTreeReceiptDto> {
+    const response = await this.captureApi().stoppedWorkingCopyWorkingTree(sandboxId, request, {
+      signal,
+      maxContentLength: MAXIMUM_WORKING_TREE_RECEIPT_BYTES,
+    })
+    return response.data as StoppedWorkingCopyWorkingTreeReceiptDto
   }
 
   async observeSandboxGeneration(
