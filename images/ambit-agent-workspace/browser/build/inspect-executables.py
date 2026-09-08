@@ -74,7 +74,7 @@ def add_libraries(libraries, interpreter, root, packages):
 
 def collect_python(programs, libraries, python, lock_root):
     # Read the locked environment itself, even when another interpreter runs
-    # this collector. Only console entrypoints can supply command descriptors.
+    # this collector. Entrypoints and installed executable scripts identify commands.
     requirement_bytes = (lock_root / python["requirements"]).read_bytes()
     if (
         hashlib.sha256(requirement_bytes).hexdigest()
