@@ -2,6 +2,7 @@
 """Exercise the installed native browser against an actual local HTTP fixture."""
 
 from functools import partial
+import argparse
 import hashlib
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -70,7 +71,47 @@ def all_terminated(identities):
     return True
 
 
+def renderer_sandbox_evidence(daemon_pid):
+    def status(pid):
+        return dict(line.split(":", 1) for line in Path(f"/proc/{pid}/status").read_text().splitlines() if ":" in line)
+
+    parent = status(daemon_pid)
+    parent_levels = len(parent["NSpid"].split())
+    parent_filters = int(parent.get("Seccomp_filters", "0"))
+    evidence = []
+    # Chromium may reparent sandboxed zygote descendants to the container's
+    # init. This conformance container hosts only this one browser, so inspect
+    # its complete process namespace instead of claiming ancestry is custody.
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        try:
+            arguments = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\x00")
+            if b"--type=renderer" not in b" ".join(arguments):
+                continue
+            observed = status(pid)
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        assert b"--no-sandbox" not in arguments
+        levels = len(observed["NSpid"].split())
+        filters = int(observed.get("Seccomp_filters", "0"))
+        assert levels > parent_levels, "Chrome renderer did not enter a nested PID namespace"
+        assert observed["NoNewPrivs"].strip() == "1"
+        assert observed["Seccomp"].strip() == "2"
+        assert filters > parent_filters, "Chrome renderer has no additional seccomp filter"
+        assert int(observed["CapEff"], 16) == 0
+        evidence.append({"pid": pid, "pidNamespaceLevels": levels, "seccompFilters": filters, "noNewPrivileges": True, "effectiveCapabilities": "0"})
+    assert evidence, "No Chrome renderer sandbox status was observed"
+    return {"daemonPidNamespaceLevels": parent_levels, "daemonSeccompFilters": parent_filters, "renderers": evidence}
+
+
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--public-url', help='Optional read-only HTTPS navigation witness')
+    options = parser.parse_args()
+    if options.public_url and not options.public_url.startswith('https://'):
+        parser.error('--public-url must use HTTPS')
     assert os.geteuid() != 0, "Conformance must run as the workspace user"
     root = Path("/workspace/work/browser/conformance")
     root.mkdir(parents=True, exist_ok=True)
@@ -110,6 +151,8 @@ def main():
         assert counter.get("text") == "1", counter
         assert int((sockets / f"{session}.pid").read_text()) == daemon_pid
         evidence["checks"].append("foreground-session-reused-across-commands")
+        evidence["rendererSandbox"] = renderer_sandbox_evidence(process.pid)
+        evidence["checks"].append("renderer-nested-namespace-and-additional-seccomp")
         screenshot = root / "interaction.png"
         invoke(session, "screenshot", str(screenshot))
         pixels = screenshot.read_bytes()
@@ -126,6 +169,13 @@ def main():
         # A second session must not attach to the first without being started.
         invoke(session + "-other", "get", "title", success=False)
         evidence["checks"].append("separate-session-does-not-reuse-browser")
+        if options.public_url:
+            invoke(session, 'open', options.public_url)
+            evidence['publicPage'] = {'url': invoke(session, 'get', 'url'), 'title': invoke(session, 'get', 'title')}
+            public_screenshot = root / 'public-page.png'
+            invoke(session, 'screenshot', str(public_screenshot))
+            evidence['publicPage']['screenshotSha256'] = hashlib.sha256(public_screenshot.read_bytes()).hexdigest()
+            evidence['checks'].append('public-https-navigation-with-certificate-verification')
         owned_processes = descendants(process.pid)
         assert len(owned_processes) > 1, "No actual browser descendants were observed"
         invoke(session, "close")

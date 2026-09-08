@@ -24,6 +24,10 @@ docker build --build-context browser_inputs=/path/to/exact-browser-inputs \
 
 Run `conformance/browser.py` inside the candidate as the normal non-root workspace user, under the actual Runner's process and browser sandbox policy. It exercises the real driver and Chrome against a local fixture: navigation, semantic interaction, screenshots, downloads, separate sessions, daemon close, and cancellation. Capture the exact image digest, runtime policy, conformance output, and screenshot artifacts. A locally passing browser command does not establish production network enforcement, sandbox confinement, restart recovery, or browser-facing chat completion.
 
+The local Linux witness uses the existing `capabilities/c18-specialist-packs/policy/specialist-seccomp-v1.json`, with every outer capability dropped and `no-new-privileges`. It checks real renderer process state for a nested PID namespace, an additional seccomp filter and zero effective capabilities. This reuses an existing policy for a task-local conformance container; it does not change the policy of production workspace containers. The Docker default profile does not permit the required Chromium sandbox on the qualification host and must fail without an unsafe fallback.
+
+`conformance/browser.py --public-url https://example.com` additionally checks real public HTTPS navigation. `conformance/proxy.py` runs entirely on loopback and proves the launcher uses the configured HTTPS CONNECT proxy, rejects an untrusted certificate, and accepts that certificate only when the workspace CA is provided through `SSL_CERT_FILE`. This proves the adapter behavior; current permission and domain enforcement still require the actual Daytona provider journey.
+
 Deployment must preserve the existing workspace snapshot registration and admission path. Register the exact resulting image, bind its actual executable evidence to the existing runtime capability catalog, then test from a normal production chat. Existing workspaces retain their admitted image; they must not be relabeled as containing the new driver.
 
 ## Acceptance still required before activation
