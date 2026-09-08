@@ -5,11 +5,11 @@
     "repository": "https://github.com/yungbote/ambit-agent-browser",
     "upstreamRepository": "https://github.com/vercel-labs/agent-browser",
     "upstreamRevision": "72007a6788d863611b23bed0b59d0d659c638d8e",
-    "revision": "ad055e00d8d4e2a30dc46693452a2a559a3e0505",
-    "sourceTree": "6d6962367e250567ea9e6a064f21558c207c474c",
+    "revision": "94300bd3aa19fb379c20372dcd3347046392173a",
+    "sourceTree": "62ba265946808bf8b90c3465f654dd1d5b62367d",
     "version": "0.37.1",
     "archiveName": "agent-browser-source.tar.gz",
-    "sha256": "e38f530055bade00d9d996065e07099582447e5898338368690dc7c41d264d4b"
+    "sha256": "02a8989083df9e0b3a4cdb84d7da10597ff5d3ed8ff83505f7b6d4b244f30ac5"
   },
   "chrome": {
     "version": "152.0.7977.82",

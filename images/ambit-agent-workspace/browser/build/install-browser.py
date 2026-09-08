@@ -60,6 +60,25 @@ def main():
             shutil.copy2(source_root / "LICENSE", license_root / "agent-browser-LICENSE")
             for license_file in (source_root / "cli/src/native/a11y").glob("LICENSE*"):
                 shutil.copy2(license_file, license_root / license_file.name)
+            cargo = json.loads(subprocess.check_output([
+                "cargo", "metadata", "--locked", "--format-version", "1",
+                "--manifest-path", str(manifest),
+            ], text=True))
+            notices = []
+            for package in cargo["packages"]:
+                package_root = Path(package["manifest_path"]).parent
+                destination = license_root / "dependencies" / f"{package['name']}@{package['version']}"
+                candidates = [path for path in package_root.iterdir() if path.is_file() and path.name.upper().startswith(("LICENSE", "COPYING", "COPYRIGHT", "NOTICE"))]
+                if package.get("license_file"):
+                    declared = (package_root / package["license_file"]).resolve()
+                    if not declared.is_relative_to(package_root.resolve()):
+                        raise ValueError("Crate license must remain inside its source package")
+                    candidates.append(declared)
+                destination.mkdir(parents=True)
+                for license_file in set(candidates):
+                    shutil.copy2(license_file, destination / license_file.name)
+                notices.append({"name": package["name"], "version": package["version"], "license": package.get("license"), "source": package.get("source"), "noticeFiles": sorted({path.name for path in candidates})})
+            (license_root / "dependencies.json").write_text(json.dumps(notices, indent=2) + "\n")
             shutil.copy2(source_root / "cli/Cargo.lock", root / "Cargo.lock")
             observed = subprocess.check_output([str(root / "bin/agent-browser"), "--version"], text=True).strip()
             if observed != f"agent-browser {source['version']}":
