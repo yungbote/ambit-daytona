@@ -1,0 +1,7 @@
+{
+  "parsers": [
+    { "pdf-parser": { "ocr": { "strategy": "NO_OCR" } } },
+    { "tesseract-ocr-parser": { "skipOcr": true } },
+    { "default-parser": {} }
+  ]
+}

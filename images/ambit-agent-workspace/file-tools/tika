@@ -1,0 +1,5 @@
+#!/bin/sh
+# Preserve the caller's working directory and the upstream CLI's full interface.
+# Automatic OCR is disabled in the supplied default, not in the environment.
+exec java -jar /opt/ambit/file-tools/tika/tika-app-4.0.0.jar \
+  --config=/opt/ambit/runtime-base/workspace/lineage/file-tools/tika-config.json "$@"
