@@ -208,10 +208,14 @@ func (d *DockerClient) Create(ctx context.Context, sandboxDto dto.CreateSandboxD
 		// containerConfig.Cmd = append([]string{common.DAEMON_PATH}, containerConfig.Cmd...)
 	}
 
+	if err := d.applyWorkspaceSecurityProfile(containerConfig, hostConfig); err != nil {
+		return "", "", err
+	}
 	c, err := d.apiClient.ContainerCreate(ctx, containerConfig, hostConfig, networkingConfig, &v1.Platform{
 		Architecture: "amd64",
 		OS:           "linux",
 	}, sandboxDto.Id)
+	createdHere := err == nil
 	if err != nil {
 		// Container already exists and is being created by another process
 		if errdefs.IsConflict(err) {
@@ -233,6 +237,11 @@ func (d *DockerClient) Create(ctx context.Context, sandboxDto dto.CreateSandboxD
 	if releaseGpu != nil {
 		releaseGpu()
 		releaseGpu = nil
+	}
+	if d.workspaceSecurityProfile == workspaceSecurityRestricted {
+		if err := d.validateCreatedWorkspaceSecurity(ctx, c.ID, createdHere); err != nil {
+			return "", "", err
+		}
 	}
 
 	// Attach the follower to the owner's link network before it starts so DNS
