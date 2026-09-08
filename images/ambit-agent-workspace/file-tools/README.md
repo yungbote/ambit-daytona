@@ -48,14 +48,35 @@ promise that a later model-authored package installation left them unchanged.
 Tesseract defaults to one OpenMP thread only when neither OMP_THREAD_LIMIT nor
 OMP_NUM_THREADS is set. Both caller controls remain available. A controlled
 two-CPU/4-GiB benchmark of147 OCR invocations retained byte-identical output;
-parallel six-page batches improved2.76–3.24× on the tested fixtures. This is a
+parallel six-page batches improved 2.76–3.24× on the tested fixtures. This is a
 Tesseract-specific default, not a limit on the model, worker count, or other
 libraries. See the reusable conformance/ocr-benchmark.py and retained release
 evidence for quality limits and raw measurements.
 
-Current status: implementation candidate. Local conformance, measured throughput
-and memory, exact final image publication, runtime inventory binding, and normal
-production chat acceptance must be recorded before claiming availability.
+Local conformance runs as the actual non-root user with networking disabled,
+two CPUs, four GiB, no added capabilities and no new privileges:
+
+```sh
+docker run --rm --entrypoint python --network none --hostname localhost \
+  --cpus 2 --memory 4g --cap-drop ALL --security-opt no-new-privileges \
+  --mount type=bind,src=/absolute/path/to/conformance,dst=/checks,readonly \
+  ambit-general-file-tools:COMMIT_SHA /checks/verify.py
+```
+
+The image retains the parent workspace entrypoint; selecting Python here is
+specific to this test. Use the complete source commit when building a release.
+
+The local candidate passed twelve checks, including real Markdown structure,
+content detection, preserved originals, default extraction without OCR,
+explicit OCR opt-in, exact regions from a 160-megapixel tiled image, malformed
+input failures and cancellation after output began. Tika probes Tesseract
+availability with no arguments at initialization; those probes are not OCR.
+The test records exact process/cgroup observations, elapsed time and peak RSS.
+These are fixture measurements, not universal performance or accuracy claims.
+
+Current status: locally qualified candidate. Exact final image publication,
+runtime inventory binding, inherited-image qualification and normal production
+chat acceptance remain before claiming availability.
 
 Primary references: [libvips](https://www.libvips.org/),
 [MarkItDown 0.1.7](https://github.com/microsoft/markitdown/releases/tag/v0.1.7),
