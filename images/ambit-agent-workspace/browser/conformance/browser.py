@@ -40,35 +40,38 @@ def invoke(session, *arguments, success=True):
     return response["data"]
 
 
-def descendants(parent_pid):
-    """Capture actual process identities before signaling the foreground owner."""
-    all_processes = {}
-    for entry in Path("/proc").iterdir():
+def live_processes(proc_root=Path("/proc")):
+    """Capture PID/start-time identities throughout the dedicated fixture namespace."""
+    identities = {}
+    for entry in proc_root.iterdir():
         if not entry.name.isdigit():
             continue
         try:
             fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
-            all_processes[int(entry.name)] = (int(fields[1]), fields[19], fields[0])
+            if fields[0] not in ("Z", "X"):
+                identities[int(entry.name)] = fields[19]
         except (FileNotFoundError, ProcessLookupError):
             continue
-    members = {parent_pid}
-    while True:
-        found = {pid for pid, (parent, _, _) in all_processes.items() if parent in members}
-        if found <= members:
-            break
-        members.update(found)
-    return {pid: all_processes[pid][1] for pid in members if pid in all_processes}
+    return identities
 
 
-def all_terminated(identities):
-    for pid, started in identities.items():
-        try:
-            fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
-        except (FileNotFoundError, ProcessLookupError):
-            continue
-        if fields[19] == started and fields[0] != "Z":
-            return False
-    return True
+def additional_processes(baseline, observed):
+    return {
+        pid: started for pid, started in observed.items()
+        if baseline.get(pid) != started
+    }
+
+
+def wait_for_fixture_baseline(baseline):
+    observed = {}
+
+    def settled():
+        nonlocal observed
+        observed = live_processes()
+        return not additional_processes(baseline, observed)
+
+    wait_until(settled)
+    return observed
 
 
 def renderer_sandbox_evidence(daemon_pid):
@@ -113,6 +116,11 @@ def main():
     if options.public_url and not options.public_url.startswith('https://'):
         parser.error('--public-url must use HTTPS')
     assert os.geteuid() != 0, "Conformance must run as the workspace user"
+    baseline = live_processes()
+    assert set(baseline) == {1, os.getpid()}, (
+        "Conformance requires a dedicated PID namespace containing only init "
+        "and this Python process"
+    )
     root = Path("/workspace/work/browser/conformance")
     root.mkdir(parents=True, exist_ok=True)
     session = f"probe-{os.getpid()}"
@@ -129,12 +137,17 @@ def main():
     server = ThreadingHTTPServer(("127.0.0.1", 0), partial(QuietHandler, directory=str(fixture)))
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
-    evidence = {"schema": "ambit.browser-conformance-result/v1", "checks": []}
+    evidence = {
+        "schema": "ambit.browser-conformance-result/v1",
+        "checks": [],
+        "lifecycleProcesses": {"baseline": baseline},
+    }
     process = None
     log = (root / "daemon.log").open("w")
     try:
         invoke(session, "get", "title", success=False)
         assert not (sockets / f"{session}.sock").exists()
+        wait_for_fixture_baseline(baseline)
         evidence["checks"].append("client-does-not-create-unowned-daemon")
         process = subprocess.Popen(["agent-browser", "--session", session, "daemon"], stdout=log, stderr=log, start_new_session=True)
         socket = sockets / f"{session}.sock"
@@ -176,23 +189,29 @@ def main():
             invoke(session, 'screenshot', str(public_screenshot))
             evidence['publicPage']['screenshotSha256'] = hashlib.sha256(public_screenshot.read_bytes()).hexdigest()
             evidence['checks'].append('public-https-navigation-with-certificate-verification')
-        owned_processes = descendants(process.pid)
-        assert len(owned_processes) > 1, "No actual browser descendants were observed"
+        before_close = live_processes()
+        launched = additional_processes(baseline, before_close)
+        assert process.pid in launched and len(launched) > 1, (
+            "No actual browser processes were observed"
+        )
+        evidence["lifecycleProcesses"]["beforeClose"] = before_close
         invoke(session, "close")
         assert process.wait(timeout=15) == 0
         wait_until(lambda: not socket.exists())
-        wait_until(lambda: all_terminated(owned_processes))
+        evidence["lifecycleProcesses"]["afterClose"] = wait_for_fixture_baseline(baseline)
         evidence["checks"].append("close-observed-on-original-process")
         process = subprocess.Popen(["agent-browser", "--session", session, "daemon"], stdout=log, stderr=log, start_new_session=True)
         wait_until(lambda: socket.exists() or process.poll() is not None)
         assert process.poll() is None
         invoke(session, "open", url)
-        owned_processes = descendants(process.pid)
-        assert len(owned_processes) > 1
+        before_cancel = live_processes()
+        launched = additional_processes(baseline, before_cancel)
+        assert process.pid in launched and len(launched) > 1
+        evidence["lifecycleProcesses"]["beforeCancellation"] = before_cancel
         process.send_signal(signal.SIGTERM)
         process.wait(timeout=15)
         wait_until(lambda: not socket.exists())
-        wait_until(lambda: all_terminated(owned_processes))
+        evidence["lifecycleProcesses"]["afterCancellation"] = wait_for_fixture_baseline(baseline)
         evidence["checks"].append("foreground-daemon-accepts-cancellation")
         evidence["status"] = "passed"
         (root / "result.json").write_text(json.dumps(evidence, indent=2) + "\n")
