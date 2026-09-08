@@ -16,7 +16,7 @@ import (
 const freshPolicyAdmissionMetadata = "daytona.freshPolicyAdmission"
 
 // admitRunningSandboxPolicy is the single runner-side admission boundary for
-// network and shared-proxy policy. It is called immediately after a container
+// workspace confinement, network and shared-proxy policy. It is called immediately after a container
 // becomes reachable and before daemon/ADB readiness is reported. Every policy
 // operation is synchronous; success therefore means the complete requested
 // boundary is live, not merely scheduled.
@@ -27,6 +27,9 @@ func (d *DockerClient) admitRunningSandboxPolicy(
 	secretsToken *string,
 	metadata map[string]string,
 ) error {
+	if err := d.admitRunningWorkspaceSecurity(ctx, info); err != nil {
+		return err
+	}
 	if info == nil || info.ContainerJSONBase == nil || info.Config == nil {
 		return fmt.Errorf("sandbox %s has incomplete container metadata", sandboxID)
 	}

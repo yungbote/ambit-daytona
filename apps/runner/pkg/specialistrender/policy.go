@@ -14,11 +14,12 @@ import (
 
 	"github.com/daytonaio/runner/pkg/c18oci"
 	"github.com/daytonaio/runner/pkg/generationstop"
+	"github.com/daytonaio/runner/pkg/sandboxsecurity"
 )
 
 const PolicySetSchema = "ambit.runtime-provider-specialist-render-policy-set/v1"
 const PolicyEntrySchema = "ambit.runtime-provider-specialist-render-policy/v1"
-const SpecialistSeccompDigest = "sha256:9de0b08286e0c0ba068eb8f6bf9e2aa49860327b654b8f0b20bcabc4fdc796f2"
+const SpecialistSeccompDigest = sandboxsecurity.RootlessSeccompDigest
 
 var packExecutables = map[string]string{
 	"data-research":    "/opt/ambit/runtime-pack/data-research/bin/ambit-specialist-render",

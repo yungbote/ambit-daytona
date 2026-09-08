@@ -178,6 +178,7 @@ func run() int {
 		NetRulesManager:              netRulesManager,
 		NetleashManager:              netleashManager,
 		ResourceLimitsDisabled:       cfg.ResourceLimitsDisabled,
+		WorkspaceSecurityProfile:     cfg.WorkspaceSecurityProfile,
 		DaemonStartTimeoutSec:        cfg.DaemonStartTimeoutSec,
 		SandboxStartTimeoutSec:       cfg.SandboxStartTimeoutSec,
 		AndroidBootTimeoutSec:        cfg.AndroidBootTimeoutSec,
