@@ -42,6 +42,10 @@ func (s *SessionService) GetSessionCommand(sessionId, cmdId string) (*Command, e
 		return nil, common_errors.NewNotFoundError(errors.New("command not found"))
 	}
 
+	// Stored commands are immutable. Return a detached observation to avoid
+	// concurrent reads racing over an exit-code cache.
+	copy := *command
+	command = &copy
 	if command.ExitCode != nil {
 		return command, nil
 	}

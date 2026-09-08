@@ -13,15 +13,11 @@ func (s *SessionService) List() ([]Session, error) {
 			continue
 		}
 
-		commands, err := s.getSessionCommands(sessionId)
+		observed, err := s.Get(sessionId)
 		if err != nil {
 			return nil, err
 		}
-
-		sessions = append(sessions, Session{
-			SessionId: sessionId,
-			Commands:  commands,
-		})
+		sessions = append(sessions, *observed)
 	}
 
 	return sessions, nil

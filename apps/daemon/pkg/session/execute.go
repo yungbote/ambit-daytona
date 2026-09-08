@@ -20,10 +20,21 @@ import (
 	"github.com/daytonaio/common-go/pkg/log"
 )
 
-func (s *SessionService) Execute(sessionId, cmdId, cmd string, async, isCombinedOutput, skipServerDemux, suppressInputEcho bool) (*SessionExecute, error) {
+func (s *SessionService) Execute(sessionId, cmdId, cmd string, async, isCombinedOutput, skipServerDemux, suppressInputEcho bool, closeInputAfterCommand ...bool) (*SessionExecute, error) {
 	session, ok := s.sessions.Get(sessionId)
 	if !ok {
 		return nil, common_errors.NewNotFoundError(errors.New("session not found"))
+	}
+
+	session.mu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			session.mu.Unlock()
+		}
+	}()
+	if session.stopping || session.inputClosed || session.scope == nil || session.scope.state() != "running" {
+		return nil, common_errors.NewGoneError(errors.New("session is no longer accepting commands"))
 	}
 
 	if cmdId == util.EmptyCommandID {
@@ -81,6 +92,15 @@ func (s *SessionService) Execute(sessionId, cmdId, cmd string, async, isCombined
 		return nil, common_errors.NewBadRequestError(fmt.Errorf("failed to write command: %w", err))
 	}
 
+	if len(closeInputAfterCommand) > 0 && closeInputAfterCommand[0] {
+		session.inputClosed = true
+		if err := session.stdinWriter.Close(); err != nil {
+			return nil, common_errors.NewBadRequestError(fmt.Errorf("command accepted but closing session input failed: %w", err))
+		}
+	}
+	session.mu.Unlock()
+	locked = false
+
 	if async {
 		return &SessionExecute{
 			CommandId: cmdId,
@@ -90,18 +110,19 @@ func (s *SessionService) Execute(sessionId, cmdId, cmd string, async, isCombined
 	for {
 		select {
 		case <-session.ctx.Done():
-			command, ok := session.commands.Get(cmdId)
+			_, ok := session.commands.Get(cmdId)
 			if !ok {
 				return nil, common_errors.NewBadRequestError(errors.New("command not found"))
 			}
-
-			command.ExitCode = util.Pointer(1)
 
 			return nil, common_errors.NewBadRequestError(errors.New("session cancelled"))
 		default:
 			exitCode, err := os.ReadFile(exitCodeFilePath)
 			if err != nil {
 				if os.IsNotExist(err) {
+					if session.scope.state() != "running" {
+						return nil, common_errors.NewBadRequestError(errors.New("session scope ended without a command result"))
+					}
 					time.Sleep(50 * time.Millisecond)
 					continue
 				}
@@ -113,11 +134,10 @@ func (s *SessionService) Execute(sessionId, cmdId, cmd string, async, isCombined
 				return nil, common_errors.NewBadRequestError(fmt.Errorf("failed to convert exit code to int: %w", err))
 			}
 
-			command, ok := session.commands.Get(cmdId)
+			_, ok := session.commands.Get(cmdId)
 			if !ok {
 				return nil, common_errors.NewBadRequestError(errors.New("command not found"))
 			}
-			command.ExitCode = &exitCodeInt
 
 			logBytes, err := os.ReadFile(logFilePath)
 			if err != nil {

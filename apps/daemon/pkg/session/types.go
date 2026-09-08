@@ -8,14 +8,19 @@ import (
 	"io"
 	"os/exec"
 	"path/filepath"
+	"sync"
 
 	cmap "github.com/orcaman/concurrent-map/v2"
 )
 
 type session struct {
+	mu          sync.Mutex
+	scope       *processScope
+	stopping    bool
+	inputClosed bool
 	id          string
 	cmd         *exec.Cmd
-	stdinWriter io.Writer
+	stdinWriter io.WriteCloser
 	commands    cmap.ConcurrentMap[string, *Command]
 	ctx         context.Context
 	cancel      context.CancelFunc
@@ -41,8 +46,10 @@ func (c *Command) InputFilePath(sessionDir string) string {
 }
 
 type Session struct {
-	SessionId string     `json:"sessionId" validate:"required"`
-	Commands  []*Command `json:"commands" validate:"required"`
+	SessionId    string     `json:"sessionId" validate:"required"`
+	ProcessScope string     `json:"processScope" validate:"required"`
+	InputClosed  bool       `json:"inputClosed"`
+	Commands     []*Command `json:"commands" validate:"required"`
 }
 
 type SessionExecute struct {

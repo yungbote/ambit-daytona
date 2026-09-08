@@ -19,6 +19,12 @@ type SessionService struct {
 }
 
 func NewSessionService(logger *slog.Logger, configDir string, terminationGracePeriod, terminationCheckInterval time.Duration) *SessionService {
+	if terminationGracePeriod <= 0 {
+		terminationGracePeriod = 5 * time.Second
+	}
+	if terminationCheckInterval <= 0 {
+		terminationCheckInterval = 25 * time.Millisecond
+	}
 	return &SessionService{
 		logger:                   logger.With(slog.String("component", "session_service")),
 		configDir:                configDir,

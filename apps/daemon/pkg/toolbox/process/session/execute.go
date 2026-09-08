@@ -64,7 +64,7 @@ func (s *SessionController) SessionExecuteCommand(c *gin.Context) {
 	isCombinedOutput := session.IsCombinedOutput(sdkVersion, versionComparison, c.Request.Header)
 	skipServerDemux := session.SkipServerDemux(sdkVersion)
 
-	executeResult, err := s.sessionService.Execute(sessionId, util.EmptyCommandID, request.Command, request.RunAsync, isCombinedOutput, skipServerDemux, request.SuppressInputEcho)
+	executeResult, err := s.sessionService.Execute(sessionId, util.EmptyCommandID, request.Command, request.RunAsync, isCombinedOutput, skipServerDemux, request.SuppressInputEcho, request.CloseInputAfterCommand)
 	if err != nil {
 		c.Error(fmt.Errorf("failed to execute command: %w", err))
 		return

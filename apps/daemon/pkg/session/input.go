@@ -21,18 +21,16 @@ func (s *SessionService) SendInput(sessionId, commandId string, data string) err
 		return common_errors.NewNotFoundError(errors.New("session not found"))
 	}
 
-	// Check if the session process is still active
-	if session.cmd.ProcessState != nil && session.cmd.ProcessState.Exited() {
-		return common_errors.NewGoneError(errors.New("session process has exited"))
+	session.mu.Lock()
+	unavailable := session.stopping || session.scope == nil || session.scope.state() != "running"
+	session.mu.Unlock()
+	if unavailable {
+		return common_errors.NewGoneError(errors.New("session process is no longer accepting input"))
 	}
-
-	// Verify the command exists
-	command, ok := session.commands.Get(commandId)
-	if !ok {
-		return common_errors.NewNotFoundError(errors.New("command not found"))
+	command, err := s.GetSessionCommand(sessionId, commandId)
+	if err != nil {
+		return err
 	}
-
-	// Check if the command is still running (exit code not set means still running)
 	if command.ExitCode != nil {
 		return common_errors.NewGoneError(fmt.Errorf("command has already completed with exit code %d", *command.ExitCode))
 	}

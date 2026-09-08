@@ -1,0 +1,24 @@
+# Session process custody
+
+A shell command finishing does not imply that the work it launched has finished. Sessions now retain that distinction through the existing session owner.
+
+On Linux, each session starts a private child-subreaper mode of the existing daemon binary. It owns the shell and any descendants adopted after a double fork, `setsid`, or an intermediate parent exiting. A private pipe confirms startup and eventual scope settlement; children do not inherit its descriptors. Closing a separate lifetime pipe requests cancellation, including when the parent daemon dies. No service, registry, cgroup configuration or dependency is added.
+
+The supervisor alone calls `wait4`, with `__WALL` to include clone children. A handled SIGCHLD disposition retains exit records. Cancellation signals only direct, unreaped children; their PIDs cannot be recycled until this same loop reaps them. When parents terminate, the kernel adopts further descendants into this subreaper. Success requires `ECHILD`, not an empty sampled descendant list. An actor that ignores SIGTERM receives SIGKILL after the configured grace period. An actor that cannot be terminated remains owned and deletion remains pending. This replaces the former process-group/tree guessing and no-children-means-dead heuristic. Linux's [subreaper](https://man7.org/linux/man-pages/man2/PR_SET_CHILD_SUBREAPER.2const.html) and [wait semantics](https://man7.org/linux/man-pages/man2/waitpid.2.html) define these ownership and reaping rules.
+
+`DELETE /process/session/{id}` closes the lifetime signal and waits for the actual scope proof. It removes output and the session map entry only after settlement. Cancellation, failed signaling, a lost supervisor or unavailable proof retains the owner and output for observation/retry. A retained directory with no in-memory owner after restart is unavailable custody, not evidence for a successful not-found deletion. Session IDs remain the existing operation identity; no WorkingCopy or Goal/Bot retention rules change.
+
+The optional execution field `closeInputAfterCommand` closes the shell's command-input pipe after the accepted command is written. It does not close that command's interactive input FIFO or cancel descendants. Existing reusable SDK sessions keep their default behavior. A caller using a session for one program can close command input so its idle shell exits naturally, while useful background actors remain owned and running.
+
+The existing Session response gains optional compatibility fields:
+
+- `processScope`: `running`, `settled`, or `unavailable`.
+- `inputClosed`: whether further commands are no longer accepted.
+
+Command `exitCode` remains the command result. A caller must not confuse it with `processScope: settled`. Background servers may continue after a zero exit code under the same session, then end naturally or through explicit cancellation or owner retirement. Older daemons omit the fields; absence is not a new scope proof. Consumers must preserve explicit ownership transfers for Goal/Bot/application work rather than automatically killing a useful task server on command exit.
+
+The daemon release target remains Linux. The non-Linux source seam compiles but explicitly reports that this custody implementation is unavailable; it does not silently substitute a process-group approximation. The supervisor mode must be entered before the daemon's global PID-1 reaper.
+
+Local verification covers idle-shell deletion, natural settlement and retained output, double-fork/setsid background actors, isolation between sessions, parent daemon death, cancellation failure/retry, supervisor loss, retained-directory uncertainty, synchronous stdin EOF and asynchronous input. The actual daemon was also exercised through HTTP in the qualified browser image with dropped capabilities, no-new-privileges and the existing C18 seccomp bytes: a browser navigated, clicked and produced a screenshot, and session deletion removed all 18 observed browser processes. No production activation is implied by those local results.
+
+Remaining integration: propagate these observations through the existing provider/runtime adapter and use scope settlement in the Run process ledger and completion/cancellation readers. Keep older retained workspace facts honest during rollout; do not rewrite previously committed terminal ledger facts. Production still needs a source-pinned daemon/Runner rollout and real Run/Bot/Automation acceptance. This is not a hostile-code isolation boundary between processes that intentionally share a workspace user, nor a substitute for the outer sandbox boundary.

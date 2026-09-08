@@ -36,6 +36,9 @@ func main() {
 }
 
 func run() int {
+	if code, handled := session.RunSupervisor(os.Args[1:]); handled {
+		return code
+	}
 	logLevel := log.ParseLogLevel(os.Getenv("LOG_LEVEL"))
 
 	// Create the console handler with tint for colored output
