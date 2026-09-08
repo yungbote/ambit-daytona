@@ -1,0 +1,6 @@
+#!/bin/sh
+# Set a Tesseract-only default unless the caller chose either thread control.
+if [ "${OMP_THREAD_LIMIT+x}" != x ] && [ "${OMP_NUM_THREADS+x}" != x ]; then
+    export OMP_THREAD_LIMIT=1
+fi
+exec /usr/bin/tesseract "$@"
