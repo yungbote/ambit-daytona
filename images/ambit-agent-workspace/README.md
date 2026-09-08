@@ -34,13 +34,20 @@ Everything the workspace adds is named in `locks/toolchains.lock.json`:
 | jq, git, unzip, zip, sqlite3, ripgrep, fd, 7zip, file/libmagic | Debian | exact Debian versions |
 | poppler-utils, qpdf, ghostscript, ImageMagick, ffmpeg, pandoc, tesseract (+eng), graphviz, exiftool | Debian | exact Debian versions |
 | LibreOffice calc/writer/impress (headless conversion), DejaVu/Liberation/Noto fonts | Debian | exact Debian versions |
-| Python 3.13 workspace environment (numpy, pandas, polars, pyarrow, duckdb, scipy, sympy, statsmodels, scikit-learn, matplotlib, seaborn, plotly, pillow, opencv, imageio, pypdf, pdfplumber, pymupdf, reportlab, python-docx/pptx, openpyxl, xlsxwriter, xlrd, odfpy, bs4, lxml, html5lib, requests, httpx, aiohttp, camelot, tiktoken, …) | PyPI wheels | `locks/python-requirements.lock.txt`: every distribution pinned **and hashed**, installed with `pip install --require-hashes` |
+| Python 3.13 workspace environment (numpy, pandas, polars, pyarrow, duckdb, scipy, sympy, statsmodels, scikit-learn, matplotlib, seaborn, plotly, pillow, opencv, imageio, pypdf, pdfplumber, pymupdf, reportlab, python-docx/pptx, openpyxl, xlsxwriter, xlrd, odfpy, bs4, lxml, html5lib, requests, httpx, aiohttp, camelot, tiktoken, …) | PyPI wheels and source archives | `locks/python-requirements.lock.txt`: distribution versions and accepted download hashes, installed with `pip install --require-hashes` |
 | Node CLIs (typescript, ts-node, tsx, prettier, eslint, esbuild, pnpm, yarn) | npm | `locks/node-tools.package-lock.json`, installed with `npm ci` (npm checks its own integrity hashes) |
 
 Debian packages resolve through the base image's own `deb.debian.org`
 trixie/trixie-updates/trixie-security sources at the locked versions. A point
 release or security update that retires a locked version fails the build
 instead of silently moving it; refresh the lock deliberately (see below).
+
+Source archives may build wheels during installation. The recorded build used
+`odfpy==1.4.1` from a hashed source archive with isolated build dependencies
+that are not fully pinned here. Rebuilding that wheel is not an exact installed-
+byte guarantee; qualify its build inputs or retain the qualified wheel by
+checksum before claiming reproducible wheel output. npm install scripts also
+run for the integrity-pinned package archives.
 
 The image records what it was built from under
 `/opt/ambit/runtime-base/workspace/lineage/`: the exact lock and the full
@@ -80,6 +87,26 @@ of `core@1`. The Daytona slim sandbox cannot be that parent, so this image
 does not claim the packs' union-overlay receipt. What it does claim is the
 narrower, honestly provable contract above: exact pins, a recorded roster,
 and a conformance run against the source lock.
+
+### Production composition reconciliation (2026-09-08)
+
+Toolchain source through `61d2cd1baa6df452776d3f1de70324e09e412395` is now
+on main. Its image is `sha256:a7eaba10bf6cb3b35d6f73e85ee82efe42d2a0b30c23ab78a23f809e5c5d2393`.
+The currently selected workspace image
+`us-east4-docker.pkg.dev/mwcc-infrastructure/ambit/ambit-agent-workspace@sha256:1dbc9cac4326224679f4bae44402839f1c3c064db2bc2c34d62782aad625c950`
+adds a materializer helper layer to that exact base. Its five lineage files
+match this toolchain source, and a fresh network-disabled conformance run
+passed against the committed locks on 2026-09-08.
+
+That extra helper composition was built outside this Dockerfile and inherited
+its source label. The helper is 2,666,622 bytes with SHA-256
+`d6d8bd4248570e7f66fe7e545e8117e558a1d6c1ce1e149a55a36c7f17c7748d`.
+It differs from the canonical helper lock's `8d4405a1…` binary. The five
+restored commits do not establish a reproducible source build for this extra
+layer. Extending the exact immutable production image preserves these bytes;
+rebuilding or substituting the canonical helper requires separate source and
+runtime qualification. Do not identify a plain build below as that composed
+production image or as certified specialist-pack equivalence.
 
 ## Build
 
