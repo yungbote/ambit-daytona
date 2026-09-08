@@ -30,6 +30,8 @@ import {
   WorkingCopyCaptureReceiptDto,
   StoppedWorkingCopyDirectoryRosterRequestDto,
   StoppedWorkingCopyDirectoryRosterReceiptDto,
+  StoppedWorkingCopyWorkingTreeRequestDto,
+  StoppedWorkingCopyWorkingTreeReceiptDto,
 } from '../dto/working-copy-capture.dto'
 import { SandboxAccessGuard } from '../guards/sandbox-access.guard'
 import { WorkingCopyCaptureService } from '../services/working-copy-capture.service'
@@ -125,6 +127,33 @@ export class WorkingCopyCaptureController {
     @Res({ passthrough: true }) outgoing: ServerResponse<IncomingMessage>,
   ): Promise<StoppedWorkingCopyDirectoryRosterReceiptDto> {
     return this.captures.stoppedDirectoryRoster(
+      auth.organizationId,
+      sandboxIdOrName,
+      request,
+      responseSignal(incoming, outgoing),
+    )
+  }
+
+  @Post('stopped-working-tree')
+  @HttpCode(200)
+  @ApiOperation({
+    operationId: 'stoppedSandboxWorkingCopyWorkingTree',
+    summary: 'List user files from an exact stopped sandbox generation',
+  })
+  @ApiResponse({ status: 200, type: StoppedWorkingCopyWorkingTreeReceiptDto })
+  @Audit({
+    action: AuditAction.READ,
+    targetType: AuditTarget.SANDBOX,
+    targetIdFromRequest: (request) => request.params.sandboxIdOrName,
+  })
+  stoppedWorkingTree(
+    @IsOrganizationAuthContext() auth: OrganizationAuthContext,
+    @Param('sandboxIdOrName') sandboxIdOrName: string,
+    @Body() request: StoppedWorkingCopyWorkingTreeRequestDto,
+    @Req() incoming: IncomingMessage,
+    @Res({ passthrough: true }) outgoing: ServerResponse<IncomingMessage>,
+  ): Promise<StoppedWorkingCopyWorkingTreeReceiptDto> {
+    return this.captures.stoppedWorkingTree(
       auth.organizationId,
       sandboxIdOrName,
       request,

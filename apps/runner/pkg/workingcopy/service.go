@@ -834,6 +834,9 @@ func (s *Service) validateStoppedDirectoryRosterRequest(
 	if err != nil {
 		return "", err
 	}
+	if request.Anchor.Selector.SemanticZoneRef == userFilesSemanticZoneRef {
+		return "", invalidf("private working-tree captures do not admit an anchor directory roster")
+	}
 	if request.Selector.SemanticZoneRef != request.Anchor.Selector.SemanticZoneRef {
 		return "", invalidf("directory roster selector must remain in the anchor semantic zone")
 	}
@@ -1277,6 +1280,13 @@ func (s *Service) requireCurrentStop(
 	ctx context.Context,
 	binding CaptureBinding,
 ) (generationstop.Receipt, error) {
+	return s.requireGenerationStop(ctx, binding.generationBinding())
+}
+
+func (s *Service) requireGenerationStop(
+	ctx context.Context,
+	binding CaptureGenerationBinding,
+) (generationstop.Receipt, error) {
 	receipt, err := s.stops.RequireCurrentReceipt(
 		ctx,
 		binding.Source,
@@ -1302,27 +1312,8 @@ func (s *Service) requireCurrentStop(
 }
 
 func (s *Service) validateBinding(sandboxID string, binding CaptureBinding) (string, error) {
-	if !boundedRef(binding.ProviderName, 512) {
-		return "", invalidf("providerName is invalid")
-	}
-	if len(binding.RequestFingerprint) != 64 || !isLowerHex(binding.RequestFingerprint) {
-		return "", invalidf("requestFingerprint must be 64 lowercase hexadecimal characters")
-	}
-	if err := validateAuthority(binding.Authority); err != nil {
+	if err := s.validateGenerationBinding(sandboxID, binding.generationBinding()); err != nil {
 		return "", err
-	}
-	if binding.Authority != s.admittedAuthority {
-		return "", invalidf("capture authority is not the admitted current lineage")
-	}
-	if err := generationstop.ValidateBinding(binding.Source, binding.Owner, binding.StopAuthority); err != nil {
-		return "", invalidf("stopped-generation binding is invalid: " + err.Error())
-	}
-	if !boundedRef(sandboxID, 512) || binding.Source.ProviderResourceID != sandboxID {
-		return "", invalidf("source providerResourceId does not match the sandbox")
-	}
-	if binding.Source.ExpectedProfile != "managed-container" ||
-		binding.Source.ExpectedRuntimeKind != "full_image_runtime_pack" {
-		return "", invalidf("source address is not an admitted managed container")
 	}
 	root, ok := semanticZoneRoot(binding.Selector.SemanticZoneRef)
 	if !ok {
@@ -1332,13 +1323,44 @@ func (s *Service) validateBinding(sandboxID string, binding CaptureBinding) (str
 	if !canonicalRelativePath(relative) {
 		return "", invalidf("zoneRelativePath is not a bounded canonical relative path")
 	}
+	if binding.Selector.SemanticZoneRef == userFilesSemanticZoneRef &&
+		(!canonicalWorkingTreePath(relative) || reservedWorkingTreePath(relative)) {
+		return "", invalidf("private working-tree selector names an invalid or managed runtime path")
+	}
 	return root + "/" + relative, nil
+}
+
+func (s *Service) validateGenerationBinding(sandboxID string, binding CaptureGenerationBinding) error {
+	if !boundedRef(binding.ProviderName, 512) {
+		return invalidf("providerName is invalid")
+	}
+	if len(binding.RequestFingerprint) != 64 || !isLowerHex(binding.RequestFingerprint) {
+		return invalidf("requestFingerprint must be 64 lowercase hexadecimal characters")
+	}
+	if err := validateAuthority(binding.Authority); err != nil {
+		return err
+	}
+	if binding.Authority != s.admittedAuthority {
+		return invalidf("capture authority is not the admitted current lineage")
+	}
+	if err := generationstop.ValidateBinding(binding.Source, binding.Owner, binding.StopAuthority); err != nil {
+		return invalidf("stopped-generation binding is invalid: " + err.Error())
+	}
+	if !boundedRef(sandboxID, 512) || binding.Source.ProviderResourceID != sandboxID {
+		return invalidf("source providerResourceId does not match the sandbox")
+	}
+	if binding.Source.ExpectedProfile != "managed-container" ||
+		binding.Source.ExpectedRuntimeKind != "full_image_runtime_pack" {
+		return invalidf("source address is not an admitted managed container")
+	}
+	return nil
 }
 
 func semanticZoneRoot(semanticZoneRef string) (string, bool) {
 	root, ok := map[string]string{
 		"ambit.workspace-zone/work@1":    "/workspace/work",
 		"ambit.workspace-zone/outputs@1": "/workspace/outputs",
+		userFilesSemanticZoneRef:         "/workspace",
 	}[semanticZoneRef]
 	return root, ok
 }
@@ -1368,7 +1390,7 @@ func captureAuthorityRef(authority CaptureAuthority) string {
 }
 
 func canonicalRelativePath(value string) bool {
-	if value == "" || len(value) > 2048 || !utf8.ValidString(value) ||
+	if value == "" || len(value) > 4096 || !utf8.ValidString(value) ||
 		strings.HasPrefix(value, "/") || strings.HasSuffix(value, "/") ||
 		strings.Contains(value, "\\") || path.Clean(value) != value || value == "." || value == ".." {
 		return false

@@ -22,7 +22,7 @@ import {
   ValidateIf,
   ValidateNested,
 } from 'class-validator'
-import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
+import { ApiProperty, ApiPropertyOptional, ApiSchema, OmitType } from '@nestjs/swagger'
 import {
   SandboxExecutionOwnerDto as WorkingCopyCaptureOwnerDto,
   SandboxExecutionSourceDto as WorkingCopyCaptureSourceDto,
@@ -33,6 +33,13 @@ export { WorkingCopyCaptureOwnerDto, WorkingCopyCaptureSourceDto }
 
 export const MAXIMUM_WORKING_COPY_CAPTURE_BYTES = 64 * 1024 * 1024
 export const MAXIMUM_WORKING_COPY_CAPTURE_READ_BYTES = 1 * 1024 * 1024
+export const USER_FILES_SEMANTIC_ZONE_REF = 'ambit.workspace-zone/user-files@1'
+export const MAXIMUM_USER_FILE_CAPTURE_BYTES = 1024 * 1024 * 1024
+export const MAXIMUM_USER_FILE_READ_BYTES = 4 * 1024 * 1024
+export const MAXIMUM_WORKING_TREE_DEPTH = 64
+export const MAXIMUM_WORKING_TREE_ENTRIES = 4096
+export const MAXIMUM_WORKING_TREE_AGGREGATE_BYTES = 8 * 1024 * 1024 * 1024
+export const MAXIMUM_WORKING_TREE_RECEIPT_BYTES = 4 * 1024 * 1024
 export const MAXIMUM_WORKING_COPY_ROSTER_DEPTH = 32
 export const MAXIMUM_WORKING_COPY_ROSTER_ENTRIES = 1024
 export const MAXIMUM_WORKING_COPY_ROSTER_FILE_BYTES = 8 * 1024 * 1024
@@ -83,15 +90,18 @@ export class WorkingCopyCaptureAuthorityDto {
 @ApiSchema({ name: 'WorkingCopyCaptureSelector' })
 export class WorkingCopyCaptureSelectorDto {
   @ApiProperty({
-    enum: ['ambit.workspace-zone/work@1', 'ambit.workspace-zone/outputs@1'],
+    enum: ['ambit.workspace-zone/work@1', 'ambit.workspace-zone/outputs@1', USER_FILES_SEMANTIC_ZONE_REF],
   })
-  @IsIn(['ambit.workspace-zone/work@1', 'ambit.workspace-zone/outputs@1'])
-  semanticZoneRef: 'ambit.workspace-zone/work@1' | 'ambit.workspace-zone/outputs@1'
+  @IsIn(['ambit.workspace-zone/work@1', 'ambit.workspace-zone/outputs@1', USER_FILES_SEMANTIC_ZONE_REF])
+  semanticZoneRef:
+    | 'ambit.workspace-zone/work@1'
+    | 'ambit.workspace-zone/outputs@1'
+    | typeof USER_FILES_SEMANTIC_ZONE_REF
 
   @ApiProperty({ description: 'Bounded canonical path relative to the admitted semantic zone.' })
   @IsString()
   @MinLength(1)
-  @MaxLength(2048)
+  @MaxLength(4096)
   zoneRelativePath: string
 }
 
@@ -144,10 +154,10 @@ export class WorkingCopyCaptureIdentityDto extends WorkingCopyCaptureBindingDto 
 
 @ApiSchema({ name: 'WorkingCopyCaptureReceipt' })
 export class WorkingCopyCaptureReceiptDto extends WorkingCopyCaptureIdentityDto {
-  @ApiProperty({ minimum: 0, maximum: MAXIMUM_WORKING_COPY_CAPTURE_BYTES })
+  @ApiProperty({ minimum: 0, maximum: MAXIMUM_USER_FILE_CAPTURE_BYTES })
   @IsInt()
   @Min(0)
-  @Max(MAXIMUM_WORKING_COPY_CAPTURE_BYTES)
+  @Max(MAXIMUM_USER_FILE_CAPTURE_BYTES)
   totalByteLength: number
 
   @ApiProperty({ pattern: '^sha256:[0-9a-f]{64}$' })
@@ -186,51 +196,51 @@ export class WorkingCopyCaptureObservationDto {
 
 @ApiSchema({ name: 'WorkingCopyCaptureRead' })
 export class WorkingCopyCaptureReadDto extends WorkingCopyCaptureIdentityDto {
-  @ApiProperty({ minimum: 0, maximum: MAXIMUM_WORKING_COPY_CAPTURE_BYTES })
+  @ApiProperty({ minimum: 0, maximum: MAXIMUM_USER_FILE_CAPTURE_BYTES })
   @IsInt()
   @Min(0)
-  @Max(MAXIMUM_WORKING_COPY_CAPTURE_BYTES)
+  @Max(MAXIMUM_USER_FILE_CAPTURE_BYTES)
   expectedTotalByteLength: number
 
   @ApiProperty({ pattern: '^sha256:[0-9a-f]{64}$' })
   @Matches(/^sha256:[0-9a-f]{64}$/)
   expectedProviderSha256Digest: string
 
-  @ApiProperty({ minimum: 0, maximum: MAXIMUM_WORKING_COPY_CAPTURE_BYTES })
+  @ApiProperty({ minimum: 0, maximum: MAXIMUM_USER_FILE_CAPTURE_BYTES })
   @IsInt()
   @Min(0)
-  @Max(MAXIMUM_WORKING_COPY_CAPTURE_BYTES)
+  @Max(MAXIMUM_USER_FILE_CAPTURE_BYTES)
   offset: number
 
-  @ApiProperty({ minimum: 1, maximum: MAXIMUM_WORKING_COPY_CAPTURE_READ_BYTES })
+  @ApiProperty({ minimum: 1, maximum: MAXIMUM_USER_FILE_READ_BYTES })
   @IsInt()
   @Min(1)
-  @Max(MAXIMUM_WORKING_COPY_CAPTURE_READ_BYTES)
+  @Max(MAXIMUM_USER_FILE_READ_BYTES)
   maximumBytes: number
 }
 
 @ApiSchema({ name: 'WorkingCopyCaptureReadResponse' })
 export class WorkingCopyCaptureReadResponseDto extends WorkingCopyCaptureIdentityDto {
-  @ApiProperty({ minimum: 0, maximum: MAXIMUM_WORKING_COPY_CAPTURE_BYTES })
+  @ApiProperty({ minimum: 0, maximum: MAXIMUM_USER_FILE_CAPTURE_BYTES })
   @IsInt()
   @Min(0)
-  @Max(MAXIMUM_WORKING_COPY_CAPTURE_BYTES)
+  @Max(MAXIMUM_USER_FILE_CAPTURE_BYTES)
   totalByteLength: number
 
   @ApiProperty({ pattern: '^sha256:[0-9a-f]{64}$' })
   @Matches(/^sha256:[0-9a-f]{64}$/)
   providerSha256Digest: string
 
-  @ApiProperty({ minimum: 0, maximum: MAXIMUM_WORKING_COPY_CAPTURE_BYTES })
+  @ApiProperty({ minimum: 0, maximum: MAXIMUM_USER_FILE_CAPTURE_BYTES })
   @IsInt()
   @Min(0)
-  @Max(MAXIMUM_WORKING_COPY_CAPTURE_BYTES)
+  @Max(MAXIMUM_USER_FILE_CAPTURE_BYTES)
   offset: number
 
-  @ApiProperty({ minimum: 0, maximum: MAXIMUM_WORKING_COPY_CAPTURE_READ_BYTES })
+  @ApiProperty({ minimum: 0, maximum: MAXIMUM_USER_FILE_READ_BYTES })
   @IsInt()
   @Min(0)
-  @Max(MAXIMUM_WORKING_COPY_CAPTURE_READ_BYTES)
+  @Max(MAXIMUM_USER_FILE_READ_BYTES)
   byteLength: number
 
   @ApiProperty()
@@ -356,6 +366,98 @@ export class StoppedWorkingCopyDirectoryRosterReceiptDto {
   @ValidateNested({ each: true })
   @Type(() => StoppedWorkingCopyDirectoryRosterEntryDto)
   entries: StoppedWorkingCopyDirectoryRosterEntryDto[]
+
+  @ApiProperty({ pattern: '^sha256:[0-9a-f]{64}$' })
+  @Matches(/^sha256:[0-9a-f]{64}$/)
+  rosterDigest: string
+
+  @ApiProperty({ format: 'date-time' })
+  @IsDateString({ strict: true })
+  observedAt: string
+}
+
+@ApiSchema({ name: 'WorkingCopyCaptureGeneration' })
+export class WorkingCopyCaptureGenerationDto extends OmitType(WorkingCopyCaptureBindingDto, ['selector'] as const) {}
+
+@ApiSchema({ name: 'StoppedWorkingCopyWorkingTreeRequest' })
+export class StoppedWorkingCopyWorkingTreeRequestDto {
+  @ApiProperty({ type: WorkingCopyCaptureGenerationDto })
+  @ValidateNested()
+  @Type(() => WorkingCopyCaptureGenerationDto)
+  generation: WorkingCopyCaptureGenerationDto
+
+  @ApiProperty({
+    type: [String],
+    description: 'Exact UTF-8-sorted relative mount paths; managed runtime roots are always excluded.',
+  })
+  @IsArray()
+  @ArrayMaxSize(MAXIMUM_WORKING_TREE_ENTRIES)
+  @IsString({ each: true })
+  @MinLength(1, { each: true })
+  @MaxLength(4096, { each: true })
+  excludedPaths: string[]
+
+  @ApiProperty({ minimum: 1, maximum: MAXIMUM_WORKING_TREE_DEPTH })
+  @IsInt()
+  @Min(1)
+  @Max(MAXIMUM_WORKING_TREE_DEPTH)
+  maximumDepth: number
+
+  @ApiProperty({ minimum: 1, maximum: MAXIMUM_WORKING_TREE_ENTRIES })
+  @IsInt()
+  @Min(1)
+  @Max(MAXIMUM_WORKING_TREE_ENTRIES)
+  maximumEntries: number
+
+  @ApiProperty({ minimum: 1, maximum: MAXIMUM_USER_FILE_CAPTURE_BYTES })
+  @IsInt()
+  @Min(1)
+  @Max(MAXIMUM_USER_FILE_CAPTURE_BYTES)
+  maximumFileBytes: number
+
+  @ApiProperty({ minimum: 1, maximum: MAXIMUM_WORKING_TREE_AGGREGATE_BYTES })
+  @IsInt()
+  @Min(1)
+  @Max(MAXIMUM_WORKING_TREE_AGGREGATE_BYTES)
+  maximumAggregateBytes: number
+}
+
+@ApiSchema({ name: 'StoppedWorkingCopyWorkingTreeEntry' })
+export class StoppedWorkingCopyWorkingTreeEntryDto extends OmitType(StoppedWorkingCopyDirectoryRosterEntryDto, [
+  'zoneRelativePath',
+  'size',
+] as const) {
+  @ApiProperty({ maxLength: 4096 })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(4096)
+  zoneRelativePath: string
+
+  @ApiProperty({ minimum: 0, maximum: MAXIMUM_USER_FILE_CAPTURE_BYTES })
+  @IsInt()
+  @Min(0)
+  @Max(MAXIMUM_USER_FILE_CAPTURE_BYTES)
+  size: number
+}
+
+@ApiSchema({ name: 'StoppedWorkingCopyWorkingTreeReceipt' })
+export class StoppedWorkingCopyWorkingTreeReceiptDto {
+  @ApiProperty({ type: StoppedWorkingCopyWorkingTreeRequestDto })
+  @ValidateNested()
+  @Type(() => StoppedWorkingCopyWorkingTreeRequestDto)
+  request: StoppedWorkingCopyWorkingTreeRequestDto
+
+  @ApiProperty({ type: SandboxTerminalGenerationDto })
+  @ValidateNested()
+  @Type(() => SandboxTerminalGenerationDto)
+  terminalGeneration: SandboxTerminalGenerationDto
+
+  @ApiProperty({ type: [StoppedWorkingCopyWorkingTreeEntryDto] })
+  @IsArray()
+  @ArrayMaxSize(MAXIMUM_WORKING_TREE_ENTRIES)
+  @ValidateNested({ each: true })
+  @Type(() => StoppedWorkingCopyWorkingTreeEntryDto)
+  entries: StoppedWorkingCopyWorkingTreeEntryDto[]
 
   @ApiProperty({ pattern: '^sha256:[0-9a-f]{64}$' })
   @Matches(/^sha256:[0-9a-f]{64}$/)
