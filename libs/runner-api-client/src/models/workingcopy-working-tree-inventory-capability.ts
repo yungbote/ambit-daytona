@@ -13,15 +13,15 @@
  */
 
 
-// May contain unused imports in some cases
-// @ts-ignore
-import type { WorkingcopyCaptureGenerationBinding } from './workingcopy-capture-generation-binding';
 
-export interface WorkingcopyStoppedWorkingTreeRequest {
-    'excludedPaths': Array<string>;
-    'generation': WorkingcopyCaptureGenerationBinding;
-    'maximumAggregateBytes': number;
+export interface WorkingcopyWorkingTreeInventoryCapability {
+    'contract': string;
+    'semanticZoneRef': string;
     'maximumDepth': number;
-    'maximumEntries': number;
     'maximumFileBytes': number;
+    'maximumAggregateBytes': number;
+    'maximumPageEntries': number;
+    'maximumPageBytes': number;
+    'maximumIndexBytes': number;
+    'maximumReadBytes': number;
 }

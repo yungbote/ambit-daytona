@@ -13,13 +13,10 @@
  */
 
 
-export interface WorkingcopyStoppedWorkingTreeCapability {
-    'contract': string;
-    'semanticZoneRef': string;
-    'maximumDepth': number;
-    'maximumEntries': number;
-    'maximumFileBytes': number;
-    'maximumAggregateBytes': number;
-    'maximumReadBytes': number;
-    'maximumReceiptBytes': number;
+import type { WorkingcopyWorkingTreeInventoryRequest } from './workingcopy-working-tree-inventory-request';
+
+export interface WorkingcopyWorkingTreeInventoryPageRequest {
+    'request': WorkingcopyWorkingTreeInventoryRequest;
+    'providerResourceId': string;
+    'pageIndex': number;
 }

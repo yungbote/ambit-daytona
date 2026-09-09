@@ -41,9 +41,10 @@ export const USER_FILES_SEMANTIC_ZONE_REF = 'ambit.workspace-zone/user-files@1'
 export const MAXIMUM_USER_FILE_CAPTURE_BYTES = 1024 * 1024 * 1024
 export const MAXIMUM_USER_FILE_READ_BYTES = 4 * 1024 * 1024
 export const MAXIMUM_WORKING_TREE_DEPTH = 64
-export const MAXIMUM_WORKING_TREE_ENTRIES = 4096
 export const MAXIMUM_WORKING_TREE_AGGREGATE_BYTES = 8 * 1024 * 1024 * 1024
-export const MAXIMUM_WORKING_TREE_RECEIPT_BYTES = 4 * 1024 * 1024
+export const MAXIMUM_WORKING_TREE_INVENTORY_PAGE_BYTES = 4 * 1024 * 1024
+export const MAXIMUM_WORKING_TREE_INVENTORY_PAGE_ENTRIES = 4096
+export const MAXIMUM_WORKING_TREE_INVENTORY_INDEX_BYTES = 4 * 1024 * 1024
 export const MAXIMUM_WORKING_COPY_ROSTER_DEPTH = 32
 export const MAXIMUM_WORKING_COPY_ROSTER_ENTRIES = 1024
 export const MAXIMUM_WORKING_COPY_ROSTER_FILE_BYTES = 8 * 1024 * 1024
@@ -99,12 +100,8 @@ export class WorkingCopyCaptureCapabilitiesRequestDto extends SandboxGenerationO
   authority: WorkingCopyCaptureAuthorityDto
 }
 
-@ApiSchema({ name: 'StoppedWorkingCopyWorkingTreeCapability' })
-export class StoppedWorkingCopyWorkingTreeCapabilityDto {
-  @ApiProperty({ enum: ['ambit.working-copy-stopped-working-tree/v1'] })
-  @Equals('ambit.working-copy-stopped-working-tree/v1')
-  contract: 'ambit.working-copy-stopped-working-tree/v1'
-
+@ApiSchema({ name: 'WorkingTreeInventoryCapability' })
+export class WorkingTreeInventoryCapabilityDto {
   @ApiProperty({ enum: [USER_FILES_SEMANTIC_ZONE_REF] })
   @Equals(USER_FILES_SEMANTIC_ZONE_REF)
   semanticZoneRef: typeof USER_FILES_SEMANTIC_ZONE_REF
@@ -114,12 +111,7 @@ export class StoppedWorkingCopyWorkingTreeCapabilityDto {
   @Min(1)
   maximumDepth: number
 
-  @ApiProperty({ minimum: 1, example: MAXIMUM_WORKING_TREE_ENTRIES })
-  @IsInt()
-  @Min(1)
-  maximumEntries: number
-
-  @ApiProperty({ minimum: 1, example: MAXIMUM_USER_FILE_CAPTURE_BYTES })
+  @ApiProperty({ minimum: 1, example: MAXIMUM_WORKING_TREE_AGGREGATE_BYTES })
   @IsInt()
   @Min(1)
   maximumFileBytes: number
@@ -134,10 +126,24 @@ export class StoppedWorkingCopyWorkingTreeCapabilityDto {
   @Min(1)
   maximumReadBytes: number
 
-  @ApiProperty({ minimum: 1, example: MAXIMUM_WORKING_TREE_RECEIPT_BYTES })
+  @ApiProperty({ enum: ['ambit.working-copy-stopped-working-tree-inventory/v1'] })
+  @Equals('ambit.working-copy-stopped-working-tree-inventory/v1')
+  contract: 'ambit.working-copy-stopped-working-tree-inventory/v1'
+
+  @ApiProperty({ minimum: 1, example: MAXIMUM_WORKING_TREE_INVENTORY_PAGE_ENTRIES })
   @IsInt()
   @Min(1)
-  maximumReceiptBytes: number
+  maximumPageEntries: number
+
+  @ApiProperty({ minimum: 1, example: MAXIMUM_WORKING_TREE_INVENTORY_PAGE_BYTES })
+  @IsInt()
+  @Min(1)
+  maximumPageBytes: number
+
+  @ApiProperty({ minimum: 1, example: MAXIMUM_WORKING_TREE_INVENTORY_INDEX_BYTES })
+  @IsInt()
+  @Min(1)
+  maximumIndexBytes: number
 }
 
 @ApiSchema({ name: 'WorkingCopyCaptureCapabilities' })
@@ -147,10 +153,11 @@ export class WorkingCopyCaptureCapabilitiesDto {
   @Type(() => WorkingCopyCaptureAuthorityDto)
   authority: WorkingCopyCaptureAuthorityDto
 
-  @ApiProperty({ type: StoppedWorkingCopyWorkingTreeCapabilityDto })
+  @ApiPropertyOptional({ type: WorkingTreeInventoryCapabilityDto })
+  @IsOptional()
   @ValidateNested()
-  @Type(() => StoppedWorkingCopyWorkingTreeCapabilityDto)
-  stoppedWorkingTree: StoppedWorkingCopyWorkingTreeCapabilityDto
+  @Type(() => WorkingTreeInventoryCapabilityDto)
+  stoppedWorkingTreeInventory?: WorkingTreeInventoryCapabilityDto
 }
 
 @ApiSchema({ name: 'WorkingCopyCaptureSelector' })
@@ -445,49 +452,6 @@ export class StoppedWorkingCopyDirectoryRosterReceiptDto {
 @ApiSchema({ name: 'WorkingCopyCaptureGeneration' })
 export class WorkingCopyCaptureGenerationDto extends OmitType(WorkingCopyCaptureBindingDto, ['selector'] as const) {}
 
-@ApiSchema({ name: 'StoppedWorkingCopyWorkingTreeRequest' })
-export class StoppedWorkingCopyWorkingTreeRequestDto {
-  @ApiProperty({ type: WorkingCopyCaptureGenerationDto })
-  @ValidateNested()
-  @Type(() => WorkingCopyCaptureGenerationDto)
-  generation: WorkingCopyCaptureGenerationDto
-
-  @ApiProperty({
-    type: [String],
-    description: 'Exact UTF-8-sorted relative mount paths; managed runtime roots are always excluded.',
-  })
-  @IsArray()
-  @ArrayMaxSize(MAXIMUM_WORKING_TREE_ENTRIES)
-  @IsString({ each: true })
-  @MinLength(1, { each: true })
-  @MaxLength(4096, { each: true })
-  excludedPaths: string[]
-
-  @ApiProperty({ minimum: 1, maximum: MAXIMUM_WORKING_TREE_DEPTH })
-  @IsInt()
-  @Min(1)
-  @Max(MAXIMUM_WORKING_TREE_DEPTH)
-  maximumDepth: number
-
-  @ApiProperty({ minimum: 1, maximum: MAXIMUM_WORKING_TREE_ENTRIES })
-  @IsInt()
-  @Min(1)
-  @Max(MAXIMUM_WORKING_TREE_ENTRIES)
-  maximumEntries: number
-
-  @ApiProperty({ minimum: 1, maximum: MAXIMUM_USER_FILE_CAPTURE_BYTES })
-  @IsInt()
-  @Min(1)
-  @Max(MAXIMUM_USER_FILE_CAPTURE_BYTES)
-  maximumFileBytes: number
-
-  @ApiProperty({ minimum: 1, maximum: MAXIMUM_WORKING_TREE_AGGREGATE_BYTES })
-  @IsInt()
-  @Min(1)
-  @Max(MAXIMUM_WORKING_TREE_AGGREGATE_BYTES)
-  maximumAggregateBytes: number
-}
-
 @ApiSchema({ name: 'StoppedWorkingCopyWorkingTreeEntry' })
 export class StoppedWorkingCopyWorkingTreeEntryDto extends OmitType(StoppedWorkingCopyDirectoryRosterEntryDto, [
   'zoneRelativePath',
@@ -516,37 +480,282 @@ export class StoppedWorkingCopyWorkingTreeEntryDto extends OmitType(StoppedWorki
   @MaxLength(4096)
   zoneRelativePath: string
 
-  @ApiProperty({ minimum: 0, maximum: MAXIMUM_USER_FILE_CAPTURE_BYTES })
+  @ApiProperty({ minimum: 0, maximum: MAXIMUM_WORKING_TREE_AGGREGATE_BYTES })
   @IsInt()
   @Min(0)
-  @Max(MAXIMUM_USER_FILE_CAPTURE_BYTES)
+  @Max(MAXIMUM_WORKING_TREE_AGGREGATE_BYTES)
   size: number
+  @ApiPropertyOptional({minimum:0,maximum:MAXIMUM_WORKING_TREE_AGGREGATE_BYTES})
+  @ValidateIf((entry:StoppedWorkingCopyWorkingTreeEntryDto)=>entry.kind==='regular_file')
+  @IsInt()
+  @Min(0)
+  @Max(MAXIMUM_WORKING_TREE_AGGREGATE_BYTES)
+  byteOffset?:number
+
 }
 
-@ApiSchema({ name: 'StoppedWorkingCopyWorkingTreeReceipt' })
-export class StoppedWorkingCopyWorkingTreeReceiptDto {
-  @ApiProperty({ type: StoppedWorkingCopyWorkingTreeRequestDto })
+@ApiSchema({ name: 'WorkingTreeInventoryRequest' })
+export class WorkingTreeInventoryRequestDto {
+  @ApiProperty({ type: WorkingCopyCaptureGenerationDto })
   @ValidateNested()
-  @Type(() => StoppedWorkingCopyWorkingTreeRequestDto)
-  request: StoppedWorkingCopyWorkingTreeRequestDto
+  @Type(() => WorkingCopyCaptureGenerationDto)
+  generation: WorkingCopyCaptureGenerationDto
+
+  @ApiProperty({ type: [String] })
+  @IsArray()
+  @ArrayMaxSize(4096)
+  @IsString({ each: true })
+  @MaxLength(4096, { each: true })
+  excludedPaths: string[]
+
+  @ApiProperty({ minimum: 1, maximum: MAXIMUM_WORKING_TREE_DEPTH })
+  @IsInt()
+  @Min(1)
+  @Max(MAXIMUM_WORKING_TREE_DEPTH)
+  maximumDepth: number
+
+  @ApiProperty({ minimum: 1, maximum: MAXIMUM_WORKING_TREE_AGGREGATE_BYTES })
+  @IsInt()
+  @Min(1)
+  @Max(MAXIMUM_WORKING_TREE_AGGREGATE_BYTES)
+  maximumFileBytes: number
+
+  @ApiProperty({ minimum: 1, maximum: MAXIMUM_WORKING_TREE_AGGREGATE_BYTES })
+  @IsInt()
+  @Min(1)
+  @Max(MAXIMUM_WORKING_TREE_AGGREGATE_BYTES)
+  maximumAggregateBytes: number
+
+  @ApiProperty({ minimum: 1, maximum: MAXIMUM_WORKING_TREE_INVENTORY_PAGE_ENTRIES })
+  @IsInt()
+  @Min(1)
+  @Max(MAXIMUM_WORKING_TREE_INVENTORY_PAGE_ENTRIES)
+  maximumPageEntries: number
+
+  @ApiProperty({ minimum: 2, maximum: MAXIMUM_WORKING_TREE_INVENTORY_PAGE_BYTES })
+  @IsInt()
+  @Min(2)
+  @Max(MAXIMUM_WORKING_TREE_INVENTORY_PAGE_BYTES)
+  maximumPageBytes: number
+}
+
+@ApiSchema({ name: 'WorkingTreeInventoryPageDescriptor' })
+export class WorkingTreeInventoryPageDescriptorDto {
+  @ApiProperty({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })
+  @IsInt()
+  @Min(0)
+  @Max(Number.MAX_SAFE_INTEGER)
+  pageIndex: number
+
+  @ApiProperty({ minimum: 1, maximum: MAXIMUM_WORKING_TREE_INVENTORY_PAGE_ENTRIES })
+  @IsInt()
+  @Min(1)
+  @Max(MAXIMUM_WORKING_TREE_INVENTORY_PAGE_ENTRIES)
+  entryCount: number
+
+  @ApiProperty({ minimum: 2, maximum: MAXIMUM_WORKING_TREE_INVENTORY_PAGE_BYTES })
+  @IsInt()
+  @Min(2)
+  @Max(MAXIMUM_WORKING_TREE_INVENTORY_PAGE_BYTES)
+  byteLength: number
+
+  @ApiProperty({ pattern: '^sha256:[0-9a-f]{64}$' })
+  @Matches(/^sha256:[0-9a-f]{64}$/)
+  sha256: string
+
+  @ApiProperty({ minLength: 1, maxLength: 4096 })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(4096)
+  firstPath: string
+
+  @ApiProperty({ minLength: 1, maxLength: 4096 })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(4096)
+  lastPath: string
+}
+
+@ApiSchema({name:'WorkingTreeInventoryBytePart'})
+export class WorkingTreeInventoryBytePartDto {
+  @ApiProperty({minimum:0})
+  @IsInt()
+  @Min(0)
+  byteOffset:number
+  @ApiProperty({minimum:1,maximum:MAXIMUM_WORKING_TREE_AGGREGATE_BYTES})
+  @IsInt()
+  @Min(1)
+  @Max(MAXIMUM_WORKING_TREE_AGGREGATE_BYTES)
+  byteLength:number
+  @ApiProperty({pattern:'^sha256:[0-9a-f]{64}$'})
+  @Matches(/^sha256:[0-9a-f]{64}$/)
+  sha256:string
+}
+
+@ApiSchema({name:'WorkingTreeInventoryBytePack'})
+export class WorkingTreeInventoryBytePackDto {
+  @ApiProperty({minimum:0,maximum:MAXIMUM_WORKING_TREE_AGGREGATE_BYTES})
+  @IsInt()
+  @Min(0)
+  @Max(MAXIMUM_WORKING_TREE_AGGREGATE_BYTES)
+  byteLength:number
+  @ApiProperty({pattern:'^sha256:[0-9a-f]{64}$'})
+  @Matches(/^sha256:[0-9a-f]{64}$/)
+  sha256:string
+  @ApiProperty({type:[WorkingTreeInventoryBytePartDto]})
+  @IsArray()
+  @ValidateNested({each:true})
+  @Type(()=>WorkingTreeInventoryBytePartDto)
+  parts:WorkingTreeInventoryBytePartDto[]
+}
+
+@ApiSchema({ name: 'WorkingTreeInventoryReceipt' })
+export class WorkingTreeInventoryReceiptDto {
+  @ApiProperty({ type: WorkingTreeInventoryRequestDto })
+  @ValidateNested()
+  @Type(() => WorkingTreeInventoryRequestDto)
+  request: WorkingTreeInventoryRequestDto
+
+  @ApiProperty({ pattern: '^daytona-working-tree-inventory:v1:sha256:[0-9a-f]{64}$' })
+  @Matches(/^daytona-working-tree-inventory:v1:sha256:[0-9a-f]{64}$/)
+  providerResourceId: string
 
   @ApiProperty({ type: SandboxTerminalGenerationDto })
   @ValidateNested()
   @Type(() => SandboxTerminalGenerationDto)
   terminalGeneration: SandboxTerminalGenerationDto
 
+  @ApiProperty({ type: [WorkingTreeInventoryPageDescriptorDto] })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => WorkingTreeInventoryPageDescriptorDto)
+  pages: WorkingTreeInventoryPageDescriptorDto[]
+
+  @ApiProperty({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })
+  @IsInt()
+  @Min(0)
+  @Max(Number.MAX_SAFE_INTEGER)
+  entryCount: number
+
+  @ApiProperty({ minimum: 0, maximum: MAXIMUM_WORKING_TREE_AGGREGATE_BYTES })
+  @IsInt()
+  @Min(0)
+  @Max(MAXIMUM_WORKING_TREE_AGGREGATE_BYTES)
+  aggregateBytes: number
+
+  @ApiProperty({type:WorkingTreeInventoryBytePackDto})
+  @ValidateNested()
+  @Type(()=>WorkingTreeInventoryBytePackDto)
+  bytePack:WorkingTreeInventoryBytePackDto
+
+
+  @ApiProperty({ pattern: '^sha256:[0-9a-f]{64}$' })
+  @Matches(/^sha256:[0-9a-f]{64}$/)
+  inventoryDigest: string
+
+  @ApiProperty({ format: 'date-time' })
+  @IsDateString({ strict: true })
+  observedAt: string
+}
+
+@ApiSchema({ name: 'WorkingTreeInventoryPageRequest' })
+export class WorkingTreeInventoryPageRequestDto {
+  @ApiProperty({ type: WorkingTreeInventoryRequestDto })
+  @ValidateNested()
+  @Type(() => WorkingTreeInventoryRequestDto)
+  request: WorkingTreeInventoryRequestDto
+
+  @ApiProperty({ pattern: '^daytona-working-tree-inventory:v1:sha256:[0-9a-f]{64}$' })
+  @Matches(/^daytona-working-tree-inventory:v1:sha256:[0-9a-f]{64}$/)
+  providerResourceId: string
+
+  @ApiProperty({ minimum: 0 })
+  @IsInt()
+  @Min(0)
+  pageIndex: number
+}
+
+@ApiSchema({ name: 'WorkingTreeInventoryPage' })
+export class WorkingTreeInventoryPageDto {
+  @ApiProperty({ pattern: '^daytona-working-tree-inventory:v1:sha256:[0-9a-f]{64}$' })
+  @Matches(/^daytona-working-tree-inventory:v1:sha256:[0-9a-f]{64}$/)
+  providerResourceId: string
+
+  @ApiProperty({ minimum: 0 })
+  @IsInt()
+  @Min(0)
+  pageIndex: number
+
   @ApiProperty({ type: [StoppedWorkingCopyWorkingTreeEntryDto] })
   @IsArray()
-  @ArrayMaxSize(MAXIMUM_WORKING_TREE_ENTRIES)
+  @ArrayMaxSize(MAXIMUM_WORKING_TREE_INVENTORY_PAGE_ENTRIES)
   @ValidateNested({ each: true })
   @Type(() => StoppedWorkingCopyWorkingTreeEntryDto)
   entries: StoppedWorkingCopyWorkingTreeEntryDto[]
 
   @ApiProperty({ pattern: '^sha256:[0-9a-f]{64}$' })
   @Matches(/^sha256:[0-9a-f]{64}$/)
-  rosterDigest: string
+  pageDigest: string
+}
 
-  @ApiProperty({ format: 'date-time' })
-  @IsDateString({ strict: true })
-  observedAt: string
+@ApiSchema({ name: 'WorkingTreeInventoryDeletionReceipt' })
+export class WorkingTreeInventoryDeletionReceiptDto {
+  @ApiProperty({ type: WorkingTreeInventoryRequestDto })
+  @ValidateNested()
+  @Type(() => WorkingTreeInventoryRequestDto)
+  request: WorkingTreeInventoryRequestDto
+
+  @ApiProperty({ pattern: '^daytona-working-tree-inventory:v1:sha256:[0-9a-f]{64}$' })
+  @Matches(/^daytona-working-tree-inventory:v1:sha256:[0-9a-f]{64}$/)
+  providerResourceId: string
+
+  @ApiProperty({ enum: ['absent'] })
+  @Equals('absent')
+  status: 'absent'
+}
+
+@ApiSchema({name:'WorkingTreeInventoryRangeRequest'})
+export class WorkingTreeInventoryRangeRequestDto extends OmitType(WorkingTreeInventoryPageRequestDto,['pageIndex'] as const) {
+  @ApiProperty({pattern:'^sha256:[0-9a-f]{64}$'})
+  @Matches(/^sha256:[0-9a-f]{64}$/)
+  inventoryDigest:string
+  @ApiProperty({minimum:0})
+  @IsInt()
+  @Min(0)
+  offset:number
+  @ApiProperty({minimum:1,maximum:MAXIMUM_USER_FILE_READ_BYTES})
+  @IsInt()
+  @Min(1)
+  @Max(MAXIMUM_USER_FILE_READ_BYTES)
+  maximumBytes:number
+}
+
+@ApiSchema({name:'WorkingTreeInventoryRange'})
+export class WorkingTreeInventoryRangeDto {
+  @ApiProperty({pattern:'^daytona-working-tree-inventory:v1:sha256:[0-9a-f]{64}$'})
+  @Matches(/^daytona-working-tree-inventory:v1:sha256:[0-9a-f]{64}$/)
+  providerResourceId:string
+  @ApiProperty({pattern:'^sha256:[0-9a-f]{64}$'})
+  @Matches(/^sha256:[0-9a-f]{64}$/)
+  inventoryDigest:string
+  @ApiProperty({minimum:0})
+  @IsInt()
+  @Min(0)
+  offset:number
+  @ApiProperty({minimum:0,maximum:MAXIMUM_USER_FILE_READ_BYTES})
+  @IsInt()
+  @Min(0)
+  @Max(MAXIMUM_USER_FILE_READ_BYTES)
+  byteLength:number
+  @ApiProperty({minimum:0,maximum:MAXIMUM_WORKING_TREE_AGGREGATE_BYTES})
+  @IsInt()
+  @Min(0)
+  @Max(MAXIMUM_WORKING_TREE_AGGREGATE_BYTES)
+  totalByteLength:number
+  @ApiProperty()
+  @IsBoolean()
+  eof:boolean
+  @ApiProperty()
+  @IsString()
+  bytesBase64:string
 }

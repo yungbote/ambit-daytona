@@ -644,15 +644,13 @@ func (s *Service) resumeCapture(
 		// The completed file must remain private until path and generation
 		// reproof finishes. Unlink immediately so cancellation, failure and
 		// process exit all release scratch custody without a durable pathname.
-		content, createErr := os.CreateTemp("", "ambit-working-copy-*")
+		content, createErr := newPrivateScratchFile("ambit-working-copy-*")
 		if createErr != nil {
 			return CaptureReceipt{}, fmt.Errorf("%w: create capture scratch file: %w", ErrUnavailable, createErr)
 		}
 		defer content.Close()
-		if err := os.Remove(content.Name()); err != nil {
-			return CaptureReceipt{}, fmt.Errorf("%w: unlink capture scratch file: %w", ErrUnavailable, err)
-		}
-		staged, err = s.captureStableFile(ctx, zonePath, intent, content)
+
+		staged, err = s.captureStableFile(ctx, zonePath, intent, content, MaximumCaptureBytes)
 		if err != nil {
 			return CaptureReceipt{}, err
 		}
@@ -741,6 +739,7 @@ func (s *Service) captureStableFile(
 	zonePath string,
 	intent captureIntent,
 	content io.Writer,
+	maximumBytes int64,
 ) (capturedFile, error) {
 	beforeStop, err := s.requireCurrentStop(ctx, intent.Binding)
 	if err != nil {
@@ -755,6 +754,9 @@ func (s *Service) captureStableFile(
 		return capturedFile{}, err
 	}
 	fileBefore := before[len(before)-1]
+	if fileBefore.Size > maximumBytes {
+		return capturedFile{}, fmt.Errorf("%w: source file exceeds the requested byte bound", ErrConflict)
+	}
 	archive, copyStat, err := s.containers.CopyFromContainer(ctx, containerID, zonePath)
 	if err != nil {
 		return capturedFile{}, dockerReadError("open Docker archive", err)

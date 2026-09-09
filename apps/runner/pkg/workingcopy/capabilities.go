@@ -37,11 +37,11 @@ func (s *Service) Capabilities(ctx context.Context, sandboxID string, request Ca
 	}
 	return CaptureCapabilities{
 		Authority: s.admittedAuthority,
-		StoppedWorkingTree: StoppedWorkingTreeCapability{
-			Contract: stoppedWorkingTreeContract, SemanticZoneRef: userFilesSemanticZoneRef,
-			MaximumDepth: MaximumWorkingTreeDepth, MaximumEntries: MaximumWorkingTreeEntries,
-			MaximumFileBytes: MaximumCaptureBytes, MaximumAggregateBytes: MaximumWorkingTreeAggregateBytes,
-			MaximumReadBytes: MaximumReadBytes, MaximumReceiptBytes: MaximumWorkingTreeReceiptBytes,
+		StoppedWorkingTreeInventory: WorkingTreeInventoryCapability{
+			Contract: workingTreeInventoryContract, SemanticZoneRef: userFilesSemanticZoneRef,
+			MaximumDepth: MaximumWorkingTreeDepth, MaximumFileBytes: MaximumWorkingTreeAggregateBytes, MaximumAggregateBytes: MaximumWorkingTreeAggregateBytes,
+			MaximumPageEntries: MaximumWorkingTreeInventoryPageEntries, MaximumPageBytes: MaximumWorkingTreeInventoryPageBytes,
+			MaximumIndexBytes: MaximumWorkingTreeInventoryIndexBytes, MaximumReadBytes: MaximumReadBytes,
 		},
 	}, nil
 }

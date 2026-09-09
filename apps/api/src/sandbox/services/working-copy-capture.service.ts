@@ -20,13 +20,9 @@ import {
   MAXIMUM_USER_FILE_CAPTURE_BYTES,
   MAXIMUM_USER_FILE_READ_BYTES,
   MAXIMUM_WORKING_TREE_DEPTH,
-  MAXIMUM_WORKING_TREE_ENTRIES,
   MAXIMUM_WORKING_TREE_AGGREGATE_BYTES,
-  MAXIMUM_WORKING_TREE_RECEIPT_BYTES,
   USER_FILES_SEMANTIC_ZONE_REF,
   WorkingCopyCaptureGenerationDto,
-  StoppedWorkingCopyWorkingTreeRequestDto,
-  StoppedWorkingCopyWorkingTreeReceiptDto,
   StoppedWorkingCopyWorkingTreeEntryDto,
   MAXIMUM_WORKING_COPY_CAPTURE_READ_BYTES,
   MAXIMUM_WORKING_COPY_ROSTER_AGGREGATE_BYTES,
@@ -38,6 +34,16 @@ import {
   StoppedWorkingCopyDirectoryRosterReceiptDto,
   WorkingCopyCaptureAuthorityDto,
   WorkingCopyCaptureBindingDto,
+  MAXIMUM_WORKING_TREE_INVENTORY_PAGE_BYTES,
+  MAXIMUM_WORKING_TREE_INVENTORY_PAGE_ENTRIES,
+  MAXIMUM_WORKING_TREE_INVENTORY_INDEX_BYTES,
+  WorkingTreeInventoryRequestDto,
+  WorkingTreeInventoryRangeRequestDto,
+  WorkingTreeInventoryRangeDto,
+  WorkingTreeInventoryReceiptDto,
+  WorkingTreeInventoryPageRequestDto,
+  WorkingTreeInventoryPageDto,
+  WorkingTreeInventoryDeletionReceiptDto,
   WorkingCopyCaptureCapabilitiesRequestDto,
   WorkingCopyCaptureCapabilitiesDto,
   WorkingCopyCaptureDeleteReceiptDto,
@@ -90,45 +96,187 @@ export class WorkingCopyCaptureService {
     )
     try {
       const response = await adapter.workingCopyCaptureCapabilities(sandbox.id, request, signal)
-      assertExactKeys(response, ['authority', 'stoppedWorkingTree'], 'capture capabilities', ConflictException)
-      if (canonicalJson(response.authority) !== canonicalJson(request.authority))
-        throw new ConflictException('Runner capture capabilities name another helper authority.')
-      const tree = response.stoppedWorkingTree
+      const tree = response.stoppedWorkingTreeInventory
       assertExactKeys(
-        tree,
-        [
-          'contract',
-          'semanticZoneRef',
-          'maximumDepth',
-          'maximumEntries',
-          'maximumFileBytes',
-          'maximumAggregateBytes',
-          'maximumReadBytes',
-          'maximumReceiptBytes',
-        ],
-        'working-tree capability',
+        response,
+        ['authority', ...(tree !== undefined ? ['stoppedWorkingTreeInventory'] : [])],
+        'capture capabilities',
         ConflictException,
       )
-      if (
-        tree.contract !== 'ambit.working-copy-stopped-working-tree/v1' ||
-        tree.semanticZoneRef !== USER_FILES_SEMANTIC_ZONE_REF
-      )
-        throw new ConflictException('Runner working-tree capability contract is unsupported.')
-      for (const key of [
-        'maximumDepth',
-        'maximumEntries',
-        'maximumFileBytes',
-        'maximumAggregateBytes',
-        'maximumReadBytes',
-        'maximumReceiptBytes',
-      ] as const) {
-        if (!Number.isSafeInteger(tree[key]) || tree[key] < 1)
-          throw new ConflictException('Runner working-tree capability bound is invalid.')
+      if (canonicalJson(response.authority) !== canonicalJson(request.authority))
+        throw new ConflictException('Runner capture capabilities name another helper authority.')
+      if (tree !== undefined) {
+        const bounds = [
+          'maximumDepth',
+          'maximumFileBytes',
+          'maximumAggregateBytes',
+          'maximumPageEntries',
+          'maximumPageBytes',
+          'maximumIndexBytes',
+          'maximumReadBytes',
+        ] as const
+        assertExactKeys(
+          tree,
+          ['contract', 'semanticZoneRef', ...bounds],
+          'working-tree inventory capability',
+          ConflictException,
+        )
+        if (tree.contract !== INVENTORY_CONTRACT || tree.semanticZoneRef !== USER_FILES_SEMANTIC_ZONE_REF)
+          throw new ConflictException('Runner working-tree inventory capability contract is unsupported.')
+        for (const key of bounds) {
+          if (!Number.isSafeInteger(tree[key]) || tree[key] < 1)
+            throw new ConflictException('Runner working-tree inventory capability bound is invalid.')
+        }
       }
       signal?.throwIfAborted()
       return response
     } catch (error) {
       throw translateRunnerCaptureError(error, false)
+    }
+  }
+
+  async prepareInventory(
+    organizationId: string,
+    sandboxIdOrName: string,
+    request: WorkingTreeInventoryRequestDto,
+    signal?: AbortSignal,
+  ): Promise<WorkingTreeInventoryReceiptDto> {
+    signal?.throwIfAborted()
+    assertInventoryRequest(request)
+    const { sandbox, adapter } = await this.executionAuthority.authorize(
+      organizationId,
+      sandboxIdOrName,
+      request.generation.source,
+      request.generation.owner,
+      request.generation.stopAuthority.fence,
+    )
+    try {
+      const receipt = await adapter.prepareWorkingTreeInventory(sandbox.id, request, signal)
+      assertInventoryReceipt(receipt, request)
+      return receipt
+    } catch (error) {
+      throw translateRunnerCaptureError(error, true)
+    }
+  }
+
+  async readInventoryPage(
+    organizationId: string,
+    sandboxIdOrName: string,
+    request: WorkingTreeInventoryPageRequestDto,
+    signal?: AbortSignal,
+  ): Promise<WorkingTreeInventoryPageDto> {
+    signal?.throwIfAborted()
+    assertExactKeys(
+      request,
+      ['request', 'providerResourceId', 'pageIndex'],
+      'inventory page request',
+      BadRequestException,
+    )
+    assertInventoryRequest(request.request)
+    if (
+      request.providerResourceId !== inventoryResourceId(request.request) ||
+      !Number.isSafeInteger(request.pageIndex) ||
+      request.pageIndex < 0
+    )
+      throw new BadRequestException('Inventory page identity is invalid.')
+    const generation = request.request.generation
+    const { sandbox, adapter } = await this.executionAuthority.authorize(
+      organizationId,
+      sandboxIdOrName,
+      generation.source,
+      generation.owner,
+      generation.stopAuthority.fence,
+    )
+    try {
+      const page = await adapter.readWorkingTreeInventoryPage(sandbox.id, request, signal)
+      assertExactKeys(
+        page,
+        ['providerResourceId', 'pageIndex', 'entries', 'pageDigest'],
+        'inventory page',
+        ConflictException,
+      )
+      if (
+        page.providerResourceId !== request.providerResourceId ||
+        page.pageIndex !== request.pageIndex ||
+        !Array.isArray(page.entries) ||
+        page.entries.length < 1 ||
+        page.entries.length > request.request.maximumPageEntries
+      )
+        throw new ConflictException('Runner inventory page identity or count changed.')
+      const excluded = new Set(request.request.excludedPaths)
+      for (const [index, entry] of page.entries.entries()) {
+        assertWorkingTreeEntry(entry, request.request, excluded)
+        if (
+          index > 0 &&
+          compareUtf8Lexicographic(page.entries[index - 1].zoneRelativePath, entry.zoneRelativePath) >= 0
+        )
+          throw new ConflictException('Runner inventory page is not sorted and unique.')
+      }
+      const body = canonicalJson(page.entries)
+      if (
+        Buffer.byteLength(body, 'utf8') > request.request.maximumPageBytes ||
+        page.pageDigest !== jsonDigest(page.entries)
+      )
+        throw new ConflictException('Runner inventory page bytes exceed or differ from their digest.')
+      return page
+    } catch (error) {
+      throw translateRunnerCaptureError(error, false)
+    }
+  }
+
+  async readInventoryRange(organizationId:string,sandboxIdOrName:string,request:WorkingTreeInventoryRangeRequestDto,signal?:AbortSignal):Promise<WorkingTreeInventoryRangeDto> {
+    signal?.throwIfAborted()
+    assertExactKeys(request,['request','providerResourceId','inventoryDigest','offset','maximumBytes'],'inventory range request',BadRequestException)
+    assertInventoryRequest(request.request)
+    if(request.providerResourceId!==inventoryResourceId(request.request)||typeof request.inventoryDigest!=='string'||!/^sha256:[0-9a-f]{64}$/.test(request.inventoryDigest)||!Number.isSafeInteger(request.offset)||request.offset<0||!Number.isSafeInteger(request.maximumBytes)||request.maximumBytes<1||request.maximumBytes>MAXIMUM_USER_FILE_READ_BYTES)
+      throw new BadRequestException('Inventory byte range is invalid.')
+    const generation=request.request.generation
+    const {sandbox,adapter}=await this.executionAuthority.authorize(organizationId,sandboxIdOrName,generation.source,generation.owner,generation.stopAuthority.fence)
+    try {
+      const range=await adapter.readWorkingTreeInventoryRange(sandbox.id,request,signal)
+      assertExactKeys(range,['providerResourceId','inventoryDigest','offset','byteLength','totalByteLength','eof','bytesBase64'],'inventory byte range',ConflictException)
+      if(range.providerResourceId!==request.providerResourceId||range.inventoryDigest!==request.inventoryDigest||range.offset!==request.offset||!Number.isSafeInteger(range.totalByteLength)||range.totalByteLength<request.offset||range.totalByteLength>request.request.maximumAggregateBytes||typeof range.bytesBase64!=='string'||!canonicalBase64(range.bytesBase64,request.maximumBytes))
+        throw new ConflictException('Runner inventory byte range authority changed.')
+      const expected=Math.min(request.maximumBytes,range.totalByteLength-request.offset)
+      if(range.byteLength!==expected||Buffer.from(range.bytesBase64,'base64').length!==expected||range.eof!==(request.offset+expected===range.totalByteLength))
+        throw new ConflictException('Runner inventory byte range was truncated or changed.')
+      return range
+    } catch(error) {throw translateRunnerCaptureError(error,false)}
+  }
+
+  async deleteInventory(
+    organizationId: string,
+    sandboxIdOrName: string,
+    request: WorkingTreeInventoryRequestDto,
+    signal?: AbortSignal,
+  ): Promise<WorkingTreeInventoryDeletionReceiptDto> {
+    signal?.throwIfAborted()
+    assertInventoryRequest(request)
+    const generation = request.generation
+    const { sandbox, adapter } = await this.executionAuthority.authorize(
+      organizationId,
+      sandboxIdOrName,
+      generation.source,
+      generation.owner,
+      generation.stopAuthority.fence,
+    )
+    try {
+      const receipt = await adapter.deleteWorkingTreeInventory(sandbox.id, request, signal)
+      assertExactKeys(
+        receipt,
+        ['request', 'providerResourceId', 'status'],
+        'inventory deletion receipt',
+        ConflictException,
+      )
+      if (
+        receipt.status !== 'absent' ||
+        receipt.providerResourceId !== inventoryResourceId(request) ||
+        canonicalJson(receipt.request) !== canonicalJson(request)
+      )
+        throw new ConflictException('Runner did not prove absence of the exact inventory.')
+      return receipt
+    } catch (error) {
+      throw translateRunnerCaptureError(error, true)
     }
   }
 
@@ -257,29 +405,6 @@ export class WorkingCopyCaptureService {
     try {
       const receipt = await adapter.stoppedWorkingCopyDirectoryRoster(sandbox.id, request, signal)
       assertStoppedDirectoryRosterReceipt(receipt, request)
-      return receipt
-    } catch (error) {
-      throw translateRunnerCaptureError(error, false)
-    }
-  }
-
-  async stoppedWorkingTree(
-    organizationId: string,
-    sandboxIdOrName: string,
-    request: StoppedWorkingCopyWorkingTreeRequestDto,
-    signal?: AbortSignal,
-  ): Promise<StoppedWorkingCopyWorkingTreeReceiptDto> {
-    assertStoppedWorkingTreeRequest(request)
-    const { sandbox, adapter } = await this.executionAuthority.authorize(
-      organizationId,
-      sandboxIdOrName,
-      request.generation.source,
-      request.generation.owner,
-      request.generation.stopAuthority.fence,
-    )
-    try {
-      const receipt = await adapter.stoppedWorkingCopyWorkingTree(sandbox.id, request, signal)
-      assertStoppedWorkingTreeReceipt(receipt, request)
       return receipt
     } catch (error) {
       throw translateRunnerCaptureError(error, false)
@@ -1009,126 +1134,6 @@ function excludedWorkingTreePath(value: string, exclusions: ReadonlySet<string>)
   return false
 }
 
-function assertStoppedWorkingTreeRequest(request: StoppedWorkingCopyWorkingTreeRequestDto): void {
-  assertExactKeys(
-    request,
-    ['generation', 'excludedPaths', 'maximumDepth', 'maximumEntries', 'maximumFileBytes', 'maximumAggregateBytes'],
-    'working-tree request',
-    BadRequestException,
-  )
-  assertExactKeys(
-    request.generation,
-    ['authority', 'owner', 'providerName', 'requestFingerprint', 'source', 'stopAuthority'],
-    'working-tree generation',
-    BadRequestException,
-  )
-  assertGenerationValues(request.generation)
-  if (
-    !Array.isArray(request.excludedPaths) ||
-    request.excludedPaths.length > MAXIMUM_WORKING_TREE_ENTRIES ||
-    !Number.isSafeInteger(request.maximumDepth) ||
-    request.maximumDepth < 1 ||
-    request.maximumDepth > MAXIMUM_WORKING_TREE_DEPTH ||
-    !Number.isSafeInteger(request.maximumEntries) ||
-    request.maximumEntries < 1 ||
-    request.maximumEntries > MAXIMUM_WORKING_TREE_ENTRIES ||
-    !Number.isSafeInteger(request.maximumFileBytes) ||
-    request.maximumFileBytes < 1 ||
-    request.maximumFileBytes > MAXIMUM_USER_FILE_CAPTURE_BYTES ||
-    !Number.isSafeInteger(request.maximumAggregateBytes) ||
-    request.maximumAggregateBytes < request.maximumFileBytes ||
-    request.maximumAggregateBytes > MAXIMUM_WORKING_TREE_AGGREGATE_BYTES
-  ) {
-    throw new BadRequestException('Working-tree roster bounds or exclusions are invalid.')
-  }
-  const seen = new Set<string>()
-  for (const [index, excluded] of request.excludedPaths.entries()) {
-    if (
-      !canonicalWorkingTreePath(excluded) ||
-      (index > 0 && compareUtf8Lexicographic(request.excludedPaths[index - 1], excluded) >= 0)
-    ) {
-      throw new BadRequestException('Working-tree exclusions must be exact sorted unique relative paths.')
-    }
-    for (let parent = posixPath.dirname(excluded); parent !== '.'; parent = posixPath.dirname(parent)) {
-      if (seen.has(parent)) throw new BadRequestException('Working-tree exclusions repeat an excluded ancestor.')
-    }
-    seen.add(excluded)
-  }
-}
-
-function assertStoppedWorkingTreeReceipt(
-  receipt: StoppedWorkingCopyWorkingTreeReceiptDto,
-  request: StoppedWorkingCopyWorkingTreeRequestDto,
-): void {
-  assertExactKeys(
-    receipt,
-    ['entries', 'observedAt', 'request', 'rosterDigest', 'terminalGeneration'],
-    'working-tree receipt',
-    ConflictException,
-  )
-  if (
-    canonicalJson(receipt.request) !== canonicalJson(request) ||
-    canonicalJson(receipt.terminalGeneration) !== canonicalJson(request.generation.stopAuthority.terminalGeneration) ||
-    !Array.isArray(receipt.entries) ||
-    receipt.entries.length > request.maximumEntries ||
-    !/^sha256:[0-9a-f]{64}$/.test(receipt.rosterDigest) ||
-    !canonicalUtcTimestamp(receipt.observedAt) ||
-    Buffer.byteLength(JSON.stringify(receipt), 'utf8') > MAXIMUM_WORKING_TREE_RECEIPT_BYTES
-  ) {
-    throw new ConflictException('Runner returned a conflicting working-tree receipt.')
-  }
-  const excluded = new Set(request.excludedPaths)
-  const paths = new Map<string, string>()
-  let aggregate = 0
-  for (const [index, entry] of receipt.entries.entries()) {
-    assertExactKeys(
-      entry,
-      [
-        'kind',
-        'mode',
-        'name',
-        'sha256',
-        'size',
-        'zoneRelativePath',
-        ...(entry.kind === 'symlink' ? ['linkTarget'] : []),
-        ...(entry.kind === 'excluded' ? ['excludedKind'] : []),
-      ],
-      'working-tree entry',
-      ConflictException,
-    )
-    if (
-      !canonicalWorkingTreePath(entry.zoneRelativePath) ||
-      excludedWorkingTreePath(entry.zoneRelativePath, excluded) ||
-      entry.name !== posixPath.basename(entry.zoneRelativePath) ||
-      entry.zoneRelativePath.split('/').length > request.maximumDepth ||
-      !Number.isSafeInteger(entry.size) ||
-      entry.size < 0 ||
-      !validWorkingTreeEntryVariant(entry, request.maximumFileBytes) ||
-      typeof entry.mode !== 'string' ||
-      !/^[0-7]{4}$/.test(entry.mode) ||
-      (index > 0 && compareUtf8Lexicographic(receipt.entries[index - 1].zoneRelativePath, entry.zoneRelativePath) >= 0)
-    ) {
-      throw new ConflictException('Runner returned an invalid working-tree entry.')
-    }
-    aggregate += entry.size
-    if (aggregate > request.maximumAggregateBytes)
-      throw new ConflictException('Runner working-tree roster exceeds its aggregate bound.')
-    for (let parent = posixPath.dirname(entry.zoneRelativePath); parent !== '.'; parent = posixPath.dirname(parent)) {
-      if (paths.get(parent) !== 'directory')
-        throw new ConflictException('Runner working-tree roster has no exact directory ancestry.')
-    }
-    paths.set(entry.zoneRelativePath, entry.kind)
-  }
-  const payload = {
-    contract: 'ambit.working-copy-stopped-working-tree/v1',
-    request,
-    terminalGeneration: receipt.terminalGeneration,
-    entries: receipt.entries,
-  }
-  const digest = `sha256:${createHash('sha256').update(canonicalJson(payload), 'utf8').digest('hex')}`
-  if (receipt.rosterDigest !== digest) throw new ConflictException('Runner working-tree roster digest changed.')
-}
-
 function validWorkingTreeEntryVariant(entry: StoppedWorkingCopyWorkingTreeEntryDto, maximumFileBytes: number): boolean {
   if (entry.kind === 'regular_file') {
     return (
@@ -1156,4 +1161,197 @@ function validWorkingTreeEntryVariant(entry: StoppedWorkingCopyWorkingTreeEntryD
     default:
       return false
   }
+}
+
+function assertWorkingTreeEntry(
+  entry: StoppedWorkingCopyWorkingTreeEntryDto,
+  request: Pick<WorkingTreeInventoryRequestDto, 'maximumDepth' | 'maximumFileBytes'>,
+  excluded: ReadonlySet<string>,
+): void {
+  assertExactKeys(
+    entry,
+    [
+      'kind',
+      'mode',
+      'name',
+      'sha256',
+      'size',
+      'zoneRelativePath',
+      ...(entry.kind === 'regular_file' ? ['byteOffset'] : []),
+      ...(entry.kind === 'symlink' ? ['linkTarget'] : []),
+      ...(entry.kind === 'excluded' ? ['excludedKind'] : []),
+    ],
+    'working-tree entry',
+    ConflictException,
+  )
+  if (
+    !canonicalWorkingTreePath(entry.zoneRelativePath) ||
+    excludedWorkingTreePath(entry.zoneRelativePath, excluded) ||
+    entry.name !== posixPath.basename(entry.zoneRelativePath) ||
+    entry.zoneRelativePath.split('/').length > request.maximumDepth ||
+    !Number.isSafeInteger(entry.size) ||
+    entry.size < 0 ||
+    !validWorkingTreeEntryVariant(entry, request.maximumFileBytes) ||
+    (entry.kind==='regular_file'&&(!Number.isSafeInteger(entry.byteOffset)||entry.byteOffset!<0||entry.size>MAXIMUM_WORKING_TREE_AGGREGATE_BYTES-entry.byteOffset!)) ||
+    typeof entry.mode !== 'string' ||
+    !/^[0-7]{4}$/.test(entry.mode)
+  ) {
+    throw new ConflictException('Runner returned an invalid working-tree entry.')
+  }
+}
+
+const INVENTORY_CONTRACT = 'ambit.working-copy-stopped-working-tree-inventory/v1'
+function jsonDigest(value: unknown): string {
+  return `sha256:${createHash('sha256').update(canonicalJson(value), 'utf8').digest('hex')}`
+}
+function inventoryResourceId(request: WorkingTreeInventoryRequestDto): string {
+  return `daytona-working-tree-inventory:v1:${jsonDigest(request)}`
+}
+
+function assertInventoryRequest(request: WorkingTreeInventoryRequestDto): void {
+  assertExactKeys(
+    request,
+    [
+      'generation',
+      'excludedPaths',
+      'maximumDepth',
+      'maximumFileBytes',
+      'maximumAggregateBytes',
+      'maximumPageEntries',
+      'maximumPageBytes',
+    ],
+    'working-tree inventory request',
+    BadRequestException,
+  )
+  assertExactKeys(
+    request.generation,
+    ['authority', 'owner', 'providerName', 'requestFingerprint', 'source', 'stopAuthority'],
+    'inventory generation',
+    BadRequestException,
+  )
+  assertGenerationValues(request.generation)
+  const limits = {
+    maximumDepth: MAXIMUM_WORKING_TREE_DEPTH,
+    maximumFileBytes: MAXIMUM_WORKING_TREE_AGGREGATE_BYTES,
+    maximumAggregateBytes: MAXIMUM_WORKING_TREE_AGGREGATE_BYTES,
+    maximumPageEntries: MAXIMUM_WORKING_TREE_INVENTORY_PAGE_ENTRIES,
+    maximumPageBytes: MAXIMUM_WORKING_TREE_INVENTORY_PAGE_BYTES,
+  }
+  for (const key of Object.keys(limits) as (keyof typeof limits)[]) {
+    if (
+      !Number.isSafeInteger(request[key]) ||
+      request[key] < (key === 'maximumPageBytes' ? 2 : 1) ||
+      request[key] > limits[key]
+    )
+      throw new BadRequestException('Working-tree inventory bounds are invalid.')
+  }
+  if (
+    request.maximumAggregateBytes < request.maximumFileBytes ||
+    !Array.isArray(request.excludedPaths) ||
+    request.excludedPaths.length > 4096
+  )
+    throw new BadRequestException('Working-tree inventory bounds or exclusions are invalid.')
+  const excluded = new Set<string>()
+  for (const [index, path] of request.excludedPaths.entries()) {
+    if (
+      !canonicalWorkingTreePath(path) ||
+      (index > 0 && compareUtf8Lexicographic(request.excludedPaths[index - 1], path) >= 0)
+    )
+      throw new BadRequestException('Inventory exclusions must be sorted unique roots.')
+    for (let parent = posixPath.dirname(path); parent !== '.'; parent = posixPath.dirname(parent)) {
+      if (excluded.has(parent)) throw new BadRequestException('Inventory exclusions repeat an excluded ancestor.')
+    }
+    excluded.add(path)
+  }
+}
+
+function assertInventoryReceipt(
+  receipt: WorkingTreeInventoryReceiptDto,
+  request: WorkingTreeInventoryRequestDto,
+): void {
+  assertExactKeys(
+    receipt,
+    [
+      'request',
+      'providerResourceId',
+      'terminalGeneration',
+      'pages',
+      'entryCount',
+      'aggregateBytes',
+      'bytePack',
+      'inventoryDigest',
+      'observedAt',
+    ],
+    'working-tree inventory',
+    ConflictException,
+  )
+  if (
+    canonicalJson(receipt.request) !== canonicalJson(request) ||
+    receipt.providerResourceId !== inventoryResourceId(request) ||
+    canonicalJson(receipt.terminalGeneration) !== canonicalJson(request.generation.stopAuthority.terminalGeneration) ||
+    !Array.isArray(receipt.pages) ||
+    Buffer.byteLength(canonicalJson(receipt), 'utf8') > MAXIMUM_WORKING_TREE_INVENTORY_INDEX_BYTES
+  )
+    throw new ConflictException('Runner inventory changed its exact source scope.')
+  let count = 0
+  let previous = ''
+  for (const [index, page] of receipt.pages.entries()) {
+    assertExactKeys(
+      page,
+      ['pageIndex', 'entryCount', 'byteLength', 'sha256', 'firstPath', 'lastPath'],
+      'inventory page descriptor',
+      ConflictException,
+    )
+    if (
+      page.pageIndex !== index ||
+      !Number.isSafeInteger(page.entryCount) ||
+      page.entryCount < 1 ||
+      page.entryCount > request.maximumPageEntries ||
+      !Number.isSafeInteger(page.byteLength) ||
+      page.byteLength < 2 ||
+      page.byteLength > request.maximumPageBytes ||
+      typeof page.sha256 !== 'string' ||
+      !/^sha256:[0-9a-f]{64}$/.test(page.sha256) ||
+      !canonicalWorkingTreePath(page.firstPath) ||
+      !canonicalWorkingTreePath(page.lastPath) ||
+      compareUtf8Lexicographic(page.firstPath, page.lastPath) > 0 ||
+      (previous !== '' && compareUtf8Lexicographic(previous, page.firstPath) >= 0)
+    )
+      throw new ConflictException('Runner inventory page descriptor is invalid.')
+    previous = page.lastPath
+    count += page.entryCount
+  }
+  if (
+    !Number.isSafeInteger(count) ||
+    receipt.entryCount !== count ||
+    !Number.isSafeInteger(receipt.aggregateBytes) ||
+    receipt.aggregateBytes < 0 ||
+    receipt.aggregateBytes > request.maximumAggregateBytes ||
+    (count === 0 && receipt.aggregateBytes !== 0) ||
+    !canonicalUtcTimestamp(receipt.observedAt)
+  )
+    throw new ConflictException('Runner inventory counts or observation time are invalid.')
+  const pack=receipt.bytePack
+  assertExactKeys(pack,['byteLength','sha256','parts'],'inventory byte pack',ConflictException)
+  if(!Number.isSafeInteger(pack.byteLength)||pack.byteLength<0||pack.byteLength>receipt.aggregateBytes||typeof pack.sha256!=='string'||!/^sha256:[0-9a-f]{64}$/.test(pack.sha256)||!Array.isArray(pack.parts))
+    throw new ConflictException('Runner inventory byte pack is invalid.')
+  let byteOffset=0
+  for(const part of pack.parts) {
+    assertExactKeys(part,['byteOffset','byteLength','sha256'],'inventory byte part',ConflictException)
+    if(part.byteOffset!==byteOffset||!Number.isSafeInteger(part.byteLength)||part.byteLength<1||part.byteLength>pack.byteLength-byteOffset||typeof part.sha256!=='string'||!/^sha256:[0-9a-f]{64}$/.test(part.sha256))
+      throw new ConflictException('Runner inventory byte parts do not cover the pack.')
+    byteOffset+=part.byteLength
+  }
+  if(byteOffset!==pack.byteLength||(pack.byteLength===0&&pack.sha256!==`sha256:${createHash('sha256').digest('hex')}`))
+    throw new ConflictException('Runner inventory byte pack coverage changed.')
+  const digest = jsonDigest({
+    contract: INVENTORY_CONTRACT,
+    request,
+    terminalGeneration: receipt.terminalGeneration,
+    pages: receipt.pages,
+    entryCount: receipt.entryCount,
+    aggregateBytes: receipt.aggregateBytes,
+    bytePack:receipt.bytePack,
+  })
+  if (receipt.inventoryDigest !== digest) throw new ConflictException('Runner inventory digest changed.')
 }

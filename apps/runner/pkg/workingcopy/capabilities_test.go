@@ -19,14 +19,14 @@ func TestCaptureCapabilitiesRequireCurrentLineageWithoutProviderEffects(t *testi
 	}
 	response, err := service.Capabilities(context.Background(), binding.Source.ProviderResourceID, request)
 	if err != nil || response.Authority != binding.Authority ||
-		response.StoppedWorkingTree.Contract != stoppedWorkingTreeContract ||
-		response.StoppedWorkingTree.SemanticZoneRef != userFilesSemanticZoneRef ||
-		response.StoppedWorkingTree.MaximumFileBytes != MaximumCaptureBytes ||
-		response.StoppedWorkingTree.MaximumReadBytes != MaximumReadBytes ||
-		response.StoppedWorkingTree.MaximumEntries != MaximumWorkingTreeEntries ||
-		response.StoppedWorkingTree.MaximumDepth != MaximumWorkingTreeDepth ||
-		response.StoppedWorkingTree.MaximumAggregateBytes != MaximumWorkingTreeAggregateBytes ||
-		response.StoppedWorkingTree.MaximumReceiptBytes != MaximumWorkingTreeReceiptBytes {
+		response.StoppedWorkingTreeInventory.Contract != workingTreeInventoryContract ||
+		response.StoppedWorkingTreeInventory.SemanticZoneRef != userFilesSemanticZoneRef ||
+		response.StoppedWorkingTreeInventory.MaximumFileBytes != MaximumWorkingTreeAggregateBytes ||
+		response.StoppedWorkingTreeInventory.MaximumReadBytes != MaximumReadBytes ||
+		response.StoppedWorkingTreeInventory.MaximumPageEntries != MaximumWorkingTreeInventoryPageEntries ||
+		response.StoppedWorkingTreeInventory.MaximumDepth != MaximumWorkingTreeDepth ||
+		response.StoppedWorkingTreeInventory.MaximumAggregateBytes != MaximumWorkingTreeAggregateBytes ||
+		response.StoppedWorkingTreeInventory.MaximumIndexBytes != MaximumWorkingTreeInventoryIndexBytes {
 		t.Fatalf("deployed capture capability differs: %#v %v", response, err)
 	}
 	for name, mutate := range map[string]func(*CaptureCapabilitiesRequest){

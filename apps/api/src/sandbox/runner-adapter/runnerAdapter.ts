@@ -17,6 +17,13 @@ import { BackupState } from '../enums/backup-state.enum'
 import { RunnerServiceInfo } from '../common/runner-service-info'
 import {
   WorkingCopyCaptureBindingDto,
+  WorkingTreeInventoryRequestDto,
+  WorkingTreeInventoryRangeRequestDto,
+  WorkingTreeInventoryRangeDto,
+  WorkingTreeInventoryReceiptDto,
+  WorkingTreeInventoryPageRequestDto,
+  WorkingTreeInventoryPageDto,
+  WorkingTreeInventoryDeletionReceiptDto,
   WorkingCopyCaptureCapabilitiesRequestDto,
   WorkingCopyCaptureCapabilitiesDto,
   WorkingCopyCaptureDeleteReceiptDto,
@@ -28,8 +35,6 @@ import {
   WorkingCopyCaptureReceiptDto,
   StoppedWorkingCopyDirectoryRosterRequestDto,
   StoppedWorkingCopyDirectoryRosterReceiptDto,
-  StoppedWorkingCopyWorkingTreeRequestDto,
-  StoppedWorkingCopyWorkingTreeReceiptDto,
 } from '../dto/working-copy-capture.dto'
 import {
   SandboxGenerationObservationDto,
@@ -223,6 +228,22 @@ export interface RunnerAdapter {
     request: WorkingCopyCaptureCapabilitiesRequestDto,
     signal?: AbortSignal,
   ): Promise<WorkingCopyCaptureCapabilitiesDto>
+  prepareWorkingTreeInventory(
+    sandboxId: string,
+    request: WorkingTreeInventoryRequestDto,
+    signal?: AbortSignal,
+  ): Promise<WorkingTreeInventoryReceiptDto>
+  readWorkingTreeInventoryPage(
+    sandboxId: string,
+    request: WorkingTreeInventoryPageRequestDto,
+    signal?: AbortSignal,
+  ): Promise<WorkingTreeInventoryPageDto>
+  readWorkingTreeInventoryRange(sandboxId:string,request:WorkingTreeInventoryRangeRequestDto,signal?:AbortSignal):Promise<WorkingTreeInventoryRangeDto>
+  deleteWorkingTreeInventory(
+    sandboxId: string,
+    request: WorkingTreeInventoryRequestDto,
+    signal?: AbortSignal,
+  ): Promise<WorkingTreeInventoryDeletionReceiptDto>
   captureWorkingCopy(
     sandboxId: string,
     binding: WorkingCopyCaptureBindingDto,
@@ -250,11 +271,6 @@ export interface RunnerAdapter {
     request: StoppedWorkingCopyDirectoryRosterRequestDto,
     signal?: AbortSignal,
   ): Promise<StoppedWorkingCopyDirectoryRosterReceiptDto>
-  stoppedWorkingCopyWorkingTree(
-    sandboxId: string,
-    request: StoppedWorkingCopyWorkingTreeRequestDto,
-    signal?: AbortSignal,
-  ): Promise<StoppedWorkingCopyWorkingTreeReceiptDto>
 
   observeSandboxGeneration(
     sandboxId: string,
