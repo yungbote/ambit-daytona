@@ -26,13 +26,18 @@ import {
   readRegularNoFollow,
   reproveOutputDirectory,
 } from './ambit-render-pages.mjs'
-import { admitDocxPackage } from './docx-package-admission.mjs'
+import {
+  admitOfficePackage,
+  OFFICE_FORMATS,
+  officeFormatForMediaType,
+} from './docx-package-admission.mjs'
 import {
   canonicalFrameLine,
   createPayloadChunkFrame,
   digestBytes,
   FramedJsonlLineReader,
   FRAMED_JSONL_SCHEMA,
+  OFFICE_PDF_JSONL_SCHEMA,
   payloadChunkCount,
   RAW_CHUNK_BYTES,
   readRenderRequest,
@@ -42,7 +47,11 @@ import {
 } from './framed-jsonl-protocol.mjs'
 import { executeBoundedProcessGroup } from './process-group-execution.mjs'
 import { inspectRenderOutput } from './render-output-verification.mjs'
-import { canonicalJson } from './render-contracts.mjs'
+import {
+  canonicalJson,
+  admitRenderPolicy,
+  admitBackendComponentLineageEnvelope,
+} from './render-contracts.mjs'
 import { CORE_DOCUMENT_V5_PACK_ROOT } from './pdfjs-page-renderer.mjs'
 import { RenderTerminalArbiter } from './render-terminal-arbiter.mjs'
 
@@ -250,21 +259,33 @@ async function disposePrivateMount(mount) {
   }
 }
 
-export async function convertDocxToPdf({
+export function convertDocxToPdf(options) {
+  return convertOfficeToPdf({
+    ...options,
+    mediaType: OFFICE_FORMATS.docx.mediaType,
+  })
+}
+
+export async function convertOfficeToPdf({
   documentBytes,
+  mediaType,
   policy,
   workspaceRoot = DEFAULT_WORKSPACE_ROOT,
   cacheRoot = DEFAULT_CACHE_ROOT,
   execute = executeBoundedProcessGroup,
   signal,
 }) {
+  const sourceFormat = officeFormatForMediaType(mediaType)
   if (
     !Buffer.isBuffer(documentBytes) ||
     documentBytes.byteLength > policy.input.maximumBytes
   ) {
-    throw new TypeError('Input is not one bounded DOCX package.')
+    throw new TypeError(`Input is not one bounded ${sourceFormat.toUpperCase()} package.`)
   }
-  admitDocxPackage(documentBytes, policy.input)
+  if (!policy.input.formats.includes(sourceFormat))
+    throw new TypeError('Office format is not admitted by the render policy.')
+  admitOfficePackage(documentBytes, policy.input, sourceFormat)
+  signal?.throwIfAborted()
   if (typeof execute !== 'function') {
     throw new TypeError('LibreOffice execution authority is invalid.')
   }
@@ -326,7 +347,7 @@ export async function convertDocxToPdf({
     return disposePromise
   }
   try {
-    const input = join(operationRoot, 'document.docx')
+    const input = join(operationRoot, `document.${sourceFormat}`)
     const convertedOutput = join(operationRoot, 'converted')
     const profile = join(privateCacheRoot, 'libreoffice-profile')
     await mkdir(convertedOutput, { mode: 0o700 })
@@ -605,6 +626,95 @@ async function emitImmutablePageChunks({ path, page, emit, nonce, signal }) {
   }
 }
 
+// PDF is a derived view. It does not replace structured workbook reads or the
+// immutable Office original. Host custody pins these exact conversion bytes.
+export async function convertOfficePdfRequest(request, options = {}) {
+  if (
+    !Buffer.isBuffer(request.document) ||
+    digestBytes(request.document) !== request.documentSha256
+  ) {
+    throw new TypeError('Office source bytes differ from their claimed digest.')
+  }
+  const backendLineage = admitBackendComponentLineageEnvelope(
+    request.backendLineage,
+  )
+  const converted = await convertOfficeToPdf({
+    documentBytes: request.document,
+    mediaType: request.documentMediaType,
+    policy: options.loadedPolicy.policy,
+    workspaceRoot: options.workspaceRoot,
+    cacheRoot: options.cacheRoot,
+    execute: options.execute,
+    signal: options.signal,
+  })
+  return Object.freeze({
+    ...converted,
+    source: Object.freeze({
+      mediaType: request.documentMediaType,
+      sha256: request.documentSha256,
+      bytes: request.document.byteLength,
+    }),
+    backendLineage,
+  })
+}
+
+export async function streamOfficePdfResponseBody({
+  sealed,
+  nonce,
+  writable,
+  signal,
+}) {
+  const streamDigest = createHash('sha256')
+  let frameCount = 0
+  const emit = async (frame) => {
+    signal?.throwIfAborted()
+    const line = canonicalFrameLine(frame)
+    streamDigest.update(line)
+    frameCount += 1
+    await writeLine(writable, line, signal)
+  }
+  const bytes = sealed.pdfBytes
+  const pdfSha256 = digestBytes(bytes)
+  const chunkCount = payloadChunkCount(bytes.byteLength)
+  await emit({
+    schema: OFFICE_PDF_JSONL_SCHEMA,
+    kind: 'pdf_start',
+    nonce,
+    bytes: bytes.byteLength,
+    sha256: pdfSha256,
+    chunkBytes: RAW_CHUNK_BYTES,
+    chunkCount,
+    source: sealed.source,
+    backendLineage: sealed.backendLineage,
+  })
+  for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+    const chunk = bytes.subarray(
+      chunkIndex * RAW_CHUNK_BYTES,
+      (chunkIndex + 1) * RAW_CHUNK_BYTES,
+    )
+    await emit({
+      schema: OFFICE_PDF_JSONL_SCHEMA,
+      kind: 'pdf_chunk',
+      nonce,
+      chunkIndex,
+      bytes: chunk.byteLength,
+      sha256: digestBytes(chunk),
+      base64: chunk.toString('base64'),
+    })
+  }
+  return Object.freeze({
+    schema: OFFICE_PDF_JSONL_SCHEMA,
+    kind: 'response_end',
+    nonce,
+    outcome: 'passed',
+    exitCode: 0,
+    frameCount,
+    pdfBytes: bytes.byteLength,
+    pdfSha256,
+    streamSha256: `sha256:${streamDigest.digest('hex')}`,
+  })
+}
+
 export async function streamSealedResponseBody({
   sealed,
   nonce,
@@ -685,7 +795,7 @@ export async function streamSealedResponse(args) {
 function parseArguments(argv) {
   if (
     argv.length !== 3 ||
-    argv[0] !== '--framed-jsonl' ||
+    !['--framed-jsonl', '--office-pdf-jsonl'].includes(argv[0]) ||
     argv[1] !== '--nonce' ||
     typeof argv[2] !== 'string' ||
     !NONCE.test(argv[2])
@@ -694,12 +804,17 @@ function parseArguments(argv) {
       'Expected --framed-jsonl --nonce LOWERCASE_128_BIT_HEX.',
     )
   }
-  return Object.freeze({ nonce: argv[2] })
+  return Object.freeze({
+    nonce: argv[2],
+    officePdf: argv[0] === '--office-pdf-jsonl',
+  })
 }
 
-async function loadInterfaceIdentity() {
+async function loadInterfaceIdentity(officePdf) {
   const bytes = await readRegularNoFollow(
-    INTERFACE_LOCK_PATH,
+    officePdf
+      ? join(CORE_DOCUMENT_V5_PACK_ROOT, 'locks/office-pdf-interface.lock.json')
+      : INTERFACE_LOCK_PATH,
     MAXIMUM_INTERFACE_LOCK_BYTES,
   )
   const value = JSON.parse(bytes.toString('utf8'))
@@ -712,7 +827,9 @@ async function loadInterfaceIdentity() {
     typeof value.contract !== 'object' ||
     sha256(Buffer.from(canonicalJson(value.contract))) !== value.digest ||
     value.contract.interfaceRef !==
-      'ambit.runtime-interface/docx-paginated-render@1'
+      (officePdf
+        ? 'ambit.runtime-interface/office-pdf-render@1'
+        : 'ambit.runtime-interface/docx-paginated-render@1')
   ) {
     throw new TypeError('Installed document-render interface lock is invalid.')
   }
@@ -836,10 +953,24 @@ async function writeTerminalWithDeadline({
   }
 }
 
+async function loadOfficePdfPolicy() {
+  const policyBytes = await readRegularNoFollow(
+    join(CORE_DOCUMENT_V5_PACK_ROOT, 'policy/office-pdf-policy.json'),
+    1048576,
+  )
+  const policy = admitRenderPolicy(JSON.parse(policyBytes.toString('utf8')))
+  if (policy.policyRef !== 'ambit.render-policy/core-document-office-pdf@1')
+    throw new TypeError('Office PDF policy identity is invalid.')
+  return Object.freeze({ policyBytes, policy })
+}
+
 async function main() {
-  const { nonce } = parseArguments(process.argv.slice(2))
-  const loadedPolicy = await loadRenderPolicy()
-  const interfaceIdentity = await loadInterfaceIdentity()
+  const { nonce, officePdf } = parseArguments(process.argv.slice(2))
+  const schema = officePdf ? OFFICE_PDF_JSONL_SCHEMA : FRAMED_JSONL_SCHEMA
+  const loadedPolicy = officePdf
+    ? await loadOfficePdfPolicy()
+    : await loadRenderPolicy()
+  const interfaceIdentity = await loadInterfaceIdentity(officePdf)
   const signals = signalAbortController()
   const pipelineDeadline = deadlineController(
     loadedPolicy.policy.execution.maximumPipelineWallMilliseconds,
@@ -867,7 +998,7 @@ async function main() {
     await writeLine(
       process.stdout,
       canonicalFrameLine({
-        schema: FRAMED_JSONL_SCHEMA,
+        schema,
         kind: 'ready',
         nonce,
         cancellationExitCode: CANCELLATION_EXIT_CODE,
@@ -886,22 +1017,29 @@ async function main() {
       loadedPolicy.policy.input.maximumBytes,
       nonce,
       arbiter.signal,
+      schema,
     )
-    controlWatcher = watchRenderCancellation(lineReader, nonce).catch((error) => {
-      if (
-        error instanceof RenderControlAdmissionClosed &&
-        ['success-committed', 'succeeded'].includes(arbiter.state)
-      ) {
-        return
-      }
-      if (error instanceof RenderProtocolCancellation) arbiter.cancel(error)
-      else arbiter.fail(error)
-    })
-    sealed = await renderDocumentRequest(request, {
+    controlWatcher = watchRenderCancellation(lineReader, nonce, schema).catch(
+      (error) => {
+        if (
+          error instanceof RenderControlAdmissionClosed &&
+          ['success-committed', 'succeeded'].includes(arbiter.state)
+        ) {
+          return
+        }
+        if (error instanceof RenderProtocolCancellation) arbiter.cancel(error)
+        else arbiter.fail(error)
+      },
+    )
+    sealed = await (
+      officePdf ? convertOfficePdfRequest : renderDocumentRequest
+    )(request, {
       loadedPolicy,
       signal: arbiter.signal,
     })
-    successTerminal = await streamSealedResponseBody({
+    successTerminal = await (
+      officePdf ? streamOfficePdfResponseBody : streamSealedResponseBody
+    )({
       sealed,
       nonce,
       writable: process.stdout,
@@ -913,7 +1051,9 @@ async function main() {
     )
     sealed = null
     if (!arbiter.commitSuccess()) {
-      throw arbiter.reason ?? new Error('Render success lost terminal arbitration.')
+      throw (
+        arbiter.reason ?? new Error('Render success lost terminal arbitration.')
+      )
     }
     lineReader.close(new RenderControlAdmissionClosed())
     await controlWatcher
@@ -964,13 +1104,13 @@ async function main() {
       await writeTerminalWithDeadline({
         writable: process.stdout,
         frame: {
-        schema: FRAMED_JSONL_SCHEMA,
-        kind: 'cancelled',
-        nonce,
-        outcome: 'cancelled',
-        exitCode: CANCELLATION_EXIT_CODE,
-        quiescence:
-          'all-render-process-groups-settled-and-private-roots-removed',
+          schema,
+          kind: 'cancelled',
+          nonce,
+          outcome: 'cancelled',
+          exitCode: CANCELLATION_EXIT_CODE,
+          quiescence:
+            'all-render-process-groups-settled-and-private-roots-removed',
         },
         milliseconds:
           loadedPolicy.policy.execution.maximumTerminalWriteMilliseconds,

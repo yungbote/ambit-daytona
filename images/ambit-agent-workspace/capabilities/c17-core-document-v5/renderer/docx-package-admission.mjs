@@ -10,14 +10,40 @@ const END_OF_CENTRAL_DIRECTORY_SIGNATURE = 0x06054b50
 const LOCAL_FILE_SIGNATURE = 0x04034b50
 const MAXIMUM_ZIP_COMMENT_BYTES = 0xffff
 const ALLOWED_GENERAL_PURPOSE_FLAGS = 0x080e
-const REQUIRED_PARTS = Object.freeze([
-  '[Content_Types].xml',
-  '_rels/.rels',
-  'word/document.xml',
-])
-const FORBIDDEN_PART = /(?:^|\/)(?:activeX|embeddings|externalLinks)(?:\/|$)|(?:^|\/)vbaProject(?:Signature)?\.bin$|\.(?:html?|mht|mhtml)$/iu
-const DOCUMENT_CONTENT_TYPE =
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml'
+export const OFFICE_FORMATS = Object.freeze({
+  docx: Object.freeze({
+    mediaType:
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    mainPart: 'word/document.xml',
+    mainContentType:
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml',
+  }),
+  pptx: Object.freeze({
+    mediaType:
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    mainPart: 'ppt/presentation.xml',
+    mainContentType:
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml',
+  }),
+  xlsx: Object.freeze({
+    mediaType:
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    mainPart: 'xl/workbook.xml',
+    mainContentType:
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml',
+  }),
+})
+
+export function officeFormatForMediaType(mediaType) {
+  const match = Object.entries(OFFICE_FORMATS).find(
+    ([, value]) => value.mediaType === mediaType,
+  )
+  if (!match) throw new TypeError('Office source media type is unsupported.')
+  return match[0]
+}
+
+const FORBIDDEN_PART =
+  /(?:^|\/)(?:activeX|embeddings|externalLinks)(?:\/|$)|(?:^|\/)vbaProject(?:Signature)?\.bin$|\.(?:html?|mht|mhtml)$/iu
 const FORBIDDEN_CONTENT_TYPE =
   /macroEnabled|vbaProject|activeX|oleObject|xhtml|html/iu
 const CONTENT_TYPES_NAMESPACE =
@@ -36,52 +62,52 @@ function exactPositiveSafeInteger(value, label) {
 
 function admitLimits(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new TypeError('DOCX package limits are invalid.')
+    throw new TypeError('Office package limits are invalid.')
   }
   return Object.freeze({
     maximumEntryBytes: exactPositiveSafeInteger(
       value.maximumEntryBytes,
-      'DOCX maximum entry bytes',
+      'Office maximum entry bytes',
     ),
     maximumPackageEntries: exactPositiveSafeInteger(
       value.maximumPackageEntries,
-      'DOCX maximum package entries',
+      'Office maximum package entries',
     ),
     maximumRelationshipBytes: exactPositiveSafeInteger(
       value.maximumRelationshipBytes,
-      'DOCX maximum relationship bytes',
+      'Office maximum relationship bytes',
     ),
     maximumUncompressedBytes: exactPositiveSafeInteger(
       value.maximumUncompressedBytes,
-      'DOCX maximum uncompressed bytes',
+      'Office maximum uncompressed bytes',
     ),
     maximumXmlBytes: exactPositiveSafeInteger(
       value.maximumXmlBytes,
-      'DOCX maximum XML bytes',
+      'Office maximum XML bytes',
     ),
     maximumXmlNodes: exactPositiveSafeInteger(
       value.maximumXmlNodes,
-      'DOCX maximum XML nodes',
+      'Office maximum XML nodes',
     ),
     maximumXmlDepth: exactPositiveSafeInteger(
       value.maximumXmlDepth,
-      'DOCX maximum XML depth',
+      'Office maximum XML depth',
     ),
     maximumXmlAttributesPerElement: exactPositiveSafeInteger(
       value.maximumXmlAttributesPerElement,
-      'DOCX maximum XML attributes per element',
+      'Office maximum XML attributes per element',
     ),
     maximumXmlAttributeBytes: exactPositiveSafeInteger(
       value.maximumXmlAttributeBytes,
-      'DOCX maximum XML attribute bytes',
+      'Office maximum XML attribute bytes',
     ),
     maximumXmlEntityReferences: exactPositiveSafeInteger(
       value.maximumXmlEntityReferences,
-      'DOCX maximum XML entity references',
+      'Office maximum XML entity references',
     ),
     maximumXmlDecodedTextBytes: exactPositiveSafeInteger(
       value.maximumXmlDecodedTextBytes,
-      'DOCX maximum decoded XML text bytes',
+      'Office maximum decoded XML text bytes',
     ),
   })
 }
@@ -96,7 +122,7 @@ function findEndOfCentralDirectory(bytes) {
       return offset
     }
   }
-  throw new TypeError('DOCX package has no exact terminal ZIP directory.')
+  throw new TypeError('Office package has no exact terminal ZIP directory.')
 }
 
 function addBounded(left, right, maximum, label) {
@@ -112,11 +138,11 @@ function decodePartName(bytes, flags) {
     bytes.byteLength === 0 ||
     ((flags & 0x0800) === 0 && bytes.some((byte) => byte > 0x7f))
   ) {
-    throw new TypeError('DOCX package part name encoding is unsupported.')
+    throw new TypeError('Office package part name encoding is unsupported.')
   }
   const name = bytes.toString('utf8')
   if (!Buffer.from(name, 'utf8').equals(bytes)) {
-    throw new TypeError('DOCX package part name is not exact UTF-8.')
+    throw new TypeError('Office package part name is not exact UTF-8.')
   }
   const parts = name.split('/')
   const directory = name.endsWith('/')
@@ -128,7 +154,7 @@ function decodePartName(bytes, flags) {
     pathParts.length === 0 ||
     pathParts.some((part) => part === '' || part === '.' || part === '..')
   ) {
-    throw new TypeError('DOCX package part name is unsafe or noncanonical.')
+    throw new TypeError('Office package part name is unsafe or noncanonical.')
   }
   return name
 }
@@ -143,7 +169,7 @@ function exactSlice(bytes, start, length, label) {
     length < 0 ||
     end > bytes.byteLength
   ) {
-    throw new TypeError(`${label} exceeds the DOCX package.`)
+    throw new TypeError(`${label} exceeds the Office package.`)
   }
   return bytes.subarray(start, end)
 }
@@ -154,7 +180,9 @@ function readEntry(bytes, entry, limits) {
     local + 30 > entry.centralOffset ||
     bytes.readUInt32LE(local) !== LOCAL_FILE_SIGNATURE
   ) {
-    throw new TypeError('DOCX local file header is missing or overlaps metadata.')
+    throw new TypeError(
+      'Office local file header is missing or overlaps metadata.',
+    )
   }
   const localFlags = bytes.readUInt16LE(local + 6)
   const localMethod = bytes.readUInt16LE(local + 8)
@@ -164,24 +192,24 @@ function readEntry(bytes, entry, limits) {
     bytes,
     local + 30,
     localNameLength,
-    'DOCX local part name',
+    'Office local part name',
   )
   if (
     localFlags !== entry.flags ||
     localMethod !== entry.method ||
     !localName.equals(entry.nameBytes)
   ) {
-    throw new TypeError('DOCX local and central file identities differ.')
+    throw new TypeError('Office local and central file identities differ.')
   }
   const dataStart = local + 30 + localNameLength + localExtraLength
   const compressed = exactSlice(
     bytes,
     dataStart,
     entry.compressedBytes,
-    'DOCX compressed part',
+    'Office compressed part',
   )
   if (dataStart + compressed.byteLength > entry.centralDirectoryStart) {
-    throw new TypeError('DOCX part data overlaps the central directory.')
+    throw new TypeError('Office part data overlaps the central directory.')
   }
   let output
   if (entry.method === 0) {
@@ -192,16 +220,21 @@ function readEntry(bytes, entry, limits) {
         maxOutputLength: limits.maximumEntryBytes,
       })
     } catch (error) {
-      throw new TypeError('DOCX compressed part is invalid or exceeds policy.', {
-        cause: error,
-      })
+      throw new TypeError(
+        'Office compressed part is invalid or exceeds policy.',
+        {
+          cause: error,
+        },
+      )
     }
   }
   if (
     output.byteLength !== entry.uncompressedBytes ||
     crc32(output) !== entry.crc32
   ) {
-    throw new TypeError('DOCX part size or checksum differs from its directory.')
+    throw new TypeError(
+      'Office part size or checksum differs from its directory.',
+    )
   }
   return output
 }
@@ -217,36 +250,36 @@ function requireElement(node, namespaceUri, localName, label) {
   return node
 }
 
-function admitContentTypes(bytes, limits) {
+function admitContentTypes(bytes, limits, format) {
   const root = requireElement(
-    parseRestrictedXml(bytes, limits, 'DOCX content types'),
+    parseRestrictedXml(bytes, limits, 'Office content types'),
     CONTENT_TYPES_NAMESPACE,
     'Types',
-    'DOCX content types root',
+    'Office content types root',
   )
-  exactUnqualifiedAttributes(root, [], 'DOCX content types root')
+  exactUnqualifiedAttributes(root, [], 'Office content types root')
   let documentOverrideCount = 0
   for (const child of root.children) {
     requireElement(
       child,
       CONTENT_TYPES_NAMESPACE,
       child.localName,
-      'DOCX content type',
+      'Office content type',
     )
     if (child.children.length !== 0) {
-      throw new TypeError('DOCX content type declarations must be empty.')
+      throw new TypeError('Office content type declarations must be empty.')
     }
     if (child.localName === 'Default') {
       const attributes = exactUnqualifiedAttributes(
         child,
         ['ContentType', 'Extension'],
-        'DOCX default content type',
+        'Office default content type',
       )
       if (
         attributes.Extension.length === 0 ||
         FORBIDDEN_CONTENT_TYPE.test(attributes.ContentType)
       ) {
-        throw new TypeError('DOCX default content type is active or invalid.')
+        throw new TypeError('Office default content type is active or invalid.')
       }
       continue
     }
@@ -254,56 +287,60 @@ function admitContentTypes(bytes, limits) {
       const attributes = exactUnqualifiedAttributes(
         child,
         ['ContentType', 'PartName'],
-        'DOCX override content type',
+        'Office override content type',
       )
       if (
         !attributes.PartName.startsWith('/') ||
         FORBIDDEN_CONTENT_TYPE.test(attributes.ContentType)
       ) {
-        throw new TypeError('DOCX override content type is active or invalid.')
+        throw new TypeError(
+          'Office override content type is active or invalid.',
+        )
       }
-      if (attributes.PartName === '/word/document.xml') {
+      if (attributes.PartName === `/${format.mainPart}`) {
         documentOverrideCount += 1
-        if (attributes.ContentType !== DOCUMENT_CONTENT_TYPE) {
-          throw new TypeError('DOCX main document content type is invalid.')
+        if (attributes.ContentType !== format.mainContentType) {
+          throw new TypeError('Office main document content type is invalid.')
         }
       }
       continue
     }
-    throw new TypeError('DOCX content types contain an unsupported element.')
+    throw new TypeError('Office content types contain an unsupported element.')
   }
   if (documentOverrideCount !== 1) {
-    throw new TypeError('DOCX content types do not bind one exact main document.')
+    throw new TypeError(
+      'Office content types do not bind one exact main document.',
+    )
   }
 }
 
 function admitRelationships(bytes, limits, name) {
   const root = requireElement(
-    parseRestrictedXml(bytes, limits, `DOCX relationships ${name}`),
+    parseRestrictedXml(bytes, limits, `Office relationships ${name}`),
     RELATIONSHIPS_NAMESPACE,
     'Relationships',
-    'DOCX relationships root',
+    'Office relationships root',
   )
-  exactUnqualifiedAttributes(root, [], 'DOCX relationships root')
+  exactUnqualifiedAttributes(root, [], 'Office relationships root')
   const identifiers = new Set()
   for (const child of root.children) {
     requireElement(
       child,
       RELATIONSHIPS_NAMESPACE,
       'Relationship',
-      'DOCX relationship',
+      'Office relationship',
     )
     if (child.children.length !== 0) {
-      throw new TypeError('DOCX relationship declarations must be empty.')
+      throw new TypeError('Office relationship declarations must be empty.')
     }
     const fields = child.attributes.map((attribute) => attribute.localName)
     if (fields.includes('TargetMode')) {
-      throw new TypeError('DOCX package contains an external relationship.')
+      throw new TypeError('Office package contains an external relationship.')
     }
     const attributes = exactUnqualifiedAttributes(
       child,
       ['Id', 'Target', 'Type'],
-      'DOCX relationship',
+      'Office relationship',
     )
     if (
       attributes.Id.length === 0 ||
@@ -316,15 +353,28 @@ function admitRelationships(bytes, limits, name) {
       attributes.Target.includes('\\') ||
       /[\u0000-\u001f\u007f]/u.test(attributes.Target)
     ) {
-      throw new TypeError('DOCX relationship identity or target is unsafe.')
+      throw new TypeError('Office relationship identity or target is unsafe.')
     }
     identifiers.add(attributes.Id)
   }
 }
 
+// Retained compatibility entry point. The package decoder is shared by all
+// supported OOXML documents; callers cannot choose arbitrary package profiles.
 export function admitDocxPackage(bytes, limitValue) {
+  return admitOfficePackage(bytes, limitValue, 'docx')
+}
+
+export function admitOfficePackage(bytes, limitValue, sourceFormat) {
+  if (!Object.hasOwn(OFFICE_FORMATS, sourceFormat)) {
+    throw new TypeError('Office source format is unsupported.')
+  }
+  const format = OFFICE_FORMATS[sourceFormat]
+  const requiredParts = ['[Content_Types].xml', '_rels/.rels', format.mainPart]
   if (!Buffer.isBuffer(bytes) || bytes.byteLength < 22) {
-    throw new TypeError('Input is not one bounded DOCX package.')
+    throw new TypeError(
+      `Input is not one bounded ${sourceFormat.toUpperCase()} package.`,
+    )
   }
   const limits = admitLimits(limitValue)
   const eocd = findEndOfCentralDirectory(bytes)
@@ -346,7 +396,7 @@ export function admitDocxPackage(bytes, limitValue) {
     centralOffset + centralBytes !== eocd
   ) {
     throw new TypeError(
-      'DOCX ZIP directory topology is unsupported or exceeds policy.',
+      'Office ZIP directory topology is unsupported or exceeds policy.',
     )
   }
 
@@ -358,7 +408,7 @@ export function admitDocxPackage(bytes, limitValue) {
       cursor + 46 > eocd ||
       bytes.readUInt32LE(cursor) !== CENTRAL_DIRECTORY_SIGNATURE
     ) {
-      throw new TypeError('DOCX central directory is truncated or reordered.')
+      throw new TypeError('Office central directory is truncated or reordered.')
     }
     const flags = bytes.readUInt16LE(cursor + 8)
     const method = bytes.readUInt16LE(cursor + 10)
@@ -375,7 +425,7 @@ export function admitDocxPackage(bytes, limitValue) {
       bytes,
       cursor + 46,
       nameLength,
-      'DOCX central part name',
+      'Office central part name',
     )
     const name = decodePartName(nameBytes, flags)
     if (
@@ -390,17 +440,17 @@ export function admitDocxPackage(bytes, limitValue) {
       entries.has(name)
     ) {
       throw new TypeError(
-        'DOCX part metadata is unsupported, duplicated, or exceeds policy.',
+        'Office part metadata is unsupported, duplicated, or exceeds policy.',
       )
     }
     if (method === 0 && compressedBytes !== uncompressedBytes) {
-      throw new TypeError('Stored DOCX part sizes differ.')
+      throw new TypeError('Stored Office part sizes differ.')
     }
     totalUncompressedBytes = addBounded(
       totalUncompressedBytes,
       uncompressedBytes,
       limits.maximumUncompressedBytes,
-      'DOCX uncompressed bytes',
+      'Office uncompressed bytes',
     )
     entries.set(
       name,
@@ -423,29 +473,30 @@ export function admitDocxPackage(bytes, limitValue) {
     ...[...entries.values()].map((entry) => entry.localOffset),
   )
   if (cursor !== eocd || firstLocalOffset !== 0) {
-    throw new TypeError('DOCX central directory has unbound bytes or a preamble.')
+    throw new TypeError(
+      'Office central directory has unbound bytes or a preamble.',
+    )
   }
-  for (const required of REQUIRED_PARTS) {
+  for (const required of requiredParts) {
     if (!entries.has(required)) {
-      throw new TypeError(`DOCX package omits required part: ${required}.`)
+      throw new TypeError(`Office package omits required part: ${required}.`)
     }
   }
   if ([...entries.keys()].some((name) => FORBIDDEN_PART.test(name))) {
-    throw new TypeError('DOCX package contains an active or externally loaded part.')
+    throw new TypeError(
+      'Office package contains an active or externally loaded part.',
+    )
   }
 
   const admittedParts = new Map()
   for (const [name, entry] of entries) {
     const part = readEntry(bytes, entry, limits)
-    if (REQUIRED_PARTS.includes(name) || name.endsWith('.rels')) {
+    if (requiredParts.includes(name) || name.endsWith('.rels')) {
       admittedParts.set(name, part)
     }
   }
 
-  admitContentTypes(
-    admittedParts.get('[Content_Types].xml'),
-    limits,
-  )
+  admitContentTypes(admittedParts.get('[Content_Types].xml'), limits, format)
   let relationshipBytes = 0
   for (const [name, entry] of entries) {
     if (!name.endsWith('.rels')) continue
@@ -453,7 +504,7 @@ export function admitDocxPackage(bytes, limitValue) {
       relationshipBytes,
       entry.uncompressedBytes,
       limits.maximumRelationshipBytes,
-      'DOCX relationship bytes',
+      'Office relationship bytes',
     )
     admitRelationships(admittedParts.get(name), limits, name)
   }

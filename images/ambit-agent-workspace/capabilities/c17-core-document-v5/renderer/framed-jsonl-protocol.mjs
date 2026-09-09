@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { officeFormatForMediaType } from './docx-package-admission.mjs'
 
 import {
   admitBackendComponentLineageEnvelope,
@@ -7,6 +8,8 @@ import {
 
 export const FRAMED_JSONL_SCHEMA =
   'ambit.runtime-interface/docx-paginated-render-jsonl@1'
+export const OFFICE_PDF_JSONL_SCHEMA =
+  'ambit.runtime-interface/office-pdf-render-jsonl@1'
 export const RAW_CHUNK_BYTES = 49_152
 export const MAXIMUM_FRAME_LINE_BYTES = 70_000
 const MAXIMUM_START_LINE_BYTES = 16_384
@@ -143,8 +146,13 @@ export class RenderRequestCollector {
   #state = 'start'
   #maximumDocumentBytes
   #nonce
+  #schema
+  #mediaType
 
-  constructor(maximumDocumentBytes, nonce) {
+  constructor(maximumDocumentBytes, nonce, schema = FRAMED_JSONL_SCHEMA) {
+    if (![FRAMED_JSONL_SCHEMA, OFFICE_PDF_JSONL_SCHEMA].includes(schema))
+      throw new TypeError('Unknown document protocol.')
+    this.#schema = schema
     this.#maximumDocumentBytes = positiveSafeInteger(
       maximumDocumentBytes,
       'Maximum request document bytes',
@@ -163,7 +171,7 @@ export class RenderRequestCollector {
         : MAXIMUM_FRAME_LINE_BYTES,
     )
     if (value.kind === 'cancel') {
-      admitCancelFrame(value, this.#nonce)
+      admitCancelFrame(value, this.#nonce, this.#schema)
       throw new RenderProtocolCancellation()
     }
     if (this.#state === 'start') {
@@ -185,6 +193,9 @@ export class RenderRequestCollector {
       value,
       [
         'backendLineage',
+        ...(this.#schema === OFFICE_PDF_JSONL_SCHEMA
+          ? ['documentMediaType']
+          : []),
         'chunkBytes',
         'chunkCount',
         'documentBytes',
@@ -204,14 +215,20 @@ export class RenderRequestCollector {
       'Render request chunk count',
     )
     if (
-      frame.schema !== FRAMED_JSONL_SCHEMA ||
+      frame.schema !== this.#schema ||
       frame.kind !== 'request_start' ||
       frame.nonce !== this.#nonce ||
       frame.chunkBytes !== RAW_CHUNK_BYTES ||
       documentBytes > this.#maximumDocumentBytes ||
       chunkCount !== expectedChunkCount(documentBytes)
     ) {
-      throw new TypeError('Render request_start identity or bounds are invalid.')
+      throw new TypeError(
+        'Render request_start identity or bounds are invalid.',
+      )
+    }
+    if (this.#schema === OFFICE_PDF_JSONL_SCHEMA) {
+      officeFormatForMediaType(frame.documentMediaType)
+      this.#mediaType = frame.documentMediaType
     }
     this.#backendLineage = admitBackendComponentLineageEnvelope(
       frame.backendLineage,
@@ -242,7 +259,7 @@ export class RenderRequestCollector {
     const remaining = this.#documentBytes - this.#nextIndex * RAW_CHUNK_BYTES
     const expectedBytes = Math.min(RAW_CHUNK_BYTES, remaining)
     if (
-      frame.schema !== FRAMED_JSONL_SCHEMA ||
+      frame.schema !== this.#schema ||
       frame.kind !== 'document_chunk' ||
       frame.nonce !== this.#nonce ||
       index !== this.#nextIndex ||
@@ -274,7 +291,7 @@ export class RenderRequestCollector {
       'Render request_end',
     )
     if (
-      frame.schema !== FRAMED_JSONL_SCHEMA ||
+      frame.schema !== this.#schema ||
       frame.kind !== 'request_end' ||
       frame.nonce !== this.#nonce ||
       frame.chunkCount !== this.#chunkCount ||
@@ -296,6 +313,7 @@ export class RenderRequestCollector {
     this.#buffers = []
     return Object.freeze({
       backendLineage: this.#backendLineage,
+      ...(this.#mediaType ? { documentMediaType: this.#mediaType } : {}),
       document,
       documentSha256: observedDigest,
     })
@@ -384,11 +402,16 @@ export async function readRenderRequest(
   maximumDocumentBytes,
   nonce,
   signal,
+  schema = FRAMED_JSONL_SCHEMA,
 ) {
   if (!(lineReader instanceof FramedJsonlLineReader)) {
     throw new TypeError('Render request requires one framed line reader.')
   }
-  const collector = new RenderRequestCollector(maximumDocumentBytes, nonce)
+  const collector = new RenderRequestCollector(
+    maximumDocumentBytes,
+    nonce,
+    schema,
+  )
   while (true) {
     const line = await lineReader.readLine(signal)
     if (line === null) {
@@ -399,14 +422,10 @@ export async function readRenderRequest(
   }
 }
 
-function admitCancelFrame(value, nonce) {
-  const frame = exactKeys(
-    value,
-    ['kind', 'nonce', 'schema'],
-    'Render cancel',
-  )
+function admitCancelFrame(value, nonce, schema = FRAMED_JSONL_SCHEMA) {
+  const frame = exactKeys(value, ['kind', 'nonce', 'schema'], 'Render cancel')
   if (
-    frame.schema !== FRAMED_JSONL_SCHEMA ||
+    frame.schema !== schema ||
     frame.kind !== 'cancel' ||
     frame.nonce !== nonce
   ) {
@@ -415,7 +434,11 @@ function admitCancelFrame(value, nonce) {
   return frame
 }
 
-export async function watchRenderCancellation(lineReader, nonce) {
+export async function watchRenderCancellation(
+  lineReader,
+  nonce,
+  schema = FRAMED_JSONL_SCHEMA,
+) {
   exactNonce(nonce)
   if (!(lineReader instanceof FramedJsonlLineReader)) {
     throw new TypeError('Render cancellation requires one framed line reader.')
@@ -424,11 +447,26 @@ export async function watchRenderCancellation(lineReader, nonce) {
   if (line === null) {
     throw new RenderTransportClosed()
   }
-  admitCancelFrame(decodeCanonicalLine(line, MAXIMUM_START_LINE_BYTES), nonce)
+  admitCancelFrame(
+    decodeCanonicalLine(line, MAXIMUM_START_LINE_BYTES),
+    nonce,
+    schema,
+  )
   throw new RenderProtocolCancellation()
 }
 
-export function encodeRenderRequestLines({ backendLineage, document, nonce }) {
+export function encodeRenderRequestLines({
+  backendLineage,
+  document,
+  nonce,
+  documentMediaType,
+}) {
+  const schema =
+    documentMediaType === undefined
+      ? FRAMED_JSONL_SCHEMA
+      : OFFICE_PDF_JSONL_SCHEMA
+  if (documentMediaType !== undefined)
+    officeFormatForMediaType(documentMediaType)
   const admittedLineage = admitBackendComponentLineageEnvelope(backendLineage)
   const admittedNonce = exactNonce(nonce)
   if (!Buffer.isBuffer(document) || document.byteLength === 0) {
@@ -438,10 +476,11 @@ export function encodeRenderRequestLines({ backendLineage, document, nonce }) {
   const chunkCount = expectedChunkCount(document.byteLength)
   const lines = [
     canonicalFrameLine({
-      schema: FRAMED_JSONL_SCHEMA,
+      schema,
       kind: 'request_start',
       nonce: admittedNonce,
       backendLineage: admittedLineage,
+      ...(documentMediaType === undefined ? {} : { documentMediaType }),
       documentBytes: document.byteLength,
       documentSha256,
       chunkBytes: RAW_CHUNK_BYTES,
@@ -455,7 +494,7 @@ export function encodeRenderRequestLines({ backendLineage, document, nonce }) {
     )
     lines.push(
       canonicalFrameLine({
-        schema: FRAMED_JSONL_SCHEMA,
+        schema,
         kind: 'document_chunk',
         nonce: admittedNonce,
         index,
@@ -467,7 +506,7 @@ export function encodeRenderRequestLines({ backendLineage, document, nonce }) {
   }
   lines.push(
     canonicalFrameLine({
-      schema: FRAMED_JSONL_SCHEMA,
+      schema,
       kind: 'request_end',
       nonce: admittedNonce,
       documentBytes: document.byteLength,

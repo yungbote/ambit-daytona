@@ -127,7 +127,10 @@ export function admitRenderPolicy(value) {
   )
   if (
     policy.schema !== 'ambit.runtime-pack-document-render-policy/v1' ||
-    policy.policyRef !== 'ambit.render-policy/core-document-paginated@1' ||
+    ![
+      'ambit.render-policy/core-document-paginated@1',
+      'ambit.render-policy/core-document-office-pdf@1',
+    ].includes(policy.policyRef) ||
     policy.canonicalArtifactBoundary !== 'external-commit-only' ||
     policy.renderOutputGrantsCanonicalAuthority !== false
   ) {
@@ -184,7 +187,12 @@ export function admitRenderPolicy(value) {
   }
   if (
     input.localImmutableBytesOnly !== true ||
-    canonicalJson(input.formats) !== canonicalJson(['docx']) ||
+    canonicalJson(input.formats) !==
+      canonicalJson(
+        policy.policyRef === 'ambit.render-policy/core-document-office-pdf@1'
+          ? ['docx', 'pptx', 'xlsx']
+          : ['docx'],
+      ) ||
     input.remoteUrls !== 'forbidden' ||
     input.macros !== 'disabled' ||
     input.externalLinks !== 'disabled' ||

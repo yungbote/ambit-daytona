@@ -1,0 +1,237 @@
+{
+  "schema": "ambit.runtime-interface-lock/v1",
+  "state": "candidate-ready",
+  "digest": "sha256:ae446b53680cf54c1d5b9f573160d65769a41d602102b147ed0e668deae1d92c",
+  "contract": {
+    "schema": "ambit.runtime-interface-contract/v1",
+    "interfaceRef": "ambit.runtime-interface/office-pdf-render@1",
+    "roleRef": "ambit.runtime-component/document-renderer@1",
+    "executable": "/opt/ambit/runtime-pack/core-document-v5/bin/ambit-render-document",
+    "arguments": [
+      "--office-pdf-jsonl",
+      "--nonce",
+      "LOWERCASE_128_BIT_HEX"
+    ],
+    "sharedContract": {
+      "ref": "ambit.runtime-interface/docx-paginated-render@1",
+      "digest": "sha256:901098446e1bf901092e60f9b6bcf906b481dbe0cb48feb32fb087b1d0b17f24",
+      "obligations": [
+        "authority",
+        "cancellation",
+        "execution",
+        "runtime",
+        "transport"
+      ]
+    },
+    "authority": {
+      "backendLineageCurrentness": "host-reproved-before-and-after-render",
+      "canonicalArtifactCommit": "host-only-after-complete-terminal-frame-and-exit-0",
+      "renderOutput": "evidence-only"
+    },
+    "cancellation": {
+      "authorityLock": {
+        "ref": "locks/runtime-cancellation-authority.lock.json",
+        "digest": "sha256:0dfdbe918f3647d06ad4b90ad843b56c866372c2c1061394c130670a2a4c61ad"
+      },
+      "explicitFrame": "cancel",
+      "helperTerminalFrame": "cancelled",
+      "helperExitCode": 130,
+      "hardTransportFailure": "requires-provider-runtime-quiescence-receipt-v1",
+      "privateRootCustody": "held-empty-workspace-and-cache-mount-authorities-cleaned-to-closed-empty-rosters-before-terminal",
+      "quiescence": "all-render-process-groups-settled-and-private-roots-removed",
+      "successCommit": "control-admission-atomically-closed-before-awaited-response_end-write",
+      "typedCancelledWithoutTerminalOrProviderReceipt": "forbidden"
+    },
+    "execution": {
+      "maximumChildStderrBytes": 65536,
+      "maximumChildStdoutBytes": 16384,
+      "maximumCleanupMilliseconds": 10000,
+      "maximumPipelineWallMilliseconds": 180000,
+      "maximumTerminalWriteMilliseconds": 5000
+    },
+    "runtime": {
+      "network": "none",
+      "pathAuthority": "none",
+      "processModel": "one-helper-with-separate-bounded-libreoffice-and-pdfjs-native-process-groups",
+      "rootFilesystem": "read-only",
+      "taskCache": {
+        "path": "/tmp",
+        "filesystem": "task-private-tmpfs",
+        "requiredBytes": 67108864,
+        "uid": 1000,
+        "gid": 1000,
+        "mode": "0700"
+      },
+      "workspaceScratch": {
+        "path": "/workspace",
+        "filesystem": "task-private-tmpfs",
+        "requiredBytes": 838860800,
+        "derivation": "existing-paginated-runtime-upper-bound-retained;office-pdf-uses-input-plus-derived-pdf",
+        "uid": 1000,
+        "gid": 1000,
+        "mode": "0700"
+      }
+    },
+    "transport": {
+      "chunkBytes": 49152,
+      "encoding": "canonical-jsonl-with-canonical-base64-payloads",
+      "inputEcho": "forbidden",
+      "plaintextHelperStderr": "forbidden",
+      "maximumLineBytes": 70000,
+      "medium": "raw-noecho-pty",
+      "providerLaunch": "stty raw -echo -onlcr && exec exact-helper --office-pdf-jsonl --nonce exact-nonce",
+      "readyFrame": "required-before-request",
+      "stdinClosure": "request_end-frame-not-eof",
+      "stdoutClosure": "response_end-frame-then-helper-exit-0"
+    },
+    "input": {
+      "backendLineageSchema": "exact:{schemaRef,ref,digest,canonicalBytesSha256}",
+      "document": "ordered-base64-chunks-bound-to-exact-office-bytes-and-declared-media-type",
+      "maximumBytes": 67108864,
+      "metadataXmlBounds": "bytes=4194304,nodes=65536,depth=64,attributes-per-element=64,attribute-bytes=1048576,entities=65536,decoded-text-bytes=4194304",
+      "nonceBinding": "every-request-frame",
+      "mediaTypes": [
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      ]
+    },
+    "output": {
+      "mediaType": "application/pdf",
+      "maximumBytes": 268435456,
+      "sourceIdentity": [
+        "bytes",
+        "mediaType",
+        "sha256"
+      ],
+      "derivedPdfIdentity": [
+        "bytes",
+        "sha256"
+      ],
+      "backendLineage": "request-envelope-exact-match",
+      "partialOrExtraFrames": "discard-entire-response",
+      "volatileMetadata": "exact-derived-byte-digest-not-stable-conversion-identity",
+      "success": "response_end-then-helper-exit-0"
+    },
+    "policy": {
+      "ref": "ambit.render-policy/core-document-office-pdf@1",
+      "digest": "sha256:f83bf424f0959637ecb349c83d073d31caff87752ec36f9a0249e23ead401252"
+    },
+    "frames": {
+      "ready": [
+        "cancellationExitCode",
+        "chunkBytes",
+        "interface",
+        "kind",
+        "nonce",
+        "policy",
+        "processIdentity",
+        "schema"
+      ],
+      "request_start": [
+        "backendLineage",
+        "chunkBytes",
+        "chunkCount",
+        "documentBytes",
+        "documentMediaType",
+        "documentSha256",
+        "kind",
+        "nonce",
+        "schema"
+      ],
+      "document_chunk": [
+        "base64",
+        "bytes",
+        "index",
+        "kind",
+        "nonce",
+        "schema",
+        "sha256"
+      ],
+      "request_end": [
+        "chunkCount",
+        "documentBytes",
+        "documentSha256",
+        "kind",
+        "nonce",
+        "schema"
+      ],
+      "cancel": [
+        "kind",
+        "nonce",
+        "schema"
+      ],
+      "cancelled": [
+        "exitCode",
+        "kind",
+        "nonce",
+        "outcome",
+        "quiescence",
+        "schema"
+      ],
+      "pdf_start": [
+        "backendLineage",
+        "bytes",
+        "chunkBytes",
+        "chunkCount",
+        "kind",
+        "nonce",
+        "schema",
+        "sha256",
+        "source"
+      ],
+      "pdf_chunk": [
+        "base64",
+        "bytes",
+        "chunkIndex",
+        "kind",
+        "nonce",
+        "schema",
+        "sha256"
+      ],
+      "response_end": [
+        "exitCode",
+        "frameCount",
+        "kind",
+        "nonce",
+        "outcome",
+        "pdfBytes",
+        "pdfSha256",
+        "schema",
+        "streamSha256"
+      ]
+    },
+    "identities": {
+      "frameSchema": "ambit.runtime-interface/office-pdf-render-jsonl@1",
+      "requestOrder": "ready;request_start;document_chunk[index=0..chunkCount-1];request_end",
+      "responseOrder": "pdf_start;pdf_chunk[chunkIndex=0..N-1];response_end",
+      "streamDigestDomain": "sha256(exact canonical UTF-8 JSON plus LF bytes for every response frame before response_end)",
+      "protocolSources": {
+        "Dockerfile": "sha256:d008445cfee5395369d8e8ee9f45b078a488abea2cf8506a5dcf36d2c0a7b513",
+        "certification/audit_offline_inputs.py": "sha256:fa3a8ffb13201dba092d9dbeab5cad52f86a0775e50b91c2a5499141e4848192",
+        "certification/build_core_derived_candidate.py": "sha256:4288d65a6cbae110030e0b51905f21ca6b95817d77c5f5fe175b27f3d30bab7f",
+        "certification/runtime_pty_conformance.py": "sha256:bf591d8fe55c50a612886a3dcd5cbb4765a9bea1a027f61806a3ff528ace8dab",
+        "certification/verify_render_output.mjs": "sha256:c3c9e0ea4469f48fb6cfb8f129ea18a769d851f68ec7ca2e2e06e34aff6d4814",
+        "certification/verify_signed_debian_snapshot.py": "sha256:c9b36f28f14b639709f840836c8c5c36af3bd8935f9464e1ed44ccfb8a671899",
+        "certification/verify_source_contracts.py": "sha256:bb64297c8a1d551412c1063a037250a1689a588dd446f239e90c4dcd3e44118c",
+        "certification/verify_structural_contracts.py": "sha256:539ca505c9952e01ec213e606fb2823457aaa4acfce27278aae52eb307abb2da",
+        "certification/verify_structural_runtime_archive.py": "sha256:73f247ceb6dd82087aaac68004888d66ee31884745d475cdda6cbde8d3e19401",
+        "renderer/ambit-render-document.mjs": "sha256:a27c7071141aca70fa2ca3c42e18ee98ae9ce13afbf49568a63f896830e00d25",
+        "renderer/ambit-render-pages.mjs": "sha256:5e888d07416c9fd8e65643df3fc0329df3bc3ac1fb3c6296cca1b5bf18a7fc8a",
+        "renderer/docx-package-admission.mjs": "sha256:e24a8fab58edef6315bbdaa0302a4b364e4d959b8cb537ee35a93b7fdef49560",
+        "renderer/framed-jsonl-protocol.mjs": "sha256:f96730751c1d87e354a393ed7a5ffc08da151c0950c88768270b0600c9b67f19",
+        "renderer/pdfjs-page-renderer.mjs": "sha256:857a7121727fd3d7da9f83eea180ee0b66f27145b4d7d6584a1d771490584c89",
+        "renderer/process-group-execution.mjs": "sha256:e3fca9cfbb69f2e3001e1aa9e59f8da2742f0b315cb295c7c92d92eb1b3e6d53",
+        "renderer/process-group-subreaper.py": "sha256:59ed1d8d65bc16ba706016df7895f37105b461f7eaf939313ad4632f3ae1a109",
+        "renderer/render-contracts.mjs": "sha256:90f0ab6e2eb62c19bca3c0ec08d9ebb0a5d1a87bd963200e5205152628457567",
+        "renderer/render-output-verification.mjs": "sha256:4fadaea237d94446e408b97c546fc99b0cd8c8b7cd1df7510160bacb154e04b5",
+        "renderer/render-terminal-arbiter.mjs": "sha256:2f57b599f1e6f55072dd6d2294034804cf77aa5aee2c4d74679719f649345078",
+        "renderer/restricted-xml.mjs": "sha256:e3e6737a62fa2f46ce37227b1b331ea46648827159adebd62b594f6919cee48e",
+        "locks/union-overlay-builder-input.lock.json": "sha256:a9275bad5a1bce5ee8dd3fda2e1cd11924ad871f75997f9ad327cfa228324819",
+        "structural/ambit-structural-python": "sha256:d971cbf56e92e2d73d038183e4c726cbaa872a177ebf1f1495e714c5bd22c099",
+        "toolchain-manifest.json": "sha256:cfcd08a2a137e60446e3693033d8f69f7e91549b1bbd6ca9e0e8a6f335d61eb9",
+        "policy/office-pdf-policy.json": "sha256:f83bf424f0959637ecb349c83d073d31caff87752ec36f9a0249e23ead401252"
+      }
+    }
+  }
+}
