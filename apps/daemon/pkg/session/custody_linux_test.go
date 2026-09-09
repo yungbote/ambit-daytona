@@ -437,6 +437,19 @@ func TestRestartKeepsEntrypointLogs(t *testing.T) {
 	}
 }
 
+// A kernel that does not name a thread's children would let every cancellation
+// signal nothing and report no failure. The scope proves the interface before
+// it owns anything, so refusing is visible where a caller still sees it.
+func TestScopeRefusesWithoutKernelChildEnumeration(t *testing.T) {
+	if err := probeChildEnumeration(scopeTaskRoot, os.Getpid()); err != nil {
+		t.Fatalf("this kernel does not expose child enumeration: %v", err)
+	}
+	err := probeChildEnumeration(t.TempDir(), os.Getpid())
+	if err == nil || !strings.Contains(err.Error(), "descendant enumeration is unavailable") {
+		t.Fatalf("a missing children interface was not reported: %v", err)
+	}
+}
+
 func TestConcurrentCreateHasOneSessionOwner(t *testing.T) {
 	svc := newStdinTestService(t)
 	var successes atomic.Int32

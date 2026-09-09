@@ -66,6 +66,16 @@ func RunSupervisor(args []string) (int, bool) {
 	if err := unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0); err != nil {
 		return fail(fmt.Errorf("session supervisor descriptor privacy unavailable: %w", err))
 	}
+	// Cancellation signals the children the kernel names. Enumeration treats a
+	// missing children file as a thread that ended mid-scan, so on a kernel
+	// without this interface every signal round would find nothing, report no
+	// failure, and leave the scope running while cancellation looked healthy.
+	// Prove the interface once, here, where refusing is still visible: the
+	// scope never reaches "ready", so the session is never created and the
+	// caller gets the reason instead of a scope it cannot cancel.
+	if err := probeChildEnumeration(scopeTaskRoot, os.Getpid()); err != nil {
+		return fail(err)
+	}
 	// Install a handled SIGCHLD disposition (not SIG_IGN/SA_NOCLDWAIT).
 	// This loop is the only waiter, so an unreaped direct child's PID cannot
 	// be recycled between enumeration and signaling, even if it has exited.
@@ -165,22 +175,36 @@ func reapScopeChildren(shellPID int) (bool, bool, error) {
 	}
 }
 
+const scopeTaskRoot = "/proc/self/task"
+
+// probeChildEnumeration proves the kernel exposes a thread's children before
+// this scope owns any. The thread-group leader's task directory exists for the
+// life of the process, so an error here names the interface, not a race.
+func probeChildEnumeration(taskRoot string, pid int) error {
+	if _, err := os.ReadFile(filepath.Join(taskRoot, strconv.Itoa(pid), "children")); err != nil {
+		return fmt.Errorf("session descendant enumeration is unavailable, so this scope could not be cancelled: %w", err)
+	}
+	return nil
+}
+
 // Only direct children need signaling. When a parent exits, the kernel adopts
 // its orphaned descendants into this subreaper, regardless of process groups.
 // Repeating until ECHILD handles arbitrary ancestry without guessing a tree's
 // historical membership. No other goroutine calls wait: every enumerated
 // direct child retains its PID until the next reapScopeChildren call.
 func signalScopeChildren(sig unix.Signal) error {
-	threads, err := os.ReadDir("/proc/self/task")
+	threads, err := os.ReadDir(scopeTaskRoot)
 	if err != nil {
 		return err
 	}
 	var failures []error
 	seen := make(map[int]bool)
 	for _, thread := range threads {
-		value, err := os.ReadFile(filepath.Join("/proc/self/task", thread.Name(), "children"))
+		value, err := os.ReadFile(filepath.Join(scopeTaskRoot, thread.Name(), "children"))
 		if os.IsNotExist(err) {
-			continue // A Go runtime thread ended during enumeration.
+			// The interface itself was proven at startup, so this can only be
+			// a Go runtime thread that ended during enumeration.
+			continue
 		}
 		if err != nil {
 			failures = append(failures, err)
