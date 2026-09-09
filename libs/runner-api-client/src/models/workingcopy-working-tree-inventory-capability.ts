@@ -16,12 +16,12 @@
 
 export interface WorkingcopyWorkingTreeInventoryCapability {
     'contract': string;
-    'semanticZoneRef': string;
+    'maximumAggregateBytes': number;
     'maximumDepth': number;
     'maximumFileBytes': number;
-    'maximumAggregateBytes': number;
-    'maximumPageEntries': number;
-    'maximumPageBytes': number;
     'maximumIndexBytes': number;
+    'maximumPageBytes': number;
+    'maximumPageEntries': number;
     'maximumReadBytes': number;
+    'semanticZoneRef': string;
 }

@@ -1345,6 +1345,71 @@ const docTemplate = `{
                 }
             }
         },
+        "/sandboxes/{sandboxId}/working-copy-captures/capabilities": {
+            "post": {
+                "description": "Read-only discovery of the inventory interface implemented by the assigned Runner, bound to operator-configured capture lineage. Capability discovery does not independently attest the Runner binary or image digest.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sandbox"
+                ],
+                "summary": "Discover the assigned Runner capture surface before stopping a generation",
+                "operationId": "WorkingCopyCaptureCapabilities",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Sandbox ID",
+                        "name": "sandboxId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Current capture authority",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/workingcopy.CaptureCapabilitiesRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/workingcopy.CaptureCapabilities"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ]
+            }
+        },
         "/sandboxes/{sandboxId}/working-copy-captures/delete": {
             "post": {
                 "produces": [
@@ -1654,6 +1719,262 @@ const docTemplate = `{
                         }
                     }
                 }
+            }
+        },
+        "/sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree-inventories": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sandbox"
+                ],
+                "summary": "Prepare immutable pages of an exact stopped working tree",
+                "operationId": "PrepareWorkingTreeInventory",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Sandbox ID",
+                        "name": "sandboxId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Exact stopped working-tree inventory authority",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/workingcopy.WorkingTreeInventoryRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/workingcopy.WorkingTreeInventoryReceipt"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ]
+            }
+        },
+        "/sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree-inventories/delete": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sandbox"
+                ],
+                "summary": "Delete exact inventory custody and prove its absence",
+                "operationId": "DeleteWorkingTreeInventory",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Sandbox ID",
+                        "name": "sandboxId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Exact stopped working-tree inventory authority",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/workingcopy.WorkingTreeInventoryRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/workingcopy.WorkingTreeInventoryDeletionReceipt"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ]
+            }
+        },
+        "/sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree-inventories/read": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sandbox"
+                ],
+                "summary": "Read one immutable stopped working-tree inventory page",
+                "operationId": "ReadWorkingTreeInventoryPage",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Sandbox ID",
+                        "name": "sandboxId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Exact stopped working-tree inventory authority",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/workingcopy.WorkingTreeInventoryPageRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/workingcopy.WorkingTreeInventoryPage"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ]
+            }
+        },
+        "/sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree-inventories/read-range": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Sandbox"
+                ],
+                "summary": "Read a bounded immutable working-tree byte range",
+                "operationId": "ReadWorkingTreeInventoryRange",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Sandbox ID",
+                        "name": "sandboxId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Exact inventory and byte range",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/workingcopy.WorkingTreeInventoryRangeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/workingcopy.WorkingTreeInventoryRange"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ]
             }
         },
         "/snapshots/build": {
@@ -2122,263 +2443,6 @@ const docTemplate = `{
                         "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/sandboxes/{sandboxId}/working-copy-captures/capabilities": {
-            "post": {
-                "security": [
-                    {
-                        "Bearer": []
-                    }
-                ],
-                "description": "Read-only discovery of the inventory interface implemented by the assigned Runner, bound to operator-configured capture lineage. Capability discovery does not independently attest the Runner binary or image digest.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "sandbox"
-                ],
-                "summary": "Discover the assigned Runner capture surface before stopping a generation",
-                "operationId": "WorkingCopyCaptureCapabilities",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Sandbox ID",
-                        "name": "sandboxId",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Current capture authority",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/workingcopy.CaptureCapabilitiesRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/workingcopy.CaptureCapabilities"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/common_errors.ErrorResponse"
-                        }
-                    },
-                    "409": {
-                        "description": "Conflict",
-                        "schema": {
-                            "$ref": "#/definitions/common_errors.ErrorResponse"
-                        }
-                    },
-                    "503": {
-                        "description": "Service Unavailable",
-                        "schema": {
-                            "$ref": "#/definitions/common_errors.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree-inventories": {
-            "post": {
-                "security": [
-                    {
-                        "Bearer": []
-                    }
-                ],
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "sandbox"
-                ],
-                "summary": "Prepare immutable pages of an exact stopped working tree",
-                "operationId": "PrepareWorkingTreeInventory",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Sandbox ID",
-                        "name": "sandboxId",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Exact stopped working-tree inventory authority",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/workingcopy.WorkingTreeInventoryRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/workingcopy.WorkingTreeInventoryReceipt"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/common_errors.ErrorResponse"
-                        }
-                    },
-                    "409": {
-                        "description": "Conflict",
-                        "schema": {
-                            "$ref": "#/definitions/common_errors.ErrorResponse"
-                        }
-                    },
-                    "503": {
-                        "description": "Service Unavailable",
-                        "schema": {
-                            "$ref": "#/definitions/common_errors.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree-inventories/read": {
-            "post": {
-                "security": [
-                    {
-                        "Bearer": []
-                    }
-                ],
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "sandbox"
-                ],
-                "summary": "Read one immutable stopped working-tree inventory page",
-                "operationId": "ReadWorkingTreeInventoryPage",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Sandbox ID",
-                        "name": "sandboxId",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Exact stopped working-tree inventory authority",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/workingcopy.WorkingTreeInventoryPageRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/workingcopy.WorkingTreeInventoryPage"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/common_errors.ErrorResponse"
-                        }
-                    },
-                    "409": {
-                        "description": "Conflict",
-                        "schema": {
-                            "$ref": "#/definitions/common_errors.ErrorResponse"
-                        }
-                    },
-                    "503": {
-                        "description": "Service Unavailable",
-                        "schema": {
-                            "$ref": "#/definitions/common_errors.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree-inventories/delete": {
-            "post": {
-                "security": [
-                    {
-                        "Bearer": []
-                    }
-                ],
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "sandbox"
-                ],
-                "summary": "Delete exact inventory custody and prove its absence",
-                "operationId": "DeleteWorkingTreeInventory",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Sandbox ID",
-                        "name": "sandboxId",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Exact stopped working-tree inventory authority",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/workingcopy.WorkingTreeInventoryRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/workingcopy.WorkingTreeInventoryDeletionReceipt"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/common_errors.ErrorResponse"
-                        }
-                    },
-                    "409": {
-                        "description": "Conflict",
-                        "schema": {
-                            "$ref": "#/definitions/common_errors.ErrorResponse"
-                        }
-                    },
-                    "503": {
-                        "description": "Service Unavailable",
-                        "schema": {
-                            "$ref": "#/definitions/common_errors.ErrorResponse"
                         }
                     }
                 }
@@ -3446,6 +3510,44 @@ const docTemplate = `{
                 }
             }
         },
+        "workingcopy.CaptureCapabilities": {
+            "type": "object",
+            "required": [
+                "authority",
+                "stoppedWorkingTreeInventory"
+            ],
+            "properties": {
+                "authority": {
+                    "$ref": "#/definitions/workingcopy.CaptureAuthority"
+                },
+                "stoppedWorkingTreeInventory": {
+                    "$ref": "#/definitions/workingcopy.WorkingTreeInventoryCapability"
+                }
+            }
+        },
+        "workingcopy.CaptureCapabilitiesRequest": {
+            "type": "object",
+            "required": [
+                "authority",
+                "fence",
+                "owner",
+                "source"
+            ],
+            "properties": {
+                "authority": {
+                    "$ref": "#/definitions/workingcopy.CaptureAuthority"
+                },
+                "fence": {
+                    "$ref": "#/definitions/generationstop.Fence"
+                },
+                "owner": {
+                    "$ref": "#/definitions/workingcopy.CaptureOwner"
+                },
+                "source": {
+                    "$ref": "#/definitions/workingcopy.SourceAddress"
+                }
+            }
+        },
         "workingcopy.CaptureDeleteReceipt": {
             "type": "object",
             "required": [
@@ -3539,12 +3641,21 @@ const docTemplate = `{
             }
         },
         "workingcopy.CaptureGenerationBinding": {
+            "type": "object",
+            "required": [
+                "authority",
+                "owner",
+                "providerName",
+                "requestFingerprint",
+                "source",
+                "stopAuthority"
+            ],
             "properties": {
                 "authority": {
                     "$ref": "#/definitions/workingcopy.CaptureAuthority"
                 },
                 "owner": {
-                    "$ref": "#/definitions/generationstop.Owner"
+                    "$ref": "#/definitions/workingcopy.CaptureOwner"
                 },
                 "providerName": {
                     "type": "string"
@@ -3553,21 +3664,12 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "source": {
-                    "$ref": "#/definitions/generationstop.Source"
+                    "$ref": "#/definitions/workingcopy.SourceAddress"
                 },
                 "stopAuthority": {
                     "$ref": "#/definitions/generationstop.StopAuthority"
                 }
-            },
-            "required": [
-                "providerName",
-                "requestFingerprint",
-                "authority",
-                "source",
-                "owner",
-                "stopAuthority"
-            ],
-            "type": "object"
+            }
         },
         "workingcopy.CaptureIdentity": {
             "type": "object",
@@ -3953,62 +4055,36 @@ const docTemplate = `{
                 }
             }
         },
-        "workingcopy.CaptureCapabilitiesRequest": {
-            "properties": {
-                "authority": {
-                    "$ref": "#/definitions/workingcopy.CaptureAuthority"
-                },
-                "fence": {
-                    "$ref": "#/definitions/generationstop.Fence"
-                },
-                "owner": {
-                    "$ref": "#/definitions/generationstop.Owner"
-                },
-                "source": {
-                    "$ref": "#/definitions/generationstop.Source"
-                }
-            },
-            "required": [
-                "authority",
-                "source",
-                "owner",
-                "fence"
-            ],
-            "type": "object"
-        },
-        "workingcopy.CaptureCapabilities": {
-            "properties": {
-                "authority": {
-                    "$ref": "#/definitions/workingcopy.CaptureAuthority"
-                },
-                "stoppedWorkingTreeInventory": {
-                    "$ref": "#/definitions/workingcopy.WorkingTreeInventoryCapability"
-                }
-            },
-            "required": [
-                "authority",
-                "stoppedWorkingTreeInventory"
-            ],
-            "type": "object"
-        },
         "workingcopy.StoppedWorkingTreeEntry": {
+            "type": "object",
+            "required": [
+                "kind",
+                "mode",
+                "name",
+                "sha256",
+                "size",
+                "zoneRelativePath"
+            ],
             "properties": {
+                "byteOffset": {
+                    "type": "integer"
+                },
                 "excludedKind": {
+                    "type": "string",
                     "enum": [
                         "fifo",
                         "character_device",
                         "block_device"
-                    ],
-                    "type": "string"
+                    ]
                 },
                 "kind": {
+                    "type": "string",
                     "enum": [
                         "regular_file",
                         "directory",
                         "symlink",
                         "excluded"
-                    ],
-                    "type": "string"
+                    ]
                 },
                 "linkTarget": {
                     "type": "string"
@@ -4030,18 +4106,62 @@ const docTemplate = `{
                 "zoneRelativePath": {
                     "type": "string"
                 }
-            },
+            }
+        },
+        "workingcopy.WorkingTreeInventoryBytePack": {
+            "type": "object",
             "required": [
-                "zoneRelativePath",
-                "name",
-                "kind",
-                "size",
-                "mode",
+                "byteLength",
+                "parts",
                 "sha256"
             ],
-            "type": "object"
+            "properties": {
+                "byteLength": {
+                    "type": "integer"
+                },
+                "parts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workingcopy.WorkingTreeInventoryBytePart"
+                    }
+                },
+                "sha256": {
+                    "type": "string"
+                }
+            }
+        },
+        "workingcopy.WorkingTreeInventoryBytePart": {
+            "type": "object",
+            "required": [
+                "byteLength",
+                "byteOffset",
+                "sha256"
+            ],
+            "properties": {
+                "byteLength": {
+                    "type": "integer"
+                },
+                "byteOffset": {
+                    "type": "integer"
+                },
+                "sha256": {
+                    "type": "string"
+                }
+            }
         },
         "workingcopy.WorkingTreeInventoryCapability": {
+            "type": "object",
+            "required": [
+                "contract",
+                "maximumAggregateBytes",
+                "maximumDepth",
+                "maximumFileBytes",
+                "maximumIndexBytes",
+                "maximumPageBytes",
+                "maximumPageEntries",
+                "maximumReadBytes",
+                "semanticZoneRef"
+            ],
             "properties": {
                 "contract": {
                     "type": "string"
@@ -4070,21 +4190,15 @@ const docTemplate = `{
                 "semanticZoneRef": {
                     "type": "string"
                 }
-            },
-            "required": [
-                "contract",
-                "semanticZoneRef",
-                "maximumDepth",
-                "maximumFileBytes",
-                "maximumAggregateBytes",
-                "maximumPageEntries",
-                "maximumPageBytes",
-                "maximumIndexBytes",
-                "maximumReadBytes"
-            ],
-            "type": "object"
+            }
         },
         "workingcopy.WorkingTreeInventoryDeletionReceipt": {
+            "type": "object",
+            "required": [
+                "providerResourceId",
+                "request",
+                "status"
+            ],
             "properties": {
                 "providerResourceId": {
                     "type": "string"
@@ -4093,26 +4207,27 @@ const docTemplate = `{
                     "$ref": "#/definitions/workingcopy.WorkingTreeInventoryRequest"
                 },
                 "status": {
+                    "type": "string",
                     "enum": [
                         "absent"
-                    ],
-                    "type": "string"
+                    ]
                 }
-            },
-            "required": [
-                "request",
-                "providerResourceId",
-                "status"
-            ],
-            "type": "object"
+            }
         },
         "workingcopy.WorkingTreeInventoryPage": {
+            "type": "object",
+            "required": [
+                "entries",
+                "pageDigest",
+                "pageIndex",
+                "providerResourceId"
+            ],
             "properties": {
                 "entries": {
+                    "type": "array",
                     "items": {
                         "$ref": "#/definitions/workingcopy.StoppedWorkingTreeEntry"
-                    },
-                    "type": "array"
+                    }
                 },
                 "pageDigest": {
                     "type": "string"
@@ -4123,16 +4238,18 @@ const docTemplate = `{
                 "providerResourceId": {
                     "type": "string"
                 }
-            },
-            "required": [
-                "providerResourceId",
-                "pageIndex",
-                "entries",
-                "pageDigest"
-            ],
-            "type": "object"
+            }
         },
         "workingcopy.WorkingTreeInventoryPageDescriptor": {
+            "type": "object",
+            "required": [
+                "byteLength",
+                "entryCount",
+                "firstPath",
+                "lastPath",
+                "pageIndex",
+                "sha256"
+            ],
             "properties": {
                 "byteLength": {
                     "type": "integer"
@@ -4152,18 +4269,15 @@ const docTemplate = `{
                 "sha256": {
                     "type": "string"
                 }
-            },
-            "required": [
-                "pageIndex",
-                "entryCount",
-                "byteLength",
-                "sha256",
-                "firstPath",
-                "lastPath"
-            ],
-            "type": "object"
+            }
         },
         "workingcopy.WorkingTreeInventoryPageRequest": {
+            "type": "object",
+            "required": [
+                "pageIndex",
+                "providerResourceId",
+                "request"
+            ],
             "properties": {
                 "pageIndex": {
                     "type": "integer"
@@ -4174,18 +4288,89 @@ const docTemplate = `{
                 "request": {
                     "$ref": "#/definitions/workingcopy.WorkingTreeInventoryRequest"
                 }
-            },
+            }
+        },
+        "workingcopy.WorkingTreeInventoryRange": {
+            "type": "object",
             "required": [
-                "request",
+                "byteLength",
+                "bytesBase64",
+                "eof",
+                "inventoryDigest",
+                "offset",
                 "providerResourceId",
-                "pageIndex"
+                "totalByteLength"
             ],
-            "type": "object"
+            "properties": {
+                "byteLength": {
+                    "type": "integer"
+                },
+                "bytesBase64": {
+                    "type": "string"
+                },
+                "eof": {
+                    "type": "boolean"
+                },
+                "inventoryDigest": {
+                    "type": "string"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "providerResourceId": {
+                    "type": "string"
+                },
+                "totalByteLength": {
+                    "type": "integer"
+                }
+            }
+        },
+        "workingcopy.WorkingTreeInventoryRangeRequest": {
+            "type": "object",
+            "required": [
+                "inventoryDigest",
+                "maximumBytes",
+                "offset",
+                "providerResourceId",
+                "request"
+            ],
+            "properties": {
+                "inventoryDigest": {
+                    "type": "string"
+                },
+                "maximumBytes": {
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "providerResourceId": {
+                    "type": "string"
+                },
+                "request": {
+                    "$ref": "#/definitions/workingcopy.WorkingTreeInventoryRequest"
+                }
+            }
         },
         "workingcopy.WorkingTreeInventoryReceipt": {
+            "type": "object",
+            "required": [
+                "aggregateBytes",
+                "bytePack",
+                "entryCount",
+                "inventoryDigest",
+                "observedAt",
+                "pages",
+                "providerResourceId",
+                "request",
+                "terminalGeneration"
+            ],
             "properties": {
                 "aggregateBytes": {
                     "type": "integer"
+                },
+                "bytePack": {
+                    "$ref": "#/definitions/workingcopy.WorkingTreeInventoryBytePack"
                 },
                 "entryCount": {
                     "type": "integer"
@@ -4197,10 +4382,10 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "pages": {
+                    "type": "array",
                     "items": {
                         "$ref": "#/definitions/workingcopy.WorkingTreeInventoryPageDescriptor"
-                    },
-                    "type": "array"
+                    }
                 },
                 "providerResourceId": {
                     "type": "string"
@@ -4211,26 +4396,25 @@ const docTemplate = `{
                 "terminalGeneration": {
                     "$ref": "#/definitions/generationstop.TerminalGeneration"
                 }
-            },
-            "required": [
-                "request",
-                "providerResourceId",
-                "terminalGeneration",
-                "pages",
-                "entryCount",
-                "aggregateBytes",
-                "inventoryDigest",
-                "observedAt"
-            ],
-            "type": "object"
+            }
         },
         "workingcopy.WorkingTreeInventoryRequest": {
+            "type": "object",
+            "required": [
+                "excludedPaths",
+                "generation",
+                "maximumAggregateBytes",
+                "maximumDepth",
+                "maximumFileBytes",
+                "maximumPageBytes",
+                "maximumPageEntries"
+            ],
             "properties": {
                 "excludedPaths": {
+                    "type": "array",
                     "items": {
                         "type": "string"
-                    },
-                    "type": "array"
+                    }
                 },
                 "generation": {
                     "$ref": "#/definitions/workingcopy.CaptureGenerationBinding"
@@ -4250,17 +4434,7 @@ const docTemplate = `{
                 "maximumPageEntries": {
                     "type": "integer"
                 }
-            },
-            "required": [
-                "generation",
-                "excludedPaths",
-                "maximumDepth",
-                "maximumFileBytes",
-                "maximumAggregateBytes",
-                "maximumPageEntries",
-                "maximumPageBytes"
-            ],
-            "type": "object"
+            }
         }
     },
     "securityDefinitions": {

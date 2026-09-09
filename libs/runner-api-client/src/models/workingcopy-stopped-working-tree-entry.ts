@@ -13,13 +13,33 @@
  */
 
 
+
 export interface WorkingcopyStoppedWorkingTreeEntry {
-    'kind': 'regular_file' | 'directory' | 'symlink' | 'excluded';
+    'byteOffset'?: number;
+    'excludedKind'?: WorkingcopyStoppedWorkingTreeEntryExcludedKindEnum;
+    'kind': WorkingcopyStoppedWorkingTreeEntryKindEnum;
+    'linkTarget'?: string;
     'mode': string | null;
     'name': string;
     'sha256': string | null;
     'size': number;
     'zoneRelativePath': string;
-    'linkTarget'?: string;
-    'excludedKind'?: 'fifo' | 'character_device' | 'block_device';
 }
+
+export const WorkingcopyStoppedWorkingTreeEntryExcludedKindEnum = {
+    FIFO: 'fifo',
+    CHARACTER_DEVICE: 'character_device',
+    BLOCK_DEVICE: 'block_device',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
+} as const;
+
+export type WorkingcopyStoppedWorkingTreeEntryExcludedKindEnum = typeof WorkingcopyStoppedWorkingTreeEntryExcludedKindEnum[keyof typeof WorkingcopyStoppedWorkingTreeEntryExcludedKindEnum];
+export const WorkingcopyStoppedWorkingTreeEntryKindEnum = {
+    REGULAR_FILE: 'regular_file',
+    DIRECTORY: 'directory',
+    SYMLINK: 'symlink',
+    EXCLUDED: 'excluded',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
+} as const;
+
+export type WorkingcopyStoppedWorkingTreeEntryKindEnum = typeof WorkingcopyStoppedWorkingTreeEntryKindEnum[keyof typeof WorkingcopyStoppedWorkingTreeEntryKindEnum];

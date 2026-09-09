@@ -371,6 +371,40 @@ func ReadWorkingTreeInventoryPage(ctx *gin.Context) {
 	ctx.PureJSON(http.StatusOK, response)
 }
 
+// ReadWorkingTreeInventoryRange godoc
+//
+//	@Summary Read a bounded immutable working-tree byte range
+//	@Tags Sandbox
+//	@Accept json
+//	@Produce json
+//	@Param sandboxId path string true "Sandbox ID"
+//	@Param request body workingcopy.WorkingTreeInventoryRangeRequest true "Exact inventory and byte range"
+//	@Success 200 {object} workingcopy.WorkingTreeInventoryRange
+//	@Failure 400 {object} common_errors.ErrorResponse
+//	@Failure 409 {object} common_errors.ErrorResponse
+//	@Failure 503 {object} common_errors.ErrorResponse
+//	@Security Bearer
+//	@Router /sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree-inventories/read-range [post]
+//	@id ReadWorkingTreeInventoryRange
+func ReadWorkingTreeInventoryRange(ctx *gin.Context) {
+	var request workingcopy.WorkingTreeInventoryRangeRequest
+	if err := decodeExactCaptureBody(ctx, &request); err != nil {
+		ctx.Error(common_errors.NewBadRequestError(err))
+		return
+	}
+	service, err := workingCopyCaptureService()
+	if err != nil {
+		writeWorkingCopyCaptureError(ctx, err)
+		return
+	}
+	response, err := service.ReadWorkingTreeInventoryRange(ctx.Request.Context(), ctx.Param("sandboxId"), request)
+	if err != nil {
+		writeWorkingCopyCaptureError(ctx, err)
+		return
+	}
+	ctx.PureJSON(http.StatusOK, response)
+}
+
 // DeleteWorkingTreeInventory godoc
 //
 //	@Tags sandbox

@@ -15,10 +15,10 @@
 
 
 export interface WorkingcopyWorkingTreeInventoryPageDescriptor {
-    'pageIndex': number;
-    'entryCount': number;
     'byteLength': number;
-    'sha256': string;
+    'entryCount': number;
     'firstPath': string;
     'lastPath': string;
+    'pageIndex': number;
+    'sha256': string;
 }

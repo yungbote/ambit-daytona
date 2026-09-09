@@ -1666,7 +1666,7 @@ func lowerMetadata(source map[string]string) map[string]string {
 }
 
 func objectReadError(action string, err error) error {
-	if errors.Is(err, storage.ErrPrivateObjectNotFound) || errors.Is(err, storage.ErrPrivateObjectTooLarge) {
+	if errors.Is(err, ErrConflict) || errors.Is(err, storage.ErrPrivateObjectNotFound) || errors.Is(err, storage.ErrPrivateObjectTooLarge) {
 		return fmt.Errorf("%w: %s: %v", ErrConflict, action, err)
 	}
 	return fmt.Errorf("%w: %s: %v", ErrUnavailable, action, err)

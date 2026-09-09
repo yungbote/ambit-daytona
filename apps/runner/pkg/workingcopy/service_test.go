@@ -2013,6 +2013,9 @@ func (f *fakeObjectStore) CreatePrivateObjectStream(
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failBeforeStoreSuffix != "" && strings.HasSuffix(key, f.failBeforeStoreSuffix) {
+		return errors.New("simulated object-store failure before publication")
+	}
 	if _, exists := f.objects[key]; exists {
 		return storage.ErrPrivateObjectAlreadyExists
 	}

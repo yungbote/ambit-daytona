@@ -14,11 +14,8 @@
 
 
 
-export interface WorkingcopyStoppedDirectoryRosterEntry {
-    'kind': string;
-    'mode': string | null;
-    'name': string;
-    'sha256': string | null;
-    'size': number;
-    'zoneRelativePath': string;
+export interface WorkingcopyWorkingTreeInventoryBytePart {
+    'byteLength': number;
+    'byteOffset': number;
+    'sha256': string;
 }

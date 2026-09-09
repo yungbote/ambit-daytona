@@ -13,14 +13,16 @@
  */
 
 
+// May contain unused imports in some cases
+// @ts-ignore
 import type { WorkingcopyCaptureGenerationBinding } from './workingcopy-capture-generation-binding';
 
 export interface WorkingcopyWorkingTreeInventoryRequest {
-    'generation': WorkingcopyCaptureGenerationBinding;
     'excludedPaths': Array<string>;
+    'generation': WorkingcopyCaptureGenerationBinding;
+    'maximumAggregateBytes': number;
     'maximumDepth': number;
     'maximumFileBytes': number;
-    'maximumAggregateBytes': number;
-    'maximumPageEntries': number;
     'maximumPageBytes': number;
+    'maximumPageEntries': number;
 }

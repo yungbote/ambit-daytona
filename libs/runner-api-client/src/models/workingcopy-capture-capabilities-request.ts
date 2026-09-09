@@ -13,14 +13,22 @@
  */
 
 
-import type { WorkingcopyCaptureAuthority } from './workingcopy-capture-authority';
-import type { GenerationstopSource } from './generationstop-source';
-import type { GenerationstopOwner } from './generationstop-owner';
+// May contain unused imports in some cases
+// @ts-ignore
 import type { GenerationstopFence } from './generationstop-fence';
+// May contain unused imports in some cases
+// @ts-ignore
+import type { WorkingcopyCaptureAuthority } from './workingcopy-capture-authority';
+// May contain unused imports in some cases
+// @ts-ignore
+import type { WorkingcopyCaptureOwner } from './workingcopy-capture-owner';
+// May contain unused imports in some cases
+// @ts-ignore
+import type { WorkingcopySourceAddress } from './workingcopy-source-address';
 
 export interface WorkingcopyCaptureCapabilitiesRequest {
     'authority': WorkingcopyCaptureAuthority;
-    'source': GenerationstopSource;
-    'owner': GenerationstopOwner;
     'fence': GenerationstopFence;
+    'owner': WorkingcopyCaptureOwner;
+    'source': WorkingcopySourceAddress;
 }

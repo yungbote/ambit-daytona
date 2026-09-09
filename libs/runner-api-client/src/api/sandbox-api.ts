@@ -62,6 +62,10 @@ import type { UpdateSandboxSecretsDTO } from '../models';
 // @ts-ignore
 import type { WorkingcopyCaptureBinding } from '../models';
 // @ts-ignore
+import type { WorkingcopyCaptureCapabilities } from '../models';
+// @ts-ignore
+import type { WorkingcopyCaptureCapabilitiesRequest } from '../models';
+// @ts-ignore
 import type { WorkingcopyCaptureDeleteReceipt } from '../models';
 // @ts-ignore
 import type { WorkingcopyCaptureExistsResponse } from '../models';
@@ -79,8 +83,20 @@ import type { WorkingcopyCaptureReceipt } from '../models';
 import type { WorkingcopyStoppedDirectoryRosterReceipt } from '../models';
 // @ts-ignore
 import type { WorkingcopyStoppedDirectoryRosterRequest } from '../models';
-import type { WorkingcopyWorkingTreeInventoryRequest, WorkingcopyWorkingTreeInventoryReceipt, WorkingcopyWorkingTreeInventoryPageRequest, WorkingcopyWorkingTreeInventoryPage, WorkingcopyWorkingTreeInventoryDeletionReceipt } from '../models';
-import type { WorkingcopyCaptureCapabilitiesRequest, WorkingcopyCaptureCapabilities } from '../models';
+// @ts-ignore
+import type { WorkingcopyWorkingTreeInventoryDeletionReceipt } from '../models';
+// @ts-ignore
+import type { WorkingcopyWorkingTreeInventoryPage } from '../models';
+// @ts-ignore
+import type { WorkingcopyWorkingTreeInventoryPageRequest } from '../models';
+// @ts-ignore
+import type { WorkingcopyWorkingTreeInventoryRange } from '../models';
+// @ts-ignore
+import type { WorkingcopyWorkingTreeInventoryRangeRequest } from '../models';
+// @ts-ignore
+import type { WorkingcopyWorkingTreeInventoryReceipt } from '../models';
+// @ts-ignore
+import type { WorkingcopyWorkingTreeInventoryRequest } from '../models';
 /**
  * SandboxApi - axios parameter creator
  */
@@ -128,185 +144,6 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
                 options: localVarRequestOptions,
             };
         },
-        /**
-         * Prove the bounded regular-file roster of one semantic-zone directory in the exact stopped container generation.
-         * @summary List one stopped sandbox working-copy directory
-         * @param {string} sandboxId Sandbox ID
-         * @param {WorkingcopyStoppedDirectoryRosterRequest} body Exact stopped-directory roster request
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        stoppedWorkingCopyDirectoryRoster: async (sandboxId: string, body: WorkingcopyStoppedDirectoryRosterRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('stoppedWorkingCopyDirectoryRoster', 'sandboxId', sandboxId)
-            // verify required parameter 'body' is not null or undefined
-            assertParamExists('stoppedWorkingCopyDirectoryRoster', 'body', body)
-            const localVarPath = `/sandboxes/{sandboxId}/working-copy-captures/stopped-directory-roster`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication Bearer required
-            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
-
-            localVarHeaderParameter['Content-Type'] = 'application/json';
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-            localVarRequestOptions.data = serializeDataIfNeeded(body, localVarRequestOptions, configuration)
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        workingCopyCaptureCapabilities: async (sandboxId: string, body: WorkingcopyCaptureCapabilitiesRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('workingCopyCaptureCapabilities', 'sandboxId', sandboxId)
-            // verify required parameter 'body' is not null or undefined
-            assertParamExists('workingCopyCaptureCapabilities', 'body', body)
-            const localVarPath = `/sandboxes/{sandboxId}/working-copy-captures/capabilities`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication Bearer required
-            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
-
-            localVarHeaderParameter['Content-Type'] = 'application/json';
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-            localVarRequestOptions.data = serializeDataIfNeeded(body, localVarRequestOptions, configuration)
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        prepareWorkingTreeInventory: async (sandboxId: string, body: WorkingcopyWorkingTreeInventoryRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('prepareWorkingTreeInventory', 'sandboxId', sandboxId)
-            // verify required parameter 'body' is not null or undefined
-            assertParamExists('prepareWorkingTreeInventory', 'body', body)
-            const localVarPath = `/sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree-inventories`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication Bearer required
-            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
-
-            localVarHeaderParameter['Content-Type'] = 'application/json';
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-            localVarRequestOptions.data = serializeDataIfNeeded(body, localVarRequestOptions, configuration)
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        readWorkingTreeInventoryPage: async (sandboxId: string, body: WorkingcopyWorkingTreeInventoryPageRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('readWorkingTreeInventoryPage', 'sandboxId', sandboxId)
-            // verify required parameter 'body' is not null or undefined
-            assertParamExists('readWorkingTreeInventoryPage', 'body', body)
-            const localVarPath = `/sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree-inventories/read`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication Bearer required
-            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
-
-            localVarHeaderParameter['Content-Type'] = 'application/json';
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-            localVarRequestOptions.data = serializeDataIfNeeded(body, localVarRequestOptions, configuration)
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-        deleteWorkingTreeInventory: async (sandboxId: string, body: WorkingcopyWorkingTreeInventoryRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'sandboxId' is not null or undefined
-            assertParamExists('deleteWorkingTreeInventory', 'sandboxId', sandboxId)
-            // verify required parameter 'body' is not null or undefined
-            assertParamExists('deleteWorkingTreeInventory', 'body', body)
-            const localVarPath = `/sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree-inventories/delete`
-                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
-            // use dummy base URL string because the URL constructor only accepts absolute URLs.
-            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
-            let baseOptions;
-            if (configuration) {
-                baseOptions = configuration.baseOptions;
-            }
-
-            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
-            const localVarHeaderParameter = {} as any;
-            const localVarQueryParameter = {} as any;
-
-            // authentication Bearer required
-            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
-
-            localVarHeaderParameter['Content-Type'] = 'application/json';
-            localVarHeaderParameter['Accept'] = 'application/json';
-
-            setSearchParams(localVarUrlObj, localVarQueryParameter);
-            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
-            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-            localVarRequestOptions.data = serializeDataIfNeeded(body, localVarRequestOptions, configuration)
-
-            return {
-                url: toPathString(localVarUrlObj),
-                options: localVarRequestOptions,
-            };
-        },
-
         /**
          * Create a sandbox
          * @summary Create a sandbox
@@ -423,6 +260,48 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
             localVarRequestOptions.data = serializeDataIfNeeded(body, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         *
+         * @summary Delete exact inventory custody and prove its absence
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyWorkingTreeInventoryRequest} request Exact stopped working-tree inventory authority
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        deleteWorkingTreeInventory: async (sandboxId: string, request: WorkingcopyWorkingTreeInventoryRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxId' is not null or undefined
+            assertParamExists('deleteWorkingTreeInventory', 'sandboxId', sandboxId)
+            // verify required parameter 'request' is not null or undefined
+            assertParamExists('deleteWorkingTreeInventory', 'request', request)
+            const localVarPath = `/sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree-inventories/delete`
+                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication Bearer required
+            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(request, localVarRequestOptions, configuration)
 
             return {
                 url: toPathString(localVarUrlObj),
@@ -710,6 +589,48 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
         },
         /**
          *
+         * @summary Prepare immutable pages of an exact stopped working tree
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyWorkingTreeInventoryRequest} request Exact stopped working-tree inventory authority
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        prepareWorkingTreeInventory: async (sandboxId: string, request: WorkingcopyWorkingTreeInventoryRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxId' is not null or undefined
+            assertParamExists('prepareWorkingTreeInventory', 'sandboxId', sandboxId)
+            // verify required parameter 'request' is not null or undefined
+            assertParamExists('prepareWorkingTreeInventory', 'request', request)
+            const localVarPath = `/sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree-inventories`
+                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication Bearer required
+            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(request, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         *
          * @summary Read an exact immutable working-copy capture
          * @param {string} sandboxId Sandbox ID
          * @param {WorkingcopyCaptureReadRequest} body Exact capture identity and read bounds
@@ -744,6 +665,90 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
             localVarRequestOptions.data = serializeDataIfNeeded(body, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         *
+         * @summary Read one immutable stopped working-tree inventory page
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyWorkingTreeInventoryPageRequest} request Exact stopped working-tree inventory authority
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        readWorkingTreeInventoryPage: async (sandboxId: string, request: WorkingcopyWorkingTreeInventoryPageRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxId' is not null or undefined
+            assertParamExists('readWorkingTreeInventoryPage', 'sandboxId', sandboxId)
+            // verify required parameter 'request' is not null or undefined
+            assertParamExists('readWorkingTreeInventoryPage', 'request', request)
+            const localVarPath = `/sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree-inventories/read`
+                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication Bearer required
+            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(request, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         *
+         * @summary Read a bounded immutable working-tree byte range
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyWorkingTreeInventoryRangeRequest} request Exact inventory and byte range
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        readWorkingTreeInventoryRange: async (sandboxId: string, request: WorkingcopyWorkingTreeInventoryRangeRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxId' is not null or undefined
+            assertParamExists('readWorkingTreeInventoryRange', 'sandboxId', sandboxId)
+            // verify required parameter 'request' is not null or undefined
+            assertParamExists('readWorkingTreeInventoryRange', 'request', request)
+            const localVarPath = `/sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree-inventories/read-range`
+                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication Bearer required
+            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(request, localVarRequestOptions, configuration)
 
             return {
                 url: toPathString(localVarUrlObj),
@@ -1009,6 +1014,48 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
+         * Stream and validate a content-digested regular-file/directory roster through Docker host authority; archive link entries, special files, escapes, and bound overflows fail closed. Accepted regular-file entries are independent exact bytes; inode/link identity is not preserved.
+         * @summary List one bounded directory from an exact stopped sandbox generation
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyStoppedDirectoryRosterRequest} body Exact anchor, directory selector, and bounds
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        stoppedWorkingCopyDirectoryRoster: async (sandboxId: string, body: WorkingcopyStoppedDirectoryRosterRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxId' is not null or undefined
+            assertParamExists('stoppedWorkingCopyDirectoryRoster', 'sandboxId', sandboxId)
+            // verify required parameter 'body' is not null or undefined
+            assertParamExists('stoppedWorkingCopyDirectoryRoster', 'body', body)
+            const localVarPath = `/sandboxes/{sandboxId}/working-copy-captures/stopped-directory-roster`
+                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication Bearer required
+            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(body, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
          * Update sandbox network settings
          * @summary Update sandbox network settings
          * @param {string} sandboxId Sandbox ID
@@ -1093,6 +1140,48 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
+         * Read-only discovery of the inventory interface implemented by the assigned Runner, bound to operator-configured capture lineage. Capability discovery does not independently attest the Runner binary or image digest.
+         * @summary Discover the assigned Runner capture surface before stopping a generation
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyCaptureCapabilitiesRequest} request Current capture authority
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        workingCopyCaptureCapabilities: async (sandboxId: string, request: WorkingcopyCaptureCapabilitiesRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxId' is not null or undefined
+            assertParamExists('workingCopyCaptureCapabilities', 'sandboxId', sandboxId)
+            // verify required parameter 'request' is not null or undefined
+            assertParamExists('workingCopyCaptureCapabilities', 'request', request)
+            const localVarPath = `/sandboxes/{sandboxId}/working-copy-captures/capabilities`
+                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication Bearer required
+            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(request, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
          *
          * @summary Check an exact private working-copy capture identity
          * @param {string} sandboxId Sandbox ID
@@ -1158,45 +1247,6 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Prove the bounded regular-file roster of one semantic-zone directory in the exact stopped container generation.
-         * @summary List one stopped sandbox working-copy directory
-         * @param {string} sandboxId Sandbox ID
-         * @param {WorkingcopyStoppedDirectoryRosterRequest} body Exact stopped-directory roster request
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async stoppedWorkingCopyDirectoryRoster(sandboxId: string, body: WorkingcopyStoppedDirectoryRosterRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingcopyStoppedDirectoryRosterReceipt>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.stoppedWorkingCopyDirectoryRoster(sandboxId, body, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['SandboxApi.stoppedWorkingCopyDirectoryRoster']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        async workingCopyCaptureCapabilities(sandboxId: string, body: WorkingcopyCaptureCapabilitiesRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingcopyCaptureCapabilities>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.workingCopyCaptureCapabilities(sandboxId, body, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['SandboxApi.workingCopyCaptureCapabilities']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        async prepareWorkingTreeInventory(sandboxId: string, body: WorkingcopyWorkingTreeInventoryRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingcopyWorkingTreeInventoryReceipt>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.prepareWorkingTreeInventory(sandboxId, body, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['SandboxApi.prepareWorkingTreeInventory']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        async readWorkingTreeInventoryPage(sandboxId: string, body: WorkingcopyWorkingTreeInventoryPageRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingcopyWorkingTreeInventoryPage>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.readWorkingTreeInventoryPage(sandboxId, body, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['SandboxApi.readWorkingTreeInventoryPage']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        async deleteWorkingTreeInventory(sandboxId: string, body: WorkingcopyWorkingTreeInventoryRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingcopyWorkingTreeInventoryDeletionReceipt>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.deleteWorkingTreeInventory(sandboxId, body, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['SandboxApi.deleteWorkingTreeInventory']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-
-        /**
          * Create a sandbox
          * @summary Create a sandbox
          * @param {CreateSandboxDTO} sandbox Create sandbox
@@ -1235,6 +1285,20 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.deleteWorkingCopyCapture(sandboxId, body, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['SandboxApi.deleteWorkingCopyCapture']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         *
+         * @summary Delete exact inventory custody and prove its absence
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyWorkingTreeInventoryRequest} request Exact stopped working-tree inventory authority
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async deleteWorkingTreeInventory(sandboxId: string, request: WorkingcopyWorkingTreeInventoryRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingcopyWorkingTreeInventoryDeletionReceipt>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.deleteWorkingTreeInventory(sandboxId, request, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.deleteWorkingTreeInventory']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -1334,6 +1398,20 @@ export const SandboxApiFp = function(configuration?: Configuration) {
         },
         /**
          *
+         * @summary Prepare immutable pages of an exact stopped working tree
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyWorkingTreeInventoryRequest} request Exact stopped working-tree inventory authority
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async prepareWorkingTreeInventory(sandboxId: string, request: WorkingcopyWorkingTreeInventoryRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingcopyWorkingTreeInventoryReceipt>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.prepareWorkingTreeInventory(sandboxId, request, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.prepareWorkingTreeInventory']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         *
          * @summary Read an exact immutable working-copy capture
          * @param {string} sandboxId Sandbox ID
          * @param {WorkingcopyCaptureReadRequest} body Exact capture identity and read bounds
@@ -1344,6 +1422,34 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.readWorkingCopyCapture(sandboxId, body, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['SandboxApi.readWorkingCopyCapture']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         *
+         * @summary Read one immutable stopped working-tree inventory page
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyWorkingTreeInventoryPageRequest} request Exact stopped working-tree inventory authority
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async readWorkingTreeInventoryPage(sandboxId: string, request: WorkingcopyWorkingTreeInventoryPageRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingcopyWorkingTreeInventoryPage>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.readWorkingTreeInventoryPage(sandboxId, request, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.readWorkingTreeInventoryPage']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         *
+         * @summary Read a bounded immutable working-tree byte range
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyWorkingTreeInventoryRangeRequest} request Exact inventory and byte range
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async readWorkingTreeInventoryRange(sandboxId: string, request: WorkingcopyWorkingTreeInventoryRangeRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingcopyWorkingTreeInventoryRange>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.readWorkingTreeInventoryRange(sandboxId, request, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.readWorkingTreeInventoryRange']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -1433,6 +1539,20 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
+         * Stream and validate a content-digested regular-file/directory roster through Docker host authority; archive link entries, special files, escapes, and bound overflows fail closed. Accepted regular-file entries are independent exact bytes; inode/link identity is not preserved.
+         * @summary List one bounded directory from an exact stopped sandbox generation
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyStoppedDirectoryRosterRequest} body Exact anchor, directory selector, and bounds
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async stoppedWorkingCopyDirectoryRoster(sandboxId: string, body: WorkingcopyStoppedDirectoryRosterRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingcopyStoppedDirectoryRosterReceipt>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.stoppedWorkingCopyDirectoryRoster(sandboxId, body, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.stoppedWorkingCopyDirectoryRoster']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
          * Update sandbox network settings
          * @summary Update sandbox network settings
          * @param {string} sandboxId Sandbox ID
@@ -1458,6 +1578,20 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.updateSandboxSecrets(sandboxId, sandbox, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['SandboxApi.updateSandboxSecrets']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * Read-only discovery of the inventory interface implemented by the assigned Runner, bound to operator-configured capture lineage. Capability discovery does not independently attest the Runner binary or image digest.
+         * @summary Discover the assigned Runner capture surface before stopping a generation
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyCaptureCapabilitiesRequest} request Current capture authority
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async workingCopyCaptureCapabilities(sandboxId: string, request: WorkingcopyCaptureCapabilitiesRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingcopyCaptureCapabilities>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.workingCopyCaptureCapabilities(sandboxId, request, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.workingCopyCaptureCapabilities']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -1495,30 +1629,6 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.captureWorkingCopy(sandboxId, body, options).then((request) => request(axios, basePath));
         },
         /**
-         * Prove the bounded regular-file roster of one semantic-zone directory in the exact stopped container generation.
-         * @summary List one stopped sandbox working-copy directory
-         * @param {string} sandboxId Sandbox ID
-         * @param {WorkingcopyStoppedDirectoryRosterRequest} body Exact stopped-directory roster request
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        stoppedWorkingCopyDirectoryRoster(sandboxId: string, body: WorkingcopyStoppedDirectoryRosterRequest, options?: RawAxiosRequestConfig): AxiosPromise<WorkingcopyStoppedDirectoryRosterReceipt> {
-            return localVarFp.stoppedWorkingCopyDirectoryRoster(sandboxId, body, options).then((request) => request(axios, basePath));
-        },
-        workingCopyCaptureCapabilities(sandboxId: string, body: WorkingcopyCaptureCapabilitiesRequest, options?: RawAxiosRequestConfig): AxiosPromise<WorkingcopyCaptureCapabilities> {
-            return localVarFp.workingCopyCaptureCapabilities(sandboxId, body, options).then((request) => request(axios, basePath));
-        },
-        prepareWorkingTreeInventory(sandboxId: string, body: WorkingcopyWorkingTreeInventoryRequest, options?: RawAxiosRequestConfig): AxiosPromise<WorkingcopyWorkingTreeInventoryReceipt> {
-            return localVarFp.prepareWorkingTreeInventory(sandboxId, body, options).then((request) => request(axios, basePath));
-        },
-        readWorkingTreeInventoryPage(sandboxId: string, body: WorkingcopyWorkingTreeInventoryPageRequest, options?: RawAxiosRequestConfig): AxiosPromise<WorkingcopyWorkingTreeInventoryPage> {
-            return localVarFp.readWorkingTreeInventoryPage(sandboxId, body, options).then((request) => request(axios, basePath));
-        },
-        deleteWorkingTreeInventory(sandboxId: string, body: WorkingcopyWorkingTreeInventoryRequest, options?: RawAxiosRequestConfig): AxiosPromise<WorkingcopyWorkingTreeInventoryDeletionReceipt> {
-            return localVarFp.deleteWorkingTreeInventory(sandboxId, body, options).then((request) => request(axios, basePath));
-        },
-
-        /**
          * Create a sandbox
          * @summary Create a sandbox
          * @param {CreateSandboxDTO} sandbox Create sandbox
@@ -1549,6 +1659,17 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
          */
         deleteWorkingCopyCapture(sandboxId: string, body: WorkingcopyCaptureIdentity, options?: RawAxiosRequestConfig): AxiosPromise<WorkingcopyCaptureDeleteReceipt> {
             return localVarFp.deleteWorkingCopyCapture(sandboxId, body, options).then((request) => request(axios, basePath));
+        },
+        /**
+         *
+         * @summary Delete exact inventory custody and prove its absence
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyWorkingTreeInventoryRequest} request Exact stopped working-tree inventory authority
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        deleteWorkingTreeInventory(sandboxId: string, request: WorkingcopyWorkingTreeInventoryRequest, options?: RawAxiosRequestConfig): AxiosPromise<WorkingcopyWorkingTreeInventoryDeletionReceipt> {
+            return localVarFp.deleteWorkingTreeInventory(sandboxId, request, options).then((request) => request(axios, basePath));
         },
         /**
          * Destroy sandbox
@@ -1626,6 +1747,17 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
         },
         /**
          *
+         * @summary Prepare immutable pages of an exact stopped working tree
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyWorkingTreeInventoryRequest} request Exact stopped working-tree inventory authority
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        prepareWorkingTreeInventory(sandboxId: string, request: WorkingcopyWorkingTreeInventoryRequest, options?: RawAxiosRequestConfig): AxiosPromise<WorkingcopyWorkingTreeInventoryReceipt> {
+            return localVarFp.prepareWorkingTreeInventory(sandboxId, request, options).then((request) => request(axios, basePath));
+        },
+        /**
+         *
          * @summary Read an exact immutable working-copy capture
          * @param {string} sandboxId Sandbox ID
          * @param {WorkingcopyCaptureReadRequest} body Exact capture identity and read bounds
@@ -1634,6 +1766,28 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
          */
         readWorkingCopyCapture(sandboxId: string, body: WorkingcopyCaptureReadRequest, options?: RawAxiosRequestConfig): AxiosPromise<WorkingcopyCaptureReadResponse> {
             return localVarFp.readWorkingCopyCapture(sandboxId, body, options).then((request) => request(axios, basePath));
+        },
+        /**
+         *
+         * @summary Read one immutable stopped working-tree inventory page
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyWorkingTreeInventoryPageRequest} request Exact stopped working-tree inventory authority
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        readWorkingTreeInventoryPage(sandboxId: string, request: WorkingcopyWorkingTreeInventoryPageRequest, options?: RawAxiosRequestConfig): AxiosPromise<WorkingcopyWorkingTreeInventoryPage> {
+            return localVarFp.readWorkingTreeInventoryPage(sandboxId, request, options).then((request) => request(axios, basePath));
+        },
+        /**
+         *
+         * @summary Read a bounded immutable working-tree byte range
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyWorkingTreeInventoryRangeRequest} request Exact inventory and byte range
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        readWorkingTreeInventoryRange(sandboxId: string, request: WorkingcopyWorkingTreeInventoryRangeRequest, options?: RawAxiosRequestConfig): AxiosPromise<WorkingcopyWorkingTreeInventoryRange> {
+            return localVarFp.readWorkingTreeInventoryRange(sandboxId, request, options).then((request) => request(axios, basePath));
         },
         /**
          * Recover sandbox from error state using specified recovery type
@@ -1704,6 +1858,17 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.stopSandboxGenerationOnce(sandboxId, body, options).then((request) => request(axios, basePath));
         },
         /**
+         * Stream and validate a content-digested regular-file/directory roster through Docker host authority; archive link entries, special files, escapes, and bound overflows fail closed. Accepted regular-file entries are independent exact bytes; inode/link identity is not preserved.
+         * @summary List one bounded directory from an exact stopped sandbox generation
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyStoppedDirectoryRosterRequest} body Exact anchor, directory selector, and bounds
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        stoppedWorkingCopyDirectoryRoster(sandboxId: string, body: WorkingcopyStoppedDirectoryRosterRequest, options?: RawAxiosRequestConfig): AxiosPromise<WorkingcopyStoppedDirectoryRosterReceipt> {
+            return localVarFp.stoppedWorkingCopyDirectoryRoster(sandboxId, body, options).then((request) => request(axios, basePath));
+        },
+        /**
          * Update sandbox network settings
          * @summary Update sandbox network settings
          * @param {string} sandboxId Sandbox ID
@@ -1724,6 +1889,17 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
          */
         updateSandboxSecrets(sandboxId: string, sandbox: UpdateSandboxSecretsDTO, options?: RawAxiosRequestConfig): AxiosPromise<string> {
             return localVarFp.updateSandboxSecrets(sandboxId, sandbox, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * Read-only discovery of the inventory interface implemented by the assigned Runner, bound to operator-configured capture lineage. Capability discovery does not independently attest the Runner binary or image digest.
+         * @summary Discover the assigned Runner capture surface before stopping a generation
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopyCaptureCapabilitiesRequest} request Current capture authority
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        workingCopyCaptureCapabilities(sandboxId: string, request: WorkingcopyCaptureCapabilitiesRequest, options?: RawAxiosRequestConfig): AxiosPromise<WorkingcopyCaptureCapabilities> {
+            return localVarFp.workingCopyCaptureCapabilities(sandboxId, request, options).then((request) => request(axios, basePath));
         },
         /**
          *
@@ -1754,31 +1930,6 @@ export class SandboxApi extends BaseAPI {
     public captureWorkingCopy(sandboxId: string, body: WorkingcopyCaptureBinding, options?: RawAxiosRequestConfig) {
         return SandboxApiFp(this.configuration).captureWorkingCopy(sandboxId, body, options).then((request) => request(this.axios, this.basePath));
     }
-
-    /**
-     * Prove the bounded regular-file roster of one semantic-zone directory in the exact stopped container generation.
-     * @summary List one stopped sandbox working-copy directory
-     * @param {string} sandboxId Sandbox ID
-     * @param {WorkingcopyStoppedDirectoryRosterRequest} body Exact stopped-directory roster request
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     */
-    public stoppedWorkingCopyDirectoryRoster(sandboxId: string, body: WorkingcopyStoppedDirectoryRosterRequest, options?: RawAxiosRequestConfig) {
-        return SandboxApiFp(this.configuration).stoppedWorkingCopyDirectoryRoster(sandboxId, body, options).then((request) => request(this.axios, this.basePath));
-    }
-    public workingCopyCaptureCapabilities(sandboxId: string, body: WorkingcopyCaptureCapabilitiesRequest, options?: RawAxiosRequestConfig) {
-        return SandboxApiFp(this.configuration).workingCopyCaptureCapabilities(sandboxId, body, options).then((request) => request(this.axios, this.basePath));
-    }
-    public prepareWorkingTreeInventory(sandboxId: string, body: WorkingcopyWorkingTreeInventoryRequest, options?: RawAxiosRequestConfig) {
-        return SandboxApiFp(this.configuration).prepareWorkingTreeInventory(sandboxId, body, options).then((request) => request(this.axios, this.basePath));
-    }
-    public readWorkingTreeInventoryPage(sandboxId: string, body: WorkingcopyWorkingTreeInventoryPageRequest, options?: RawAxiosRequestConfig) {
-        return SandboxApiFp(this.configuration).readWorkingTreeInventoryPage(sandboxId, body, options).then((request) => request(this.axios, this.basePath));
-    }
-    public deleteWorkingTreeInventory(sandboxId: string, body: WorkingcopyWorkingTreeInventoryRequest, options?: RawAxiosRequestConfig) {
-        return SandboxApiFp(this.configuration).deleteWorkingTreeInventory(sandboxId, body, options).then((request) => request(this.axios, this.basePath));
-    }
-
 
     /**
      * Create a sandbox
@@ -1813,6 +1964,18 @@ export class SandboxApi extends BaseAPI {
      */
     public deleteWorkingCopyCapture(sandboxId: string, body: WorkingcopyCaptureIdentity, options?: RawAxiosRequestConfig) {
         return SandboxApiFp(this.configuration).deleteWorkingCopyCapture(sandboxId, body, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     *
+     * @summary Delete exact inventory custody and prove its absence
+     * @param {string} sandboxId Sandbox ID
+     * @param {WorkingcopyWorkingTreeInventoryRequest} request Exact stopped working-tree inventory authority
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public deleteWorkingTreeInventory(sandboxId: string, request: WorkingcopyWorkingTreeInventoryRequest, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).deleteWorkingTreeInventory(sandboxId, request, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -1898,6 +2061,18 @@ export class SandboxApi extends BaseAPI {
 
     /**
      *
+     * @summary Prepare immutable pages of an exact stopped working tree
+     * @param {string} sandboxId Sandbox ID
+     * @param {WorkingcopyWorkingTreeInventoryRequest} request Exact stopped working-tree inventory authority
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public prepareWorkingTreeInventory(sandboxId: string, request: WorkingcopyWorkingTreeInventoryRequest, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).prepareWorkingTreeInventory(sandboxId, request, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     *
      * @summary Read an exact immutable working-copy capture
      * @param {string} sandboxId Sandbox ID
      * @param {WorkingcopyCaptureReadRequest} body Exact capture identity and read bounds
@@ -1906,6 +2081,30 @@ export class SandboxApi extends BaseAPI {
      */
     public readWorkingCopyCapture(sandboxId: string, body: WorkingcopyCaptureReadRequest, options?: RawAxiosRequestConfig) {
         return SandboxApiFp(this.configuration).readWorkingCopyCapture(sandboxId, body, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     *
+     * @summary Read one immutable stopped working-tree inventory page
+     * @param {string} sandboxId Sandbox ID
+     * @param {WorkingcopyWorkingTreeInventoryPageRequest} request Exact stopped working-tree inventory authority
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public readWorkingTreeInventoryPage(sandboxId: string, request: WorkingcopyWorkingTreeInventoryPageRequest, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).readWorkingTreeInventoryPage(sandboxId, request, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     *
+     * @summary Read a bounded immutable working-tree byte range
+     * @param {string} sandboxId Sandbox ID
+     * @param {WorkingcopyWorkingTreeInventoryRangeRequest} request Exact inventory and byte range
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public readWorkingTreeInventoryRange(sandboxId: string, request: WorkingcopyWorkingTreeInventoryRangeRequest, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).readWorkingTreeInventoryRange(sandboxId, request, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -1983,6 +2182,18 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
+     * Stream and validate a content-digested regular-file/directory roster through Docker host authority; archive link entries, special files, escapes, and bound overflows fail closed. Accepted regular-file entries are independent exact bytes; inode/link identity is not preserved.
+     * @summary List one bounded directory from an exact stopped sandbox generation
+     * @param {string} sandboxId Sandbox ID
+     * @param {WorkingcopyStoppedDirectoryRosterRequest} body Exact anchor, directory selector, and bounds
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public stoppedWorkingCopyDirectoryRoster(sandboxId: string, body: WorkingcopyStoppedDirectoryRosterRequest, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).stoppedWorkingCopyDirectoryRoster(sandboxId, body, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
      * Update sandbox network settings
      * @summary Update sandbox network settings
      * @param {string} sandboxId Sandbox ID
@@ -2004,6 +2215,18 @@ export class SandboxApi extends BaseAPI {
      */
     public updateSandboxSecrets(sandboxId: string, sandbox: UpdateSandboxSecretsDTO, options?: RawAxiosRequestConfig) {
         return SandboxApiFp(this.configuration).updateSandboxSecrets(sandboxId, sandbox, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * Read-only discovery of the inventory interface implemented by the assigned Runner, bound to operator-configured capture lineage. Capability discovery does not independently attest the Runner binary or image digest.
+     * @summary Discover the assigned Runner capture surface before stopping a generation
+     * @param {string} sandboxId Sandbox ID
+     * @param {WorkingcopyCaptureCapabilitiesRequest} request Current capture authority
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public workingCopyCaptureCapabilities(sandboxId: string, request: WorkingcopyCaptureCapabilitiesRequest, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).workingCopyCaptureCapabilities(sandboxId, request, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

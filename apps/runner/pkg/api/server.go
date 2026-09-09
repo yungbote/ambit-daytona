@@ -152,6 +152,7 @@ func (a *ApiServer) Start(ctx context.Context) error {
 		sandboxController.POST("/:sandboxId/working-copy-captures/stopped-directory-roster", controllers.StoppedWorkingCopyDirectoryRoster)
 		sandboxController.POST("/:sandboxId/working-copy-captures/stopped-working-tree-inventories", controllers.PrepareWorkingTreeInventory)
 		sandboxController.POST("/:sandboxId/working-copy-captures/stopped-working-tree-inventories/read", controllers.ReadWorkingTreeInventoryPage)
+		sandboxController.POST("/:sandboxId/working-copy-captures/stopped-working-tree-inventories/read-range", controllers.ReadWorkingTreeInventoryRange)
 		sandboxController.POST("/:sandboxId/working-copy-captures/stopped-working-tree-inventories/delete", controllers.DeleteWorkingTreeInventory)
 		sandboxController.POST("/:sandboxId/working-copy-captures/delete", controllers.DeleteWorkingCopyCapture)
 		sandboxController.POST("/:sandboxId/working-copy-captures/exists", controllers.WorkingCopyCaptureExists)

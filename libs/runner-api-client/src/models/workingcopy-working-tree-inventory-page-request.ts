@@ -13,10 +13,12 @@
  */
 
 
+// May contain unused imports in some cases
+// @ts-ignore
 import type { WorkingcopyWorkingTreeInventoryRequest } from './workingcopy-working-tree-inventory-request';
 
 export interface WorkingcopyWorkingTreeInventoryPageRequest {
-    'request': WorkingcopyWorkingTreeInventoryRequest;
-    'providerResourceId': string;
     'pageIndex': number;
+    'providerResourceId': string;
+    'request': WorkingcopyWorkingTreeInventoryRequest;
 }

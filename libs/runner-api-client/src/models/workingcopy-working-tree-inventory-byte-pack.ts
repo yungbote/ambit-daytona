@@ -15,11 +15,10 @@
 
 // May contain unused imports in some cases
 // @ts-ignore
-import type { WorkingcopyStoppedWorkingTreeEntry } from './workingcopy-stopped-working-tree-entry';
+import type { WorkingcopyWorkingTreeInventoryBytePart } from './workingcopy-working-tree-inventory-byte-part';
 
-export interface WorkingcopyWorkingTreeInventoryPage {
-    'entries': Array<WorkingcopyStoppedWorkingTreeEntry>;
-    'pageDigest': string;
-    'pageIndex': number;
-    'providerResourceId': string;
+export interface WorkingcopyWorkingTreeInventoryBytePack {
+    'byteLength': number;
+    'parts': Array<WorkingcopyWorkingTreeInventoryBytePart>;
+    'sha256': string;
 }

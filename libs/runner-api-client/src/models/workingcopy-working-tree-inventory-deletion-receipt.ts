@@ -13,10 +13,19 @@
  */
 
 
+// May contain unused imports in some cases
+// @ts-ignore
 import type { WorkingcopyWorkingTreeInventoryRequest } from './workingcopy-working-tree-inventory-request';
 
 export interface WorkingcopyWorkingTreeInventoryDeletionReceipt {
-    'request': WorkingcopyWorkingTreeInventoryRequest;
     'providerResourceId': string;
-    'status': 'absent';
+    'request': WorkingcopyWorkingTreeInventoryRequest;
+    'status': WorkingcopyWorkingTreeInventoryDeletionReceiptStatusEnum;
 }
+
+export const WorkingcopyWorkingTreeInventoryDeletionReceiptStatusEnum = {
+    ABSENT: 'absent',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
+} as const;
+
+export type WorkingcopyWorkingTreeInventoryDeletionReceiptStatusEnum = typeof WorkingcopyWorkingTreeInventoryDeletionReceiptStatusEnum[keyof typeof WorkingcopyWorkingTreeInventoryDeletionReceiptStatusEnum];

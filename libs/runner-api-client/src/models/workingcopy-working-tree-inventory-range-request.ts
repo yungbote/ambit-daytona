@@ -15,11 +15,12 @@
 
 // May contain unused imports in some cases
 // @ts-ignore
-import type { WorkingcopyStoppedWorkingTreeEntry } from './workingcopy-stopped-working-tree-entry';
+import type { WorkingcopyWorkingTreeInventoryRequest } from './workingcopy-working-tree-inventory-request';
 
-export interface WorkingcopyWorkingTreeInventoryPage {
-    'entries': Array<WorkingcopyStoppedWorkingTreeEntry>;
-    'pageDigest': string;
-    'pageIndex': number;
+export interface WorkingcopyWorkingTreeInventoryRangeRequest {
+    'inventoryDigest': string;
+    'maximumBytes': number;
+    'offset': number;
     'providerResourceId': string;
+    'request': WorkingcopyWorkingTreeInventoryRequest;
 }

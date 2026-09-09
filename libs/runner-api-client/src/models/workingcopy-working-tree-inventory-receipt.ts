@@ -13,17 +13,27 @@
  */
 
 
-import type { WorkingcopyWorkingTreeInventoryRequest } from './workingcopy-working-tree-inventory-request';
-import type { WorkingcopyWorkingTreeInventoryPageDescriptor } from './workingcopy-working-tree-inventory-page-descriptor';
+// May contain unused imports in some cases
+// @ts-ignore
 import type { GenerationstopTerminalGeneration } from './generationstop-terminal-generation';
+// May contain unused imports in some cases
+// @ts-ignore
+import type { WorkingcopyWorkingTreeInventoryBytePack } from './workingcopy-working-tree-inventory-byte-pack';
+// May contain unused imports in some cases
+// @ts-ignore
+import type { WorkingcopyWorkingTreeInventoryPageDescriptor } from './workingcopy-working-tree-inventory-page-descriptor';
+// May contain unused imports in some cases
+// @ts-ignore
+import type { WorkingcopyWorkingTreeInventoryRequest } from './workingcopy-working-tree-inventory-request';
 
 export interface WorkingcopyWorkingTreeInventoryReceipt {
-    'request': WorkingcopyWorkingTreeInventoryRequest;
-    'providerResourceId': string;
-    'terminalGeneration': GenerationstopTerminalGeneration;
-    'pages': Array<WorkingcopyWorkingTreeInventoryPageDescriptor>;
-    'entryCount': number;
     'aggregateBytes': number;
+    'bytePack': WorkingcopyWorkingTreeInventoryBytePack;
+    'entryCount': number;
     'inventoryDigest': string;
     'observedAt': string;
+    'pages': Array<WorkingcopyWorkingTreeInventoryPageDescriptor>;
+    'providerResourceId': string;
+    'request': WorkingcopyWorkingTreeInventoryRequest;
+    'terminalGeneration': GenerationstopTerminalGeneration;
 }
