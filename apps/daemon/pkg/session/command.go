@@ -32,8 +32,8 @@ func (s *SessionService) GetSessionCommand(sessionId, cmdId string) (*Command, e
 	}
 
 	observed, err := s.commandObservation(session, cmdId)
-	if current, exists := s.sessions.Get(sessionId); !exists || current != session {
-		return nil, common_errors.NewConflictError(errors.New("session owner changed during command observation"))
+	if ownershipErr := s.stillOwned(sessionId, session); ownershipErr != nil {
+		return nil, ownershipErr
 	}
 	return observed, err
 }

@@ -450,6 +450,71 @@ func TestScopeRefusesWithoutKernelChildEnumeration(t *testing.T) {
 	}
 }
 
+// One caller retiring its own session must not turn another caller's listing
+// into a conflict over a session that is simply gone.
+func TestListSkipsSessionsRetiredDuringTheWalk(t *testing.T) {
+	svc := newStdinTestService(t)
+	openSession(t, svc, "kept")
+	observed, err := svc.list([]string{"kept", "vanished", util.EntrypointSessionID})
+	if err != nil {
+		t.Fatalf("a session retired during the walk failed the listing: %v", err)
+	}
+	if len(observed) != 1 || observed[0].SessionId != "kept" {
+		t.Fatalf("listing lost its surviving sessions: %+v", observed)
+	}
+}
+
+// Concurrent deletion and observation must not manufacture errors for either.
+func TestConcurrentDeletionKeepsListingAvailable(t *testing.T) {
+	svc := newStdinTestService(t)
+	for _, id := range []string{"listed-a", "listed-b", "listed-c"} {
+		if err := svc.Create(id, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var workers sync.WaitGroup
+	for _, id := range []string{"listed-a", "listed-b", "listed-c"} {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			if err := svc.Delete(context.Background(), id); err != nil && !common_errors.IsNotFoundError(err) {
+				t.Errorf("delete %s: %v", id, err)
+			}
+		}()
+	}
+	listings := make(chan error, 1)
+	go func() {
+		defer close(listings)
+		for range 200 {
+			if _, err := svc.List(); err != nil {
+				listings <- err
+				return
+			}
+		}
+	}()
+	workers.Wait()
+	for err := range listings {
+		t.Fatalf("listing failed while sessions were being deleted: %v", err)
+	}
+}
+
+// A deletion that loses its own owner while waiting for the lifecycle lock got
+// the outcome it asked for; reporting a conflict made a caller retry forever.
+func TestDeletionOfAnAlreadyRetiredOwnerReportsAbsence(t *testing.T) {
+	svc := newStdinTestService(t)
+	openSession(t, svc, "raced")
+	owned, _ := svc.sessions.Get("raced")
+	owned.mu.Lock()
+	deleted := make(chan error, 1)
+	go func() { deleted <- svc.Delete(context.Background(), "raced") }()
+	<-owned.ctx.Done() // Delete cancelled the session and now waits for the lock.
+	svc.sessions.Remove("raced")
+	owned.mu.Unlock()
+	if err := <-deleted; !common_errors.IsNotFoundError(err) {
+		t.Fatalf("a completed deletion was reported as a conflict: %v", err)
+	}
+}
+
 func TestConcurrentCreateHasOneSessionOwner(t *testing.T) {
 	svc := newStdinTestService(t)
 	var successes atomic.Int32

@@ -34,7 +34,14 @@ func (s *SessionService) Delete(ctx context.Context, sessionID string) error {
 	owned.cancel()
 	owned.mu.Lock()
 	defer owned.mu.Unlock()
-	if current, exists := s.sessions.Get(sessionID); !exists || current != owned {
+	current, exists := s.sessions.Get(sessionID)
+	if !exists {
+		// Another caller completed this exact deletion while this one waited
+		// for the lifecycle lock. The session is gone, which is the outcome
+		// asked for, not a conflict over an owner that still exists.
+		return common_errors.NewNotFoundError(errors.New("session not found"))
+	}
+	if current != owned {
 		return common_errors.NewConflictError(errors.New("session owner changed before deletion"))
 	}
 	scope := owned.scope.Load()
