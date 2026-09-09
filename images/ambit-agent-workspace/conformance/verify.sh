@@ -96,12 +96,12 @@ for ((index = 0; index < count; index++)); do
     rustup-init) toolchain="$(lock "${entry}[\"toolchain\"]")"
                  expect rustc "$(rustc --version | awk '{ print $2 }')" "$toolchain"
                  expect cargo "$(cargo --version | awk '{ print $2 }')" "$toolchain"
-                 expect rustup "$(rustup --version 2>/dev/null | head -1 | awk '{ print $2 }')" "$version"
+                 expect rustup "$(rustup --version 2>/dev/null | sed -n '1p' | awk '{ print $2 }')" "$version"
                  while read -r component; do
                    rustup component list --installed 2>/dev/null | grep -q "^${component}" && ok "rust component $component" || fail "rust component $component missing"
                  done < <(lock "${entry}[\"components\"]")
                  [ -w "$(lock "${entry}[\"cargoHome\"]")" ] && ok "CARGO_HOME writable by runtime user" || fail "CARGO_HOME not writable" ;;
-    maven)       expect maven "$(mvn -v 2>/dev/null | head -1 | awk '{ print $3 }')" "$version" ;;
+    maven)       expect maven "$(mvn -v 2>/dev/null | sed -n '1p' | awk '{ print $3 }')" "$version" ;;
     gradle)      expect gradle "$(gradle --version 2>/dev/null | awk '/^Gradle / { print $2 }')" "$version" ;;
     dotnet-sdk)  expect dotnet "$(dotnet --version)" "$version" ;;
     composer)    expect composer "$(composer --version --no-ansi 2>/dev/null | awk '{ print $3 }')" "$version" ;;
@@ -180,7 +180,7 @@ for tool in gcc g++ clang make cmake pkg-config jq rg fd fdfind curl git unzip z
             tesseract dot soffice libreoffice exiftool file; do
   command -v "$tool" >/dev/null && ok "on PATH: $tool" || fail "not on PATH: $tool"
 done
-[ "$(java -version 2>&1 | head -1 | grep -c '^openjdk version "21\.')" = 1 ] && ok "java is OpenJDK 21" || fail "java is not OpenJDK 21"
+[ "$(java -version 2>&1 | sed -n '1p' | grep -c '^openjdk version "21\.')" = 1 ] && ok "java is OpenJDK 21" || fail "java is not OpenJDK 21"
 [ -n "${JAVA_HOME:-}" ] && [ -x "${JAVA_HOME}/bin/java" ] && ok "JAVA_HOME=${JAVA_HOME}" || fail "JAVA_HOME unset or wrong"
 
 # --- the document/media tools must run, not merely resolve -------------------------
@@ -228,21 +228,21 @@ echo "=== version roster ==="
 go version
 rustc --version
 cargo --version
-java -version 2>&1 | head -1
-mvn -v 2>/dev/null | head -1
+java -version 2>&1 | sed -n '1p'
+mvn -v 2>/dev/null | sed -n '1p'
 gradle -v 2>/dev/null | grep Gradle
 dotnet --version
 ruby -v
 bundle -v
-php -v | head -1
+php -v | sed -n '1p'
 composer --version --no-ansi 2>/dev/null
-clang --version | head -1
-gcc --version | head -1
-cmake --version | head -1
-make --version | head -1
+clang --version | sed -n '1p'
+gcc --version | sed -n '1p'
+cmake --version | sed -n '1p'
+make --version | sed -n '1p'
 pkg-config --version
 jq --version
-rg --version | head -1
+rg --version | sed -n '1p'
 git --version
 sqlite3 --version | awk '{ print "sqlite3 " $1 }'
 python3 --version
@@ -254,16 +254,16 @@ eslint --version
 esbuild --version
 pnpm --version
 yarn --version
-pdftotext -v 2>&1 | head -1
-pandoc --version | head -1
-tesseract --version 2>&1 | head -1
-ffmpeg -version | head -1
-convert -version | head -1
-soffice --headless --version 2>&1 | head -1
+pdftotext -v 2>&1 | sed -n '1p'
+pandoc --version | sed -n '1p'
+tesseract --version 2>&1 | sed -n '1p'
+ffmpeg -version | sed -n '1p'
+convert -version | sed -n '1p'
+soffice --headless --version 2>&1 | sed -n '1p'
 gs --version | sed 's/^/ghostscript /'
-qpdf --version | head -1
+qpdf --version | sed -n '1p'
 exiftool -ver | sed 's/^/exiftool /'
-dot -V 2>&1 | head -1
+dot -V 2>&1 | sed -n '1p'
 7z i 2>/dev/null | awk 'NR == 2'
 fd --version
 whoami
