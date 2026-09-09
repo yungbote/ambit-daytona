@@ -10,12 +10,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/containerd/errdefs"
 	"github.com/daytonaio/common-go/pkg/timer"
 	"github.com/daytonaio/runner/pkg/api/dto"
 	"github.com/daytonaio/runner/pkg/common"
@@ -27,16 +29,20 @@ import (
 
 func (d *DockerClient) Start(ctx context.Context, containerId string, authToken *string, secretsToken *string, metadata map[string]string) (*container.InspectResponse, string, error) {
 	defer timer.Timer()()
+	c, err := d.ContainerInspect(ctx, containerId)
+	if err != nil {
+		return nil, "", err
+	}
+	// Refuse an incompatible existing container before starting, converting or
+	// cancelling its backup. Policy rollout does not relabel old workspaces.
+	if err := d.validateWorkspaceSecurityConfiguration(c); err != nil {
+		return nil, "", err
+	}
 
 	// Cancel a backup if it's already in progress
 	backup_context, ok := backup_context_map.Get(containerId)
 	if ok {
 		backup_context.cancel()
-	}
-
-	c, err := d.ContainerInspect(ctx, containerId)
-	if err != nil {
-		return nil, "", err
 	}
 
 	if c.State.Running {
@@ -173,6 +179,18 @@ func (d *DockerClient) convertRuncToKata(ctx context.Context, containerId string
 // The original is renamed aside (so a create failure can roll back) then removed, which
 // clears any sysbox-mgr registration tied to it.
 func (d *DockerClient) recreateContainerUnderSameID(ctx context.Context, containerId, imagePrefix string, original *container.InspectResponse, mutateConfig func(*container.Config), mutateHostConfig func(*container.HostConfig)) (*container.InspectResponse, error) {
+	newContainerConfig := *original.Config
+	newContainerConfig.Labels = maps.Clone(original.Config.Labels)
+	if mutateConfig != nil {
+		mutateConfig(&newContainerConfig)
+	}
+	newHostConfig := *original.HostConfig
+	if mutateHostConfig != nil {
+		mutateHostConfig(&newHostConfig)
+	}
+	if err := d.applyWorkspaceSecurityProfile(&newContainerConfig, &newHostConfig); err != nil {
+		return nil, err
+	}
 	timestamp := time.Now().Unix()
 	imageName := fmt.Sprintf("%s:%s-%d", imagePrefix, containerId, timestamp)
 	oldName := fmt.Sprintf("%s-old-%d", containerId, timestamp)
@@ -185,39 +203,45 @@ func (d *DockerClient) recreateContainerUnderSameID(ctx context.Context, contain
 		return nil, fmt.Errorf("failed to rename container: %w", err)
 	}
 
-	newContainerConfig := *original.Config
 	newContainerConfig.Image = imageName
-	if mutateConfig != nil {
-		mutateConfig(&newContainerConfig)
-	}
-
-	newHostConfig := *original.HostConfig
-	if mutateHostConfig != nil {
-		mutateHostConfig(&newHostConfig)
-	}
 
 	// No need for a full CreateSandboxDTO here since it's used only for android sandboxes which won't take this path either way
 	networkingConfig := d.getContainerNetworkingConfig(dto.CreateSandboxDTO{Id: containerId})
 
-	if _, err := d.apiClient.ContainerCreate(ctx, &newContainerConfig, &newHostConfig, networkingConfig, &v1.Platform{
+	created, err := d.apiClient.ContainerCreate(ctx, &newContainerConfig, &newHostConfig, networkingConfig, &v1.Platform{
 		Architecture: "amd64",
 		OS:           "linux",
-	}, containerId); err != nil {
-		if rnErr := d.apiClient.ContainerRename(ctx, oldName, containerId); rnErr != nil {
-			d.logger.ErrorContext(ctx, "Failed to roll back rename after recreate failure", "containerId", containerId, "oldName", oldName, "error", rnErr)
-		}
-		return nil, fmt.Errorf("failed to recreate container: %w", err)
+	}, containerId)
+	if err != nil {
+		return nil, d.rollbackRecreatedContainer(ctx, "", original.ID, containerId, fmt.Errorf("failed to recreate container: %w", err))
 	}
 
-	if err := d.apiClient.ContainerRemove(ctx, oldName, container.RemoveOptions{Force: true}); err != nil {
+	newInspect, err := d.ContainerInspect(ctx, created.ID)
+	if err == nil {
+		err = d.validateWorkspaceSecurityConfiguration(newInspect)
+	}
+	if err != nil {
+		return nil, d.rollbackRecreatedContainer(ctx, created.ID, original.ID, containerId, err)
+	}
+	// Keep the original recoverable until the exact new container is inspected.
+	if err := d.apiClient.ContainerRemove(ctx, original.ID, container.RemoveOptions{Force: true}); err != nil {
 		d.logger.WarnContext(ctx, "Failed to remove old container after recreate", "oldName", oldName, "error", err)
 	}
-
-	newInspect, err := d.ContainerInspect(ctx, containerId)
-	if err != nil {
-		return nil, fmt.Errorf("failed to inspect recreated container: %w", err)
-	}
 	return newInspect, nil
+}
+
+func (d *DockerClient) rollbackRecreatedContainer(ctx context.Context, createdID, originalID, originalName string, cause error) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+	if createdID != "" {
+		if err := d.apiClient.ContainerRemove(cleanupCtx, createdID, container.RemoveOptions{Force: true}); err != nil && !errdefs.IsNotFound(err) {
+			return errors.Join(cause, fmt.Errorf("rejected replacement %s remains pending cleanup; original %s is retained: %w", createdID, originalID, err))
+		}
+	}
+	if err := d.apiClient.ContainerRename(cleanupCtx, originalID, originalName); err != nil {
+		return errors.Join(cause, fmt.Errorf("original workspace %s is retained but its name could not be restored: %w", originalID, err))
+	}
+	return cause
 }
 
 // startContainerWithSysboxRecovery starts the container, healing a stale sysbox-mgr

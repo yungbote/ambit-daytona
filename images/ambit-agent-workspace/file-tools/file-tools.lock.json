@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "baseEnvironmentRef": "us-east4-docker.pkg.dev/mwcc-infrastructure/ambit/ambit-agent-workspace@sha256:1dbc9cac4326224679f4bae44402839f1c3c064db2bc2c34d62782aad625c950",
+  "debianPackages": {
+    "libvips-tools": "8.16.1-1+deb13u1"
+  },
+  "python": {
+    "venv": "/opt/ambit/file-tools/python",
+    "requirements": "requirements.lock.txt",
+    "requirementsSha256": "8efbd3c3c21d9d19945aa6324ef1c23351f300dea769c0e7ea1c9b42389c073d",
+    "requested": [
+      "markitdown[docx,pptx,xlsx,xls,pdf,outlook]==0.1.7"
+    ]
+  },
+  "artifacts": {
+    "tika": {
+      "name": "tika-app",
+      "version": "4.0.0",
+      "url": "https://dlcdn.apache.org/tika/4.0.0/tika-app-4.0.0.zip",
+      "sha256": "56e487cbba0794da5c025a25bf94d92fc5f76a6ba447f96d8238ca2f4687eed7",
+      "sha512": "59970cecd51dbd22f51eec1f14bfdefdf660dd9cd6f726dd7ec5dfafcd089d80927d6034c7514f8d87571a05715126e984e5e07dbf6d9033d54075a19884b92a",
+      "bytes": 60278832
+    }
+  },
+  "executables": [
+    {
+      "name": "tika",
+      "version": "4.0.0",
+      "helpArgv": [
+        "tika",
+        "--help"
+      ]
+    },
+    {
+      "name": "tesseract",
+      "version": "5.5.0",
+      "helpArgv": [
+        "tesseract",
+        "--help"
+      ]
+    }
+  ]
+}
