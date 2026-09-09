@@ -12,6 +12,7 @@ import (
 	"time"
 
 	common_errors "github.com/daytonaio/common-go/pkg/errors"
+	"github.com/daytonaio/daemon/internal/util"
 	"github.com/daytonaio/daemon/pkg/common"
 	cmap "github.com/orcaman/concurrent-map/v2"
 )
@@ -21,6 +22,16 @@ func validSessionID(id string) bool {
 }
 
 func (s *SessionService) Create(sessionID string, isLegacy bool) error {
+	return s.create(sessionID, isLegacy, false)
+}
+
+// CreateEntrypoint preserves the existing trusted daemon-startup owner and its
+// snapshot-carried logs. The public API reserves this ID and cannot invoke it.
+func (s *SessionService) CreateEntrypoint() error {
+	return s.create(util.EntrypointSessionID, false, true)
+}
+
+func (s *SessionService) create(sessionID string, isLegacy, entrypoint bool) error {
 	if !validSessionID(sessionID) {
 		return common_errors.NewBadRequestError(errors.New("invalid session ID"))
 	}
@@ -36,10 +47,19 @@ func (s *SessionService) Create(sessionID string, isLegacy bool) error {
 		s.sessions.RemoveCb(sessionID, func(_ string, current *session, exists bool) bool { return exists && current == owned })
 		cancel()
 	}
-	// Keep the existing session directory/log layout, including entrypoint
-	// state carried by snapshots. The in-memory owner reservation is atomic.
-	if err := os.MkdirAll(owned.Dir(s.configDir), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(owned.Dir(s.configDir)), 0755); err != nil {
 		removeReservation()
+		return err
+	}
+	mkdir := os.Mkdir
+	if entrypoint {
+		mkdir = os.MkdirAll
+	}
+	if err := mkdir(owned.Dir(s.configDir), 0755); err != nil {
+		removeReservation()
+		if os.IsExist(err) {
+			return common_errors.NewConflictError(errors.New("session state is retained; its prior process custody must be reconciled before this ID can be reused"))
+		}
 		return err
 	}
 
@@ -53,13 +73,10 @@ func (s *SessionService) Create(sessionID string, isLegacy bool) error {
 			return err
 		}
 	}
-	scope, err := startProcessScope(common.GetShell(), dir, s.terminationGracePeriod, s.terminationCheckInterval)
-	owned.scope = scope
-	if scope != nil {
-		owned.cmd, owned.stdinWriter = scope.cmd, scope.input
-	}
+	scope, err := startProcessScope(ctx, common.GetShell(), dir, s.terminationGracePeriod, s.terminationCheckInterval)
+	owned.scope.Store(scope)
 	if err != nil {
-		owned.stopping = true
+		cancel()
 		if scope != nil {
 			scope.cancel()
 			cleanupCtx, stop := context.WithTimeout(context.Background(), s.terminationGracePeriod+2*time.Second)

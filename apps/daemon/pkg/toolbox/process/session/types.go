@@ -22,11 +22,13 @@ type SessionSendInputRequest struct {
 } //	@name	SessionSendInputRequest
 
 type SessionExecuteResponse struct {
-	CommandId string  `json:"cmdId" validate:"required"`
-	Output    *string `json:"output" validate:"optional"`
-	Stdout    *string `json:"stdout" validate:"optional"`
-	Stderr    *string `json:"stderr" validate:"optional"`
-	ExitCode  *int    `json:"exitCode" validate:"optional"`
+	ProcessScope string  `json:"processScope,omitempty" validate:"optional" enums:"running,settled,unavailable"`
+	InputClosed  bool    `json:"inputClosed"`
+	CommandId    string  `json:"cmdId" validate:"required"`
+	Output       *string `json:"output" validate:"optional"`
+	Stdout       *string `json:"stdout" validate:"optional"`
+	Stderr       *string `json:"stderr" validate:"optional"`
+	ExitCode     *int    `json:"exitCode" validate:"optional"`
 } //	@name	SessionExecuteResponse
 
 type SessionCommandLogsResponse struct {

@@ -41,7 +41,7 @@ func (s *SessionController) SendInput(c *gin.Context) {
 		return
 	}
 
-	err := s.sessionService.SendInput(sessionId, commandId, request.Data)
+	err := s.sessionService.SendInput(c.Request.Context(), sessionId, commandId, request.Data)
 	if err != nil {
 		c.Error(err)
 		return

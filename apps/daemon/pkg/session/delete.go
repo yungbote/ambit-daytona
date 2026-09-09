@@ -25,21 +25,23 @@ func (s *SessionService) Delete(ctx context.Context, sessionID string) error {
 		}
 		return common_errors.NewNotFoundError(errors.New("session not found"))
 	}
+	// Cancel before waiting for the lifecycle lock: a queued command may be
+	// blocked writing to the shell pipe while holding it. The existing context
+	// closes that pipe independently and unblocks the writer.
+	owned.cancel()
 	owned.mu.Lock()
 	defer owned.mu.Unlock()
 	if current, exists := s.sessions.Get(sessionID); !exists || current != owned {
 		return common_errors.NewConflictError(errors.New("session owner changed before deletion"))
 	}
-	owned.stopping = true
-	owned.inputClosed = true
-	owned.cancel()
-	if owned.scope == nil {
+	scope := owned.scope.Load()
+	if scope == nil {
 		return errors.New("session process custody is unavailable")
 	}
-	owned.scope.cancel()
+	scope.cancel()
 	waitCtx, cancel := context.WithTimeout(ctx, s.terminationGracePeriod+2*time.Second)
 	defer cancel()
-	if err := owned.scope.awaitSettlement(waitCtx); err != nil {
+	if err := scope.awaitSettlement(waitCtx); err != nil {
 		// The same owner and its output remain available for observation/retry.
 		// A transport timeout never turns failed termination into a deletion.
 		return err

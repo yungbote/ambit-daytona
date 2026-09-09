@@ -72,16 +72,20 @@ func (s *SessionController) SessionExecuteCommand(c *gin.Context) {
 
 	if request.RunAsync {
 		c.JSON(http.StatusAccepted, &SessionExecuteResponse{
-			CommandId: executeResult.CommandId,
+			CommandId:    executeResult.CommandId,
+			ProcessScope: executeResult.ProcessScope,
+			InputClosed:  executeResult.InputClosed,
 		})
 		return
 	}
 
 	c.JSON(http.StatusOK, &SessionExecuteResponse{
-		CommandId: executeResult.CommandId,
-		Output:    executeResult.Output,
-		Stdout:    executeResult.Stdout,
-		Stderr:    executeResult.Stderr,
-		ExitCode:  executeResult.ExitCode,
+		CommandId:    executeResult.CommandId,
+		ProcessScope: executeResult.ProcessScope,
+		InputClosed:  executeResult.InputClosed,
+		Output:       executeResult.Output,
+		Stdout:       executeResult.Stdout,
+		Stderr:       executeResult.Stderr,
+		ExitCode:     executeResult.ExitCode,
 	})
 }

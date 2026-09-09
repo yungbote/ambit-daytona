@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -47,6 +48,58 @@ func runCustodyFixture(args []string) bool {
 		}
 		// A failed test is bounded even if its cleanup path is broken.
 		time.Sleep(20 * time.Second)
+	case "fd-pressure":
+		previousGC := debug.SetGCPercent(-1)
+		defer debug.SetGCPercent(previousGC)
+		r, w, err := os.Pipe()
+		if err != nil {
+			panic(err)
+		}
+		r.Close()
+		w.Close()
+		count := func() int {
+			entries, err := os.ReadDir("/proc/self/fd")
+			if err != nil {
+				panic(err)
+			}
+			return len(entries) - 1
+		}
+		before := count()
+		var original unix.Rlimit
+		if err := unix.Getrlimit(unix.RLIMIT_NOFILE, &original); err != nil {
+			panic(err)
+		}
+		limited := original
+		limited.Cur = 64
+		if err := unix.Setrlimit(unix.RLIMIT_NOFILE, &limited); err != nil {
+			panic(err)
+		}
+		var filler []int
+		for {
+			fd, err := unix.Open("/dev/null", unix.O_RDONLY|unix.O_CLOEXEC, 0)
+			if errors.Is(err, unix.EMFILE) {
+				break
+			}
+			if err != nil {
+				panic(err)
+			}
+			filler = append(filler, fd)
+		}
+		for range 3 {
+			unix.Close(filler[len(filler)-1])
+			filler = filler[:len(filler)-1]
+		}
+		scope, startErr := startProcessScope(context.Background(), "sh", "", 100*time.Millisecond, 10*time.Millisecond)
+		if err := unix.Setrlimit(unix.RLIMIT_NOFILE, &original); err != nil {
+			panic(err)
+		}
+		for _, fd := range filler {
+			unix.Close(fd)
+		}
+		after := count()
+		if scope != nil || startErr == nil || !strings.Contains(startErr.Error(), "too many open files") || after != before {
+			panic(fmt.Sprintf("unexpected startup/FD custody: scope=%v error=%v before=%d after=%d", scope, startErr, before, after))
+		}
 	case "owner":
 		svc := NewSessionService(slog.New(slog.NewTextHandler(io.Discard, nil)), filepath.Join(filepath.Dir(path), "owner-state"), 100*time.Millisecond, 10*time.Millisecond)
 		if err := svc.Create("owner-dies", false); err != nil {
@@ -125,7 +178,7 @@ func TestDeleteWaitsForShellItself(t *testing.T) {
 	svc := newStdinTestService(t)
 	openSession(t, svc, "idle-shell")
 	owned, _ := svc.sessions.Get("idle-shell")
-	fd, err := unix.PidfdOpen(owned.cmd.Process.Pid, 0)
+	fd, err := unix.PidfdOpen(owned.scope.Load().cmd.Process.Pid, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +232,7 @@ func TestClosedInputSettlesNaturallyAndPreservesResult(t *testing.T) {
 	owned, _ := svc.sessions.Get("natural")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if err := owned.scope.awaitSettlement(ctx); err != nil {
+	if err := owned.scope.Load().awaitSettlement(ctx); err != nil {
 		t.Fatal(err)
 	}
 	observed, err := svc.Get("natural")
@@ -238,10 +291,10 @@ func TestLostSupervisorNeverConfirmsDeletion(t *testing.T) {
 	svc := newStdinTestService(t)
 	openSession(t, svc, "lost")
 	owned, _ := svc.sessions.Get("lost")
-	if err := owned.cmd.Process.Kill(); err != nil {
+	if err := owned.scope.Load().cmd.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}
-	<-owned.scope.done
+	<-owned.scope.Load().done
 	if err := svc.Delete(context.Background(), "lost"); err == nil {
 		t.Fatal("lost supervisor was treated as a settled scope")
 	}
@@ -255,6 +308,9 @@ func TestRetainedDirectoryIsNotProofOfAbsentScope(t *testing.T) {
 	path := (&session{id: "old-owner"}).Dir(svc.configDir)
 	if err := os.MkdirAll(path, 0755); err != nil {
 		t.Fatal(err)
+	}
+	if err := svc.Create("old-owner", false); err == nil {
+		t.Fatal("a new scope replaced retained unresolved custody")
 	}
 	if err := svc.Delete(context.Background(), "old-owner"); err == nil || !strings.Contains(err.Error(), "custody is unavailable") {
 		t.Fatalf("lost ownership was reported as absent: %v", err)
@@ -300,7 +356,7 @@ func TestReusableSessionPreservesShellState(t *testing.T) {
 }
 
 func TestFailedShellStartupSettlesWithoutForgettingCustody(t *testing.T) {
-	scope, err := startProcessScope("/does-not-exist/daytona-shell", "", 100*time.Millisecond, 10*time.Millisecond)
+	scope, err := startProcessScope(context.Background(), "/does-not-exist/daytona-shell", "", 100*time.Millisecond, 10*time.Millisecond)
 	if err == nil || scope == nil {
 		t.Fatalf("startup failure not reported: %+v %v", scope, err)
 	}
@@ -320,12 +376,246 @@ func TestBackgroundWorkCanSettleNaturallyWithoutCancellation(t *testing.T) {
 		t.Fatalf("start failed: %+v %v", result, err)
 	}
 	owned, _ := svc.sessions.Get("natural-background")
-	if owned.scope.state() != "running" {
+	if owned.scope.Load().state() != "running" {
 		t.Fatal("background work was killed on main exit")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := owned.scope.awaitSettlement(ctx); err != nil {
+	if err := owned.scope.Load().awaitSettlement(ctx); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestBlockedSubmissionDoesNotBlockObservationOrCancellation(t *testing.T) {
+	svc := newStdinTestService(t)
+	openSession(t, svc, "backpressure")
+	if _, err := svc.Execute("backpressure", "hold", "sleep 3", true, true, true, false); err != nil {
+		t.Fatal(err)
+	}
+	queued := make(chan struct{})
+	go func() {
+		defer close(queued)
+		for i := range 64 {
+			if _, err := svc.Execute("backpressure", fmt.Sprint(i), "true", true, true, true, false); err != nil {
+				return
+			}
+		}
+	}()
+	time.Sleep(250 * time.Millisecond)
+	observation := make(chan error, 1)
+	go func() { _, err := svc.Get("backpressure"); observation <- err }()
+	select {
+	case err := <-observation:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("observation blocked behind a full command pipe")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	stopped := make(chan error, 1)
+	go func() { stopped <- svc.Delete(ctx, "backpressure") }()
+	select {
+	case firstErr := <-stopped:
+		if firstErr != nil {
+			if !errors.Is(firstErr, context.DeadlineExceeded) {
+				t.Fatal(firstErr)
+			}
+			if err := svc.Delete(context.Background(), "backpressure"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancellation could not reach the blocked command pipe")
+	}
+	select {
+	case <-queued:
+	case <-time.After(time.Second):
+		t.Fatal("queued command writer did not unblock")
+	}
+}
+
+func TestExitedShellClosesIntakeWhileRetainingBackgroundWork(t *testing.T) {
+	svc := newStdinTestService(t)
+	openSession(t, svc, "shell-exits")
+	if _, err := svc.Execute("shell-exits", "main", "sleep 2 </dev/null >/dev/null 2>&1 & exit 0", true, true, true, false); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	var observed *Session
+	for time.Now().Before(deadline) {
+		var err error
+		observed, err = svc.Get("shell-exits")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if observed.InputClosed {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if observed == nil || !observed.InputClosed || observed.ProcessScope != "running" {
+		t.Fatalf("shell lifetime confused with descendant lifetime: %+v", observed)
+	}
+	if _, err := svc.Execute("shell-exits", "late", "true", true, true, true, false); err == nil {
+		t.Fatal("dead shell falsely accepted another command")
+	}
+}
+
+func TestFailedPipeAllocationClosesEveryOwnedDescriptor(t *testing.T) {
+	child := exec.Command("/proc/self/exe", "--custody-fixture", "fd-pressure", "unused")
+	if output, err := child.CombinedOutput(); err != nil {
+		t.Fatalf("isolated descriptor-pressure check: %v: %s", err, output)
+	}
+}
+
+func TestTrustedEntrypointKeepsSnapshotLogsWithoutReusingOrdinaryCustody(t *testing.T) {
+	svc := newStdinTestService(t)
+	path := filepath.Join(svc.configDir, "sessions", "entrypoint", "retained.log")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("snapshot log"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.CreateEntrypoint(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = svc.Delete(context.Background(), "entrypoint") })
+	if content, err := os.ReadFile(path); err != nil || string(content) != "snapshot log" {
+		t.Fatalf("trusted startup discarded logs: %q %v", content, err)
+	}
+}
+
+func TestClosingCommandInputPreservesInteractiveTaskInput(t *testing.T) {
+	svc := newStdinTestService(t)
+	openSession(t, svc, "closed-stream-interactive")
+	result, err := svc.Execute("closed-stream-interactive", "read", `read -r answer; printf 'answer:%s\n' "$answer"`, true, true, true, false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.InputClosed || result.ProcessScope != "running" {
+		t.Fatalf("missing accepted scope receipt: %+v", result)
+	}
+	pipe := filepath.Join(svc.configDir, "sessions", "closed-stream-interactive", "read", "input.pipe")
+	deadline := time.Now().Add(time.Second)
+	for {
+		if _, err := os.Stat(pipe); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("accepted command did not prepare interactive input")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := svc.SendInput(context.Background(), "closed-stream-interactive", "read", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	command := pollCommand(t, svc, "closed-stream-interactive", "read", time.Second)
+	if command.ExitCode == nil || *command.ExitCode != 0 {
+		t.Fatalf("interactive command failed: %+v", command)
+	}
+	owned, _ := svc.sessions.Get("closed-stream-interactive")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := owned.scope.Load().awaitSettlement(ctx); err != nil {
+		t.Fatal(err)
+	}
+	logPath, _ := command.LogFilePath(owned.Dir(svc.configDir))
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, _ := DemuxLogBytes(content)
+	if !strings.Contains(string(stdout), "answer:hello\n") {
+		t.Fatalf("interactive result missing: %q", stdout)
+	}
+
+}
+
+func TestInputWithoutReaderEndsWhenSessionIsDeleted(t *testing.T) {
+	svc := newStdinTestService(t)
+	openSession(t, svc, "input-reader-closed")
+	marker := filepath.Join(t.TempDir(), "stdin-closed")
+	script := "exec 0</dev/null; printf ready > " + shellFixtureQuote(marker) + "; sleep 20"
+	if _, err := svc.Execute("input-reader-closed", "main", script, true, true, true, false); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		if _, err := os.Stat(marker); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("command did not close stdin")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	sent := make(chan error, 1)
+	go func() { sent <- svc.SendInput(context.Background(), "input-reader-closed", "main", "late-input") }()
+	select {
+	case err := <-sent:
+		if err == nil {
+			t.Fatal("input succeeded without a reader")
+		}
+	case <-time.After(50 * time.Millisecond):
+		if err := svc.Delete(context.Background(), "input-reader-closed"); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-sent:
+			if err == nil {
+				t.Fatal("input succeeded after deletion")
+			}
+		case <-time.After(time.Second):
+			t.Fatal("input remained blocked after deletion")
+		}
+	}
+}
+
+func TestBlockedInputWriteHonorsRequestCancellation(t *testing.T) {
+	svc := newStdinTestService(t)
+	openSession(t, svc, "blocked-input-write")
+	if _, err := svc.Execute("blocked-input-write", "main", "sleep 20", true, true, true, false); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	sent := make(chan error, 1)
+	go func() { sent <- svc.SendInput(ctx, "blocked-input-write", "main", strings.Repeat("x", 1024*1024)) }()
+	select {
+	case err := <-sent:
+		if err == nil {
+			t.Fatal("input delivery succeeded without a consuming reader")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blocked input write ignored request cancellation")
+	}
+	observed, err := svc.Get("blocked-input-write")
+	if err != nil || observed.ProcessScope != "running" {
+		t.Fatalf("canceling input changed process custody: observation=%+v error=%v", observed, err)
+	}
+}
+
+func TestSynchronousShellExitRetainsBackgroundWithoutWaitingForAResult(t *testing.T) {
+	svc := newStdinTestService(t)
+	openSession(t, svc, "sync-shell-exit")
+	result := make(chan error, 1)
+	go func() {
+		_, err := svc.Execute("sync-shell-exit", "main", "sleep 20 </dev/null >/dev/null 2>&1 & exit 7", false, true, true, false)
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		if err == nil || !strings.Contains(err.Error(), "shell ended without a command result") {
+			t.Fatalf("unexpected shell-exit result: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("synchronous call waited for a result after its shell exited")
+	}
+	observed, err := svc.Get("sync-shell-exit")
+	if err != nil || !observed.InputClosed || observed.ProcessScope != "running" {
+		t.Fatalf("shell exit lost background custody: observation=%+v error=%v", observed, err)
 	}
 }

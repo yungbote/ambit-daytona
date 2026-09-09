@@ -140,7 +140,7 @@ func run() int {
 	// Execute passed arguments as command in entrypoint session
 	if len(args) > 0 {
 		// Create entrypoint session
-		err = sessionService.Create(util.EntrypointSessionID, false)
+		err = sessionService.CreateEntrypoint()
 		if err != nil {
 			logger.Error("Failed to create entrypoint session", "error", err)
 			return 2

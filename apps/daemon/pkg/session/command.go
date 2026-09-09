@@ -13,21 +13,15 @@ import (
 	common_errors "github.com/daytonaio/common-go/pkg/errors"
 )
 
-func (s *SessionService) getSessionCommands(sessionId string) ([]*Command, error) {
-	session, ok := s.sessions.Get(sessionId)
-	if !ok {
-		return nil, common_errors.NewNotFoundError(errors.New("session not found"))
-	}
-
+func (s *SessionService) getSessionCommandsFor(owned *session) ([]*Command, error) {
 	commands := []*Command{}
-	for _, command := range session.commands.Items() {
-		cmd, err := s.GetSessionCommand(sessionId, command.Id)
+	for _, command := range owned.commands.Items() {
+		cmd, err := s.commandObservation(owned, command.Id)
 		if err != nil {
 			return nil, err
 		}
 		commands = append(commands, cmd)
 	}
-
 	return commands, nil
 }
 
@@ -36,6 +30,15 @@ func (s *SessionService) GetSessionCommand(sessionId, cmdId string) (*Command, e
 	if !ok {
 		return nil, common_errors.NewNotFoundError(errors.New("session not found"))
 	}
+
+	observed, err := s.commandObservation(session, cmdId)
+	if current, exists := s.sessions.Get(sessionId); !exists || current != session {
+		return nil, common_errors.NewConflictError(errors.New("session owner changed during command observation"))
+	}
+	return observed, err
+}
+
+func (s *SessionService) commandObservation(session *session, cmdId string) (*Command, error) {
 
 	command, ok := session.commands.Get(cmdId)
 	if !ok {

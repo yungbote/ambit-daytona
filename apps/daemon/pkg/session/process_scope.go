@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/daytonaio/daemon/pkg/childreap"
@@ -24,24 +25,31 @@ type scopeResult struct {
 }
 
 type processScope struct {
-	cmd     *exec.Cmd
-	input   io.WriteCloser
-	control *os.File
-	stop    sync.Once
-	done    chan struct{}
-	result  scopeResult // Published by closing done, then immutable.
+	cmd         *exec.Cmd
+	input       io.WriteCloser
+	control     *os.File
+	stop        sync.Once
+	inputClosed atomic.Bool
+	shellExited atomic.Bool
+	done        chan struct{}
+	result      scopeResult // Published by closing done, then immutable.
 }
 
-func startProcessScope(shell, dir string, grace, interval time.Duration) (*processScope, error) {
+func startProcessScope(ctx context.Context, shell, dir string, grace, interval time.Duration) (*processScope, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	cmd := supervisorCommand(grace, interval, shell)
 	if cmd == nil {
 		return nil, errors.New("session descendant custody requires the Linux daemon runtime")
 	}
 	cmd.Dir, cmd.Env = dir, os.Environ()
-	input, err := cmd.StdinPipe()
+	inputRead, input, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
+	defer inputRead.Close()
+	cmd.Stdin = inputRead
 	controlRead, controlWrite, err := os.Pipe()
 	if err != nil {
 		input.Close()
@@ -63,9 +71,17 @@ func startProcessScope(shell, dir string, grace, interval time.Duration) (*proce
 		statusWrite.Close()
 		return nil, err
 	}
+	inputRead.Close()
 	controlRead.Close()
 	statusWrite.Close()
 	scope := &processScope{cmd: cmd, input: input, control: controlWrite, done: make(chan struct{})}
+	go func() {
+		select {
+		case <-ctx.Done():
+			scope.cancel()
+		case <-scope.done:
+		}
+	}()
 	ready := make(chan error, 1)
 	observed := make(chan scopeResult, 1)
 	go func() {
@@ -79,6 +95,9 @@ func startProcessScope(shell, dir string, grace, interval time.Duration) (*proce
 			case line == "ready" && !readySent:
 				ready <- nil
 				readySent = true
+			case line == "input_closed":
+				scope.shellExited.Store(true)
+				scope.inputClosed.Store(true)
 			case line == "settled":
 				result.settled = true
 			case strings.HasPrefix(line, "error "):
@@ -119,7 +138,7 @@ func (scope *processScope) cancel() {
 		// EOF is the lifetime signal. Children never inherit this descriptor;
 		// the same signal is delivered automatically when the daemon dies.
 		_ = scope.control.Close()
-		_ = scope.input.Close()
+		_ = scope.closeInput()
 	})
 }
 
@@ -145,4 +164,9 @@ func (scope *processScope) state() string {
 	default:
 		return "running"
 	}
+}
+
+func (scope *processScope) closeInput() error {
+	scope.inputClosed.Store(true)
+	return scope.input.Close()
 }

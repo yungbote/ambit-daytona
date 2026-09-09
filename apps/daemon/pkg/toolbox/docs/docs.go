@@ -5460,6 +5460,17 @@ const docTemplate = `{
                 "cmdId"
             ],
             "properties": {
+                "inputClosed": {
+                    "type": "boolean"
+                },
+                "processScope": {
+                    "type": "string",
+                    "enum": [
+                        "running",
+                        "settled",
+                        "unavailable"
+                    ]
+                },
                 "cmdId": {
                     "type": "string"
                 },

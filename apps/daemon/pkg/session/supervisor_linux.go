@@ -45,7 +45,7 @@ func RunSupervisor(args []string) (int, bool) {
 	unix.CloseOnExec(4)
 	fail := func(err error) (int, bool) {
 		_, _ = fmt.Fprintf(status, "error %s\n", strings.ReplaceAll(err.Error(), "\n", " "))
-		if none, checkErr := reapScopeChildren(); checkErr == nil && none {
+		if none, _, checkErr := reapScopeChildren(0); checkErr == nil && none {
 			_, _ = fmt.Fprintln(status, "settled")
 		}
 		return 1, true
@@ -86,6 +86,9 @@ func RunSupervisor(args []string) (int, bool) {
 	// The supervisor owns wait4 for every descendant; exec.Cmd.Wait must not
 	// compete for this shell. No copying goroutines exist for *os.File streams.
 	defer shell.Process.Release()
+	// Only the actual shell may retain the command pipe reader. Otherwise a
+	// dead shell with live descendants could appear to accept later commands.
+	_ = os.Stdin.Close()
 	_, _ = fmt.Fprintln(status, "ready")
 	var ticker *time.Ticker
 	var tick <-chan time.Time
@@ -97,7 +100,10 @@ func RunSupervisor(args []string) (int, bool) {
 	var stoppingAt time.Time
 	reportedFailure := false
 	for {
-		noChildren, err := reapScopeChildren()
+		noChildren, shellExited, err := reapScopeChildren(shell.Process.Pid)
+		if shellExited {
+			_, _ = fmt.Fprintln(status, "input_closed")
+		}
 		if err != nil {
 			if !reportedFailure {
 				_, _ = fmt.Fprintf(status, "error child status unavailable: %v\n", err)
@@ -136,7 +142,8 @@ func supervisorCommand(grace, interval time.Duration, shell string) *exec.Cmd {
 	return exec.Command("/proc/self/exe", supervisorArgument, grace.String(), interval.String(), shell)
 }
 
-func reapScopeChildren() (bool, error) {
+func reapScopeChildren(shellPID int) (bool, bool, error) {
+	shellExited := false
 	for {
 		var status unix.WaitStatus
 		pid, err := unix.Wait4(-1, &status, unix.WNOHANG|unix.WALL, nil)
@@ -144,13 +151,16 @@ func reapScopeChildren() (bool, error) {
 			continue
 		}
 		if errors.Is(err, unix.ECHILD) {
-			return true, nil
+			return true, shellExited, nil
 		}
 		if err != nil {
-			return false, err
+			return false, shellExited, err
+		}
+		if pid == shellPID && (status.Exited() || status.Signaled()) {
+			shellExited = true
 		}
 		if pid == 0 {
-			return false, nil
+			return false, shellExited, nil
 		}
 	}
 }
