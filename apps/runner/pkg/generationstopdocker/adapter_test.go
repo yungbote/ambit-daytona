@@ -129,6 +129,80 @@ func TestAdapterRejectsPartialRetiredOrUnknownRuntimeObservation(t *testing.T) {
 	}
 }
 
+func TestAdapterDoesNotAttributePreviousTerminalOutcomeToLiveExecution(t *testing.T) {
+	for _, paused := range []bool{false, true} {
+		t.Run(map[bool]string{false: "running", true: "paused"}[paused], func(t *testing.T) {
+			api := newFakeDockerAPI()
+			api.inspect.State.StartedAt = "2026-08-24T00:02:00.123456789Z"
+			api.inspect.State.FinishedAt = "2026-08-24T00:01:00.987654321Z"
+			api.inspect.State.ExitCode = 137
+			api.inspect.State.OOMKilled = true
+			api.inspect.State.Paused = paused
+			if paused {
+				api.inspect.State.Status = containertypes.StatePaused
+			}
+			adapter, _ := New(api)
+			observed, err := adapter.InspectGeneration(context.Background(), "sandbox-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if observed.Generation.ExecutionStartedAt != "2026-08-24T00:02:00.123Z" ||
+				observed.Generation.ExecutionFinishedAt != "" || observed.Generation.ExitCode != 0 || observed.Generation.OOMKilled ||
+				observed.Generation.RestartCount != 0 || !observed.State.Running || observed.State.Paused != paused {
+				t.Fatalf("previous outcome was attributed to the live epoch: %#v", observed)
+			}
+			if api.inspect.State.FinishedAt != "2026-08-24T00:01:00.987654321Z" || api.stopCalls != 0 {
+				t.Fatal("read-only observation mutated the provider or its source data")
+			}
+		})
+	}
+}
+
+func TestAdapterPreservesStoppedOutcomeAndRejectsInvalidTerminalTime(t *testing.T) {
+	api := newFakeDockerAPI()
+	api.makeExited()
+	api.inspect.State.ExitCode = 137
+	api.inspect.State.OOMKilled = true
+	adapter, _ := New(api)
+	observed, err := adapter.InspectGeneration(context.Background(), "sandbox-1")
+	if err != nil || observed.Generation.ExecutionFinishedAt != "2026-08-24T00:01:00.000Z" ||
+		observed.Generation.ExitCode != 137 || !observed.Generation.OOMKilled {
+		t.Fatalf("stopped outcome was changed: %#v %v", observed, err)
+	}
+	api.inspect.State.StartedAt = "2026-08-24T00:02:00Z"
+	observed, err = adapter.InspectGeneration(context.Background(), "sandbox-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := "sha256:" + strings.Repeat("b", 64)
+	if err := generationstop.ValidateStopAuthority(generationstop.StopAuthority{
+		OperationID: "00000000-0000-4000-8000-000000000006",
+		ReceiptRef:  "ambit.stopped-generation-receipt:v1:" + digest, ReceiptDigest: digest,
+		Fence: observed.Fence,
+		TerminalGeneration: generationstop.TerminalGeneration{
+			ExpectedGeneration:  observed.Generation.ExpectedGeneration,
+			ExecutionFinishedAt: observed.Generation.ExecutionFinishedAt,
+			ExitCode:            observed.Generation.ExitCode, OOMKilled: observed.Generation.OOMKilled,
+		},
+	}); err == nil {
+		t.Fatal("invalid terminal finish time was admitted after normalization")
+	}
+}
+
+func TestAdapterPreservesFinishedAttemptWhileDockerIsRestarting(t *testing.T) {
+	api := newFakeDockerAPI()
+	api.inspect.State.Status = containertypes.StateRestarting
+	api.inspect.State.Restarting = true
+	api.inspect.State.Pid = 0
+	api.inspect.State.FinishedAt = "2026-08-24T00:01:00Z"
+	api.inspect.State.ExitCode = 42
+	adapter, _ := New(api)
+	observed, err := adapter.InspectGeneration(context.Background(), "sandbox-1")
+	if err != nil || observed.Generation.ExecutionFinishedAt != "2026-08-24T00:01:00.000Z" || observed.Generation.ExitCode != 42 {
+		t.Fatalf("restarting attempt lost its actual terminal outcome: %#v %v", observed, err)
+	}
+}
+
 type fakeDockerAPI struct {
 	inspect   containertypes.InspectResponse
 	stopCalls int

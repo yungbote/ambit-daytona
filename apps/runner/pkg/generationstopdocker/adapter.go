@@ -162,7 +162,14 @@ func observation(
 	}
 	state := inspect.State
 	finishedAt := state.FinishedAt
-	if finishedAt == "0001-01-01T00:00:00Z" || strings.HasPrefix(finishedAt, "0001-01-01T00:00:00.") {
+	exitCode, oomKilled := state.ExitCode, state.OOMKilled
+	// Docker retains the previous execution's FinishedAt after an explicit
+	// start, even though StartedAt now names the new execution. Terminal
+	// outcome fields do not describe a currently live (including paused) run.
+	// A restarting state still describes a finished attempt awaiting restart.
+	if state.Running && !state.Restarting {
+		finishedAt, exitCode, oomKilled = "", 0, false
+	} else if finishedAt == "0001-01-01T00:00:00Z" || strings.HasPrefix(finishedAt, "0001-01-01T00:00:00.") {
 		finishedAt = ""
 	}
 	return generationstop.CurrentGenerationObservation{
@@ -189,8 +196,8 @@ func observation(
 				RestartCount:       inspect.RestartCount,
 			},
 			ExecutionFinishedAt: canonicalInstantMillis(finishedAt),
-			ExitCode:            state.ExitCode,
-			OOMKilled:           state.OOMKilled,
+			ExitCode:            exitCode,
+			OOMKilled:           oomKilled,
 		},
 		State: generationstop.RuntimeState{
 			Status:     state.Status,
