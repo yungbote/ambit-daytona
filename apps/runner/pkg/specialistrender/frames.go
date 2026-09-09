@@ -487,15 +487,33 @@ func closeProviderOutputReader(reader io.Closer) error {
 }
 
 func readFrameLine(reader *bufio.Reader) ([]byte, error) {
-	line, err := reader.ReadSlice('\n')
-	if err != nil {
-		if errors.Is(err, bufio.ErrBufferFull) {
+	// A Docker attachment may supply a smaller reader than the protocol's
+	// frame bound. Enforce the wire bound independently of buffering capacity.
+	var pending []byte
+	var line []byte
+	for {
+		chunk, err := reader.ReadSlice('\n')
+		if len(pending)+len(chunk) > MaximumFrameBytes {
 			return nil, invalidf("provider frame exceeds its bound")
 		}
-		if errors.Is(err, io.EOF) {
-			return nil, invalidf("provider stream closed before its terminal frame")
+		if pending == nil && err == nil {
+			line = chunk
+			break
 		}
-		return nil, invalidf("read provider stream: %v", err)
+		if err != nil && !errors.Is(err, bufio.ErrBufferFull) {
+			if errors.Is(err, io.EOF) {
+				return nil, invalidf("provider stream closed before its terminal frame")
+			}
+			return nil, invalidf("read provider stream: %v", err)
+		}
+		if pending == nil {
+			pending = make([]byte, 0, MaximumFrameBytes)
+		}
+		pending = append(pending, chunk...)
+		if err == nil {
+			line = pending
+			break
+		}
 	}
 	if len(line) == 1 || len(line) > MaximumFrameBytes || bytes.IndexByte(line, '\r') >= 0 {
 		return nil, invalidf("provider frame delimiter or size is invalid")
