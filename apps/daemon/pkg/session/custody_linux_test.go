@@ -102,6 +102,34 @@ func runCustodyFixture(args []string) bool {
 		if scope != nil || startErr == nil || !strings.Contains(startErr.Error(), "too many open files") || after != before {
 			panic(fmt.Sprintf("unexpected startup/FD custody: scope=%v error=%v before=%d after=%d", scope, startErr, before, after))
 		}
+	case "exit-now":
+	case "reap-labels":
+		// Isolated: reapScopeChildren owns wait4 for the whole process.
+		if none, shellExited, err := reapScopeChildren(0); err != nil || !none || shellExited {
+			panic(fmt.Sprintf("an idle scope was mislabeled: none=%v shellExited=%v error=%v", none, shellExited, err))
+		}
+		child := exec.Command("/proc/self/exe", "--custody-fixture", "exit-now", path)
+		if err := child.Start(); err != nil {
+			panic(err)
+		}
+		shellPID := child.Process.Pid
+		_ = child.Process.Release()
+		for {
+			none, shellExited, err := reapScopeChildren(0)
+			if err != nil {
+				panic(err)
+			}
+			if shellExited {
+				panic("a scope without a shell PID reported a shell exit")
+			}
+			if none {
+				break
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+		if none, shellExited, err := reapScopeChildren(shellPID); err != nil || !none || shellExited {
+			panic(fmt.Sprintf("an already-reaped shell was re-reported: none=%v shellExited=%v error=%v", none, shellExited, err))
+		}
 	case "owner":
 		svc, err := NewSessionService(slog.New(slog.NewTextHandler(io.Discard, nil)), filepath.Join(filepath.Dir(path), "owner-state"), 100*time.Millisecond, 10*time.Millisecond)
 		if err != nil {
@@ -665,6 +693,16 @@ func TestFailedPipeAllocationClosesEveryOwnedDescriptor(t *testing.T) {
 	child := exec.Command("/proc/self/exe", "--custody-fixture", "fd-pressure", "unused")
 	if output, err := child.CombinedOutput(); err != nil {
 		t.Fatalf("isolated descriptor-pressure check: %v: %s", err, output)
+	}
+}
+
+// wait4 reports a zero PID when no child changed state, and its status word
+// then describes nothing. A scope with no shell PID to compare against must not
+// read that idle answer as its shell exiting.
+func TestIdleReapDoesNotReportAShellExit(t *testing.T) {
+	child := exec.Command("/proc/self/exe", "--custody-fixture", "reap-labels", "unused")
+	if output, err := child.CombinedOutput(); err != nil {
+		t.Fatalf("isolated reap-labelling check: %v: %s", err, output)
 	}
 }
 

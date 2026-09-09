@@ -166,11 +166,14 @@ func reapScopeChildren(shellPID int) (bool, bool, error) {
 		if err != nil {
 			return false, shellExited, err
 		}
-		if pid == shellPID && (status.Exited() || status.Signaled()) {
-			shellExited = true
-		}
+		// A zero PID means no child changed state, so `status` describes
+		// nothing. Reading it first labelled that idle answer as the shell's
+		// own exit whenever this scope has no shell PID to compare against.
 		if pid == 0 {
 			return false, shellExited, nil
+		}
+		if pid == shellPID && (status.Exited() || status.Signaled()) {
+			shellExited = true
 		}
 	}
 }
