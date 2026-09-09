@@ -16,6 +16,8 @@
 
 export interface SessionExecuteResponse {
     'cmdId': string;
+    'inputClosed'?: boolean;
+    'processScope'?: 'running' | 'settled' | 'unavailable';
     'exitCode'?: number;
     'output'?: string;
     'stderr'?: string;

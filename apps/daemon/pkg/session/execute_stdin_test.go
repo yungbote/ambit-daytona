@@ -124,7 +124,7 @@ func TestAsyncCommandBlocksUntilSendInput(t *testing.T) {
 
 	expectRunning(t, svc, sessionID, exec.CommandId, 300*time.Millisecond)
 
-	if err := svc.SendInput(sessionID, exec.CommandId, "hello from test"); err != nil {
+	if err := svc.SendInput(context.Background(), sessionID, exec.CommandId, "hello from test"); err != nil {
 		t.Fatalf("send input: %v", err)
 	}
 

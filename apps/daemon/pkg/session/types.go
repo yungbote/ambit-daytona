@@ -5,20 +5,20 @@ package session
 
 import (
 	"context"
-	"io"
-	"os/exec"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 
 	cmap "github.com/orcaman/concurrent-map/v2"
 )
 
 type session struct {
-	id          string
-	cmd         *exec.Cmd
-	stdinWriter io.Writer
-	commands    cmap.ConcurrentMap[string, *Command]
-	ctx         context.Context
-	cancel      context.CancelFunc
+	mu       sync.Mutex
+	scope    atomic.Pointer[processScope]
+	id       string
+	commands cmap.ConcurrentMap[string, *Command]
+	ctx      context.Context
+	cancel   context.CancelFunc
 }
 
 func (s *session) Dir(configDir string) string {
@@ -41,14 +41,18 @@ func (c *Command) InputFilePath(sessionDir string) string {
 }
 
 type Session struct {
-	SessionId string     `json:"sessionId" validate:"required"`
-	Commands  []*Command `json:"commands" validate:"required"`
+	SessionId    string     `json:"sessionId" validate:"required"`
+	ProcessScope string     `json:"processScope" validate:"required"`
+	InputClosed  bool       `json:"inputClosed"`
+	Commands     []*Command `json:"commands" validate:"required"`
 }
 
 type SessionExecute struct {
-	CommandId string  `json:"cmdId" validate:"optional"`
-	Output    *string `json:"output" validate:"optional"`
-	Stdout    *string `json:"stdout" validate:"optional"`
-	Stderr    *string `json:"stderr" validate:"optional"`
-	ExitCode  *int    `json:"exitCode" validate:"optional"`
+	ProcessScope string  `json:"processScope,omitempty" validate:"optional"`
+	InputClosed  bool    `json:"inputClosed"`
+	CommandId    string  `json:"cmdId" validate:"optional"`
+	Output       *string `json:"output" validate:"optional"`
+	Stdout       *string `json:"stdout" validate:"optional"`
+	Stderr       *string `json:"stderr" validate:"optional"`
+	ExitCode     *int    `json:"exitCode" validate:"optional"`
 }

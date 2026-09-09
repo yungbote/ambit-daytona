@@ -36,6 +36,9 @@ func main() {
 }
 
 func run() int {
+	if code, handled := session.RunSupervisor(os.Args[1:]); handled {
+		return code
+	}
 	logLevel := log.ParseLogLevel(os.Getenv("LOG_LEVEL"))
 
 	// Create the console handler with tint for colored output
@@ -137,7 +140,7 @@ func run() int {
 	// Execute passed arguments as command in entrypoint session
 	if len(args) > 0 {
 		// Create entrypoint session
-		err = sessionService.Create(util.EntrypointSessionID, false)
+		err = sessionService.CreateEntrypoint()
 		if err != nil {
 			logger.Error("Failed to create entrypoint session", "error", err)
 			return 2

@@ -10,18 +10,32 @@ import (
 )
 
 func (s *SessionService) Get(sessionId string) (*Session, error) {
-	_, ok := s.sessions.Get(sessionId)
+	owned, ok := s.sessions.Get(sessionId)
 	if !ok {
 		return nil, common_errors.NewNotFoundError(errors.New("session not found"))
 	}
 
-	commands, err := s.getSessionCommands(sessionId)
+	if current, exists := s.sessions.Get(sessionId); !exists || current != owned {
+		return nil, common_errors.NewConflictError(errors.New("session owner changed during observation"))
+	}
+	commands, err := s.getSessionCommandsFor(owned)
 	if err != nil {
 		return nil, err
 	}
 
+	if current, exists := s.sessions.Get(sessionId); !exists || current != owned {
+		return nil, common_errors.NewConflictError(errors.New("session owner changed during observation"))
+	}
+
+	scopeState := "unavailable"
+	scope := owned.scope.Load()
+	if scope != nil {
+		scopeState = scope.state()
+	}
 	return &Session{
-		SessionId: sessionId,
-		Commands:  commands,
+		SessionId:    sessionId,
+		ProcessScope: scopeState,
+		InputClosed:  owned.ctx.Err() != nil || scope == nil || scope.inputClosed.Load(),
+		Commands:     commands,
 	}, nil
 }

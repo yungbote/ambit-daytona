@@ -1170,6 +1170,14 @@ definitions:
     type: object
   Session:
     properties:
+      inputClosed:
+        type: boolean
+      processScope:
+        type: string
+        enum:
+          - running
+          - settled
+          - unavailable
       commands:
         items:
           $ref: '#/definitions/Command'
@@ -1195,6 +1203,8 @@ definitions:
     type: object
   SessionExecuteRequest:
     properties:
+      closeInputAfterCommand:
+        type: boolean
       async:
         type: boolean
       command:
@@ -1208,6 +1218,14 @@ definitions:
     type: object
   SessionExecuteResponse:
     properties:
+      inputClosed:
+        type: boolean
+      processScope:
+        type: string
+        enum:
+          - running
+          - settled
+          - unavailable
       cmdId:
         type: string
       exitCode:

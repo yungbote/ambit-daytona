@@ -64,7 +64,7 @@ func (s *SessionController) SessionExecuteCommand(c *gin.Context) {
 	isCombinedOutput := session.IsCombinedOutput(sdkVersion, versionComparison, c.Request.Header)
 	skipServerDemux := session.SkipServerDemux(sdkVersion)
 
-	executeResult, err := s.sessionService.Execute(sessionId, util.EmptyCommandID, request.Command, request.RunAsync, isCombinedOutput, skipServerDemux, request.SuppressInputEcho)
+	executeResult, err := s.sessionService.Execute(sessionId, util.EmptyCommandID, request.Command, request.RunAsync, isCombinedOutput, skipServerDemux, request.SuppressInputEcho, request.CloseInputAfterCommand)
 	if err != nil {
 		c.Error(fmt.Errorf("failed to execute command: %w", err))
 		return
@@ -72,16 +72,20 @@ func (s *SessionController) SessionExecuteCommand(c *gin.Context) {
 
 	if request.RunAsync {
 		c.JSON(http.StatusAccepted, &SessionExecuteResponse{
-			CommandId: executeResult.CommandId,
+			CommandId:    executeResult.CommandId,
+			ProcessScope: executeResult.ProcessScope,
+			InputClosed:  executeResult.InputClosed,
 		})
 		return
 	}
 
 	c.JSON(http.StatusOK, &SessionExecuteResponse{
-		CommandId: executeResult.CommandId,
-		Output:    executeResult.Output,
-		Stdout:    executeResult.Stdout,
-		Stderr:    executeResult.Stderr,
-		ExitCode:  executeResult.ExitCode,
+		CommandId:    executeResult.CommandId,
+		ProcessScope: executeResult.ProcessScope,
+		InputClosed:  executeResult.InputClosed,
+		Output:       executeResult.Output,
+		Stdout:       executeResult.Stdout,
+		Stderr:       executeResult.Stderr,
+		ExitCode:     executeResult.ExitCode,
 	})
 }

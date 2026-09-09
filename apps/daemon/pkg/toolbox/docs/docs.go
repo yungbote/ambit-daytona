@@ -5390,6 +5390,17 @@ const docTemplate = `{
                 "sessionId"
             ],
             "properties": {
+                "inputClosed": {
+                    "type": "boolean"
+                },
+                "processScope": {
+                    "type": "string",
+                    "enum": [
+                        "running",
+                        "settled",
+                        "unavailable"
+                    ]
+                },
                 "commands": {
                     "type": "array",
                     "items": {
@@ -5426,6 +5437,9 @@ const docTemplate = `{
                 "command"
             ],
             "properties": {
+                "closeInputAfterCommand": {
+                    "type": "boolean"
+                },
                 "async": {
                     "type": "boolean"
                 },
@@ -5446,6 +5460,17 @@ const docTemplate = `{
                 "cmdId"
             ],
             "properties": {
+                "inputClosed": {
+                    "type": "boolean"
+                },
+                "processScope": {
+                    "type": "string",
+                    "enum": [
+                        "running",
+                        "settled",
+                        "unavailable"
+                    ]
+                },
                 "cmdId": {
                     "type": "string"
                 },

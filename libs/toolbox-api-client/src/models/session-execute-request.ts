@@ -17,6 +17,7 @@
 export interface SessionExecuteRequest {
     'async'?: boolean;
     'command': string;
+    'closeInputAfterCommand'?: boolean;
     'runAsync'?: boolean;
     'suppressInputEcho'?: boolean;
 }

@@ -20,10 +20,34 @@ import (
 	"github.com/daytonaio/common-go/pkg/log"
 )
 
-func (s *SessionService) Execute(sessionId, cmdId, cmd string, async, isCombinedOutput, skipServerDemux, suppressInputEcho bool) (*SessionExecute, error) {
+func (s *SessionService) Execute(sessionId, cmdId, cmd string, async, isCombinedOutput, skipServerDemux, suppressInputEcho bool, closeInputAfterCommand ...bool) (observation *SessionExecute, executionErr error) {
 	session, ok := s.sessions.Get(sessionId)
 	if !ok {
 		return nil, common_errors.NewNotFoundError(errors.New("session not found"))
+	}
+
+	var scope *processScope
+	defer func() {
+		if observation == nil {
+			return
+		}
+		observation.ProcessScope = "unavailable"
+		if scope != nil {
+			observation.ProcessScope = scope.state()
+		}
+		observation.InputClosed = session.ctx.Err() != nil || scope == nil || scope.inputClosed.Load()
+	}()
+
+	session.mu.Lock()
+	scope = session.scope.Load()
+	locked := true
+	defer func() {
+		if locked {
+			session.mu.Unlock()
+		}
+	}()
+	if session.ctx.Err() != nil || scope == nil || scope.inputClosed.Load() || scope.state() != "running" {
+		return nil, common_errors.NewGoneError(errors.New("session is no longer accepting commands"))
 	}
 
 	if cmdId == util.EmptyCommandID {
@@ -60,9 +84,9 @@ func (s *SessionService) Execute(sessionId, cmdId, cmd string, async, isCombined
 		return nil, common_errors.NewBadRequestError(fmt.Errorf("failed to write command file: %w", err))
 	}
 
-	stdinHolder := `: > "$ip" &`
+	stdinRedirect := `< /dev/null`
 	if async {
-		stdinHolder = `tail -f /dev/null > "$ip" &`
+		stdinRedirect = `<> "$ip"`
 	}
 
 	cmdToExec := fmt.Sprintf(cmdWrapperFormat+"\n",
@@ -71,15 +95,23 @@ func (s *SessionService) Execute(sessionId, cmdId, cmd string, async, isCombined
 		command.InputFilePath(session.Dir(s.configDir)), // %q  -> input
 		toOctalEscapes(log.STDOUT_PREFIX),               // %s  -> stdout prefix
 		toOctalEscapes(log.STDERR_PREFIX),               // %s  -> stderr prefix
-		stdinHolder,                                     // %s  -> stdin behavior
 		cmdFilePath,                                     // %q  -> command file path
+		stdinRedirect,                                   // %s  -> stdin behavior
 		exitCodeFilePath,                                // %q
 	)
 
-	_, err = session.stdinWriter.Write([]byte(cmdToExec))
+	_, err = scope.input.Write([]byte(cmdToExec))
 	if err != nil {
 		return nil, common_errors.NewBadRequestError(fmt.Errorf("failed to write command: %w", err))
 	}
+
+	if len(closeInputAfterCommand) > 0 && closeInputAfterCommand[0] {
+		if err := scope.closeInput(); err != nil {
+			return nil, common_errors.NewBadRequestError(fmt.Errorf("command accepted but closing session input failed: %w", err))
+		}
+	}
+	session.mu.Unlock()
+	locked = false
 
 	if async {
 		return &SessionExecute{
@@ -90,18 +122,24 @@ func (s *SessionService) Execute(sessionId, cmdId, cmd string, async, isCombined
 	for {
 		select {
 		case <-session.ctx.Done():
-			command, ok := session.commands.Get(cmdId)
+			_, ok := session.commands.Get(cmdId)
 			if !ok {
 				return nil, common_errors.NewBadRequestError(errors.New("command not found"))
 			}
-
-			command.ExitCode = util.Pointer(1)
 
 			return nil, common_errors.NewBadRequestError(errors.New("session cancelled"))
 		default:
 			exitCode, err := os.ReadFile(exitCodeFilePath)
 			if err != nil {
 				if os.IsNotExist(err) {
+					if scope.shellExited.Load() || scope.state() != "running" {
+						// Recheck after the terminal observation: the shell may have
+						// published its result between the first read and its exit.
+						if _, err := os.Stat(exitCodeFilePath); err == nil {
+							continue
+						}
+						return nil, common_errors.NewBadRequestError(errors.New("session shell ended without a command result"))
+					}
 					time.Sleep(50 * time.Millisecond)
 					continue
 				}
@@ -113,11 +151,10 @@ func (s *SessionService) Execute(sessionId, cmdId, cmd string, async, isCombined
 				return nil, common_errors.NewBadRequestError(fmt.Errorf("failed to convert exit code to int: %w", err))
 			}
 
-			command, ok := session.commands.Get(cmdId)
+			_, ok := session.commands.Get(cmdId)
 			if !ok {
 				return nil, common_errors.NewBadRequestError(errors.New("command not found"))
 			}
-			command.ExitCode = &exitCodeInt
 
 			logBytes, err := os.ReadFile(logFilePath)
 			if err != nil {
@@ -212,16 +249,11 @@ var cmdWrapperFormat string = `
 	( while IFS= read -r line || [ -n "$line" ]; do printf '%s%%s\n' "$line"; done < "$sp" ) >> "$log" & r1=$!
 	( while IFS= read -r line || [ -n "$line" ]; do printf '%s%%s\n' "$line"; done < "$ep" ) >> "$log" & r2=$!
 
-	# Sync commands should see EOF immediately; async commands keep stdin open for SendInput.
-	%s
-	ip_pid=$!
-
 	# Run your command from file (avoids heredoc parsing issues with pipe-fed shells)
-	{ . %q; } < "$ip" > "$sp" 2> "$ep"
+	# Sync input is /dev/null. Async input opens the FIFO read/write, retaining
+	# its writer until this command ends without a racing holder subprocess.
+	{ . %q; } %s > "$sp" 2> "$ep"
 	_ec=$?
-
-	# Stop the stdin holder so it doesn't outlive the command
-	kill "$ip_pid" 2>/dev/null; wait "$ip_pid" 2>/dev/null
 
 	# drain labelers (cleanup via trap)
 	wait "$r1" "$r2"

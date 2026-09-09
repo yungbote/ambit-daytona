@@ -19,6 +19,8 @@ import type { Command } from './command';
 
 export interface Session {
     'commands': Array<Command>;
+    'inputClosed'?: boolean;
+    'processScope'?: 'running' | 'settled' | 'unavailable';
     'sessionId': string;
 }
 

@@ -10,10 +10,11 @@ type CreateSessionRequest struct {
 } //	@name	CreateSessionRequest
 
 type SessionExecuteRequest struct {
-	Command           string `json:"command" validate:"required"`
-	RunAsync          bool   `json:"runAsync" validate:"optional"`
-	Async             bool   `json:"async" validate:"optional"`
-	SuppressInputEcho bool   `json:"suppressInputEcho" validate:"optional"`
+	CloseInputAfterCommand bool   `json:"closeInputAfterCommand" validate:"optional"`
+	Command                string `json:"command" validate:"required"`
+	RunAsync               bool   `json:"runAsync" validate:"optional"`
+	Async                  bool   `json:"async" validate:"optional"`
+	SuppressInputEcho      bool   `json:"suppressInputEcho" validate:"optional"`
 } //	@name	SessionExecuteRequest
 
 type SessionSendInputRequest struct {
@@ -21,11 +22,13 @@ type SessionSendInputRequest struct {
 } //	@name	SessionSendInputRequest
 
 type SessionExecuteResponse struct {
-	CommandId string  `json:"cmdId" validate:"required"`
-	Output    *string `json:"output" validate:"optional"`
-	Stdout    *string `json:"stdout" validate:"optional"`
-	Stderr    *string `json:"stderr" validate:"optional"`
-	ExitCode  *int    `json:"exitCode" validate:"optional"`
+	ProcessScope string  `json:"processScope,omitempty" validate:"optional" enums:"running,settled,unavailable"`
+	InputClosed  bool    `json:"inputClosed"`
+	CommandId    string  `json:"cmdId" validate:"required"`
+	Output       *string `json:"output" validate:"optional"`
+	Stdout       *string `json:"stdout" validate:"optional"`
+	Stderr       *string `json:"stderr" validate:"optional"`
+	ExitCode     *int    `json:"exitCode" validate:"optional"`
 } //	@name	SessionExecuteResponse
 
 type SessionCommandLogsResponse struct {
@@ -41,8 +44,10 @@ type CommandDTO struct {
 } //	@name	Command
 
 type SessionDTO struct {
-	SessionId string        `json:"sessionId" validate:"required"`
-	Commands  []*CommandDTO `json:"commands" validate:"required"`
+	ProcessScope string        `json:"processScope,omitempty" validate:"optional" enums:"running,settled,unavailable"`
+	InputClosed  bool          `json:"inputClosed"`
+	SessionId    string        `json:"sessionId" validate:"required"`
+	Commands     []*CommandDTO `json:"commands" validate:"required"`
 } //	@name	Session
 
 func CommandToDTO(c *session.Command) *CommandDTO {
@@ -60,7 +65,9 @@ func SessionToDTO(s *session.Session) *SessionDTO {
 	}
 
 	return &SessionDTO{
-		SessionId: s.SessionId,
-		Commands:  commands,
+		SessionId:    s.SessionId,
+		ProcessScope: s.ProcessScope,
+		InputClosed:  s.InputClosed,
+		Commands:     commands,
 	}
 }
