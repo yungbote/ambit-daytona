@@ -10,6 +10,10 @@ import { plainToInstance } from 'class-transformer'
 import { validateSync } from 'class-validator'
 import { Configuration, SandboxApiAxiosParamCreator } from '@daytona/runner-api-client'
 import {
+  Configuration as HostConfiguration,
+  SandboxApiAxiosParamCreator as HostSandboxApiAxiosParamCreator,
+} from '@daytona/api-client'
+import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
@@ -36,6 +40,8 @@ import {
   WorkingTreeInventoryReceiptDto,
   WorkingTreeInventoryPageRequestDto,
   WorkingTreeInventoryPageDto,
+  WorkingTreeInventoryRangeRequestDto,
+  WorkingTreeInventoryRangeDto,
   MAXIMUM_WORKING_TREE_INVENTORY_PAGE_BYTES,
   MAXIMUM_WORKING_TREE_INVENTORY_PAGE_ENTRIES,
   MAXIMUM_WORKING_TREE_INVENTORY_INDEX_BYTES,
@@ -79,6 +85,7 @@ describe(WorkingCopyCaptureService.name, () => {
       stoppedWorkingCopyDirectoryRoster: jest.fn(),
       prepareWorkingTreeInventory: jest.fn(),
       readWorkingTreeInventoryPage: jest.fn(),
+      readWorkingTreeInventoryRange: jest.fn(),
       deleteWorkingTreeInventory: jest.fn(),
       observeWorkingCopyCapture: jest.fn(),
       readWorkingCopyCapture: jest.fn(),
@@ -1019,14 +1026,195 @@ describe(WorkingCopyCaptureService.name, () => {
     const prepared = await client.prepareWorkingTreeInventory('sandbox/encoded', receipt.request, { signal })
     const pageRequest = { request: receipt.request, providerResourceId: receipt.providerResourceId, pageIndex: 0 }
     const page = await client.readWorkingTreeInventoryPage('sandbox/encoded', pageRequest, { signal })
+    const rangeRequest = {
+      request: receipt.request,
+      providerResourceId: receipt.providerResourceId,
+      inventoryDigest: receipt.inventoryDigest,
+      offset: 0,
+      maximumBytes: MAXIMUM_USER_FILE_READ_BYTES,
+    }
+    const range = await client.readWorkingTreeInventoryRange('sandbox/encoded', rangeRequest, { signal })
     const deleted = await client.deleteWorkingTreeInventory('sandbox/encoded', receipt.request, { signal })
     expect(prepared.url).toBe('/sandboxes/sandbox%2Fencoded/working-copy-captures/stopped-working-tree-inventories')
     expect(page.url).toBe(prepared.url + '/read')
+    expect(range.url).toBe(prepared.url + '/read-range')
     expect(deleted.url).toBe(prepared.url + '/delete')
     expect(JSON.parse(prepared.options.data as string)).toEqual(receipt.request)
     expect(JSON.parse(page.options.data as string)).toEqual(pageRequest)
     expect(page.options.signal).toBe(signal)
+    expect(JSON.parse(range.options.data as string)).toEqual(rangeRequest)
+    expect(range.options.signal).toBe(signal)
+    expect(range.options.headers).toMatchObject({ Authorization: 'Bearer token' })
     expect(prepared.options.headers).toMatchObject({ Authorization: 'Bearer token' })
+  })
+
+  function inventoryRangeFixture(): {
+    request: WorkingTreeInventoryRangeRequestDto
+    response: WorkingTreeInventoryRangeDto
+  } {
+    const { receipt } = inventoryFixture()
+    const request = {
+      request: receipt.request,
+      providerResourceId: receipt.providerResourceId,
+      inventoryDigest: receipt.inventoryDigest,
+      offset: 2,
+      maximumBytes: 3,
+    }
+    return {
+      request,
+      response: {
+        providerResourceId: receipt.providerResourceId,
+        inventoryDigest: receipt.inventoryDigest,
+        offset: 2,
+        byteLength: 3,
+        totalByteLength: receipt.bytePack.byteLength,
+        eof: false,
+        bytesBase64: Buffer.from('abc').toString('base64'),
+      },
+    }
+  }
+
+  it('forwards bounded byte reads with owner authorization and exact response validation', async () => {
+    const { request, response } = inventoryRangeFixture()
+    const signal = new AbortController().signal
+    adapter.readWorkingTreeInventoryRange.mockResolvedValue(response)
+    await expect(service.readInventoryRange('daytona-org-1', 'friendly-name', request, signal)).resolves.toEqual(
+      response,
+    )
+    expect(adapter.readWorkingTreeInventoryRange).toHaveBeenCalledWith('sandbox-1', request, signal)
+    expect(validateSync(plainToInstance(WorkingTreeInventoryRangeRequestDto, request))).toEqual([])
+    expect(validateSync(plainToInstance(WorkingTreeInventoryRangeDto, response))).toEqual([])
+    request.offset = response.totalByteLength
+    const eof = { ...response, offset: request.offset, byteLength: 0, bytesBase64: '', eof: true }
+    adapter.readWorkingTreeInventoryRange.mockResolvedValue(eof)
+    await expect(service.readInventoryRange('daytona-org-1', 'sandbox-1', request)).resolves.toEqual(eof)
+    expect(adapter.captureWorkingCopy).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [
+      'owner',
+      (r: WorkingTreeInventoryRangeRequestDto) => {
+        r.request.generation.owner.tenantId = OTHER_ID
+        r.providerResourceId = `daytona-working-tree-inventory:v1:sha256:${createHash('sha256').update(JSON.stringify(r.request)).digest('hex')}`
+      },
+      ForbiddenException,
+    ],
+    [
+      'resource',
+      (r: WorkingTreeInventoryRangeRequestDto) => {
+        r.providerResourceId += 'x'
+      },
+      BadRequestException,
+    ],
+    [
+      'negative offset',
+      (r: WorkingTreeInventoryRangeRequestDto) => {
+        r.offset = -1
+      },
+      BadRequestException,
+    ],
+    [
+      'fractional offset',
+      (r: WorkingTreeInventoryRangeRequestDto) => {
+        r.offset = 0.5
+      },
+      BadRequestException,
+    ],
+    [
+      'zero bound',
+      (r: WorkingTreeInventoryRangeRequestDto) => {
+        r.maximumBytes = 0
+      },
+      BadRequestException,
+    ],
+    [
+      'oversize bound',
+      (r: WorkingTreeInventoryRangeRequestDto) => {
+        r.maximumBytes = MAXIMUM_USER_FILE_READ_BYTES + 1
+      },
+      BadRequestException,
+    ],
+  ])('rejects an invalid range %s before the Runner', async (_name, mutate, exception) => {
+    const { request } = inventoryRangeFixture()
+    mutate(request)
+    await expect(service.readInventoryRange('daytona-org-1', 'sandbox-1', request)).rejects.toBeInstanceOf(exception)
+    expect(adapter.readWorkingTreeInventoryRange).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [
+      'resource',
+      (r: WorkingTreeInventoryRangeDto) => {
+        r.providerResourceId += 'x'
+      },
+    ],
+    [
+      'digest',
+      (r: WorkingTreeInventoryRangeDto) => {
+        r.inventoryDigest = `sha256:${'0'.repeat(64)}`
+      },
+    ],
+    [
+      'offset',
+      (r: WorkingTreeInventoryRangeDto) => {
+        r.offset++
+      },
+    ],
+    [
+      'size',
+      (r: WorkingTreeInventoryRangeDto) => {
+        r.byteLength--
+      },
+    ],
+    [
+      'total size',
+      (r: WorkingTreeInventoryRangeDto) => {
+        r.totalByteLength = -1
+      },
+    ],
+    [
+      'truncation',
+      (r: WorkingTreeInventoryRangeDto) => {
+        r.bytesBase64 = 'YQ=='
+      },
+    ],
+    [
+      'noncanonical base64',
+      (r: WorkingTreeInventoryRangeDto) => {
+        r.bytesBase64 += '\n'
+      },
+    ],
+    [
+      'EOF',
+      (r: WorkingTreeInventoryRangeDto) => {
+        r.eof = true
+      },
+    ],
+  ])('rejects a changed Runner range %s', async (_name, mutate) => {
+    const { request, response } = inventoryRangeFixture()
+    mutate(response)
+    adapter.readWorkingTreeInventoryRange.mockResolvedValue(response)
+    await expect(service.readInventoryRange('daytona-org-1', 'sandbox-1', request)).rejects.toBeInstanceOf(
+      ConflictException,
+    )
+  })
+
+  it('publishes matching authenticated inventory operations in the host client', async () => {
+    const { receipt } = inventoryFixture()
+    const { request } = inventoryRangeFixture()
+    request.request.generation.stopAuthority.terminalGeneration.executionStartedAt = '2026-08-23T00:01:00.123456789Z'
+    const signal = new AbortController().signal
+    const client = HostSandboxApiAxiosParamCreator(new HostConfiguration({ accessToken: 'token' }))
+    const prepared = await client.sandboxPrepareInventory('sandbox/encoded', receipt.request, 'org', { signal })
+    const range = await client.sandboxReadInventoryRange('sandbox/encoded', request, 'org', { signal })
+    const deleted = await client.sandboxDeleteInventory('sandbox/encoded', receipt.request, 'org', { signal })
+    expect(prepared.url).toBe('/sandbox/sandbox%2Fencoded/working-copy-captures/stopped-working-tree-inventories')
+    expect(range.url).toBe(prepared.url + '/read-range')
+    expect(deleted.url).toBe(prepared.url + '/delete')
+    expect(JSON.parse(range.options.data as string)).toEqual(request)
+    expect(range.options.signal).toBe(signal)
+    expect(range.options.headers).toMatchObject({ Authorization: 'Bearer token', 'X-Daytona-Organization-ID': 'org' })
   })
 
   it('rejects foreign inventory owners before contacting a Runner', async () => {
@@ -1042,7 +1230,7 @@ describe(WorkingCopyCaptureService.name, () => {
     const { receipt, pages } = inventoryFixture()
     adapter.prepareWorkingTreeInventory.mockResolvedValue({ ...receipt, entryCount: receipt.entryCount + 1 })
     await expect(service.prepareInventory('daytona-org-1', 'sandbox-1', receipt.request)).rejects.toBeInstanceOf(
-      ServiceUnavailableException,
+      ConflictException,
     )
     const page = { ...pages[0], pageDigest: `sha256:${'a'.repeat(64)}` }
     adapter.readWorkingTreeInventoryPage.mockResolvedValue(page)

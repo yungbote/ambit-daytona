@@ -1922,7 +1922,7 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "Sandbox"
+                    "sandbox"
                 ],
                 "summary": "Read a bounded immutable working-tree byte range",
                 "operationId": "ReadWorkingTreeInventoryRange",

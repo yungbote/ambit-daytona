@@ -485,13 +485,12 @@ export class StoppedWorkingCopyWorkingTreeEntryDto extends OmitType(StoppedWorki
   @Min(0)
   @Max(MAXIMUM_WORKING_TREE_AGGREGATE_BYTES)
   size: number
-  @ApiPropertyOptional({minimum:0,maximum:MAXIMUM_WORKING_TREE_AGGREGATE_BYTES})
-  @ValidateIf((entry:StoppedWorkingCopyWorkingTreeEntryDto)=>entry.kind==='regular_file')
+  @ApiPropertyOptional({ minimum: 0, maximum: MAXIMUM_WORKING_TREE_AGGREGATE_BYTES })
+  @ValidateIf((entry: StoppedWorkingCopyWorkingTreeEntryDto) => entry.kind === 'regular_file')
   @IsInt()
   @Min(0)
   @Max(MAXIMUM_WORKING_TREE_AGGREGATE_BYTES)
-  byteOffset?:number
-
+  byteOffset?: number
 }
 
 @ApiSchema({ name: 'WorkingTreeInventoryRequest' })
@@ -576,37 +575,37 @@ export class WorkingTreeInventoryPageDescriptorDto {
   lastPath: string
 }
 
-@ApiSchema({name:'WorkingTreeInventoryBytePart'})
+@ApiSchema({ name: 'WorkingTreeInventoryBytePart' })
 export class WorkingTreeInventoryBytePartDto {
-  @ApiProperty({minimum:0})
+  @ApiProperty({ minimum: 0 })
   @IsInt()
   @Min(0)
-  byteOffset:number
-  @ApiProperty({minimum:1,maximum:MAXIMUM_WORKING_TREE_AGGREGATE_BYTES})
+  byteOffset: number
+  @ApiProperty({ minimum: 1, maximum: MAXIMUM_WORKING_TREE_AGGREGATE_BYTES })
   @IsInt()
   @Min(1)
   @Max(MAXIMUM_WORKING_TREE_AGGREGATE_BYTES)
-  byteLength:number
-  @ApiProperty({pattern:'^sha256:[0-9a-f]{64}$'})
+  byteLength: number
+  @ApiProperty({ pattern: '^sha256:[0-9a-f]{64}$' })
   @Matches(/^sha256:[0-9a-f]{64}$/)
-  sha256:string
+  sha256: string
 }
 
-@ApiSchema({name:'WorkingTreeInventoryBytePack'})
+@ApiSchema({ name: 'WorkingTreeInventoryBytePack' })
 export class WorkingTreeInventoryBytePackDto {
-  @ApiProperty({minimum:0,maximum:MAXIMUM_WORKING_TREE_AGGREGATE_BYTES})
+  @ApiProperty({ minimum: 0, maximum: MAXIMUM_WORKING_TREE_AGGREGATE_BYTES })
   @IsInt()
   @Min(0)
   @Max(MAXIMUM_WORKING_TREE_AGGREGATE_BYTES)
-  byteLength:number
-  @ApiProperty({pattern:'^sha256:[0-9a-f]{64}$'})
+  byteLength: number
+  @ApiProperty({ pattern: '^sha256:[0-9a-f]{64}$' })
   @Matches(/^sha256:[0-9a-f]{64}$/)
-  sha256:string
-  @ApiProperty({type:[WorkingTreeInventoryBytePartDto]})
+  sha256: string
+  @ApiProperty({ type: [WorkingTreeInventoryBytePartDto] })
   @IsArray()
-  @ValidateNested({each:true})
-  @Type(()=>WorkingTreeInventoryBytePartDto)
-  parts:WorkingTreeInventoryBytePartDto[]
+  @ValidateNested({ each: true })
+  @Type(() => WorkingTreeInventoryBytePartDto)
+  parts: WorkingTreeInventoryBytePartDto[]
 }
 
 @ApiSchema({ name: 'WorkingTreeInventoryReceipt' })
@@ -643,11 +642,10 @@ export class WorkingTreeInventoryReceiptDto {
   @Max(MAXIMUM_WORKING_TREE_AGGREGATE_BYTES)
   aggregateBytes: number
 
-  @ApiProperty({type:WorkingTreeInventoryBytePackDto})
+  @ApiProperty({ type: WorkingTreeInventoryBytePackDto })
   @ValidateNested()
-  @Type(()=>WorkingTreeInventoryBytePackDto)
-  bytePack:WorkingTreeInventoryBytePackDto
-
+  @Type(() => WorkingTreeInventoryBytePackDto)
+  bytePack: WorkingTreeInventoryBytePackDto
 
   @ApiProperty({ pattern: '^sha256:[0-9a-f]{64}$' })
   @Matches(/^sha256:[0-9a-f]{64}$/)
@@ -714,48 +712,50 @@ export class WorkingTreeInventoryDeletionReceiptDto {
   status: 'absent'
 }
 
-@ApiSchema({name:'WorkingTreeInventoryRangeRequest'})
-export class WorkingTreeInventoryRangeRequestDto extends OmitType(WorkingTreeInventoryPageRequestDto,['pageIndex'] as const) {
-  @ApiProperty({pattern:'^sha256:[0-9a-f]{64}$'})
+@ApiSchema({ name: 'WorkingTreeInventoryRangeRequest' })
+export class WorkingTreeInventoryRangeRequestDto extends OmitType(WorkingTreeInventoryPageRequestDto, [
+  'pageIndex',
+] as const) {
+  @ApiProperty({ pattern: '^sha256:[0-9a-f]{64}$' })
   @Matches(/^sha256:[0-9a-f]{64}$/)
-  inventoryDigest:string
-  @ApiProperty({minimum:0})
+  inventoryDigest: string
+  @ApiProperty({ minimum: 0 })
   @IsInt()
   @Min(0)
-  offset:number
-  @ApiProperty({minimum:1,maximum:MAXIMUM_USER_FILE_READ_BYTES})
+  offset: number
+  @ApiProperty({ minimum: 1, maximum: MAXIMUM_USER_FILE_READ_BYTES })
   @IsInt()
   @Min(1)
   @Max(MAXIMUM_USER_FILE_READ_BYTES)
-  maximumBytes:number
+  maximumBytes: number
 }
 
-@ApiSchema({name:'WorkingTreeInventoryRange'})
+@ApiSchema({ name: 'WorkingTreeInventoryRange' })
 export class WorkingTreeInventoryRangeDto {
-  @ApiProperty({pattern:'^daytona-working-tree-inventory:v1:sha256:[0-9a-f]{64}$'})
+  @ApiProperty({ pattern: '^daytona-working-tree-inventory:v1:sha256:[0-9a-f]{64}$' })
   @Matches(/^daytona-working-tree-inventory:v1:sha256:[0-9a-f]{64}$/)
-  providerResourceId:string
-  @ApiProperty({pattern:'^sha256:[0-9a-f]{64}$'})
+  providerResourceId: string
+  @ApiProperty({ pattern: '^sha256:[0-9a-f]{64}$' })
   @Matches(/^sha256:[0-9a-f]{64}$/)
-  inventoryDigest:string
-  @ApiProperty({minimum:0})
+  inventoryDigest: string
+  @ApiProperty({ minimum: 0 })
   @IsInt()
   @Min(0)
-  offset:number
-  @ApiProperty({minimum:0,maximum:MAXIMUM_USER_FILE_READ_BYTES})
+  offset: number
+  @ApiProperty({ minimum: 0, maximum: MAXIMUM_USER_FILE_READ_BYTES })
   @IsInt()
   @Min(0)
   @Max(MAXIMUM_USER_FILE_READ_BYTES)
-  byteLength:number
-  @ApiProperty({minimum:0,maximum:MAXIMUM_WORKING_TREE_AGGREGATE_BYTES})
+  byteLength: number
+  @ApiProperty({ minimum: 0, maximum: MAXIMUM_WORKING_TREE_AGGREGATE_BYTES })
   @IsInt()
   @Min(0)
   @Max(MAXIMUM_WORKING_TREE_AGGREGATE_BYTES)
-  totalByteLength:number
+  totalByteLength: number
   @ApiProperty()
   @IsBoolean()
-  eof:boolean
+  eof: boolean
   @ApiProperty()
   @IsString()
-  bytesBase64:string
+  bytesBase64: string
 }

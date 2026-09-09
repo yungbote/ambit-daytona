@@ -14,6 +14,7 @@ import type {
   StoppedWorkingCopyDirectoryRosterRequestDto,
   WorkingTreeInventoryRequestDto,
   WorkingTreeInventoryPageRequestDto,
+  WorkingTreeInventoryRangeRequestDto,
 } from '../dto/working-copy-capture.dto'
 import type { WorkingCopyCaptureService } from '../services/working-copy-capture.service'
 import { WorkingCopyCaptureController } from './working-copy-capture.controller'
@@ -25,6 +26,7 @@ describe.each([
   'stoppedDirectoryRoster',
   'prepareInventory',
   'readInventoryPage',
+  'readInventoryRange',
   'deleteInventory',
 ] as const)(`${WorkingCopyCaptureController.name} %s cancellation`, (method) => {
   it('does not abort a capture only because the request body was fully consumed', async () => {
@@ -52,6 +54,7 @@ describe.each([
       {} as StoppedWorkingCopyDirectoryRosterRequestDto &
         WorkingTreeInventoryRequestDto &
         WorkingTreeInventoryPageRequestDto &
+        WorkingTreeInventoryRangeRequestDto &
         WorkingCopyCaptureCapabilitiesRequestDto &
         WorkingCopyCaptureBindingDto &
         WorkingCopyCaptureReadDto,
@@ -90,6 +93,7 @@ describe.each([
       {} as StoppedWorkingCopyDirectoryRosterRequestDto &
         WorkingTreeInventoryRequestDto &
         WorkingTreeInventoryPageRequestDto &
+        WorkingTreeInventoryRangeRequestDto &
         WorkingCopyCaptureCapabilitiesRequestDto &
         WorkingCopyCaptureBindingDto &
         WorkingCopyCaptureReadDto,

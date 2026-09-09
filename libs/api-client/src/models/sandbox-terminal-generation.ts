@@ -16,10 +16,19 @@
 
 export interface SandboxTerminalGeneration {
     'containerId': string;
-    'containerCreatedAt': Date;
-    'executionStartedAt': Date;
+    /**
+     * Exact provider timestamp; preserve its original fractional precision.
+     */
+    'containerCreatedAt': string;
+    /**
+     * Exact provider timestamp; preserve its original fractional precision.
+     */
+    'executionStartedAt': string;
     'restartCount': number;
-    'executionFinishedAt': Date;
+    /**
+     * Exact provider timestamp; preserve its original fractional precision.
+     */
+    'executionFinishedAt': string;
     'exitCode': number;
     'oomKilled': boolean;
 }

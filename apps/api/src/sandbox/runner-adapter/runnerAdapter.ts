@@ -238,7 +238,11 @@ export interface RunnerAdapter {
     request: WorkingTreeInventoryPageRequestDto,
     signal?: AbortSignal,
   ): Promise<WorkingTreeInventoryPageDto>
-  readWorkingTreeInventoryRange(sandboxId:string,request:WorkingTreeInventoryRangeRequestDto,signal?:AbortSignal):Promise<WorkingTreeInventoryRangeDto>
+  readWorkingTreeInventoryRange(
+    sandboxId: string,
+    request: WorkingTreeInventoryRangeRequestDto,
+    signal?: AbortSignal,
+  ): Promise<WorkingTreeInventoryRangeDto>
   deleteWorkingTreeInventory(
     sandboxId: string,
     request: WorkingTreeInventoryRequestDto,

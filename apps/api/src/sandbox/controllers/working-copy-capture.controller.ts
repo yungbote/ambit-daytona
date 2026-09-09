@@ -132,11 +132,29 @@ export class WorkingCopyCaptureController {
 
   @Post('stopped-working-tree-inventories/read-range')
   @HttpCode(200)
-  @ApiOperation({operationId:'sandboxReadInventoryRange',summary:'Read a bounded immutable working-tree byte range'})
-  @ApiResponse({status:200,type:WorkingTreeInventoryRangeDto})
-  @Audit({action:AuditAction.READ,targetType:AuditTarget.SANDBOX,targetIdFromRequest:(request)=>request.params.sandboxIdOrName})
-  readInventoryRange(@IsOrganizationAuthContext() auth:OrganizationAuthContext,@Param('sandboxIdOrName') sandboxIdOrName:string,@Body() request:WorkingTreeInventoryRangeRequestDto,@Req() incoming:IncomingMessage,@Res({passthrough:true}) outgoing:ServerResponse<IncomingMessage>):Promise<WorkingTreeInventoryRangeDto> {
-    return this.captures.readInventoryRange(auth.organizationId,sandboxIdOrName,request,responseSignal(incoming,outgoing))
+  @ApiOperation({
+    operationId: 'sandboxReadInventoryRange',
+    summary: 'Read a bounded immutable working-tree byte range',
+  })
+  @ApiResponse({ status: 200, type: WorkingTreeInventoryRangeDto })
+  @Audit({
+    action: AuditAction.READ,
+    targetType: AuditTarget.SANDBOX,
+    targetIdFromRequest: (request) => request.params.sandboxIdOrName,
+  })
+  readInventoryRange(
+    @IsOrganizationAuthContext() auth: OrganizationAuthContext,
+    @Param('sandboxIdOrName') sandboxIdOrName: string,
+    @Body() request: WorkingTreeInventoryRangeRequestDto,
+    @Req() incoming: IncomingMessage,
+    @Res({ passthrough: true }) outgoing: ServerResponse<IncomingMessage>,
+  ): Promise<WorkingTreeInventoryRangeDto> {
+    return this.captures.readInventoryRange(
+      auth.organizationId,
+      sandboxIdOrName,
+      request,
+      responseSignal(incoming, outgoing),
+    )
   }
 
   @Post('stopped-working-tree-inventories/delete')

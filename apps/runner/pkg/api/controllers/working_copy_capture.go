@@ -374,7 +374,7 @@ func ReadWorkingTreeInventoryPage(ctx *gin.Context) {
 // ReadWorkingTreeInventoryRange godoc
 //
 //	@Summary Read a bounded immutable working-tree byte range
-//	@Tags Sandbox
+//	@Tags sandbox
 //	@Accept json
 //	@Produce json
 //	@Param sandboxId path string true "Sandbox ID"

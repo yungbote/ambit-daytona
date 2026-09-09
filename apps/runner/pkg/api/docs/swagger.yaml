@@ -2716,7 +2716,7 @@ paths:
         - Bearer: []
       summary: Read a bounded immutable working-tree byte range
       tags:
-        - Sandbox
+        - sandbox
   /snapshots/build:
     post:
       description: >-

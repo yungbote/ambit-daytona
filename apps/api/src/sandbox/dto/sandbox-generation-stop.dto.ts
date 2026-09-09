@@ -39,11 +39,11 @@ export class SandboxExecutionGenerationDto {
   @Matches(/^[0-9a-f]{64}$/)
   containerId: string
 
-  @ApiProperty({ format: 'date-time' })
+  @ApiProperty({ type: String, description: 'Exact provider timestamp; preserve its original fractional precision.' })
   @IsDateString({ strict: true })
   containerCreatedAt: string
 
-  @ApiProperty({ format: 'date-time' })
+  @ApiProperty({ type: String, description: 'Exact provider timestamp; preserve its original fractional precision.' })
   @IsDateString({ strict: true })
   executionStartedAt: string
 
@@ -56,7 +56,7 @@ export class SandboxExecutionGenerationDto {
 
 @ApiSchema({ name: 'SandboxTerminalGeneration' })
 export class SandboxTerminalGenerationDto extends SandboxExecutionGenerationDto {
-  @ApiProperty({ format: 'date-time' })
+  @ApiProperty({ type: String, description: 'Exact provider timestamp; preserve its original fractional precision.' })
   @IsDateString({ strict: true })
   executionFinishedAt: string
 

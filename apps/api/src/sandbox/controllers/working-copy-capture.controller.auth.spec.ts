@@ -29,6 +29,7 @@ describe('[AUTH] WorkingCopyCaptureController', () => {
     'stoppedDirectoryRoster',
     'prepareInventory',
     'readInventoryPage',
+    'readInventoryRange',
     'deleteInventory',
     'delete',
     'exists',

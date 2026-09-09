@@ -224,24 +224,69 @@ export class WorkingCopyCaptureService {
     }
   }
 
-  async readInventoryRange(organizationId:string,sandboxIdOrName:string,request:WorkingTreeInventoryRangeRequestDto,signal?:AbortSignal):Promise<WorkingTreeInventoryRangeDto> {
+  async readInventoryRange(
+    organizationId: string,
+    sandboxIdOrName: string,
+    request: WorkingTreeInventoryRangeRequestDto,
+    signal?: AbortSignal,
+  ): Promise<WorkingTreeInventoryRangeDto> {
     signal?.throwIfAborted()
-    assertExactKeys(request,['request','providerResourceId','inventoryDigest','offset','maximumBytes'],'inventory range request',BadRequestException)
+    assertExactKeys(
+      request,
+      ['request', 'providerResourceId', 'inventoryDigest', 'offset', 'maximumBytes'],
+      'inventory range request',
+      BadRequestException,
+    )
     assertInventoryRequest(request.request)
-    if(request.providerResourceId!==inventoryResourceId(request.request)||typeof request.inventoryDigest!=='string'||!/^sha256:[0-9a-f]{64}$/.test(request.inventoryDigest)||!Number.isSafeInteger(request.offset)||request.offset<0||!Number.isSafeInteger(request.maximumBytes)||request.maximumBytes<1||request.maximumBytes>MAXIMUM_USER_FILE_READ_BYTES)
+    if (
+      request.providerResourceId !== inventoryResourceId(request.request) ||
+      typeof request.inventoryDigest !== 'string' ||
+      !/^sha256:[0-9a-f]{64}$/.test(request.inventoryDigest) ||
+      !Number.isSafeInteger(request.offset) ||
+      request.offset < 0 ||
+      !Number.isSafeInteger(request.maximumBytes) ||
+      request.maximumBytes < 1 ||
+      request.maximumBytes > MAXIMUM_USER_FILE_READ_BYTES
+    )
       throw new BadRequestException('Inventory byte range is invalid.')
-    const generation=request.request.generation
-    const {sandbox,adapter}=await this.executionAuthority.authorize(organizationId,sandboxIdOrName,generation.source,generation.owner,generation.stopAuthority.fence)
+    const generation = request.request.generation
+    const { sandbox, adapter } = await this.executionAuthority.authorize(
+      organizationId,
+      sandboxIdOrName,
+      generation.source,
+      generation.owner,
+      generation.stopAuthority.fence,
+    )
     try {
-      const range=await adapter.readWorkingTreeInventoryRange(sandbox.id,request,signal)
-      assertExactKeys(range,['providerResourceId','inventoryDigest','offset','byteLength','totalByteLength','eof','bytesBase64'],'inventory byte range',ConflictException)
-      if(range.providerResourceId!==request.providerResourceId||range.inventoryDigest!==request.inventoryDigest||range.offset!==request.offset||!Number.isSafeInteger(range.totalByteLength)||range.totalByteLength<request.offset||range.totalByteLength>request.request.maximumAggregateBytes||typeof range.bytesBase64!=='string'||!canonicalBase64(range.bytesBase64,request.maximumBytes))
+      const range = await adapter.readWorkingTreeInventoryRange(sandbox.id, request, signal)
+      assertExactKeys(
+        range,
+        ['providerResourceId', 'inventoryDigest', 'offset', 'byteLength', 'totalByteLength', 'eof', 'bytesBase64'],
+        'inventory byte range',
+        ConflictException,
+      )
+      if (
+        range.providerResourceId !== request.providerResourceId ||
+        range.inventoryDigest !== request.inventoryDigest ||
+        range.offset !== request.offset ||
+        !Number.isSafeInteger(range.totalByteLength) ||
+        range.totalByteLength < request.offset ||
+        range.totalByteLength > request.request.maximumAggregateBytes ||
+        typeof range.bytesBase64 !== 'string' ||
+        !canonicalBase64(range.bytesBase64, request.maximumBytes)
+      )
         throw new ConflictException('Runner inventory byte range authority changed.')
-      const expected=Math.min(request.maximumBytes,range.totalByteLength-request.offset)
-      if(range.byteLength!==expected||Buffer.from(range.bytesBase64,'base64').length!==expected||range.eof!==(request.offset+expected===range.totalByteLength))
+      const expected = Math.min(request.maximumBytes, range.totalByteLength - request.offset)
+      if (
+        range.byteLength !== expected ||
+        Buffer.from(range.bytesBase64, 'base64').length !== expected ||
+        range.eof !== (request.offset + expected === range.totalByteLength)
+      )
         throw new ConflictException('Runner inventory byte range was truncated or changed.')
       return range
-    } catch(error) {throw translateRunnerCaptureError(error,false)}
+    } catch (error) {
+      throw translateRunnerCaptureError(error, false)
+    }
   }
 
   async deleteInventory(
@@ -1192,7 +1237,11 @@ function assertWorkingTreeEntry(
     !Number.isSafeInteger(entry.size) ||
     entry.size < 0 ||
     !validWorkingTreeEntryVariant(entry, request.maximumFileBytes) ||
-    (entry.kind==='regular_file'&&(!Number.isSafeInteger(entry.byteOffset)||entry.byteOffset!<0||entry.size>MAXIMUM_WORKING_TREE_AGGREGATE_BYTES-entry.byteOffset!)) ||
+    (entry.kind === 'regular_file' &&
+      (typeof entry.byteOffset !== 'number' ||
+        !Number.isSafeInteger(entry.byteOffset) ||
+        entry.byteOffset < 0 ||
+        entry.size > MAXIMUM_WORKING_TREE_AGGREGATE_BYTES - entry.byteOffset)) ||
     typeof entry.mode !== 'string' ||
     !/^[0-7]{4}$/.test(entry.mode)
   ) {
@@ -1331,18 +1380,35 @@ function assertInventoryReceipt(
     !canonicalUtcTimestamp(receipt.observedAt)
   )
     throw new ConflictException('Runner inventory counts or observation time are invalid.')
-  const pack=receipt.bytePack
-  assertExactKeys(pack,['byteLength','sha256','parts'],'inventory byte pack',ConflictException)
-  if(!Number.isSafeInteger(pack.byteLength)||pack.byteLength<0||pack.byteLength>receipt.aggregateBytes||typeof pack.sha256!=='string'||!/^sha256:[0-9a-f]{64}$/.test(pack.sha256)||!Array.isArray(pack.parts))
+  const pack = receipt.bytePack
+  assertExactKeys(pack, ['byteLength', 'sha256', 'parts'], 'inventory byte pack', ConflictException)
+  if (
+    !Number.isSafeInteger(pack.byteLength) ||
+    pack.byteLength < 0 ||
+    pack.byteLength > receipt.aggregateBytes ||
+    typeof pack.sha256 !== 'string' ||
+    !/^sha256:[0-9a-f]{64}$/.test(pack.sha256) ||
+    !Array.isArray(pack.parts)
+  )
     throw new ConflictException('Runner inventory byte pack is invalid.')
-  let byteOffset=0
-  for(const part of pack.parts) {
-    assertExactKeys(part,['byteOffset','byteLength','sha256'],'inventory byte part',ConflictException)
-    if(part.byteOffset!==byteOffset||!Number.isSafeInteger(part.byteLength)||part.byteLength<1||part.byteLength>pack.byteLength-byteOffset||typeof part.sha256!=='string'||!/^sha256:[0-9a-f]{64}$/.test(part.sha256))
+  let byteOffset = 0
+  for (const part of pack.parts) {
+    assertExactKeys(part, ['byteOffset', 'byteLength', 'sha256'], 'inventory byte part', ConflictException)
+    if (
+      part.byteOffset !== byteOffset ||
+      !Number.isSafeInteger(part.byteLength) ||
+      part.byteLength < 1 ||
+      part.byteLength > pack.byteLength - byteOffset ||
+      typeof part.sha256 !== 'string' ||
+      !/^sha256:[0-9a-f]{64}$/.test(part.sha256)
+    )
       throw new ConflictException('Runner inventory byte parts do not cover the pack.')
-    byteOffset+=part.byteLength
+    byteOffset += part.byteLength
   }
-  if(byteOffset!==pack.byteLength||(pack.byteLength===0&&pack.sha256!==`sha256:${createHash('sha256').digest('hex')}`))
+  if (
+    byteOffset !== pack.byteLength ||
+    (pack.byteLength === 0 && pack.sha256 !== `sha256:${createHash('sha256').digest('hex')}`)
+  )
     throw new ConflictException('Runner inventory byte pack coverage changed.')
   const digest = jsonDigest({
     contract: INVENTORY_CONTRACT,
@@ -1351,7 +1417,7 @@ function assertInventoryReceipt(
     pages: receipt.pages,
     entryCount: receipt.entryCount,
     aggregateBytes: receipt.aggregateBytes,
-    bytePack:receipt.bytePack,
+    bytePack: receipt.bytePack,
   })
   if (receipt.inventoryDigest !== digest) throw new ConflictException('Runner inventory digest changed.')
 }

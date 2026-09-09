@@ -147,8 +147,15 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     return response.data as WorkingTreeInventoryPageDto
   }
 
-  async readWorkingTreeInventoryRange(sandboxId:string,request:WorkingTreeInventoryRangeRequestDto,signal?:AbortSignal):Promise<WorkingTreeInventoryRangeDto> {
-    const response=await this.captureApi().readWorkingTreeInventoryRange(sandboxId,request,{signal,maxContentLength:Math.ceil(request.maximumBytes/3)*4+256*1024})
+  async readWorkingTreeInventoryRange(
+    sandboxId: string,
+    request: WorkingTreeInventoryRangeRequestDto,
+    signal?: AbortSignal,
+  ): Promise<WorkingTreeInventoryRangeDto> {
+    const response = await this.captureApi().readWorkingTreeInventoryRange(sandboxId, request, {
+      signal,
+      maxContentLength: Math.ceil(request.maximumBytes / 3) * 4 + 256 * 1024,
+    })
     return response.data as WorkingTreeInventoryRangeDto
   }
 
