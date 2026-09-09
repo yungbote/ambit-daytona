@@ -22,18 +22,21 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// TestMain also serves the session supervisor: a session scope re-executes
-// /proc/self/exe, which is this test binary.
+// TestMain also serves the session supervisor and the browser driver stand-in:
+// both re-execute /proc/self/exe, which is this test binary.
 func TestMain(m *testing.M) {
 	if code, handled := session.RunSupervisor(os.Args[1:]); handled {
 		os.Exit(code)
 	}
+	if runBrowserFixture(os.Args[1:]) {
+		os.Exit(0)
+	}
 	os.Exit(m.Run())
 }
 
-// router builds the real session routes behind the real error middleware, so a
-// status code here is the status code a client receives.
-func router(t *testing.T, configDir string) *gin.Engine {
+// newSessionEngine builds the real session routes behind the real error
+// middleware, so a status code here is the status code a client receives.
+func newSessionEngine(t *testing.T, configDir string, configure func(*SessionController)) (*gin.Engine, *session.SessionService) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -46,12 +49,24 @@ func router(t *testing.T, configDir string) *gin.Engine {
 		return common_errors.ErrorResponse{StatusCode: http.StatusInternalServerError, Message: err.Error()}
 	}, false))
 	controller := NewSessionController(logger, configDir, service)
-	sessions := engine.Group("/process/session")
+	if configure != nil {
+		configure(controller)
+	}
+	process := engine.Group("/process")
+	process.GET("/browser-views", controller.ListBrowserViews)
+	sessions := process.Group("/session")
 	sessions.GET("", controller.ListSessions)
 	sessions.POST("", controller.CreateSession)
 	sessions.GET("/:sessionId", controller.GetSession)
 	sessions.DELETE("/:sessionId", controller.DeleteSession)
 	sessions.POST("/:sessionId/exec", controller.SessionExecuteCommand)
+	sessions.GET("/:sessionId/browser-views/:viewId/stream", controller.StreamBrowserView)
+	return engine, service
+}
+
+func router(t *testing.T, configDir string) *gin.Engine {
+	t.Helper()
+	engine, _ := newSessionEngine(t, configDir, nil)
 	return engine
 }
 

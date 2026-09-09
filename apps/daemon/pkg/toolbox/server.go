@@ -209,6 +209,7 @@ func (s *server) Start() error {
 		processController.POST("/code-run", coderun.CodeRun(processLogger))
 
 		sessionController := session.NewSessionController(s.logger, s.configDir, s.sessionService)
+		processController.GET("/browser-views", sessionController.ListBrowserViews)
 		sessionGroup := processController.Group("/session")
 		{
 			sessionGroup.GET("", sessionController.ListSessions)
@@ -217,7 +218,6 @@ func (s *server) Start() error {
 			sessionGroup.GET("/entrypoint/logs", sessionController.GetEntrypointLogs)
 			sessionGroup.POST("/:sessionId/exec", sessionController.SessionExecuteCommand)
 			sessionGroup.GET("/:sessionId", sessionController.GetSession)
-			sessionGroup.GET("/:sessionId/browser-views", sessionController.ListBrowserViews)
 			sessionGroup.GET("/:sessionId/browser-views/:viewId/stream", sessionController.StreamBrowserView)
 			sessionGroup.DELETE("/:sessionId", sessionController.DeleteSession)
 			sessionGroup.GET("/:sessionId/command/:commandId", sessionController.GetSessionCommand)
