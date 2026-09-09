@@ -2051,6 +2051,65 @@
           }
         }
       }
+    },
+    "/sandboxes/{sandboxId}/working-copy-captures/capabilities": {
+      "post": {
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "description": "Read-only discovery bound to the admitted capture helper. The private tree preserves lexical symlink targets, records FIFO and device omissions, and excludes managed runtime roots and caller-owned mounts. Process state and sockets are not portable; Docker archives can omit sockets.",
+        "consumes": ["application/json"],
+        "produces": ["application/json"],
+        "tags": ["sandbox"],
+        "summary": "Discover the assigned Runner capture surface before stopping a generation",
+        "operationId": "WorkingCopyCaptureCapabilities",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "Sandbox ID",
+            "name": "sandboxId",
+            "in": "path",
+            "required": true
+          },
+          {
+            "description": "Current capture authority",
+            "name": "request",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/workingcopy.CaptureCapabilitiesRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/workingcopy.CaptureCapabilities"
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "schema": {
+              "$ref": "#/definitions/common_errors.ErrorResponse"
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "schema": {
+              "$ref": "#/definitions/common_errors.ErrorResponse"
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "schema": {
+              "$ref": "#/definitions/common_errors.ErrorResponse"
+            }
+          }
+        }
+      }
     }
   },
   "definitions": {
@@ -3460,7 +3519,7 @@
         "entries": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/workingcopy.StoppedDirectoryRosterEntry"
+            "$ref": "#/definitions/workingcopy.StoppedWorkingTreeEntry"
           }
         },
         "observedAt": {
@@ -3508,6 +3567,109 @@
         },
         "maximumFileBytes": {
           "type": "integer"
+        }
+      }
+    },
+    "workingcopy.CaptureCapabilitiesRequest": {
+      "type": "object",
+      "required": ["authority", "fence", "owner", "source"],
+      "properties": {
+        "authority": {
+          "$ref": "#/definitions/workingcopy.CaptureAuthority"
+        },
+        "source": {
+          "$ref": "#/definitions/generationstop.Source"
+        },
+        "owner": {
+          "$ref": "#/definitions/generationstop.Owner"
+        },
+        "fence": {
+          "$ref": "#/definitions/generationstop.Fence"
+        }
+      }
+    },
+    "workingcopy.CaptureCapabilities": {
+      "type": "object",
+      "required": ["authority", "stoppedWorkingTree"],
+      "properties": {
+        "authority": {
+          "$ref": "#/definitions/workingcopy.CaptureAuthority"
+        },
+        "stoppedWorkingTree": {
+          "$ref": "#/definitions/workingcopy.StoppedWorkingTreeCapability"
+        }
+      }
+    },
+    "workingcopy.StoppedWorkingTreeCapability": {
+      "type": "object",
+      "required": [
+        "contract",
+        "maximumAggregateBytes",
+        "maximumDepth",
+        "maximumEntries",
+        "maximumFileBytes",
+        "maximumReadBytes",
+        "maximumReceiptBytes",
+        "semanticZoneRef"
+      ],
+      "properties": {
+        "contract": {
+          "type": "string"
+        },
+        "semanticZoneRef": {
+          "type": "string"
+        },
+        "maximumDepth": {
+          "type": "integer"
+        },
+        "maximumEntries": {
+          "type": "integer"
+        },
+        "maximumFileBytes": {
+          "type": "integer"
+        },
+        "maximumAggregateBytes": {
+          "type": "integer"
+        },
+        "maximumReadBytes": {
+          "type": "integer"
+        },
+        "maximumReceiptBytes": {
+          "type": "integer"
+        }
+      }
+    },
+    "workingcopy.StoppedWorkingTreeEntry": {
+      "type": "object",
+      "required": ["kind", "mode", "name", "sha256", "size", "zoneRelativePath"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["regular_file", "directory", "symlink", "excluded"]
+        },
+        "mode": {
+          "type": "string",
+          "x-nullable": true
+        },
+        "name": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "x-nullable": true
+        },
+        "size": {
+          "type": "integer"
+        },
+        "zoneRelativePath": {
+          "type": "string"
+        },
+        "linkTarget": {
+          "type": "string"
+        },
+        "excludedKind": {
+          "type": "string",
+          "enum": ["fifo", "character_device", "block_device"]
         }
       }
     }

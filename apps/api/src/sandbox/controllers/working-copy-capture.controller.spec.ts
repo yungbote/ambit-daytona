@@ -8,13 +8,16 @@ import { IncomingMessage, ServerResponse } from 'node:http'
 
 import type { OrganizationAuthContext } from '../../common/interfaces/organization-auth-context.interface'
 import type {
+  WorkingCopyCaptureBindingDto,
+  WorkingCopyCaptureReadDto,
+  WorkingCopyCaptureCapabilitiesRequestDto,
   StoppedWorkingCopyDirectoryRosterRequestDto,
   StoppedWorkingCopyWorkingTreeRequestDto,
 } from '../dto/working-copy-capture.dto'
 import type { WorkingCopyCaptureService } from '../services/working-copy-capture.service'
 import { WorkingCopyCaptureController } from './working-copy-capture.controller'
 
-describe.each(['stoppedDirectoryRoster', 'stoppedWorkingTree'] as const)(
+describe.each(['capabilities', 'capture', 'read', 'stoppedDirectoryRoster', 'stoppedWorkingTree'] as const)(
   `${WorkingCopyCaptureController.name} %s cancellation`,
   (method) => {
     it('does not abort a capture only because the request body was fully consumed', async () => {
@@ -39,7 +42,11 @@ describe.each(['stoppedDirectoryRoster', 'stoppedWorkingTree'] as const)(
       await controller[method](
         { organizationId: 'org' } as OrganizationAuthContext,
         'sandbox',
-        {} as StoppedWorkingCopyDirectoryRosterRequestDto & StoppedWorkingCopyWorkingTreeRequestDto,
+        {} as StoppedWorkingCopyDirectoryRosterRequestDto &
+          StoppedWorkingCopyWorkingTreeRequestDto &
+          WorkingCopyCaptureCapabilitiesRequestDto &
+          WorkingCopyCaptureBindingDto &
+          WorkingCopyCaptureReadDto,
         incoming,
         outgoing,
       )
@@ -72,7 +79,11 @@ describe.each(['stoppedDirectoryRoster', 'stoppedWorkingTree'] as const)(
       const pending = controller[method](
         { organizationId: 'daytona-org-1' } as OrganizationAuthContext,
         'sandbox-1',
-        {} as StoppedWorkingCopyDirectoryRosterRequestDto & StoppedWorkingCopyWorkingTreeRequestDto,
+        {} as StoppedWorkingCopyDirectoryRosterRequestDto &
+          StoppedWorkingCopyWorkingTreeRequestDto &
+          WorkingCopyCaptureCapabilitiesRequestDto &
+          WorkingCopyCaptureBindingDto &
+          WorkingCopyCaptureReadDto,
         incoming,
         outgoing,
       )

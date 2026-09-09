@@ -37,6 +37,29 @@ type CaptureSelector struct {
 	ZoneRelativePath string `json:"zoneRelativePath" validate:"required"`
 }
 
+type CaptureCapabilitiesRequest struct {
+	Authority CaptureAuthority     `json:"authority" validate:"required"`
+	Source    SourceAddress        `json:"source" validate:"required"`
+	Owner     CaptureOwner         `json:"owner" validate:"required"`
+	Fence     generationstop.Fence `json:"fence" validate:"required"`
+}
+
+type CaptureCapabilities struct {
+	Authority          CaptureAuthority             `json:"authority" validate:"required"`
+	StoppedWorkingTree StoppedWorkingTreeCapability `json:"stoppedWorkingTree" validate:"required"`
+}
+
+type StoppedWorkingTreeCapability struct {
+	Contract              string `json:"contract" validate:"required"`
+	SemanticZoneRef       string `json:"semanticZoneRef" validate:"required"`
+	MaximumDepth          int    `json:"maximumDepth" validate:"required"`
+	MaximumEntries        int    `json:"maximumEntries" validate:"required"`
+	MaximumFileBytes      int64  `json:"maximumFileBytes" validate:"required"`
+	MaximumAggregateBytes int64  `json:"maximumAggregateBytes" validate:"required"`
+	MaximumReadBytes      int64  `json:"maximumReadBytes" validate:"required"`
+	MaximumReceiptBytes   int64  `json:"maximumReceiptBytes" validate:"required"`
+}
+
 type CaptureBinding struct {
 	ProviderName       string                       `json:"providerName" validate:"required"`
 	RequestFingerprint string                       `json:"requestFingerprint" validate:"required"`
@@ -78,9 +101,23 @@ type StoppedWorkingTreeRequest struct {
 type StoppedWorkingTreeReceipt struct {
 	Request            StoppedWorkingTreeRequest         `json:"request" validate:"required"`
 	TerminalGeneration generationstop.TerminalGeneration `json:"terminalGeneration" validate:"required"`
-	Entries            []StoppedDirectoryRosterEntry     `json:"entries" validate:"required"`
+	Entries            []StoppedWorkingTreeEntry         `json:"entries" validate:"required"`
 	RosterDigest       string                            `json:"rosterDigest" validate:"required"`
 	ObservedAt         string                            `json:"observedAt" validate:"required"`
+}
+
+// Private working-tree entries preserve link targets as lexical data and
+// explicitly record runtime entries that are not portable. Docker archives
+// may omit sockets, so this roster is not a per-path socket inventory.
+type StoppedWorkingTreeEntry struct {
+	ZoneRelativePath string  `json:"zoneRelativePath" validate:"required"`
+	Name             string  `json:"name" validate:"required"`
+	Kind             string  `json:"kind" validate:"required" enums:"regular_file,directory,symlink,excluded"`
+	Size             int64   `json:"size" validate:"required"`
+	Mode             *string `json:"mode" validate:"required" extensions:"x-nullable"`
+	SHA256           *string `json:"sha256" validate:"required" extensions:"x-nullable"`
+	LinkTarget       *string `json:"linkTarget,omitempty"`
+	ExcludedKind     string  `json:"excludedKind,omitempty" enums:"fifo,character_device,block_device"`
 }
 
 type CaptureIdentity struct {

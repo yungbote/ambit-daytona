@@ -17,6 +17,8 @@ import { BackupState } from '../enums/backup-state.enum'
 import { RunnerServiceInfo } from '../common/runner-service-info'
 import {
   WorkingCopyCaptureBindingDto,
+  WorkingCopyCaptureCapabilitiesRequestDto,
+  WorkingCopyCaptureCapabilitiesDto,
   WorkingCopyCaptureDeleteReceiptDto,
   WorkingCopyCaptureExistsResponseDto,
   WorkingCopyCaptureIdentityDto,
@@ -216,7 +218,16 @@ export interface RunnerAdapter {
     registry?: DockerRegistry,
   ): Promise<void>
 
-  captureWorkingCopy(sandboxId: string, binding: WorkingCopyCaptureBindingDto): Promise<WorkingCopyCaptureReceiptDto>
+  workingCopyCaptureCapabilities(
+    sandboxId: string,
+    request: WorkingCopyCaptureCapabilitiesRequestDto,
+    signal?: AbortSignal,
+  ): Promise<WorkingCopyCaptureCapabilitiesDto>
+  captureWorkingCopy(
+    sandboxId: string,
+    binding: WorkingCopyCaptureBindingDto,
+    signal?: AbortSignal,
+  ): Promise<WorkingCopyCaptureReceiptDto>
   observeWorkingCopyCapture(
     sandboxId: string,
     binding: WorkingCopyCaptureBindingDto,
@@ -224,6 +235,7 @@ export interface RunnerAdapter {
   readWorkingCopyCapture(
     sandboxId: string,
     request: WorkingCopyCaptureReadDto,
+    signal?: AbortSignal,
   ): Promise<WorkingCopyCaptureReadResponseDto>
   deleteWorkingCopyCapture(
     sandboxId: string,

@@ -43,6 +43,8 @@ import { RunnerApiError } from '../errors/runner-api-error'
 import { createRunnerHttpClient } from './runner-http-client'
 import {
   WorkingCopyCaptureBindingDto,
+  WorkingCopyCaptureCapabilitiesRequestDto,
+  WorkingCopyCaptureCapabilitiesDto,
   WorkingCopyCaptureDeleteReceiptDto,
   WorkingCopyCaptureExistsResponseDto,
   WorkingCopyCaptureIdentityDto,
@@ -143,11 +145,24 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     }
   }
 
+  async workingCopyCaptureCapabilities(
+    sandboxId: string,
+    request: WorkingCopyCaptureCapabilitiesRequestDto,
+    signal?: AbortSignal,
+  ): Promise<WorkingCopyCaptureCapabilitiesDto> {
+    const response = await this.sandboxApiClient.workingCopyCaptureCapabilities(sandboxId, request, {
+      signal,
+      maxContentLength: 256 * 1024,
+    })
+    return response.data as WorkingCopyCaptureCapabilitiesDto
+  }
+
   async captureWorkingCopy(
     sandboxId: string,
     binding: WorkingCopyCaptureBindingDto,
+    signal?: AbortSignal,
   ): Promise<WorkingCopyCaptureReceiptDto> {
-    const response = await this.sandboxApiClient.captureWorkingCopy(sandboxId, binding)
+    const response = await this.sandboxApiClient.captureWorkingCopy(sandboxId, binding, { signal })
     return response.data as WorkingCopyCaptureReceiptDto
   }
 
@@ -162,8 +177,12 @@ export class RunnerAdapterV0 implements RunnerAdapter {
   async readWorkingCopyCapture(
     sandboxId: string,
     request: WorkingCopyCaptureReadDto,
+    signal?: AbortSignal,
   ): Promise<WorkingCopyCaptureReadResponseDto> {
-    const response = await this.sandboxApiClient.readWorkingCopyCapture(sandboxId, request)
+    const response = await this.sandboxApiClient.readWorkingCopyCapture(sandboxId, request, {
+      signal,
+      maxContentLength: Math.ceil(request.maximumBytes / 3) * 4 + 256 * 1024,
+    })
     return response.data as WorkingCopyCaptureReadResponseDto
   }
 

@@ -146,6 +146,7 @@ func (a *ApiServer) Start(ctx context.Context) error {
 		sandboxController.POST("/:sandboxId/network-settings", controllers.UpdateNetworkSettings)
 		sandboxController.POST("/:sandboxId/secrets", controllers.UpdateSandboxSecrets)
 		sandboxController.POST("/:sandboxId/working-copy-captures", controllers.CaptureWorkingCopy)
+		sandboxController.POST("/:sandboxId/working-copy-captures/capabilities", controllers.WorkingCopyCaptureCapabilities)
 		sandboxController.POST("/:sandboxId/working-copy-captures/observe", controllers.ObserveWorkingCopyCapture)
 		sandboxController.POST("/:sandboxId/working-copy-captures/read", controllers.ReadWorkingCopyCapture)
 		sandboxController.POST("/:sandboxId/working-copy-captures/stopped-directory-roster", controllers.StoppedWorkingCopyDirectoryRoster)

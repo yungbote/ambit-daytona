@@ -57,3 +57,7 @@ export * from './workingcopy-stopped-directory-roster-receipt';
 export * from './workingcopy-stopped-working-tree-receipt';
 export * from './workingcopy-stopped-directory-roster-request';
 export * from './workingcopy-stopped-working-tree-request';
+export * from './workingcopy-capture-capabilities-request';
+export * from './workingcopy-capture-capabilities';
+export * from './workingcopy-stopped-working-tree-capability';
+export * from './workingcopy-stopped-working-tree-entry';

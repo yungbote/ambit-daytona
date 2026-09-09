@@ -150,16 +150,21 @@ func TestStoppedWorkingTreeRejectsNoncanonicalAndRedundantExclusions(t *testing.
 	}
 }
 
-func TestStoppedWorkingTreeRejectsLinksEscapesDuplicatePathsAndMissingParents(t *testing.T) {
+func TestStoppedWorkingTreeRejectsUnsafePathsAndUnsupportedEntryKinds(t *testing.T) {
 	for name, entries := range map[string][]tarEntry{
-		"symlink":        {{name: "workspace/link", typeflag: tar.TypeSymlink, linkname: "/outside"}},
-		"hardlink":       {{name: "workspace/link", typeflag: tar.TypeLink, linkname: "workspace/file"}},
-		"special":        {{name: "workspace/pipe", typeflag: tar.TypeFifo}},
-		"escape":         {{name: "workspace/../outside", typeflag: tar.TypeReg, body: []byte("x")}},
-		"duplicate":      {{name: "workspace/a", typeflag: tar.TypeReg}, {name: "workspace/a", typeflag: tar.TypeReg}},
-		"missing-parent": {{name: "workspace/a/b", typeflag: tar.TypeReg}},
-		"file-parent":    {{name: "workspace/a", typeflag: tar.TypeReg}, {name: "workspace/a/b", typeflag: tar.TypeReg}},
-		"non-nfc":        {{name: "workspace/e\u0301", typeflag: tar.TypeReg}},
+		"empty-link-target":        {{name: "workspace/link", typeflag: tar.TypeSymlink}},
+		"hardlink":                 {{name: "workspace/link", typeflag: tar.TypeLink, linkname: "workspace/file"}},
+		"unsupported-kind":         {{name: "workspace/unknown", typeflag: tar.TypeCont}},
+		"child-under-link":         {{name: "workspace/link", typeflag: tar.TypeSymlink, linkname: "real"}, {name: "workspace/link/file", typeflag: tar.TypeReg}},
+		"reverse-child-under-link": {{name: "workspace/link/file", typeflag: tar.TypeReg}, {name: "workspace/link", typeflag: tar.TypeSymlink, linkname: "real"}},
+		"colliding-link-directory": {{name: "workspace/link/", typeflag: tar.TypeDir}, {name: "workspace/link", typeflag: tar.TypeSymlink, linkname: "real"}},
+		"child-under-exclusion":    {{name: "workspace/pipe", typeflag: tar.TypeFifo}, {name: "workspace/pipe/file", typeflag: tar.TypeReg}},
+		"link-directory-path":      {{name: "workspace/link/", typeflag: tar.TypeSymlink, linkname: "real"}},
+		"escape":                   {{name: "workspace/../outside", typeflag: tar.TypeReg, body: []byte("x")}},
+		"duplicate":                {{name: "workspace/a", typeflag: tar.TypeReg}, {name: "workspace/a", typeflag: tar.TypeReg}},
+		"missing-parent":           {{name: "workspace/a/b", typeflag: tar.TypeReg}},
+		"file-parent":              {{name: "workspace/a", typeflag: tar.TypeReg}, {name: "workspace/a/b", typeflag: tar.TypeReg}},
+		"non-nfc":                  {{name: "workspace/e\u0301", typeflag: tar.TypeReg}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			service, _, _, request := workingTreeFixture(t, entries...)
@@ -305,4 +310,129 @@ func workingTreeTarHeader(name string, kind byte, size int64) []byte {
 		panic(err)
 	}
 	return header.Bytes()
+}
+
+func workingTreeLinkEntries() []tarEntry {
+	return []tarEntry{
+		{name: "workspace/packages/", typeflag: tar.TypeDir},
+		{name: "workspace/packages/a/", typeflag: tar.TypeDir},
+		{name: "workspace/packages/a/index.js", typeflag: tar.TypeReg, body: []byte("export default 1")},
+		{name: "workspace/node_modules/", typeflag: tar.TypeDir},
+		{name: "workspace/node_modules/@scope/", typeflag: tar.TypeDir},
+		{name: "workspace/node_modules/@scope/a", typeflag: tar.TypeSymlink, linkname: "../../packages/a"},
+		{name: "workspace/relative-link", typeflag: tar.TypeSymlink, linkname: "packages/a"},
+		{name: "workspace/dangling-link", typeflag: tar.TypeSymlink, linkname: "../missing/package"},
+		{name: "workspace/absolute-link", typeflag: tar.TypeSymlink, linkname: "/outside/not-guaranteed"},
+		{name: "workspace/unicode-link", typeflag: tar.TypeSymlink, linkname: "../packages/e\u0301"},
+		{name: "workspace/control-link", typeflag: tar.TypeSymlink, linkname: "../a\nb"},
+		{name: "workspace/runtime.pipe", typeflag: tar.TypeFifo},
+		{name: "workspace/runtime.char", typeflag: tar.TypeChar},
+		{name: "workspace/runtime.block", typeflag: tar.TypeBlock},
+	}
+}
+
+func TestStoppedWorkingTreePreservesLexicalLinksAndRecordsRuntimeOmissions(t *testing.T) {
+	service, containers, objects, request := workingTreeFixture(t, workingTreeLinkEntries()...)
+	receipt, err := service.StoppedWorkingTree(context.Background(), request.Generation.Source.ProviderResourceID, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedTargets := map[string]string{
+		"node_modules/@scope/a": "../../packages/a", "relative-link": "packages/a",
+		"dangling-link": "../missing/package", "absolute-link": "/outside/not-guaranteed",
+		"unicode-link": "../packages/e\u0301", "control-link": "../a\nb",
+	}
+	expectedExcluded := map[string]string{"runtime.pipe": "fifo", "runtime.char": "character_device", "runtime.block": "block_device"}
+	for _, entry := range receipt.Entries {
+		if target, expected := expectedTargets[entry.ZoneRelativePath]; expected {
+			if entry.Kind != "symlink" || entry.Size != 0 || entry.SHA256 != nil || entry.LinkTarget == nil || *entry.LinkTarget != target || entry.ExcludedKind != "" {
+				t.Fatalf("lexical link was altered: %#v", entry)
+			}
+			delete(expectedTargets, entry.ZoneRelativePath)
+		} else if kind, expected := expectedExcluded[entry.ZoneRelativePath]; expected {
+			if entry.Kind != "excluded" || entry.ExcludedKind != kind || entry.Size != 0 || entry.SHA256 != nil || entry.LinkTarget != nil {
+				t.Fatalf("runtime omission was misrepresented: %#v", entry)
+			}
+			delete(expectedExcluded, entry.ZoneRelativePath)
+		} else if entry.LinkTarget != nil || entry.ExcludedKind != "" {
+			t.Fatal("ordinary entry acquired unrelated variant fields")
+		}
+	}
+	if len(expectedTargets) != 0 || len(expectedExcluded) != 0 || len(receipt.Entries) != len(workingTreeLinkEntries()) {
+		t.Fatal("roster lost a link or runtime omission")
+	}
+	if containers.copyCalls != 1 || containers.statCalls != 2 || len(objects.objects) != 0 {
+		t.Fatal("roster followed a link or persisted source bytes")
+	}
+	canonical, err := generationstop.CanonicalJSON(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden, err := os.ReadFile("testdata/stopped-working-tree-links.canonical.json")
+	if err != nil || !bytes.Equal(canonical, bytes.TrimSpace(golden)) {
+		t.Fatalf("working-tree link/omission interop fixture drifted: %v", err)
+	}
+}
+
+func TestWorkingTreeLinkTargetsRemainBoundedLexicalData(t *testing.T) {
+	for _, target := range []string{"../outside", "/absolute", "dangling", "../../packages/a", "../e\u0301", "../a\nb", "C:\\literal\\target", strings.Repeat("😀", 1024)} {
+		if !validWorkingTreeLinkTarget(target) {
+			t.Fatalf("valid lexical target rejected: %q", target)
+		}
+	}
+	for _, target := range []string{"", "a\x00b", string([]byte{0xff}), strings.Repeat("😀", 1025)} {
+		if validWorkingTreeLinkTarget(target) {
+			t.Fatal("invalid or oversized lexical target admitted")
+		}
+	}
+	service, containers, _, request := workingTreeFixture(t, tarEntry{name: "workspace/link", typeflag: tar.TypeSymlink, linkname: strings.Repeat("x", 4096)})
+	if _, err := service.StoppedWorkingTree(context.Background(), request.Generation.Source.ProviderResourceID, request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readStoppedWorkingTreeTar(context.Background(), bytes.NewReader(containers.archive), request, 4096); !errors.Is(err, ErrConflict) {
+		t.Fatalf("link target escaped serialized receipt budget: %v", err)
+	}
+}
+
+func TestStoppedWorkingTreeMaterializesOnlyAdmittedHardlinks(t *testing.T) {
+	service, _, objects, request := workingTreeFixture(t,
+		tarEntry{name: "workspace/forward", typeflag: tar.TypeLink, linkname: "workspace/original"},
+		tarEntry{name: "workspace/original", typeflag: tar.TypeReg, body: []byte("file")},
+		tarEntry{name: "workspace/backward", typeflag: tar.TypeLink, linkname: "workspace/original"},
+		tarEntry{name: "workspace/chain", typeflag: tar.TypeLink, linkname: "workspace/forward"},
+	)
+	roster, err := service.StoppedWorkingTree(context.Background(), request.Generation.Source.ProviderResourceID, request)
+	if err != nil || len(roster.Entries) != 4 {
+		t.Fatalf("hardlink roster failed: %#v %v", roster, err)
+	}
+	for _, entry := range roster.Entries {
+		if entry.Kind != "regular_file" || entry.Size != 4 || entry.SHA256 == nil || *entry.SHA256 != sha256Digest([]byte("file")) || entry.LinkTarget != nil {
+			t.Fatalf("hardlink was not ordinary file custody: %#v", entry)
+		}
+	}
+	if len(objects.objects) != 0 {
+		t.Fatal("hardlink materialization wrote bytes")
+	}
+	request.MaximumFileBytes, request.MaximumAggregateBytes = 4, 15
+	if _, err := service.StoppedWorkingTree(context.Background(), request.Generation.Source.ProviderResourceID, request); !errors.Is(err, ErrConflict) {
+		t.Fatalf("materialized aliases were not charged to aggregate bytes: %v", err)
+	}
+	for name, entries := range map[string][]tarEntry{
+		"escape":    {{name: "workspace/link", typeflag: tar.TypeLink, linkname: "workspace/../outside"}},
+		"absolute":  {{name: "workspace/link", typeflag: tar.TypeLink, linkname: "/workspace/file"}},
+		"managed":   {{name: "workspace/link", typeflag: tar.TypeLink, linkname: "workspace/.ambit/file"}},
+		"mount":     {{name: "workspace/link", typeflag: tar.TypeLink, linkname: "workspace/mounted/file"}},
+		"missing":   {{name: "workspace/link", typeflag: tar.TypeLink, linkname: "workspace/missing"}},
+		"cycle":     {{name: "workspace/a", typeflag: tar.TypeLink, linkname: "workspace/b"}, {name: "workspace/b", typeflag: tar.TypeLink, linkname: "workspace/a"}},
+		"symlink":   {{name: "workspace/a", typeflag: tar.TypeLink, linkname: "workspace/b"}, {name: "workspace/b", typeflag: tar.TypeSymlink, linkname: "outside"}},
+		"directory": {{name: "workspace/a", typeflag: tar.TypeLink, linkname: "workspace/b"}, {name: "workspace/b", typeflag: tar.TypeDir}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			service, _, _, request := workingTreeFixture(t, entries...)
+			request.ExcludedPaths = []string{"mounted"}
+			if _, err := service.StoppedWorkingTree(context.Background(), request.Generation.Source.ProviderResourceID, request); !errors.Is(err, ErrConflict) {
+				t.Fatalf("unowned hardlink target was admitted: %v", err)
+			}
+		})
+	}
 }
