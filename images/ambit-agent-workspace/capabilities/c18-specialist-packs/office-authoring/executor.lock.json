@@ -1,11 +1,11 @@
 {
-  "digest": "sha256:d95523e80edaa30628a21f1ff44789642dfc4259685b0381bb9ff27ca54a4195",
-  "facets": [
-    "presentation",
-    "spreadsheet"
+  "digest": "sha256:8c0b46da4b999ad88a0af4c118255f43dc1e69620346b8001b7e8786fee7541e",
+  "operations": [
+    "convert_to_pdf",
+    "render_validate"
   ],
-  "ref": "ambit://specialist-render-executors/office-authoring@1",
-  "schema": "ambit.c18-specialist-render-executor-lock/v2",
+  "ref": "ambit://specialist-render-executors/office-authoring@2",
+  "schema": "ambit.c18-specialist-render-executor-lock/v3",
   "transport": {
     "digest": "sha256:b4a5b3bb225cb0f9b5693b1300ecb325ce0019a47da8b44ee38103131b919033",
     "ref": "ambit.runtime-interface/specialist-render@1"

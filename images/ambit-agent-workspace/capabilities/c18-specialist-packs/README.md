@@ -12,6 +12,21 @@ revisions; there is deliberately no one-pack-per-Skill rule.
 | `data-research` | data analysis and research | one Python numerical/query/notebook environment avoids duplicate NumPy/Arrow/DuckDB stacks and captures one reproducible seed/environment boundary |
 | `web-browser` | web applications and research browser QA | browsers and Node require a much faster security refresh cadence and a separate browser sandbox/preview boundary |
 
+`office-authoring@2` adds private DOCX, PPTX and XLSX conversion to PDF through
+the same nonce-bound specialist interface. Its `convert_to_pdf` operation
+returns the source-bound PDF and a semantic result; it does not apply the
+authoring-quality checks used by `render_validate`. Both operations share
+LibreOffice, process deadlines, bounded source/output custody, private scratch
+and provider-owned cleanup. Writer joins the exact Calc/Impress release through
+four additional signed-snapshot packages. No package is installed at runtime.
+
+The existing `office-authoring@1` artifact candidates and their immutable images
+remain independent release inputs. Their facet closure references stay at `@1`;
+the new source directory builds `@2` and does not retroactively qualify `@1`
+images for document conversion. Adoption requires an exact `@2` image,
+composition, provider policy and current document-candidate publication. The
+unchanged C17 DOCX command is not part of this operation.
+
 Splitting spreadsheet and presentation Python packages would duplicate the
 same native office/font closure. Splitting local data analysis from research
 would duplicate the largest wheel graph. Conversely, combining browsers or

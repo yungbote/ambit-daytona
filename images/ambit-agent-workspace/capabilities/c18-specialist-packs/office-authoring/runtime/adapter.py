@@ -5,12 +5,15 @@ import csv
 import hashlib
 import io
 import json
+import re
 import stat
 import zipfile
 from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree
+from urllib.parse import unquote, urljoin, urlsplit
 
+from lxml import etree
 from openpyxl import load_workbook
 from openpyxl.formula import Tokenizer
 from openpyxl.utils.cell import range_boundaries
@@ -18,19 +21,35 @@ from PIL import Image
 from pptx import Presentation
 
 from process_control import ProcessDeadlineExceeded, ProcessFailure, run_bounded
-from render_command import pack_check_names
+from render_command import MAXIMUM_OFFICE_SOURCE_BYTES, pack_check_names
 from render_runner import AdapterFailure
 
 
 PACK_ROOT = Path("/opt/ambit/runtime-pack/office-authoring")
 PATH = f"{PACK_ROOT}/python/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 ODS = "application/vnd.oasis.opendocument.spreadsheet"
 PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 ODP = "application/vnd.oasis.opendocument.presentation"
 MAXIMUM_ARCHIVE_ENTRIES = 20_000
 MAXIMUM_ARCHIVE_ENTRY_BYTES = 128 * 1024 * 1024
 MAXIMUM_ARCHIVE_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
+MAXIMUM_PACKAGE_METADATA_BYTES = 4 * 1024 * 1024
+OFFICE_MAIN_PARTS = {
+    DOCX: (
+        "word/document.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml",
+    ),
+    PPTX: (
+        "ppt/presentation.xml",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml",
+    ),
+    XLSX: (
+        "xl/workbook.xml",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml",
+    ),
+}
 
 
 def _sha256(path: Path) -> str:
@@ -124,13 +143,14 @@ def _run(argv: list[str], *, scratch: Path, deadline: float, environment: dict[s
         ) from error
 
 
-def _render_pdf(
+def _convert_pdf(
     source: Path,
     *,
     scratch: Path,
     deadline: float,
     environment: dict[str, str],
-) -> tuple[Path, str, list[Path], list[str], Path, Path]:
+    maximum_pdf_bytes: int | None = None,
+) -> Path:
     rendered = scratch / "rendered"
     profile = scratch / "libreoffice-profile"
     rendered.mkdir()
@@ -154,12 +174,31 @@ def _render_pdf(
         environment=environment,
     )
     pdf = rendered / f"{source.stem}.pdf"
-    if not pdf.is_file() or pdf.stat().st_size == 0:
+    metadata = pdf.lstat() if pdf.exists() else None
+    if (
+        metadata is None
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or metadata.st_size == 0
+        or (maximum_pdf_bytes is not None and metadata.st_size > maximum_pdf_bytes)
+    ):
         raise AdapterFailure(
             "office_render_missing",
             "LibreOffice did not produce a complete PDF render.",
             check="office.render_complete",
         )
+    return pdf
+
+
+def _render_pdf(
+    source: Path,
+    *,
+    scratch: Path,
+    deadline: float,
+    environment: dict[str, str],
+) -> tuple[Path, str, list[Path], list[str], Path, Path]:
+    pdf = _convert_pdf(source, scratch=scratch, deadline=deadline, environment=environment)
+    rendered = pdf.parent
     text_path = rendered / "text.txt"
     _run(
         ["pdftotext", "-layout", str(pdf), str(text_path)],
@@ -192,6 +231,104 @@ def _render_pdf(
         )
     font_rows = font_output.splitlines()[2:]
     return pdf, text_path.read_text(encoding="utf-8"), pages, font_rows, text_path, font_path
+
+
+def _office_source(path: Path, media_type: str) -> None:
+    """Bind OOXML package identity without imposing artifact quality checks."""
+    profile = OFFICE_MAIN_PARTS.get(media_type)
+    if profile is None:
+        raise AdapterFailure("unsupported_office_source", "The Office document type is unsupported.")
+    main_part, main_content_type = profile
+    _archive(path, {"[Content_Types].xml", "_rels/.rels", main_part})
+    content_namespace = "http://schemas.openxmlformats.org/package/2006/content-types"
+    relation_namespace = "http://schemas.openxmlformats.org/package/2006/relationships"
+    office_relations = {
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument",
+        "http://purl.oclc.org/ooxml/officeDocument/relationships/officeDocument",
+    }
+    try:
+        with zipfile.ZipFile(path) as archive:
+            def metadata(name: str) -> Any:
+                entry = archive.getinfo(name)
+                if entry.file_size > MAXIMUM_PACKAGE_METADATA_BYTES:
+                    raise ValueError("Office package metadata exceeds its bound")
+                parser = etree.XMLParser(
+                    resolve_entities=False, load_dtd=False, no_network=True,
+                    huge_tree=False, recover=False,
+                )
+                root = etree.fromstring(archive.read(entry), parser)
+                if root.getroottree().docinfo.doctype:
+                    raise ValueError("Office package metadata contains a DTD")
+                return root
+
+            types = metadata("[Content_Types].xml")
+            if types.tag != f"{{{content_namespace}}}Types":
+                raise ValueError("Office content types root is invalid")
+            bindings = [
+                child for child in types
+                if child.tag == f"{{{content_namespace}}}Override"
+                and child.get("PartName") == "/" + main_part
+            ]
+            if len(bindings) != 1 or bindings[0].get("ContentType") != main_content_type:
+                raise ValueError("Office main content type differs from the claimed source")
+            relations = metadata("_rels/.rels")
+            if relations.tag != f"{{{relation_namespace}}}Relationships":
+                raise ValueError("Office relationships root is invalid")
+            roots = [
+                child for child in relations
+                if child.tag == f"{{{relation_namespace}}}Relationship"
+                and child.get("Type") in office_relations
+            ]
+            if len(roots) != 1 or roots[0].get("TargetMode", "Internal") != "Internal":
+                raise ValueError("Office package does not select one internal main part")
+            target = roots[0].get("Target", "")
+            if not target or "\\" in target or re.search(r"[\x00-\x1f\x7f]", target):
+                raise ValueError("Office main part target is invalid")
+            resolved = urlsplit(urljoin("https://office-package.invalid/", target))
+            if (
+                resolved.scheme != "https"
+                or resolved.netloc != "office-package.invalid"
+                or resolved.query or resolved.fragment
+                or unquote(resolved.path) != "/" + main_part
+            ):
+                raise ValueError("Office root selects a different main part")
+    except (KeyError, ValueError, zipfile.BadZipFile, etree.XMLSyntaxError) as error:
+        raise AdapterFailure(
+            "invalid_office_source",
+            "The uploaded bytes do not contain the declared Office document.",
+        ) from error
+
+
+def convert_to_pdf(
+    *, request: dict[str, Any], source_path: Path, scratch: Path, deadline: float,
+) -> dict[str, str]:
+    source = request["source"]
+    if (
+        not 0 < source_path.stat().st_size <= MAXIMUM_OFFICE_SOURCE_BYTES
+        or source_path.stat().st_size != source["byteLength"]
+        or _sha256(source_path) != source["digest"]
+    ):
+        raise AdapterFailure("office_source_changed", "The Office source no longer matches its recorded bytes.")
+    _office_source(source_path, source["mediaType"])
+    environment = _environment(scratch)
+    pdf = _convert_pdf(
+        source_path, scratch=scratch, deadline=deadline, environment=environment,
+        maximum_pdf_bytes=request["output"]["maximumPdfBytes"],
+    )
+    with pdf.open("rb") as stream:
+        header = stream.read(5)
+        stream.seek(max(0, pdf.stat().st_size - 1024))
+        trailer = stream.read(1024)
+    if header != b"%PDF-" or b"%%EOF" not in trailer:
+        raise AdapterFailure("office_pdf_invalid", "The conversion did not produce a complete PDF.")
+    info = _run(
+        ["pdfinfo", str(pdf)], scratch=scratch, deadline=deadline, environment=environment,
+    ).decode("utf-8", errors="strict")
+    if not re.search(r"^Pages:\s+[1-9][0-9]*\s*$", info, re.MULTILINE):
+        raise AdapterFailure("office_pdf_invalid", "The converted PDF contains no readable pages.")
+    if _sha256(source_path) != source["digest"]:
+        raise AdapterFailure("office_source_changed", "The Office source changed during conversion.")
+    return {"pdfPath": str(pdf)}
 
 
 def _font_environment(

@@ -23,7 +23,7 @@ from common import canonical_json, file_receipts, runtime_guard, sha256
 
 
 FIXED_TIME = dt.datetime(2026, 8, 23, 12, 0, 0)
-PACK_REF = "ambit.runtime-pack/office-authoring@1"
+PACK_REF = "ambit.runtime-pack/office-authoring@2"
 
 
 def canonicalize_zip(path: Path) -> None:
