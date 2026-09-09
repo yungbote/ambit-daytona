@@ -6,7 +6,6 @@ set -euo pipefail
 umask 077
 
 export AGENT_BROWSER_EXECUTABLE_PATH=/opt/ambit/browser/chrome/chrome
-export AGENT_BROWSER_REQUIRE_DAEMON=1
 export AGENT_BROWSER_REQUIRE_SANDBOX=1
 export AGENT_BROWSER_IDLE_TIMEOUT_MS="${AGENT_BROWSER_IDLE_TIMEOUT_MS:-0}"
 export AGENT_BROWSER_SOCKET_DIR=/workspace/.ambit/browser/sockets

@@ -30,7 +30,7 @@ ARG BUILD_SOURCE_REVISION=unbound
 LABEL org.opencontainers.image.revision="${BUILD_SOURCE_REVISION}" \
       io.ambit.browser-lock="/opt/ambit/browser/browser.lock.json" \
       io.ambit.executable-inventory="/opt/ambit/runtime-base/workspace/lineage/executables.json" \
-      io.ambit.browser-lifecycle="supervised-workspace-process"
+      io.ambit.browser-lifecycle="session-owned-workspace-process"
 USER daytona
 WORKDIR /workspace
 RUN test -w /workspace && agent-browser --version

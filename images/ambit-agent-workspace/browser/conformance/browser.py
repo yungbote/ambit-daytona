@@ -30,7 +30,7 @@ def wait_until(predicate, timeout=15):
 
 
 def invoke(session, *arguments, success=True):
-    result = subprocess.run(["agent-browser", "--session", session, "--json", *arguments], text=True, capture_output=True, timeout=45)
+    result = subprocess.run(["agent-browser", "--require-daemon", "--session", session, "--json", *arguments], text=True, capture_output=True, timeout=45)
     if not success:
         assert result.returncode != 0, "Unsupervised browser client unexpectedly succeeded"
         return result
