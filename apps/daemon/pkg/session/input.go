@@ -46,10 +46,6 @@ func (s *SessionService) SendInput(ctx context.Context, sessionId, commandId str
 		return common_errors.NewInternalServerError(fmt.Errorf("failed to write to input pipe: %w", err))
 	}
 
-	// The descriptor remains bound to the original pipe if deletion races the
-	// write. Bind the optional echo to that same owner before reopening a path.
-	session.mu.Lock()
-	defer session.mu.Unlock()
 	if ctx.Err() != nil || session.ctx.Err() != nil {
 		return common_errors.NewGoneError(errors.New("session closed during input delivery; input outcome is unknown"))
 	}
@@ -61,6 +57,12 @@ func (s *SessionService) SendInput(ctx context.Context, sessionId, commandId str
 			s.logger.Debug("failed to open log file to echo input", "error", err)
 		} else {
 			defer logFile.Close()
+			// Deletion cancels this immutable owner before it removes paths.
+			// If open reached a replacement directory, that cancellation is
+			// already observable. Otherwise this descriptor keeps the old log.
+			if ctx.Err() != nil || session.ctx.Err() != nil {
+				return common_errors.NewGoneError(errors.New("session closed during input delivery; input outcome is unknown"))
+			}
 			// Write with STDOUT prefix to maintain log format consistency
 			dataWithPrefix := append(log.STDOUT_PREFIX, []byte(data)...)
 			_, err = logFile.Write(dataWithPrefix)
@@ -75,24 +77,27 @@ func (s *SessionService) SendInput(ctx context.Context, sessionId, commandId str
 
 func (s *SessionService) openCommandInput(ctx context.Context, owned *session, commandID string) (*os.File, *Command, error) {
 	for {
-		owned.mu.Lock()
 		scope := owned.scope.Load()
 		if ctx.Err() != nil || owned.ctx.Err() != nil || scope == nil || scope.shellExited.Load() || scope.state() != "running" {
-			owned.mu.Unlock()
 			return nil, nil, common_errors.NewGoneError(errors.New("session process is no longer accepting input"))
 		}
 		command, err := s.commandObservation(owned, commandID)
 		if err != nil {
-			owned.mu.Unlock()
 			return nil, nil, err
 		}
 		if command.ExitCode != nil {
-			owned.mu.Unlock()
 			return nil, nil, common_errors.NewGoneError(fmt.Errorf("command has already completed with exit code %d", *command.ExitCode))
 		}
 		file, err := os.OpenFile(command.InputFilePath(owned.Dir(s.configDir)), os.O_WRONLY|syscall.O_NONBLOCK, 0600)
-		owned.mu.Unlock()
 		if err == nil {
+			// Never wait for submission serialization here: the shell may
+			// need this input before it can drain queued command writes.
+			// Cancellation precedes path removal, so this post-open check
+			// rejects replacement paths before any input can be written.
+			if ctx.Err() != nil || owned.ctx.Err() != nil {
+				_ = file.Close()
+				return nil, nil, common_errors.NewGoneError(errors.New("session process is no longer accepting input"))
+			}
 			return file, command, nil
 		}
 		if !errors.Is(err, syscall.ENXIO) && !os.IsNotExist(err) {

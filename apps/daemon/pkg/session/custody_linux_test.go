@@ -619,3 +619,47 @@ func TestSynchronousShellExitRetainsBackgroundWithoutWaitingForAResult(t *testin
 		t.Fatalf("shell exit lost background custody: observation=%+v error=%v", observed, err)
 	}
 }
+
+func TestInteractiveInputProgressesBehindQueuedCommandBackpressure(t *testing.T) {
+	svc := newStdinTestService(t)
+	openSession(t, svc, "review-queued-input")
+	if _, err := svc.Execute("review-queued-input", "active", "read -r answer; printf '%s' \"$answer\"", true, true, true, true); err != nil {
+		t.Fatal(err)
+	}
+	owned, _ := svc.sessions.Get("review-queued-input")
+	queued := make(chan struct{})
+	go func() {
+		defer close(queued)
+		for i := range 64 {
+			if _, err := svc.Execute("review-queued-input", fmt.Sprintf("queued-%d", i), "true", true, true, true, false); err != nil {
+				return
+			}
+		}
+	}()
+	time.Sleep(250 * time.Millisecond)
+	if owned.mu.TryLock() {
+		owned.mu.Unlock()
+		t.Fatal("fixture did not reach blocked command submission")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	input := make(chan error, 1)
+	go func() { input <- svc.SendInput(ctx, "review-queued-input", "active", "hello") }()
+	select {
+	case err := <-input:
+		if err != nil {
+			t.Fatalf("interactive input failed behind queued commands: %v", err)
+		}
+		pollCommand(t, svc, "review-queued-input", "active", time.Second)
+	case <-time.After(750 * time.Millisecond):
+		t.Errorf("SendInput is deadlocked behind queued command submission and ignored its request deadline")
+	}
+	if err := svc.Delete(context.Background(), "review-queued-input"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-queued:
+	case <-time.After(time.Second):
+		t.Error("queued submission did not stop")
+	}
+}
