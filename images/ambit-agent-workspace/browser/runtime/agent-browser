@@ -7,7 +7,14 @@ umask 077
 
 export AGENT_BROWSER_EXECUTABLE_PATH=/opt/ambit/browser/chrome/chrome
 export AGENT_BROWSER_REQUIRE_SANDBOX=1
-export AGENT_BROWSER_IDLE_TIMEOUT_MS="${AGENT_BROWSER_IDLE_TIMEOUT_MS:-0}"
+# The bound on a browser left open. Only a canceled Run deletes its workspace
+# sessions; a completed Run leaves this scope owned and running, so without a
+# standalone timer nothing inside the session ends it. Ten minutes matches the
+# workspace's own inactivity auto-stop, so an idle browser never outlives the
+# workspace that owns it, and it also bounds an idle browser inside a workspace
+# that stays busy with other work. After it elapses the next command starts a
+# fresh daemon: page state is gone, which is honest recovery, not a resumed page.
+export AGENT_BROWSER_IDLE_TIMEOUT_MS="${AGENT_BROWSER_IDLE_TIMEOUT_MS:-600000}"
 export AGENT_BROWSER_SOCKET_DIR=/workspace/.ambit/browser/sockets
 export AGENT_BROWSER_CONTENT_BOUNDARIES=1
 export AGENT_BROWSER_DOWNLOAD_PATH="${AGENT_BROWSER_DOWNLOAD_PATH:-/workspace/outputs/downloads}"

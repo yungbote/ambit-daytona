@@ -227,6 +227,44 @@ func TestDetachedActorStaysOwnedAfterCommandExitAndCancelsExactly(t *testing.T) 
 	}
 }
 
+// A plain `cmd &` keeps the scope running after its command and its shell are
+// gone, exactly like a browser daemon left open. Nothing inside the session
+// ends it, so deletion is the bound: it must reach the whole scope even when
+// the work ignores SIGTERM.
+func TestPlainBackgroundJobRunsUntilTheScopeIsDeleted(t *testing.T) {
+	svc := newStdinTestService(t)
+	openSession(t, svc, "plain-background")
+	path := filepath.Join(t.TempDir(), "actor.pid")
+	result, err := svc.Execute("plain-background", "start", fixtureCommand("actor", path)+" &", false, true, true, false, true)
+	if err != nil || result.ExitCode == nil || *result.ExitCode != 0 {
+		t.Fatalf("start: %+v %v", result, err)
+	}
+	fd := actorFD(t, path)
+	deadline := time.Now().Add(time.Second)
+	var observed *Session
+	for time.Now().Before(deadline) {
+		if observed, err = svc.Get("plain-background"); err != nil {
+			t.Fatal(err)
+		}
+		if observed.InputClosed {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if observed == nil || !observed.InputClosed || observed.ProcessScope != "running" {
+		t.Fatalf("a background job did not keep its scope: %+v", observed)
+	}
+	if fdTerminated(t, fd, 250*time.Millisecond) {
+		t.Fatal("a background job ended with the command that started it")
+	}
+	if err := svc.Delete(context.Background(), "plain-background"); err != nil {
+		t.Fatal(err)
+	}
+	if !fdTerminated(t, fd, 0) {
+		t.Fatal("a background job survived successful deletion")
+	}
+}
+
 func TestClosedInputSettlesNaturallyAndPreservesResult(t *testing.T) {
 	svc := newStdinTestService(t)
 	openSession(t, svc, "natural")

@@ -22,8 +22,8 @@ def execute(name, command, async_=False):
 def observed(name):
     return request('GET', f'/process/session/{name}')[1]
 
-def wait_scope(name, want):
-    deadline = time.monotonic() + 8
+def wait_scope(name, want, timeout=8):
+    deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         result = observed(name)
         if result['processScope'] == want:
@@ -59,6 +59,7 @@ def main():
     assert wait_scope('direct-http', 'settled')['inputClosed']
     assert 'owned-result' in (result.get('output') or result.get('stdout') or ''), result
     delete('direct-http')
+    background_code = "import signal,os,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); open('/workspace/plain-background.pid','w').write(str(os.getpid())); time.sleep(60)"
     child_code = "import os,signal,time; p=os.fork();\nif p: os._exit(0)\nos.setsid(); p=os.fork();\nif p: os._exit(0)\nsignal.signal(signal.SIGTERM,signal.SIG_IGN); open('/workspace/scope-actor.pid','w').write(str(os.getpid())); time.sleep(60)"
     create('double-fork-http')
     result = execute('double-fork-http', 'python -c ' + shlex.quote(child_code) + ' </dev/null >/dev/null 2>&1')
@@ -73,6 +74,20 @@ def main():
     assert observed('double-fork-http')['processScope'] == 'running'
     delete('double-fork-http')
     assert not pathlib.Path(f'/proc/{pid}').exists(), 'actor or zombie survived successful Delete'
+    create('plain-background-http')
+    marker = pathlib.Path('/workspace/plain-background.pid')
+    result = execute('plain-background-http', 'python -c ' + shlex.quote(background_code) + ' </dev/null >/dev/null 2>&1 &')
+    assert result['exitCode'] == 0, result
+    for _ in range(100):
+        if marker.exists():
+            break
+        time.sleep(0.02)
+    background_pid = int(marker.read_text())
+    assert pathlib.Path(f'/proc/{background_pid}').exists()
+    assert observed('plain-background-http')['processScope'] == 'running'
+    assert observed('plain-background-http')['inputClosed'] is True
+    delete('plain-background-http')
+    assert not pathlib.Path(f'/proc/{background_pid}').exists(), 'plain background job survived successful Delete'
     fixture = pathlib.Path('/workspace/work/session-browser.html')
     fixture.parent.mkdir(parents=True, exist_ok=True)
     fixture.write_text('<!doctype html><html><title>Session custody fixture</title><body><button id="advance" onclick="document.querySelector(\'#counter\').textContent=\'1\'">Advance</button><p id="counter">0</p></body></html>')
@@ -102,9 +117,19 @@ def main():
     remaining = [pid for pid in before if pathlib.Path(f'/proc/{pid}').exists()]
     assert not remaining, remaining
     delete('browser-client-http')
+    # The bound on a browser nobody closes. Only a canceled Run deletes its
+    # workspace sessions, so the launcher's own idle timer is what ends an idle
+    # browser; this proves the mechanism at a short override instead of waiting
+    # out the ten-minute default.
+    create('browser-idle-http')
+    idle = execute('browser-idle-http', 'AGENT_BROWSER_IDLE_TIMEOUT_MS=4000 agent-browser open ' + shlex.quote(fixture.as_uri()))
+    assert idle['exitCode'] == 0, idle
+    assert observed('browser-idle-http')['processScope'] == 'running', idle
+    wait_scope('browser-idle-http', 'settled', timeout=45)
+    delete('browser-idle-http')
     additional = {pid: started for pid, started in process_identities().items() if baseline.get(pid) != started}
     assert not additional, additional
-    print(json.dumps({'status': 'passed', 'mainExitKeepsDetachedScope': True, 'browserStartsWithoutForegroundRecipe': True, 'doubleForkReaped': pid, 'browserTrackedBeforeStop': len(before), 'browserSurvivors': remaining, 'browserClient': client, 'screenshot': '/workspace/outputs/session-custody-browser.png', 'remainingSessions': request('GET', '/process/session')[1]}, indent=2))
+    print(json.dumps({'status': 'passed', 'mainExitKeepsDetachedScope': True, 'browserStartsWithoutForegroundRecipe': True, 'doubleForkReaped': pid, 'browserTrackedBeforeStop': len(before), 'browserSurvivors': remaining, 'plainBackgroundReaped': background_pid, 'idleBrowserSettledWithoutClose': True, 'browserClient': client, 'screenshot': '/workspace/outputs/session-custody-browser.png', 'remainingSessions': request('GET', '/process/session')[1]}, indent=2))
 
 
 if __name__ == '__main__':
