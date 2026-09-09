@@ -46,6 +46,18 @@ The local Linux witness uses the existing `capabilities/c18-specialist-packs/pol
 
 Deployment must preserve the existing workspace snapshot registration and admission path. Register the exact resulting image, bind its actual executable evidence to the existing runtime capability catalog, then test from a normal production chat. Existing workspaces retain their admitted image; they must not be relabeled as containing the new driver.
 
+## Corrections after the first custody cut
+
+Two review findings against `c97d9f7b5` are fixed on this branch. Both are recorded here because a browser task is the reachable case for each.
+
+A session directory that outlived its daemon held its own ID forever. After any daemon or sandbox restart, creating a session at a previously used ID answered 409 and deleting it answered an untyped 500, on every retry — so a Run that reuses a process ID could never start that program again, and a cancellation could never settle it. An owner is installed before its scope starts and removed only after that scope settles, so retained state without an owner has no live scope behind it, and the daemon's exit already closed the lifetime pipe that terminates every scope it started. Startup now retires those directories, deletion sweeps unowned state and reports the absence, and creation retires it rather than conflicting. The reserved entrypoint keeps its snapshot-carried logs.
+
+A browser left open kept its scope running with no bound inside the session. Only a canceled Run reaches the deletion that ends the scope; a completed or failed Run's terminal retirement is a non-mutating proof that leaves the workspace and its sessions alive. Settlement therefore depended on the model issuing `agent-browser close`. The launcher's ten-minute idle timer is now the bound, as described above.
+
+Three smaller corrections ship with them: the supervisor proves the kernel names a thread's children before a scope accepts work, instead of letting a missing interface make every cancellation signal nothing and report no failure; a session that is gone is reported as absent rather than as a conflict, so one caller retiring its own session no longer fails every other caller's listing; and a reap status is read only when a child actually changed state.
+
+No image was rebuilt from these commits. The daemon and launcher changes require a fresh image and the canary in `RUNNER-CANARY.md` before any of it is claimed in production.
+
 ## Acceptance still required before activation
 
 - Source build and all inherited workspace toolchain checks pass against the exact image.
