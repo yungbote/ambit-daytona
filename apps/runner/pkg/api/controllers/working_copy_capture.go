@@ -17,6 +17,41 @@ import (
 
 const maximumWorkingCopyCaptureRequestBytes = 128 * 1024
 
+// WorkingCopyCaptureCapabilities godoc
+//
+//	@Tags sandbox
+//	@Summary Discover the assigned Runner capture surface before stopping a generation
+//	@Description Read-only capability discovery bound to the admitted capture helper. The private tree preserves lexical symlink targets, records FIFO and device omissions, and excludes managed runtime roots and caller-owned mounts. Process state and sockets are not portable; Docker archives can omit sockets.
+//	@Accept json
+//	@Produce json
+//	@Param sandboxId path string true "Sandbox ID"
+//	@Param request body workingcopy.CaptureCapabilitiesRequest true "Current capture authority"
+//	@Success 200 {object} workingcopy.CaptureCapabilities
+//	@Failure 400 {object} common_errors.ErrorResponse
+//	@Failure 409 {object} common_errors.ErrorResponse
+//	@Failure 503 {object} common_errors.ErrorResponse
+//	@Security Bearer
+//	@Router /sandboxes/{sandboxId}/working-copy-captures/capabilities [post]
+//	@id WorkingCopyCaptureCapabilities
+func WorkingCopyCaptureCapabilities(ctx *gin.Context) {
+	var request workingcopy.CaptureCapabilitiesRequest
+	if err := decodeExactCaptureBody(ctx, &request); err != nil {
+		ctx.Error(common_errors.NewBadRequestError(err))
+		return
+	}
+	service, err := workingCopyCaptureService()
+	if err != nil {
+		writeWorkingCopyCaptureError(ctx, err)
+		return
+	}
+	response, err := service.Capabilities(ctx.Request.Context(), ctx.Param("sandboxId"), request)
+	if err != nil {
+		writeWorkingCopyCaptureError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, response)
+}
+
 // CaptureWorkingCopy godoc
 //
 //	@Tags			sandbox
@@ -159,7 +194,7 @@ func StoppedWorkingCopyDirectoryRoster(ctx *gin.Context) {
 //
 //	@Tags			sandbox
 //	@Summary		List user files from an exact stopped sandbox generation
-//	@Description	Stream a complete bounded working-tree roster without an anchor file. Managed runtime roots and exact host-provided mount paths are excluded; unsupported user links and special files fail closed.
+//	@Description	Stream a bounded working-tree roster without an anchor file. Preserve symlink targets as lexical data without following them and report FIFO/device omissions. Managed runtime roots and exact host-provided mount paths are excluded. Docker archives may omit sockets, so the result is not a per-path socket inventory.
 //	@Param			sandboxId	path	string	true	"Sandbox ID"
 //	@Param			body	body	workingcopy.StoppedWorkingTreeRequest	true	"Generation authority, exclusions, and bounds"
 //	@Produce		json

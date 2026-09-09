@@ -27,6 +27,7 @@ import {
   WorkingCopyCaptureGenerationDto,
   StoppedWorkingCopyWorkingTreeRequestDto,
   StoppedWorkingCopyWorkingTreeReceiptDto,
+  StoppedWorkingCopyWorkingTreeEntryDto,
   MAXIMUM_WORKING_COPY_CAPTURE_READ_BYTES,
   MAXIMUM_WORKING_COPY_ROSTER_AGGREGATE_BYTES,
   MAXIMUM_WORKING_COPY_ROSTER_DEPTH,
@@ -37,6 +38,8 @@ import {
   StoppedWorkingCopyDirectoryRosterReceiptDto,
   WorkingCopyCaptureAuthorityDto,
   WorkingCopyCaptureBindingDto,
+  WorkingCopyCaptureCapabilitiesRequestDto,
+  WorkingCopyCaptureCapabilitiesDto,
   WorkingCopyCaptureDeleteReceiptDto,
   WorkingCopyCaptureExistsResponseDto,
   WorkingCopyCaptureIdentityDto,
@@ -45,7 +48,10 @@ import {
   WorkingCopyCaptureReadResponseDto,
   WorkingCopyCaptureReceiptDto,
 } from '../dto/working-copy-capture.dto'
-import { assertStopAuthority as assertGenerationStopAuthority } from '../dto/sandbox-generation-stop.contract'
+import {
+  assertGenerationObservationRequest,
+  assertStopAuthority as assertGenerationStopAuthority,
+} from '../dto/sandbox-generation-stop.contract'
 import { RunnerApiError } from '../errors/runner-api-error'
 import { SandboxExecutionAuthorityService } from './sandbox-execution-authority.service'
 
@@ -56,11 +62,83 @@ const CAPTURE_PROTOCOL_REF = 'ambit.runtime-interface/working-copy-capture@2'
 export class WorkingCopyCaptureService {
   constructor(private readonly executionAuthority: SandboxExecutionAuthorityService) {}
 
+  async capabilities(
+    organizationId: string,
+    sandboxIdOrName: string,
+    request: WorkingCopyCaptureCapabilitiesRequestDto,
+    signal?: AbortSignal,
+  ): Promise<WorkingCopyCaptureCapabilitiesDto> {
+    signal?.throwIfAborted()
+    assertExactKeys(
+      request,
+      ['authority', 'source', 'owner', 'fence'],
+      'capture capability request',
+      BadRequestException,
+    )
+    assertAuthority(request.authority)
+    try {
+      assertGenerationObservationRequest({ source: request.source, owner: request.owner, fence: request.fence })
+    } catch {
+      throw new BadRequestException('Working-copy capture capability authority is invalid.')
+    }
+    const { sandbox, adapter } = await this.executionAuthority.authorize(
+      organizationId,
+      sandboxIdOrName,
+      request.source,
+      request.owner,
+      request.fence,
+    )
+    try {
+      const response = await adapter.workingCopyCaptureCapabilities(sandbox.id, request, signal)
+      assertExactKeys(response, ['authority', 'stoppedWorkingTree'], 'capture capabilities', ConflictException)
+      if (canonicalJson(response.authority) !== canonicalJson(request.authority))
+        throw new ConflictException('Runner capture capabilities name another helper authority.')
+      const tree = response.stoppedWorkingTree
+      assertExactKeys(
+        tree,
+        [
+          'contract',
+          'semanticZoneRef',
+          'maximumDepth',
+          'maximumEntries',
+          'maximumFileBytes',
+          'maximumAggregateBytes',
+          'maximumReadBytes',
+          'maximumReceiptBytes',
+        ],
+        'working-tree capability',
+        ConflictException,
+      )
+      if (
+        tree.contract !== 'ambit.working-copy-stopped-working-tree/v1' ||
+        tree.semanticZoneRef !== USER_FILES_SEMANTIC_ZONE_REF
+      )
+        throw new ConflictException('Runner working-tree capability contract is unsupported.')
+      for (const key of [
+        'maximumDepth',
+        'maximumEntries',
+        'maximumFileBytes',
+        'maximumAggregateBytes',
+        'maximumReadBytes',
+        'maximumReceiptBytes',
+      ] as const) {
+        if (!Number.isSafeInteger(tree[key]) || tree[key] < 1)
+          throw new ConflictException('Runner working-tree capability bound is invalid.')
+      }
+      signal?.throwIfAborted()
+      return response
+    } catch (error) {
+      throw translateRunnerCaptureError(error, false)
+    }
+  }
+
   async capture(
     organizationId: string,
     sandboxIdOrName: string,
     binding: WorkingCopyCaptureBindingDto,
+    signal?: AbortSignal,
   ): Promise<WorkingCopyCaptureReceiptDto> {
+    signal?.throwIfAborted()
     assertBinding(binding)
     const { sandbox, adapter } = await this.executionAuthority.authorize(
       organizationId,
@@ -70,7 +148,7 @@ export class WorkingCopyCaptureService {
       binding.stopAuthority.fence,
     )
     try {
-      const receipt = await adapter.captureWorkingCopy(sandbox.id, binding)
+      const receipt = await adapter.captureWorkingCopy(sandbox.id, binding, signal)
       mutationReceiptGuard(() => assertReceipt(receipt, binding))
       return receipt
     } catch (error) {
@@ -104,7 +182,9 @@ export class WorkingCopyCaptureService {
     organizationId: string,
     sandboxIdOrName: string,
     request: WorkingCopyCaptureReadDto,
+    signal?: AbortSignal,
   ): Promise<WorkingCopyCaptureReadResponseDto> {
+    signal?.throwIfAborted()
     assertRead(request)
     const { sandbox, adapter } = await this.executionAuthority.authorize(
       organizationId,
@@ -114,7 +194,7 @@ export class WorkingCopyCaptureService {
       request.stopAuthority.fence,
     )
     try {
-      const response = await adapter.readWorkingCopyCapture(sandbox.id, request)
+      const response = await adapter.readWorkingCopyCapture(sandbox.id, request, signal)
       assertExactKeys(
         response,
         [
@@ -137,7 +217,7 @@ export class WorkingCopyCaptureService {
         ConflictException,
       )
       assertProviderIdentity(response)
-      if (typeof response.bytesBase64 !== 'string' || !canonicalBase64(response.bytesBase64)) {
+      if (typeof response.bytesBase64 !== 'string' || !canonicalBase64(response.bytesBase64, request.maximumBytes)) {
         throw new ConflictException('Runner returned a non-canonical capture body.')
       }
       const bytes = Buffer.from(response.bytesBase64, 'base64')
@@ -792,9 +872,10 @@ function canonicalUuid(value: unknown): value is string {
   )
 }
 
-function canonicalBase64(value: string): boolean {
+function canonicalBase64(value: string, maximumBytes: number): boolean {
   return (
-    /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value) &&
+    value.length <= Math.ceil(maximumBytes / 3) * 4 &&
+    value.length % 4 === 0 &&
     Buffer.from(value, 'base64').toString('base64') === value
   )
 }
@@ -1002,7 +1083,16 @@ function assertStoppedWorkingTreeReceipt(
   for (const [index, entry] of receipt.entries.entries()) {
     assertExactKeys(
       entry,
-      ['kind', 'mode', 'name', 'sha256', 'size', 'zoneRelativePath'],
+      [
+        'kind',
+        'mode',
+        'name',
+        'sha256',
+        'size',
+        'zoneRelativePath',
+        ...(entry.kind === 'symlink' ? ['linkTarget'] : []),
+        ...(entry.kind === 'excluded' ? ['excludedKind'] : []),
+      ],
       'working-tree entry',
       ConflictException,
     )
@@ -1011,14 +1101,9 @@ function assertStoppedWorkingTreeReceipt(
       excludedWorkingTreePath(entry.zoneRelativePath, excluded) ||
       entry.name !== posixPath.basename(entry.zoneRelativePath) ||
       entry.zoneRelativePath.split('/').length > request.maximumDepth ||
-      (entry.kind !== 'regular_file' && entry.kind !== 'directory') ||
       !Number.isSafeInteger(entry.size) ||
       entry.size < 0 ||
-      (entry.kind === 'directory' && (entry.size !== 0 || entry.sha256 !== null)) ||
-      (entry.kind === 'regular_file' &&
-        (entry.size > request.maximumFileBytes ||
-          typeof entry.sha256 !== 'string' ||
-          !/^sha256:[0-9a-f]{64}$/.test(entry.sha256))) ||
+      !validWorkingTreeEntryVariant(entry, request.maximumFileBytes) ||
       typeof entry.mode !== 'string' ||
       !/^[0-7]{4}$/.test(entry.mode) ||
       (index > 0 && compareUtf8Lexicographic(receipt.entries[index - 1].zoneRelativePath, entry.zoneRelativePath) >= 0)
@@ -1042,4 +1127,33 @@ function assertStoppedWorkingTreeReceipt(
   }
   const digest = `sha256:${createHash('sha256').update(canonicalJson(payload), 'utf8').digest('hex')}`
   if (receipt.rosterDigest !== digest) throw new ConflictException('Runner working-tree roster digest changed.')
+}
+
+function validWorkingTreeEntryVariant(entry: StoppedWorkingCopyWorkingTreeEntryDto, maximumFileBytes: number): boolean {
+  if (entry.kind === 'regular_file') {
+    return (
+      entry.size <= maximumFileBytes && typeof entry.sha256 === 'string' && /^sha256:[0-9a-f]{64}$/.test(entry.sha256)
+    )
+  }
+  if (entry.size !== 0 || entry.sha256 !== null) return false
+  switch (entry.kind) {
+    case 'directory':
+      return true
+    case 'symlink':
+      return (
+        typeof entry.linkTarget === 'string' &&
+        entry.linkTarget.length > 0 &&
+        Buffer.byteLength(entry.linkTarget, 'utf8') <= 4096 &&
+        toUSVString(entry.linkTarget) === entry.linkTarget &&
+        !entry.linkTarget.includes(String.fromCharCode(0))
+      )
+    case 'excluded':
+      return (
+        entry.excludedKind === 'fifo' ||
+        entry.excludedKind === 'character_device' ||
+        entry.excludedKind === 'block_device'
+      )
+    default:
+      return false
+  }
 }

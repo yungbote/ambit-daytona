@@ -18,13 +18,13 @@
 import type { GenerationstopTerminalGeneration } from './generationstop-terminal-generation';
 // May contain unused imports in some cases
 // @ts-ignore
-import type { WorkingcopyStoppedDirectoryRosterEntry } from './workingcopy-stopped-directory-roster-entry';
+import type { WorkingcopyStoppedWorkingTreeEntry } from './workingcopy-stopped-working-tree-entry';
 // May contain unused imports in some cases
 // @ts-ignore
 import type { WorkingcopyStoppedWorkingTreeRequest } from './workingcopy-stopped-working-tree-request';
 
 export interface WorkingcopyStoppedWorkingTreeReceipt {
-    'entries': Array<WorkingcopyStoppedDirectoryRosterEntry>;
+    'entries': Array<WorkingcopyStoppedWorkingTreeEntry>;
     'observedAt': string;
     'request': WorkingcopyStoppedWorkingTreeRequest;
     'rosterDigest': string;

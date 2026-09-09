@@ -27,7 +27,11 @@ import {
   SandboxExecutionOwnerDto as WorkingCopyCaptureOwnerDto,
   SandboxExecutionSourceDto as WorkingCopyCaptureSourceDto,
 } from './sandbox-execution-authority.dto'
-import { SandboxGenerationStopAuthorityDto, SandboxTerminalGenerationDto } from './sandbox-generation-stop.dto'
+import {
+  SandboxGenerationObservationRequestDto,
+  SandboxGenerationStopAuthorityDto,
+  SandboxTerminalGenerationDto,
+} from './sandbox-generation-stop.dto'
 
 export { WorkingCopyCaptureOwnerDto, WorkingCopyCaptureSourceDto }
 
@@ -85,6 +89,68 @@ export class WorkingCopyCaptureAuthorityDto {
   @ValidateNested()
   @Type(() => WorkingCopyCaptureAuthorityArtifactDto)
   helper: WorkingCopyCaptureAuthorityArtifactDto
+}
+
+@ApiSchema({ name: 'WorkingCopyCaptureCapabilitiesRequest' })
+export class WorkingCopyCaptureCapabilitiesRequestDto extends SandboxGenerationObservationRequestDto {
+  @ApiProperty({ type: WorkingCopyCaptureAuthorityDto })
+  @ValidateNested()
+  @Type(() => WorkingCopyCaptureAuthorityDto)
+  authority: WorkingCopyCaptureAuthorityDto
+}
+
+@ApiSchema({ name: 'StoppedWorkingCopyWorkingTreeCapability' })
+export class StoppedWorkingCopyWorkingTreeCapabilityDto {
+  @ApiProperty({ enum: ['ambit.working-copy-stopped-working-tree/v1'] })
+  @Equals('ambit.working-copy-stopped-working-tree/v1')
+  contract: 'ambit.working-copy-stopped-working-tree/v1'
+
+  @ApiProperty({ enum: [USER_FILES_SEMANTIC_ZONE_REF] })
+  @Equals(USER_FILES_SEMANTIC_ZONE_REF)
+  semanticZoneRef: typeof USER_FILES_SEMANTIC_ZONE_REF
+
+  @ApiProperty({ minimum: 1, example: MAXIMUM_WORKING_TREE_DEPTH })
+  @IsInt()
+  @Min(1)
+  maximumDepth: number
+
+  @ApiProperty({ minimum: 1, example: MAXIMUM_WORKING_TREE_ENTRIES })
+  @IsInt()
+  @Min(1)
+  maximumEntries: number
+
+  @ApiProperty({ minimum: 1, example: MAXIMUM_USER_FILE_CAPTURE_BYTES })
+  @IsInt()
+  @Min(1)
+  maximumFileBytes: number
+
+  @ApiProperty({ minimum: 1, example: MAXIMUM_WORKING_TREE_AGGREGATE_BYTES })
+  @IsInt()
+  @Min(1)
+  maximumAggregateBytes: number
+
+  @ApiProperty({ minimum: 1, example: MAXIMUM_USER_FILE_READ_BYTES })
+  @IsInt()
+  @Min(1)
+  maximumReadBytes: number
+
+  @ApiProperty({ minimum: 1, example: MAXIMUM_WORKING_TREE_RECEIPT_BYTES })
+  @IsInt()
+  @Min(1)
+  maximumReceiptBytes: number
+}
+
+@ApiSchema({ name: 'WorkingCopyCaptureCapabilities' })
+export class WorkingCopyCaptureCapabilitiesDto {
+  @ApiProperty({ type: WorkingCopyCaptureAuthorityDto })
+  @ValidateNested()
+  @Type(() => WorkingCopyCaptureAuthorityDto)
+  authority: WorkingCopyCaptureAuthorityDto
+
+  @ApiProperty({ type: StoppedWorkingCopyWorkingTreeCapabilityDto })
+  @ValidateNested()
+  @Type(() => StoppedWorkingCopyWorkingTreeCapabilityDto)
+  stoppedWorkingTree: StoppedWorkingCopyWorkingTreeCapabilityDto
 }
 
 @ApiSchema({ name: 'WorkingCopyCaptureSelector' })
@@ -426,7 +492,24 @@ export class StoppedWorkingCopyWorkingTreeRequestDto {
 export class StoppedWorkingCopyWorkingTreeEntryDto extends OmitType(StoppedWorkingCopyDirectoryRosterEntryDto, [
   'zoneRelativePath',
   'size',
+  'kind',
 ] as const) {
+  @ApiProperty({ enum: ['regular_file', 'directory', 'symlink', 'excluded'] })
+  @IsIn(['regular_file', 'directory', 'symlink', 'excluded'])
+  kind: 'regular_file' | 'directory' | 'symlink' | 'excluded'
+
+  @ApiPropertyOptional({ description: 'Lexical symlink target; never resolved by roster capture.', maxLength: 4096 })
+  @ValidateIf((entry) => entry.kind === 'symlink')
+  @IsString()
+  @MinLength(1)
+  @MaxLength(4096)
+  linkTarget?: string
+
+  @ApiPropertyOptional({ enum: ['fifo', 'character_device', 'block_device'] })
+  @ValidateIf((entry) => entry.kind === 'excluded')
+  @IsIn(['fifo', 'character_device', 'block_device'])
+  excludedKind?: 'fifo' | 'character_device' | 'block_device'
+
   @ApiProperty({ maxLength: 4096 })
   @IsString()
   @MinLength(1)

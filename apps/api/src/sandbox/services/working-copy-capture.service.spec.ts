@@ -32,6 +32,8 @@ import {
   StoppedWorkingCopyDirectoryRosterReceiptDto,
   StoppedWorkingCopyDirectoryRosterRequestDto,
   WorkingCopyCaptureBindingDto,
+  WorkingCopyCaptureCapabilitiesRequestDto,
+  WorkingCopyCaptureCapabilitiesDto,
   WorkingCopyCaptureDeleteReceiptDto,
   WorkingCopyCaptureExistsResponseDto,
   WorkingCopyCaptureIdentityDto,
@@ -68,6 +70,7 @@ describe(WorkingCopyCaptureService.name, () => {
   beforeEach(() => {
     adapter = {
       captureWorkingCopy: jest.fn(),
+      workingCopyCaptureCapabilities: jest.fn(),
       stoppedWorkingCopyDirectoryRoster: jest.fn(),
       stoppedWorkingCopyWorkingTree: jest.fn(),
       observeWorkingCopyCapture: jest.fn(),
@@ -88,6 +91,112 @@ describe(WorkingCopyCaptureService.name, () => {
       adapters as RunnerAdapterFactory,
     )
     service = new WorkingCopyCaptureService(executionAuthority)
+  })
+
+  function capabilityRequest(): WorkingCopyCaptureCapabilitiesRequestDto {
+    const binding = validBinding()
+    return {
+      source: binding.source,
+      owner: binding.owner,
+      fence: binding.stopAuthority.fence,
+      authority: binding.authority,
+    }
+  }
+
+  function capabilities(request: WorkingCopyCaptureCapabilitiesRequestDto): WorkingCopyCaptureCapabilitiesDto {
+    return {
+      authority: request.authority,
+      stoppedWorkingTree: {
+        contract: 'ambit.working-copy-stopped-working-tree/v1',
+        semanticZoneRef: USER_FILES_SEMANTIC_ZONE_REF,
+        maximumDepth: 64,
+        maximumEntries: 4096,
+        maximumFileBytes: MAXIMUM_USER_FILE_CAPTURE_BYTES,
+        maximumAggregateBytes: 8 * 1024 * 1024 * 1024,
+        maximumReadBytes: MAXIMUM_USER_FILE_READ_BYTES,
+        maximumReceiptBytes: 4 * 1024 * 1024,
+      },
+    }
+  }
+
+  it('discovers the assigned Runner without a stopped generation or capture write', async () => {
+    const request = capabilityRequest()
+    const response = capabilities(request)
+    const signal = new AbortController().signal
+    adapter.workingCopyCaptureCapabilities.mockResolvedValue(response)
+    await expect(service.capabilities('daytona-org-1', 'friendly-name', request, signal)).resolves.toEqual(response)
+    expect(adapter.workingCopyCaptureCapabilities).toHaveBeenCalledWith('sandbox-1', request, signal)
+    expect(adapter.captureWorkingCopy).not.toHaveBeenCalled()
+    expect(adapter.stoppedWorkingCopyWorkingTree).not.toHaveBeenCalled()
+    expect(validateSync(plainToInstance(WorkingCopyCaptureCapabilitiesRequestDto, request))).toEqual([])
+    expect(validateSync(plainToInstance(WorkingCopyCaptureCapabilitiesDto, response))).toEqual([])
+    const wire = await SandboxApiAxiosParamCreator(
+      new Configuration({ apiKey: 'Bearer token' }),
+    ).workingCopyCaptureCapabilities('sandbox-1', request, { signal })
+    expect(wire.url).toBe('/sandboxes/sandbox-1/working-copy-captures/capabilities')
+    expect(JSON.parse(wire.options.data as string)).toEqual(request)
+    expect(wire.options.signal).toBe(signal)
+  })
+
+  it('preserves old Runner 404 as an unavailable discovery without writing or stopping', async () => {
+    adapter.workingCopyCaptureCapabilities.mockRejectedValue(new RunnerApiError('route unavailable', 404))
+    await expect(service.capabilities('daytona-org-1', 'sandbox-1', capabilityRequest())).rejects.toBeInstanceOf(
+      NotFoundException,
+    )
+    expect(adapter.captureWorkingCopy).not.toHaveBeenCalled()
+  })
+
+  it('rejects foreign owners before contacting the Runner', async () => {
+    const request = capabilityRequest()
+    request.owner.tenantId = OTHER_ID
+    await expect(service.capabilities('daytona-org-1', 'sandbox-1', request)).rejects.toBeInstanceOf(ForbiddenException)
+    expect(adapter.workingCopyCaptureCapabilities).not.toHaveBeenCalled()
+  })
+
+  it('rejects substituted or malformed helper advertisements', async () => {
+    const request = capabilityRequest()
+    for (const mutate of [
+      (r: WorkingCopyCaptureCapabilitiesDto) => {
+        r.authority = { ...r.authority, lineageRef: 'other' }
+      },
+      (r: WorkingCopyCaptureCapabilitiesDto) => {
+        r.stoppedWorkingTree.maximumFileBytes = 1.5
+      },
+      (r: WorkingCopyCaptureCapabilitiesDto) => {
+        Object.assign(r, { unexpected: true })
+      },
+    ]) {
+      const response = capabilities(request)
+      mutate(response)
+      adapter.workingCopyCaptureCapabilities.mockResolvedValue(response)
+      await expect(service.capabilities('daytona-org-1', 'sandbox-1', request)).rejects.toBeInstanceOf(
+        ConflictException,
+      )
+    }
+  })
+
+  it.each(['capture', 'read'] as const)('propagates %s cancellation to the assigned Runner', async (operation) => {
+    const controller = new AbortController()
+    const reason = new Error('caller canceled')
+    let dispatch: () => void
+    const dispatched = new Promise<void>((resolve) => {
+      dispatch = resolve
+    })
+    const pendingRunner = (_sandbox: string, _request: unknown, signal?: AbortSignal) =>
+      new Promise<never>((_resolve, reject) => {
+        expect(signal).toBe(controller.signal)
+        signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
+        dispatch()
+      })
+    adapter.captureWorkingCopy.mockImplementation(pendingRunner)
+    adapter.readWorkingCopyCapture.mockImplementation(pendingRunner)
+    const pending =
+      operation === 'capture'
+        ? service.capture('daytona-org-1', 'sandbox-1', validBinding(), controller.signal)
+        : service.read('daytona-org-1', 'sandbox-1', validRead(), controller.signal)
+    await dispatched
+    controller.abort(reason)
+    await expect(pending).rejects.toBe(reason)
   })
 
   it('authorizes the exact v2 owner, source, runtime and stopped-container labels before capture', async () => {
@@ -113,7 +222,7 @@ describe(WorkingCopyCaptureService.name, () => {
     expect(sandboxService.findOneByIdOrName).toHaveBeenCalledWith('friendly-name', 'daytona-org-1')
     expect(runnerService.findOneOrFail).toHaveBeenCalledWith('runner-1')
     expect(adapters.create).toHaveBeenCalledTimes(1)
-    expect(adapter.captureWorkingCopy).toHaveBeenCalledWith('sandbox-1', binding)
+    expect(adapter.captureWorkingCopy).toHaveBeenCalledWith('sandbox-1', binding, undefined)
   })
 
   it('binds authority v2 to the exact lineage preimage and pinned protocol/helper artifacts', async () => {
@@ -294,7 +403,7 @@ describe(WorkingCopyCaptureService.name, () => {
     adapter.captureWorkingCopy.mockResolvedValue(receipt)
 
     await expect(service.capture('daytona-org-1', 'sandbox-1', binding)).resolves.toEqual(receipt)
-    expect(adapter.captureWorkingCopy).toHaveBeenCalledWith('sandbox-1', binding)
+    expect(adapter.captureWorkingCopy).toHaveBeenCalledWith('sandbox-1', binding, undefined)
   })
 
   it('forwards and re-proves an exact bounded stopped-generation directory roster', async () => {
@@ -575,7 +684,7 @@ describe(WorkingCopyCaptureService.name, () => {
     const middleResponse = validReadResponse(middle, 'cde')
     adapter.readWorkingCopyCapture.mockResolvedValueOnce(middleResponse)
     await expect(service.read('daytona-org-1', 'sandbox-1', middle)).resolves.toEqual(middleResponse)
-    expect(adapter.readWorkingCopyCapture).toHaveBeenLastCalledWith('sandbox-1', middle)
+    expect(adapter.readWorkingCopyCapture).toHaveBeenLastCalledWith('sandbox-1', middle, undefined)
 
     const terminal = validRead({ expectedTotalByteLength: 8, offset: 6, maximumBytes: 4 })
     const terminalResponse = validReadResponse(terminal, 'gh')
@@ -845,29 +954,29 @@ describe(WorkingCopyCaptureService.name, () => {
     })
   })
 
-  it('admits the exact Go-produced empty working-tree receipt without a fabricated anchor', async () => {
-    const receipt = JSON.parse(
-      readFileSync(
-        resolve(__dirname, '../../../../runner/pkg/workingcopy/testdata/stopped-working-tree.canonical.json'),
-        'utf8',
-      ),
-    ) as StoppedWorkingCopyWorkingTreeReceiptDto
-    const sandbox = validSandbox()
-    sandbox.labels.ambitWorkspaceExecutionManifestRef =
-      receipt.request.generation.stopAuthority.fence.workspaceExecutionManifestRef
-    sandbox.labels.ambitRuntimeManifestRef = sandbox.labels.ambitWorkspaceExecutionManifestRef
-    ;(sandboxService.findOneByIdOrName as jest.Mock).mockResolvedValue(sandbox)
-    adapter.stoppedWorkingCopyWorkingTree.mockResolvedValue(receipt)
-    const signal = new AbortController().signal
-    await expect(
-      service.stoppedWorkingTree('daytona-org-1', 'friendly-name', receipt.request, signal),
-    ).resolves.toEqual(receipt)
-    expect(adapter.stoppedWorkingCopyWorkingTree).toHaveBeenCalledWith('sandbox-1', receipt.request, signal)
-    expect(receipt.entries).toEqual([])
-    expect(receipt.request.generation).not.toHaveProperty('selector')
-    expect(validateSync(plainToInstance(StoppedWorkingCopyWorkingTreeRequestDto, receipt.request))).toEqual([])
-    expect(validateSync(plainToInstance(StoppedWorkingCopyWorkingTreeReceiptDto, receipt))).toEqual([])
-  })
+  it.each(['stopped-working-tree.canonical.json', 'stopped-working-tree-links.canonical.json'])(
+    'admits the exact Go-produced %s without a fabricated anchor',
+    async (fixture) => {
+      const receipt = JSON.parse(
+        readFileSync(resolve(__dirname, '../../../../runner/pkg/workingcopy/testdata', fixture), 'utf8'),
+      ) as StoppedWorkingCopyWorkingTreeReceiptDto
+      const sandbox = validSandbox()
+      sandbox.labels.ambitWorkspaceExecutionManifestRef =
+        receipt.request.generation.stopAuthority.fence.workspaceExecutionManifestRef
+      sandbox.labels.ambitRuntimeManifestRef = sandbox.labels.ambitWorkspaceExecutionManifestRef
+      ;(sandboxService.findOneByIdOrName as jest.Mock).mockResolvedValue(sandbox)
+      adapter.stoppedWorkingCopyWorkingTree.mockResolvedValue(receipt)
+      const signal = new AbortController().signal
+      await expect(
+        service.stoppedWorkingTree('daytona-org-1', 'friendly-name', receipt.request, signal),
+      ).resolves.toEqual(receipt)
+      expect(adapter.stoppedWorkingCopyWorkingTree).toHaveBeenCalledWith('sandbox-1', receipt.request, signal)
+      expect(receipt.entries.length).toBe(fixture.includes('links') ? 14 : 0)
+      expect(receipt.request.generation).not.toHaveProperty('selector')
+      expect(validateSync(plainToInstance(StoppedWorkingCopyWorkingTreeRequestDto, receipt.request))).toEqual([])
+      expect(validateSync(plainToInstance(StoppedWorkingCopyWorkingTreeReceiptDto, receipt))).toEqual([])
+    },
+  )
 
   it('forwards a complete custom working tree with a large file through the existing adapter', async () => {
     const request = validWorkingTreeRequest()
@@ -974,7 +1083,7 @@ describe(WorkingCopyCaptureService.name, () => {
     const binding = validBinding()
     binding.selector = { semanticZoneRef: USER_FILES_SEMANTIC_ZONE_REF, zoneRelativePath: 'customer.bin' }
     const receipt = validReceipt(binding)
-    receipt.totalByteLength = 102 * 1024 * 1024
+    receipt.totalByteLength = MAXIMUM_USER_FILE_CAPTURE_BYTES
     adapter.captureWorkingCopy.mockResolvedValue(receipt)
     await expect(service.capture('daytona-org-1', 'sandbox-1', binding)).resolves.toEqual(receipt)
     expect(validateSync(plainToInstance(WorkingCopyCaptureReceiptDto, receipt))).toEqual([])
@@ -986,6 +1095,13 @@ describe(WorkingCopyCaptureService.name, () => {
     adapter.readWorkingCopyCapture.mockResolvedValue(validReadResponse(read, 'x'))
     await expect(service.read('daytona-org-1', 'sandbox-1', read)).resolves.toMatchObject({ byteLength: 1, eof: true })
     expect(validateSync(plainToInstance(WorkingCopyCaptureReadDto, read))).toEqual([])
+
+    const bulk = { ...read, offset: 0 }
+    adapter.readWorkingCopyCapture.mockResolvedValue(validReadResponse(bulk, 'x'.repeat(MAXIMUM_USER_FILE_READ_BYTES)))
+    await expect(service.read('daytona-org-1', 'sandbox-1', bulk)).resolves.toMatchObject({
+      byteLength: MAXIMUM_USER_FILE_READ_BYTES,
+      eof: false,
+    })
 
     const legacy = validRead()
     legacy.maximumBytes = MAXIMUM_USER_FILE_READ_BYTES

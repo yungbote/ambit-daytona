@@ -21,6 +21,8 @@ import { OrganizationResourcePermission } from '../../organization/enums/organiz
 import { OrganizationAuthContextGuard } from '../../organization/guards/organization-auth-context.guard'
 import {
   WorkingCopyCaptureBindingDto,
+  WorkingCopyCaptureCapabilitiesRequestDto,
+  WorkingCopyCaptureCapabilitiesDto,
   WorkingCopyCaptureDeleteReceiptDto,
   WorkingCopyCaptureExistsResponseDto,
   WorkingCopyCaptureIdentityDto,
@@ -47,6 +49,28 @@ import { WorkingCopyCaptureService } from '../services/working-copy-capture.serv
 export class WorkingCopyCaptureController {
   constructor(private readonly captures: WorkingCopyCaptureService) {}
 
+  @Post('capabilities')
+  @HttpCode(200)
+  @ApiOperation({
+    operationId: 'sandboxWorkingCopyCaptureCapabilities',
+    summary: 'Discover the assigned Runner capture surface before stopping a generation',
+  })
+  @ApiResponse({ status: 200, type: WorkingCopyCaptureCapabilitiesDto })
+  @Audit({
+    action: AuditAction.READ,
+    targetType: AuditTarget.SANDBOX,
+    targetIdFromRequest: (request) => request.params.sandboxIdOrName,
+  })
+  capabilities(
+    @IsOrganizationAuthContext() auth: OrganizationAuthContext,
+    @Param('sandboxIdOrName') sandboxIdOrName: string,
+    @Body() request: WorkingCopyCaptureCapabilitiesRequestDto,
+    @Req() incoming: IncomingMessage,
+    @Res({ passthrough: true }) outgoing: ServerResponse<IncomingMessage>,
+  ): Promise<WorkingCopyCaptureCapabilitiesDto> {
+    return this.captures.capabilities(auth.organizationId, sandboxIdOrName, request, responseSignal(incoming, outgoing))
+  }
+
   @Post()
   @HttpCode(200)
   @ApiOperation({
@@ -63,8 +87,10 @@ export class WorkingCopyCaptureController {
     @IsOrganizationAuthContext() auth: OrganizationAuthContext,
     @Param('sandboxIdOrName') sandboxIdOrName: string,
     @Body() binding: WorkingCopyCaptureBindingDto,
+    @Req() incoming: IncomingMessage,
+    @Res({ passthrough: true }) outgoing: ServerResponse<IncomingMessage>,
   ): Promise<WorkingCopyCaptureReceiptDto> {
-    return this.captures.capture(auth.organizationId, sandboxIdOrName, binding)
+    return this.captures.capture(auth.organizationId, sandboxIdOrName, binding, responseSignal(incoming, outgoing))
   }
 
   @Post('observe')
@@ -103,8 +129,10 @@ export class WorkingCopyCaptureController {
     @IsOrganizationAuthContext() auth: OrganizationAuthContext,
     @Param('sandboxIdOrName') sandboxIdOrName: string,
     @Body() request: WorkingCopyCaptureReadDto,
+    @Req() incoming: IncomingMessage,
+    @Res({ passthrough: true }) outgoing: ServerResponse<IncomingMessage>,
   ): Promise<WorkingCopyCaptureReadResponseDto> {
-    return this.captures.read(auth.organizationId, sandboxIdOrName, request)
+    return this.captures.read(auth.organizationId, sandboxIdOrName, request, responseSignal(incoming, outgoing))
   }
 
   @Post('stopped-directory-roster')

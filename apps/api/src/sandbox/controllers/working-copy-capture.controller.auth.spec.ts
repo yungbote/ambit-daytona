@@ -22,6 +22,7 @@ describe('[AUTH] WorkingCopyCaptureController', () => {
   const trackMethod = createCoverageTracker(WorkingCopyCaptureController)
 
   for (const method of [
+    'capabilities',
     'capture',
     'observe',
     'read',

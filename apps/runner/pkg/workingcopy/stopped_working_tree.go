@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/daytonaio/runner/pkg/generationstop"
 	"golang.org/x/text/unicode/norm"
@@ -65,7 +66,7 @@ func (s *Service) StoppedWorkingTree(ctx context.Context, sandboxID string, requ
 		return StoppedWorkingTreeReceipt{}, fmt.Errorf("%w: working-tree descriptor changed before archive read", ErrConflict)
 	}
 	receipt := StoppedWorkingTreeReceipt{
-		Request: request, TerminalGeneration: terminal, Entries: []StoppedDirectoryRosterEntry{},
+		Request: request, TerminalGeneration: terminal, Entries: []StoppedWorkingTreeEntry{},
 		RosterDigest: "sha256:" + strings.Repeat("0", 64),
 		ObservedAt:   "2000-01-01T00:00:00.000Z",
 	}
@@ -151,7 +152,8 @@ func excludedWorkingTreePath(relative string, exclusions map[string]struct{}) bo
 	return false
 }
 
-func readStoppedWorkingTreeTar(ctx context.Context, archive io.Reader, request StoppedWorkingTreeRequest, entryBudget int) ([]StoppedDirectoryRosterEntry, error) {
+func readStoppedWorkingTreeTar(ctx context.Context, archive io.Reader, request StoppedWorkingTreeRequest, entryBudget int) ([]StoppedWorkingTreeEntry, error) {
+	initialEntryBudget := entryBudget
 	bounded := &io.LimitedReader{R: captureContextReader{ctx: ctx, reader: archive}, N: maximumWorkingTreeArchiveBytes + 1}
 	reader := tar.NewReader(bounded)
 	root, err := reader.Next()
@@ -166,7 +168,8 @@ func readStoppedWorkingTreeTar(ctx context.Context, archive io.Reader, request S
 	for _, excluded := range request.ExcludedPaths {
 		exclusions[excluded] = struct{}{}
 	}
-	entries := make([]StoppedDirectoryRosterEntry, 0)
+	entries := make([]StoppedWorkingTreeEntry, 0)
+	hardlinks := make(map[string]string)
 	buffer := make([]byte, captureStreamBufferBytes)
 	var aggregate, archiveBodyBytes int64
 	for {
@@ -194,17 +197,46 @@ func readStoppedWorkingTreeTar(ctx context.Context, archive io.Reader, request S
 		if !canonicalWorkingTreePath(relative) || len(strings.Split(relative, "/")) > request.MaximumDepth || len(entries) >= request.MaximumEntries {
 			return nil, fmt.Errorf("%w: working-tree path, depth or entry bound exceeded", ErrConflict)
 		}
-		if header.Linkname != "" {
-			return nil, fmt.Errorf("%w: user working-tree links are unsupported", ErrConflict)
+		if header.Linkname != "" && header.Typeflag != tar.TypeSymlink && header.Typeflag != tar.TypeLink {
+			return nil, fmt.Errorf("%w: working-tree entry has unsupported link metadata", ErrConflict)
+		}
+		if header.Typeflag != tar.TypeDir && strings.HasSuffix(header.Name, "/") {
+			return nil, fmt.Errorf("%w: non-directory working-tree entry has a directory path", ErrConflict)
 		}
 		mode := fmt.Sprintf("%04o", header.FileInfo().Mode().Perm())
-		entry := StoppedDirectoryRosterEntry{ZoneRelativePath: relative, Name: path.Base(relative), Mode: &mode}
+		entry := StoppedWorkingTreeEntry{ZoneRelativePath: relative, Name: path.Base(relative), Mode: &mode}
 		switch header.Typeflag {
 		case tar.TypeDir:
 			if header.Size != 0 || !header.FileInfo().Mode().IsDir() {
 				return nil, fmt.Errorf("%w: working-tree directory descriptor is invalid", ErrConflict)
 			}
 			entry.Kind = "directory"
+		case tar.TypeSymlink:
+			if header.Size != 0 || !validWorkingTreeLinkTarget(header.Linkname) {
+				return nil, fmt.Errorf("%w: working-tree symlink target or size is invalid", ErrConflict)
+			}
+			entry.Kind = "symlink"
+			target := header.Linkname
+			entry.LinkTarget = &target
+		case tar.TypeLink:
+			// Docker represents repeated inodes as archive links. Resolve only
+			// against admitted regular entries after the whole archive is read;
+			// no path from link metadata is ever opened or followed.
+			target := strings.TrimPrefix(header.Linkname, "workspace/")
+			if header.Size != 0 || !strings.HasPrefix(header.Linkname, "workspace/") ||
+				!canonicalWorkingTreePath(target) || excludedWorkingTreePath(target, exclusions) {
+				return nil, fmt.Errorf("%w: working-tree hardlink target is not an admitted archive path", ErrConflict)
+			}
+			entry.Kind = "regular_file"
+			hardlinks[relative] = target
+		case tar.TypeFifo, tar.TypeChar, tar.TypeBlock:
+			if header.Size != 0 {
+				return nil, fmt.Errorf("%w: non-portable working-tree entry contains data", ErrConflict)
+			}
+			entry.Kind = "excluded"
+			entry.ExcludedKind = map[byte]string{
+				tar.TypeFifo: "fifo", tar.TypeChar: "character_device", tar.TypeBlock: "block_device",
+			}[header.Typeflag]
 		case tar.TypeReg, tar.TypeRegA:
 			if !header.FileInfo().Mode().IsRegular() || header.Size < 0 || header.Size > request.MaximumFileBytes || header.Size > request.MaximumAggregateBytes-aggregate {
 				return nil, fmt.Errorf("%w: working-tree file or aggregate byte bound exceeded", ErrConflict)
@@ -222,7 +254,7 @@ func readStoppedWorkingTreeTar(ctx context.Context, archive io.Reader, request S
 			digest := "sha256:" + hex.EncodeToString(hasher.Sum(nil))
 			entry.SHA256 = &digest
 		default:
-			return nil, fmt.Errorf("%w: user working-tree links and special files are unsupported", ErrConflict)
+			return nil, fmt.Errorf("%w: working-tree archive entry kind is unsupported", ErrConflict)
 		}
 		encoded, err := json.Marshal(entry)
 		if err != nil {
@@ -257,17 +289,62 @@ func readStoppedWorkingTreeTar(ctx context.Context, archive io.Reader, request S
 	sort.Slice(entries, func(left, right int) bool {
 		return compareUTF8Lexicographic(entries[left].ZoneRelativePath, entries[right].ZoneRelativePath) < 0
 	})
-	paths := make(map[string]string, len(entries))
-	for _, entry := range entries {
+	paths := make(map[string]int, len(entries))
+	for index, entry := range entries {
 		if _, exists := paths[entry.ZoneRelativePath]; exists {
 			return nil, fmt.Errorf("%w: working-tree roster repeats a path", ErrConflict)
 		}
 		for parent := path.Dir(entry.ZoneRelativePath); parent != "."; parent = path.Dir(parent) {
-			if paths[parent] != "directory" {
+			if parentIndex, exists := paths[parent]; !exists || entries[parentIndex].Kind != "directory" {
 				return nil, fmt.Errorf("%w: working-tree roster has no exact directory ancestry", ErrConflict)
 			}
 		}
-		paths[entry.ZoneRelativePath] = entry.Kind
+		paths[entry.ZoneRelativePath] = index
+	}
+	resolving := make(map[string]bool)
+	var resolveHardlink func(int) error
+	resolveHardlink = func(index int) error {
+		entry := &entries[index]
+		if entry.Kind != "regular_file" {
+			return fmt.Errorf("%w: working-tree hardlink target is not a regular file", ErrConflict)
+		}
+		if entry.SHA256 != nil {
+			return nil
+		}
+		if resolving[entry.ZoneRelativePath] {
+			return fmt.Errorf("%w: working-tree hardlinks contain a cycle", ErrConflict)
+		}
+		targetIndex, exists := paths[hardlinks[entry.ZoneRelativePath]]
+		if !exists {
+			return fmt.Errorf("%w: working-tree hardlink target is absent", ErrConflict)
+		}
+		resolving[entry.ZoneRelativePath] = true
+		if err := resolveHardlink(targetIndex); err != nil {
+			return err
+		}
+		target := entries[targetIndex]
+		if target.Size > request.MaximumAggregateBytes-aggregate {
+			return fmt.Errorf("%w: materialized working-tree hardlinks exceed aggregate byte bound", ErrConflict)
+		}
+		aggregate += target.Size
+		entry.Size, entry.SHA256 = target.Size, target.SHA256
+		delete(resolving, entry.ZoneRelativePath)
+		return nil
+	}
+	for relative := range hardlinks {
+		if err := resolveHardlink(paths[relative]); err != nil {
+			return nil, err
+		}
+	}
+	if len(hardlinks) > 0 {
+		encoded, err := json.Marshal(entries)
+		if err != nil || len(encoded)-2 > initialEntryBudget {
+			return nil, fmt.Errorf("%w: materialized working-tree receipt exceeds its byte bound", ErrConflict)
+		}
 	}
 	return entries, nil
+}
+
+func validWorkingTreeLinkTarget(value string) bool {
+	return value != "" && len(value) <= 4096 && utf8.ValidString(value) && !strings.ContainsRune(value, 0)
 }
