@@ -23,8 +23,11 @@ export AGENT_BROWSER_SCREENSHOT_DIR="${AGENT_BROWSER_SCREENSHOT_DIR:-/workspace/
 mkdir -p "$AGENT_BROWSER_SOCKET_DIR" "$AGENT_BROWSER_DOWNLOAD_PATH" "$AGENT_BROWSER_SCREENSHOT_DIR"
 
 # Chromium does not consume HTTP(S)_PROXY or SSL_CERT_FILE itself. The native
-# driver maps these existing provider settings to Chrome proxy/NSS trust. It
-# retains certificate verification; no proxy credentials are logged here.
+# driver maps these existing provider settings to Chrome proxy/NSS trust and
+# retains certificate verification. The proxy value is forwarded verbatim: this
+# launcher neither rewrites, stores nor prints it, and it adds no credential
+# handling of its own. Only an unauthenticated CONNECT proxy is covered by
+# conformance/proxy.py, so an authenticated proxy is unverified here.
 if [[ -z "${AGENT_BROWSER_PROXY:-}" ]]; then
   browser_proxy="${HTTPS_PROXY:-${https_proxy:-${HTTP_PROXY:-${http_proxy:-}}}}"
   if [[ -n "$browser_proxy" ]]; then

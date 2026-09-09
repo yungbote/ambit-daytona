@@ -35,4 +35,13 @@ LABEL org.opencontainers.image.revision="${BUILD_SOURCE_REVISION}" \
       io.ambit.browser-lifecycle="session-owned-workspace-process"
 USER daytona
 WORKDIR /workspace
-RUN test -w /workspace && agent-browser --version
+# Qualify the real launcher, not the raw binary. Its default output paths are
+# redirected into a scratch directory this step removes, so the image does not
+# carry a browser output tree. The launcher's fixed socket directory is still
+# created under /workspace; the workspace volume shadows the image's /workspace
+# at runtime, so nothing baked there is ever visible to a Run.
+RUN test -w /workspace \
+ && AGENT_BROWSER_DOWNLOAD_PATH=/tmp/browser-version-check/downloads \
+    AGENT_BROWSER_SCREENSHOT_DIR=/tmp/browser-version-check/screenshots \
+    agent-browser --version \
+ && rm -rf /tmp/browser-version-check
