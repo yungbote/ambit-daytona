@@ -86,8 +86,9 @@ func retain(t *testing.T, configDir, sessionID string) string {
 }
 
 // A restarted daemon must expose retained state as absent and free its ID for
-// reuse. Holding it made the reachable production arm — a start that reuses a
-// previously used session ID — fail with 409 forever.
+// reuse. Holding it walled the ID: creation answered 409 forever and deletion
+// answered an untyped 500 forever, which is the arm cancellation settlement
+// depends on. This proves the daemon's contract, not a backend's reachability.
 func TestRestartedDaemonServesReusableSessionIdentities(t *testing.T) {
 	configDir := t.TempDir()
 	retained := retain(t, configDir, "hp-build")

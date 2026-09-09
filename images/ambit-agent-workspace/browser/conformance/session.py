@@ -117,10 +117,9 @@ def main():
     remaining = [pid for pid in before if pathlib.Path(f'/proc/{pid}').exists()]
     assert not remaining, remaining
     delete('browser-client-http')
-    # The bound on a browser nobody closes. Only a canceled Run deletes its
-    # workspace sessions, so the launcher's own idle timer is what ends an idle
-    # browser; this proves the mechanism at a short override instead of waiting
-    # out the ten-minute default.
+    # The workspace lifecycle is the bound on a browser nobody closes; the
+    # driver's idle timer is a leak backstop, and this proves that mechanism
+    # works at a short override rather than waiting out its hour-long default.
     create('browser-idle-http')
     idle = execute('browser-idle-http', 'AGENT_BROWSER_IDLE_TIMEOUT_MS=4000 agent-browser open ' + shlex.quote(fixture.as_uri()))
     assert idle['exitCode'] == 0, idle

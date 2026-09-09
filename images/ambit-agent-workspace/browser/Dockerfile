@@ -36,12 +36,14 @@ LABEL org.opencontainers.image.revision="${BUILD_SOURCE_REVISION}" \
 USER daytona
 WORKDIR /workspace
 # Qualify the real launcher, not the raw binary. Its default output paths are
-# redirected into a scratch directory this step removes, so the image does not
-# carry a browser output tree. The launcher's fixed socket directory is still
-# created under /workspace; the workspace volume shadows the image's /workspace
-# at runtime, so nothing baked there is ever visible to a Run.
+# redirected into a scratch directory this step removes. An ordinary Run's
+# /workspace is this image's own layer — the Runner binds no volume and mounts
+# no tmpfs over it — so the launcher's fixed socket directory would otherwise be
+# baked in. Remove it here and prove /workspace is left exactly as the parent's
+# `io.ambit.workspace-contract` states: writable by the runtime user, empty.
 RUN test -w /workspace \
  && AGENT_BROWSER_DOWNLOAD_PATH=/tmp/browser-version-check/downloads \
     AGENT_BROWSER_SCREENSHOT_DIR=/tmp/browser-version-check/screenshots \
     agent-browser --version \
- && rm -rf /tmp/browser-version-check
+ && rm -rf /tmp/browser-version-check /workspace/.ambit \
+ && [ -z "$(ls -A /workspace)" ]
