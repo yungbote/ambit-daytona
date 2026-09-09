@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	common_errors "github.com/daytonaio/common-go/pkg/errors"
+	"github.com/daytonaio/daemon/internal/util"
 	"golang.org/x/sys/unix"
 )
 
@@ -101,7 +103,10 @@ func runCustodyFixture(args []string) bool {
 			panic(fmt.Sprintf("unexpected startup/FD custody: scope=%v error=%v before=%d after=%d", scope, startErr, before, after))
 		}
 	case "owner":
-		svc := NewSessionService(slog.New(slog.NewTextHandler(io.Discard, nil)), filepath.Join(filepath.Dir(path), "owner-state"), 100*time.Millisecond, 10*time.Millisecond)
+		svc, err := NewSessionService(slog.New(slog.NewTextHandler(io.Discard, nil)), filepath.Join(filepath.Dir(path), "owner-state"), 100*time.Millisecond, 10*time.Millisecond)
+		if err != nil {
+			panic(err)
+		}
 		if err := svc.Create("owner-dies", false); err != nil {
 			panic(err)
 		}
@@ -303,17 +308,94 @@ func TestLostSupervisorNeverConfirmsDeletion(t *testing.T) {
 	}
 }
 
-func TestRetainedDirectoryIsNotProofOfAbsentScope(t *testing.T) {
+// A directory this daemon does not own cannot be reached again: observation,
+// command results and deletion all require the in-memory owner. It is retained
+// output of custody that is gone, so the ID stays usable and deletion reports
+// the absence instead of an unconvergeable conflict.
+func TestRetainedDirectoryWithoutAnOwnerIsRetiredNotHeld(t *testing.T) {
 	svc := newStdinTestService(t)
-	path := (&session{id: "old-owner"}).Dir(svc.configDir)
+	path := filepath.Join((&session{id: "old-owner"}).Dir(svc.configDir), "cmd-1")
 	if err := os.MkdirAll(path, 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Create("old-owner", false); err == nil {
-		t.Fatal("a new scope replaced retained unresolved custody")
+	if err := os.WriteFile(filepath.Join(path, "output.log"), []byte("previous life"), 0600); err != nil {
+		t.Fatal(err)
 	}
-	if err := svc.Delete(context.Background(), "old-owner"); err == nil || !strings.Contains(err.Error(), "custody is unavailable") {
-		t.Fatalf("lost ownership was reported as absent: %v", err)
+	if err := svc.Delete(context.Background(), "old-owner"); !common_errors.IsNotFoundError(err) {
+		t.Fatalf("lost ownership was not reported as absent: %v", err)
+	}
+	if _, err := os.Lstat((&session{id: "old-owner"}).Dir(svc.configDir)); !os.IsNotExist(err) {
+		t.Fatalf("deletion left retained state behind: %v", err)
+	}
+	if err := os.MkdirAll(path, 0755); err != nil {
+		t.Fatal(err)
+	}
+	openSession(t, svc, "old-owner")
+	result, err := svc.Execute("old-owner", "reused", "printf reused-scope", false, true, true, false, true)
+	if err != nil || result.Output == nil || !strings.Contains(*result.Output, "reused-scope") {
+		t.Fatalf("retained state blocked its own session ID: %+v %v", result, err)
+	}
+	if _, err := os.Lstat(filepath.Join(path, "output.log")); !os.IsNotExist(err) {
+		t.Fatalf("a reused ID inherited the previous life's output: %v", err)
+	}
+}
+
+// The daemon's death is the lifetime signal for every scope it started, so a
+// restarted daemon starts from free session identities.
+func TestRestartedDaemonReconcilesRetainedSessions(t *testing.T) {
+	configDir := t.TempDir()
+	first := newTestServiceIn(t, configDir)
+	if err := first.Create("hp-build", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Execute("hp-build", "cmd-1", "printf previous-life", false, true, true, false, true); err != nil {
+		t.Fatal(err)
+	}
+	owned, _ := first.sessions.Get("hp-build")
+	retained := owned.Dir(configDir)
+	// Emulate the daemon exit: the lifetime pipe closes and the scope settles,
+	// while the retained directory stays exactly as a restart would find it.
+	owned.scope.Load().cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := owned.scope.Load().awaitSettlement(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(retained); err != nil {
+		t.Fatalf("fixture did not retain session state: %v", err)
+	}
+
+	second := newTestServiceIn(t, configDir)
+	if _, err := os.Lstat(retained); !os.IsNotExist(err) {
+		t.Fatalf("restart kept unreachable retained state: %v", err)
+	}
+	if observed, err := second.Get("hp-build"); !common_errors.IsNotFoundError(err) {
+		t.Fatalf("restart reported custody it does not have: %+v %v", observed, err)
+	}
+	if observed, err := second.List(); err != nil || len(observed) != 0 {
+		t.Fatalf("restart listed retained state as a session: %+v %v", observed, err)
+	}
+	openSession(t, second, "hp-build")
+	result, err := second.Execute("hp-build", "cmd-1", "printf restarted", false, true, true, false, true)
+	if err != nil || result.Output == nil || !strings.Contains(*result.Output, "restarted") {
+		t.Fatalf("a previously used session ID stayed unusable after restart: %+v %v", result, err)
+	}
+}
+
+// The reserved entrypoint ID is read from disk by the daemon itself, so
+// reconciliation must not treat its snapshot-carried logs as unreachable.
+func TestRestartKeepsEntrypointLogs(t *testing.T) {
+	configDir := t.TempDir()
+	path := filepath.Join(configDir, "sessions", util.EntrypointSessionID, "carried.log")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("snapshot log"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	newTestServiceIn(t, configDir)
+	if content, err := os.ReadFile(path); err != nil || string(content) != "snapshot log" {
+		t.Fatalf("restart discarded entrypoint logs: %q %v", content, err)
 	}
 }
 

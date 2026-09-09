@@ -6,7 +6,6 @@ package session
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"time"
 
@@ -19,9 +18,13 @@ func (s *SessionService) Delete(ctx context.Context, sessionID string) error {
 	}
 	owned, ok := s.sessions.Get(sessionID)
 	if !ok {
-		_, err := os.Lstat((&session{id: sessionID}).Dir(s.configDir))
-		if err == nil || !os.IsNotExist(err) {
-			return fmt.Errorf("session process custody is unavailable; retained session state requires workspace reconciliation")
+		// No owner means no live scope: an owner is installed before its scope
+		// starts and removed only after the scope settles. Anything still on
+		// disk is unreachable output of custody that is gone, so this sweeps it
+		// and reports the absence the caller asked about. Deletion converges;
+		// it never leaves state a later Create would conflict with.
+		if err := os.RemoveAll((&session{id: sessionID}).Dir(s.configDir)); err != nil {
+			return common_errors.NewBadRequestError(err)
 		}
 		return common_errors.NewNotFoundError(errors.New("session not found"))
 	}

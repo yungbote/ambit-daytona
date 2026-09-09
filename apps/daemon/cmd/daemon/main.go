@@ -135,7 +135,11 @@ func run() int {
 	// sandboxes without secrets.
 	cacert.InstallProxyCA(logger)
 
-	sessionService := session.NewSessionService(logger, configDir, c.TerminationGracePeriod, c.TerminationCheckInterval)
+	sessionService, err := session.NewSessionService(logger, configDir, c.TerminationGracePeriod, c.TerminationCheckInterval)
+	if err != nil {
+		logger.Error("Failed to reconcile retained session state", "error", err)
+		return 2
+	}
 
 	// Execute passed arguments as command in entrypoint session
 	if len(args) > 0 {

@@ -56,11 +56,24 @@ func (s *SessionService) create(sessionID string, isLegacy, entrypoint bool) err
 		mkdir = os.MkdirAll
 	}
 	if err := mkdir(owned.Dir(s.configDir), 0755); err != nil {
-		removeReservation()
-		if os.IsExist(err) {
-			return common_errors.NewConflictError(errors.New("session state is retained; its prior process custody must be reconciled before this ID can be reused"))
+		if !os.IsExist(err) {
+			removeReservation()
+			return err
 		}
-		return err
+		// This owner holds the ID, so no live scope can be behind that
+		// directory: an owner is installed before its scope starts and removed
+		// only after the scope settles. Retained state without an owner is the
+		// same unreachable output startup reconciliation retires, so retiring
+		// it here keeps a reused ID convergent instead of conflicting forever.
+		s.logger.Info("retired retained session state without process custody", "session_id", sessionID)
+		if err := os.RemoveAll(owned.Dir(s.configDir)); err != nil {
+			removeReservation()
+			return err
+		}
+		if err := mkdir(owned.Dir(s.configDir), 0755); err != nil {
+			removeReservation()
+			return err
+		}
 	}
 
 	dir := ""

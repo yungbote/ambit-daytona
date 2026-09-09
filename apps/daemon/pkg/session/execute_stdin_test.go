@@ -14,12 +14,23 @@ import (
 
 func newStdinTestService(t *testing.T) *SessionService {
 	t.Helper()
-	return NewSessionService(
+	return newTestServiceIn(t, t.TempDir())
+}
+
+// newTestServiceIn constructs a service over an exact configuration directory,
+// so a test can build a second service over the first one's retained state.
+func newTestServiceIn(t *testing.T, configDir string) *SessionService {
+	t.Helper()
+	svc, err := NewSessionService(
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
-		t.TempDir(),
+		configDir,
 		250*time.Millisecond,
 		25*time.Millisecond,
 	)
+	if err != nil {
+		t.Fatalf("new session service: %v", err)
+	}
+	return svc
 }
 
 func openSession(t *testing.T, svc *SessionService, id string) {
