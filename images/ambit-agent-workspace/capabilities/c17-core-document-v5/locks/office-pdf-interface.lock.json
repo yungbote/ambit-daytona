@@ -1,7 +1,7 @@
 {
   "schema": "ambit.runtime-interface-lock/v1",
   "state": "candidate-ready",
-  "digest": "sha256:ae446b53680cf54c1d5b9f573160d65769a41d602102b147ed0e668deae1d92c",
+  "digest": "sha256:d10b87eb2d57f720ec658d7e8faec19247cd7c4b15e04fec27bc6f605460dc42",
   "contract": {
     "schema": "ambit.runtime-interface-contract/v1",
     "interfaceRef": "ambit.runtime-interface/office-pdf-render@1",
@@ -218,7 +218,7 @@
         "certification/verify_structural_runtime_archive.py": "sha256:73f247ceb6dd82087aaac68004888d66ee31884745d475cdda6cbde8d3e19401",
         "renderer/ambit-render-document.mjs": "sha256:a27c7071141aca70fa2ca3c42e18ee98ae9ce13afbf49568a63f896830e00d25",
         "renderer/ambit-render-pages.mjs": "sha256:5e888d07416c9fd8e65643df3fc0329df3bc3ac1fb3c6296cca1b5bf18a7fc8a",
-        "renderer/docx-package-admission.mjs": "sha256:e24a8fab58edef6315bbdaa0302a4b364e4d959b8cb537ee35a93b7fdef49560",
+        "renderer/docx-package-admission.mjs": "sha256:bc314544dd1a1270df29ccd0db0ff64f507e737739a66d27f731839e30683871",
         "renderer/framed-jsonl-protocol.mjs": "sha256:f96730751c1d87e354a393ed7a5ffc08da151c0950c88768270b0600c9b67f19",
         "renderer/pdfjs-page-renderer.mjs": "sha256:857a7121727fd3d7da9f83eea180ee0b66f27145b4d7d6584a1d771490584c89",
         "renderer/process-group-execution.mjs": "sha256:e3fca9cfbb69f2e3001e1aa9e59f8da2742f0b315cb295c7c92d92eb1b3e6d53",

@@ -314,7 +314,7 @@ function admitContentTypes(bytes, limits, format) {
   }
 }
 
-function admitRelationships(bytes, limits, name) {
+function admitRelationships(bytes, limits, name, mainPart) {
   const root = requireElement(
     parseRestrictedXml(bytes, limits, `Office relationships ${name}`),
     RELATIONSHIPS_NAMESPACE,
@@ -323,6 +323,7 @@ function admitRelationships(bytes, limits, name) {
   )
   exactUnqualifiedAttributes(root, [], 'Office relationships root')
   const identifiers = new Set()
+  let mainRelationshipCount = 0
   for (const child of root.children) {
     requireElement(
       child,
@@ -355,7 +356,35 @@ function admitRelationships(bytes, limits, name) {
     ) {
       throw new TypeError('Office relationship identity or target is unsafe.')
     }
+    if (
+      name === '_rels/.rels' &&
+      [
+        'http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument',
+        'http://purl.oclc.org/ooxml/officeDocument/relationships/officeDocument',
+      ].includes(attributes.Type)
+    ) {
+      mainRelationshipCount += 1
+      const target = new URL(
+        attributes.Target,
+        'https://office-package.invalid/',
+      )
+      if (
+        target.origin !== 'https://office-package.invalid' ||
+        target.search !== '' ||
+        target.hash !== '' ||
+        decodeURIComponent(target.pathname) !== `/${mainPart}`
+      ) {
+        throw new TypeError(
+          'Office root relationship selects a different main document.',
+        )
+      }
+    }
     identifiers.add(attributes.Id)
+  }
+  if (name === '_rels/.rels' && mainRelationshipCount !== 1) {
+    throw new TypeError(
+      'Office package must select exactly one main document.',
+    )
   }
 }
 
@@ -506,7 +535,7 @@ export function admitOfficePackage(bytes, limitValue, sourceFormat) {
       limits.maximumRelationshipBytes,
       'Office relationship bytes',
     )
-    admitRelationships(admittedParts.get(name), limits, name)
+    admitRelationships(admittedParts.get(name), limits, name, format.mainPart)
   }
   return Object.freeze({ entryCount, totalUncompressedBytes, relationshipBytes })
 }

@@ -41,9 +41,9 @@ const pdfBytes = Buffer.concat([
   Buffer.from('\n%%EOF\n'),
 ])
 
-function officeBytes(format) {
+function officeEntries(format) {
   const profile = OFFICE_FORMATS[format]
-  return makeDocx([
+  return [
     {
       name: '[Content_Types].xml',
       bytes: Buffer.from(
@@ -57,7 +57,11 @@ function officeBytes(format) {
       ),
     },
     { name: profile.mainPart, bytes: Buffer.from('<document/>') },
-  ])
+  ]
+}
+
+function officeBytes(format) {
+  return makeDocx(officeEntries(format))
 }
 
 for (const format of Object.keys(OFFICE_FORMATS)) {
@@ -123,6 +127,51 @@ for (const format of Object.keys(OFFICE_FORMATS)) {
     }
   })
 }
+
+test('binds the root Office relationship to the declared media kind', () => {
+  for (const format of Object.keys(OFFICE_FORMATS)) {
+    const profile = OFFICE_FORMATS[format]
+    const wrong = officeEntries(format)
+    wrong[1].bytes = Buffer.from(
+      wrong[1].bytes
+        .toString()
+        .replace(
+          `Target="${profile.mainPart}"`,
+          'Target="different/document.xml"',
+        ),
+    )
+    wrong.push({
+      name: 'different/document.xml',
+      bytes: Buffer.from('<document/>'),
+    })
+    assert.throws(
+      () => admitOfficePackage(makeDocx(wrong), DOCX_LIMITS, format),
+      /root relationship/,
+    )
+    for (const target of [`./${profile.mainPart}`, `/${profile.mainPart}`]) {
+      const equivalent = officeEntries(format)
+      equivalent[1].bytes = Buffer.from(
+        equivalent[1].bytes
+          .toString()
+          .replace(`Target="${profile.mainPart}"`, `Target="${target}"`),
+      )
+      admitOfficePackage(makeDocx(equivalent), DOCX_LIMITS, format)
+    }
+    const duplicate = officeEntries(format)
+    duplicate[1].bytes = Buffer.from(
+      duplicate[1].bytes
+        .toString()
+        .replace(
+          '</Relationships>',
+          `<Relationship Id="another" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="${profile.mainPart}"/></Relationships>`,
+        ),
+    )
+    assert.throws(
+      () => admitOfficePackage(makeDocx(duplicate), DOCX_LIMITS, format),
+      /exactly one main/,
+    )
+  }
+})
 
 test('Office frames bind exact MIME, source, lineage, ordered bytes and conversion output', async () => {
   const document = officeBytes('pptx')
