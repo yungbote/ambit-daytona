@@ -27,7 +27,9 @@ describe('[AUTH] WorkingCopyCaptureController', () => {
     'observe',
     'read',
     'stoppedDirectoryRoster',
-    'stoppedWorkingTree',
+    'prepareInventory',
+    'readInventoryPage',
+    'deleteInventory',
     'delete',
     'exists',
   ] as const) {

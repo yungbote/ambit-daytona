@@ -22,8 +22,6 @@ import {
   MAXIMUM_USER_FILE_CAPTURE_BYTES,
   MAXIMUM_USER_FILE_READ_BYTES,
   USER_FILES_SEMANTIC_ZONE_REF,
-  StoppedWorkingCopyWorkingTreeRequestDto,
-  StoppedWorkingCopyWorkingTreeReceiptDto,
   MAXIMUM_WORKING_COPY_CAPTURE_READ_BYTES,
   MAXIMUM_WORKING_COPY_ROSTER_AGGREGATE_BYTES,
   MAXIMUM_WORKING_COPY_ROSTER_DEPTH,
@@ -34,6 +32,13 @@ import {
   WorkingCopyCaptureBindingDto,
   WorkingCopyCaptureCapabilitiesRequestDto,
   WorkingCopyCaptureCapabilitiesDto,
+  WorkingTreeInventoryRequestDto,
+  WorkingTreeInventoryReceiptDto,
+  WorkingTreeInventoryPageRequestDto,
+  WorkingTreeInventoryPageDto,
+  MAXIMUM_WORKING_TREE_INVENTORY_PAGE_BYTES,
+  MAXIMUM_WORKING_TREE_INVENTORY_PAGE_ENTRIES,
+  MAXIMUM_WORKING_TREE_INVENTORY_INDEX_BYTES,
   WorkingCopyCaptureDeleteReceiptDto,
   WorkingCopyCaptureExistsResponseDto,
   WorkingCopyCaptureIdentityDto,
@@ -72,7 +77,9 @@ describe(WorkingCopyCaptureService.name, () => {
       captureWorkingCopy: jest.fn(),
       workingCopyCaptureCapabilities: jest.fn(),
       stoppedWorkingCopyDirectoryRoster: jest.fn(),
-      stoppedWorkingCopyWorkingTree: jest.fn(),
+      prepareWorkingTreeInventory: jest.fn(),
+      readWorkingTreeInventoryPage: jest.fn(),
+      deleteWorkingTreeInventory: jest.fn(),
       observeWorkingCopyCapture: jest.fn(),
       readWorkingCopyCapture: jest.fn(),
       deleteWorkingCopyCapture: jest.fn(),
@@ -106,15 +113,16 @@ describe(WorkingCopyCaptureService.name, () => {
   function capabilities(request: WorkingCopyCaptureCapabilitiesRequestDto): WorkingCopyCaptureCapabilitiesDto {
     return {
       authority: request.authority,
-      stoppedWorkingTree: {
-        contract: 'ambit.working-copy-stopped-working-tree/v1',
+      stoppedWorkingTreeInventory: {
+        contract: 'ambit.working-copy-stopped-working-tree-inventory/v1',
         semanticZoneRef: USER_FILES_SEMANTIC_ZONE_REF,
         maximumDepth: 64,
-        maximumEntries: 4096,
+        maximumPageEntries: MAXIMUM_WORKING_TREE_INVENTORY_PAGE_ENTRIES,
         maximumFileBytes: MAXIMUM_USER_FILE_CAPTURE_BYTES,
         maximumAggregateBytes: 8 * 1024 * 1024 * 1024,
         maximumReadBytes: MAXIMUM_USER_FILE_READ_BYTES,
-        maximumReceiptBytes: 4 * 1024 * 1024,
+        maximumIndexBytes: MAXIMUM_WORKING_TREE_INVENTORY_INDEX_BYTES,
+        maximumPageBytes: MAXIMUM_WORKING_TREE_INVENTORY_PAGE_BYTES,
       },
     }
   }
@@ -127,7 +135,7 @@ describe(WorkingCopyCaptureService.name, () => {
     await expect(service.capabilities('daytona-org-1', 'friendly-name', request, signal)).resolves.toEqual(response)
     expect(adapter.workingCopyCaptureCapabilities).toHaveBeenCalledWith('sandbox-1', request, signal)
     expect(adapter.captureWorkingCopy).not.toHaveBeenCalled()
-    expect(adapter.stoppedWorkingCopyWorkingTree).not.toHaveBeenCalled()
+    expect(adapter.prepareWorkingTreeInventory).not.toHaveBeenCalled()
     expect(validateSync(plainToInstance(WorkingCopyCaptureCapabilitiesRequestDto, request))).toEqual([])
     expect(validateSync(plainToInstance(WorkingCopyCaptureCapabilitiesDto, response))).toEqual([])
     const wire = await SandboxApiAxiosParamCreator(
@@ -160,7 +168,7 @@ describe(WorkingCopyCaptureService.name, () => {
         r.authority = { ...r.authority, lineageRef: 'other' }
       },
       (r: WorkingCopyCaptureCapabilitiesDto) => {
-        r.stoppedWorkingTree.maximumFileBytes = 1.5
+        r.stoppedWorkingTreeInventory!.maximumFileBytes = 1.5
       },
       (r: WorkingCopyCaptureCapabilitiesDto) => {
         Object.assign(r, { unexpected: true })
@@ -954,129 +962,97 @@ describe(WorkingCopyCaptureService.name, () => {
     })
   })
 
-  it.each(['stopped-working-tree.canonical.json', 'stopped-working-tree-links.canonical.json'])(
-    'admits the exact Go-produced %s without a fabricated anchor',
-    async (fixture) => {
-      const receipt = JSON.parse(
-        readFileSync(resolve(__dirname, '../../../../runner/pkg/workingcopy/testdata', fixture), 'utf8'),
-      ) as StoppedWorkingCopyWorkingTreeReceiptDto
-      const sandbox = validSandbox()
-      sandbox.labels.ambitWorkspaceExecutionManifestRef =
-        receipt.request.generation.stopAuthority.fence.workspaceExecutionManifestRef
-      sandbox.labels.ambitRuntimeManifestRef = sandbox.labels.ambitWorkspaceExecutionManifestRef
-      ;(sandboxService.findOneByIdOrName as jest.Mock).mockResolvedValue(sandbox)
-      adapter.stoppedWorkingCopyWorkingTree.mockResolvedValue(receipt)
-      const signal = new AbortController().signal
-      await expect(
-        service.stoppedWorkingTree('daytona-org-1', 'friendly-name', receipt.request, signal),
-      ).resolves.toEqual(receipt)
-      expect(adapter.stoppedWorkingCopyWorkingTree).toHaveBeenCalledWith('sandbox-1', receipt.request, signal)
-      expect(receipt.entries.length).toBe(fixture.includes('links') ? 14 : 0)
-      expect(receipt.request.generation).not.toHaveProperty('selector')
-      expect(validateSync(plainToInstance(StoppedWorkingCopyWorkingTreeRequestDto, receipt.request))).toEqual([])
-      expect(validateSync(plainToInstance(StoppedWorkingCopyWorkingTreeReceiptDto, receipt))).toEqual([])
-    },
-  )
+  function inventoryFixture(): { receipt: WorkingTreeInventoryReceiptDto; pages: WorkingTreeInventoryPageDto[] } {
+    const fixture = JSON.parse(
+      readFileSync(
+        resolve(__dirname, '../../../../runner/pkg/workingcopy/testdata/stopped-working-tree-inventory.canonical.json'),
+        'utf8',
+      ),
+    ) as { receipt: WorkingTreeInventoryReceiptDto; pages: WorkingTreeInventoryPageDto[] }
+    const sandbox = validSandbox()
+    sandbox.labels.ambitWorkspaceExecutionManifestRef =
+      fixture.receipt.request.generation.stopAuthority.fence.workspaceExecutionManifestRef
+    sandbox.labels.ambitRuntimeManifestRef = sandbox.labels.ambitWorkspaceExecutionManifestRef
+    ;(sandboxService.findOneByIdOrName as jest.Mock).mockResolvedValue(sandbox)
+    return fixture
+  }
 
-  it('forwards a complete custom working tree with a large file through the existing adapter', async () => {
-    const request = validWorkingTreeRequest()
-    request.excludedPaths = ['mounted']
-    const receipt = validWorkingTreeReceipt(request)
-    adapter.stoppedWorkingCopyWorkingTree.mockResolvedValue(receipt)
-    await expect(service.stoppedWorkingTree('daytona-org-1', 'sandbox-1', request)).resolves.toEqual(receipt)
-    expect(receipt.entries[1].size).toBe(102 * 1024 * 1024)
-    expect(validateSync(plainToInstance(StoppedWorkingCopyWorkingTreeReceiptDto, receipt))).toEqual([])
-  })
-
-  it('uses the generated authenticated runner operation without changing the request shape', async () => {
-    const request = validWorkingTreeRequest()
+  it('admits the complete cross-language inventory and each bounded lexical page', async () => {
+    const { receipt, pages } = inventoryFixture()
     const signal = new AbortController().signal
-    const call = await SandboxApiAxiosParamCreator(
-      new Configuration({ apiKey: 'Bearer fixture-runner-key' }),
-    ).stoppedWorkingCopyWorkingTree('sandbox/encoded', request, { signal })
-    expect(call.url).toBe('/sandboxes/sandbox%2Fencoded/working-copy-captures/stopped-working-tree')
-    expect(call.options.method).toBe('POST')
-    expect(call.options.signal).toBe(signal)
-    expect(call.options.headers).toEqual(expect.objectContaining({ Authorization: 'Bearer fixture-runner-key' }))
-    expect(JSON.parse(call.options.data as string)).toEqual(request)
-  })
-
-  it.each(
-    [[], [''], ['.'], ['../outside'], ['/workspace/x'], ['x/'], ['b', 'a'], ['a', 'a'], ['a', 'a/b'], ['e\u0301']].map(
-      (excludedPaths) => ({ excludedPaths }),
-    ),
-  )('enforces canonical working-tree exclusions $excludedPaths', async ({ excludedPaths }) => {
-    const request = validWorkingTreeRequest()
-    request.excludedPaths = excludedPaths
-    if (excludedPaths.length === 0) {
-      adapter.stoppedWorkingCopyWorkingTree.mockResolvedValue(validWorkingTreeReceipt(request))
-      await expect(service.stoppedWorkingTree('daytona-org-1', 'sandbox-1', request)).resolves.toBeDefined()
-    } else {
-      await expect(service.stoppedWorkingTree('daytona-org-1', 'sandbox-1', request)).rejects.toBeInstanceOf(
-        BadRequestException,
-      )
-      expect(adapter.stoppedWorkingCopyWorkingTree).not.toHaveBeenCalled()
+    adapter.prepareWorkingTreeInventory.mockResolvedValue(receipt)
+    await expect(service.prepareInventory('daytona-org-1', 'friendly-name', receipt.request, signal)).resolves.toEqual(
+      receipt,
+    )
+    expect(adapter.prepareWorkingTreeInventory).toHaveBeenCalledWith('sandbox-1', receipt.request, signal)
+    expect(validateSync(plainToInstance(WorkingTreeInventoryRequestDto, receipt.request))).toEqual([])
+    expect(validateSync(plainToInstance(WorkingTreeInventoryReceiptDto, receipt))).toEqual([])
+    for (const page of pages) {
+      const request = {
+        request: receipt.request,
+        providerResourceId: receipt.providerResourceId,
+        pageIndex: page.pageIndex,
+      }
+      adapter.readWorkingTreeInventoryPage.mockResolvedValueOnce(page)
+      await expect(service.readInventoryPage('daytona-org-1', 'friendly-name', request, signal)).resolves.toEqual(page)
+      expect(adapter.readWorkingTreeInventoryPage).toHaveBeenLastCalledWith('sandbox-1', request, signal)
+      expect(validateSync(plainToInstance(WorkingTreeInventoryPageRequestDto, request))).toEqual([])
+      expect(validateSync(plainToInstance(WorkingTreeInventoryPageDto, page))).toEqual([])
     }
-  })
-
-  it('rejects forged working-tree receipts even when their digest is recomputed', async () => {
-    const request = validWorkingTreeRequest()
-    request.excludedPaths = ['mounted']
-    const changes: Array<(receipt: StoppedWorkingCopyWorkingTreeReceiptDto) => void> = [
-      (r) => {
-        r.entries.reverse()
-      },
-      (r) => {
-        r.entries.push({ ...r.entries[1] })
-      },
-      (r) => {
-        r.entries.shift()
-      },
-      (r) => {
-        r.entries[1].zoneRelativePath = 'mounted/file'
-        r.entries[1].name = 'file'
-      },
-      (r) => {
-        r.entries[0].zoneRelativePath = '.ambit'
-        r.entries[0].name = '.ambit'
-      },
-      (r) => {
-        r.entries[1].size = MAXIMUM_USER_FILE_CAPTURE_BYTES + 1
-      },
-      (r) => {
-        r.entries[1].mode = '9999'
-      },
-      (r) => {
-        r.entries[1].kind = 'symlink' as never
-      },
-      (r) => {
-        r.entries[1].sha256 = null
-      },
-      (r) => {
-        r.terminalGeneration.restartCount++
-      },
-      (r) => {
-        r.request.generation.owner.userId = OTHER_ID
-      },
-    ]
-    for (const change of changes) {
-      const receipt = structuredClone(validWorkingTreeReceipt(request))
-      change(receipt)
-      receipt.rosterDigest = workingTreeDigest(receipt)
-      adapter.stoppedWorkingCopyWorkingTree.mockResolvedValueOnce(receipt)
-      await expect(service.stoppedWorkingTree('daytona-org-1', 'sandbox-1', request)).rejects.toBeInstanceOf(
-        ConflictException,
-      )
+    const deletion = {
+      request: receipt.request,
+      providerResourceId: receipt.providerResourceId,
+      status: 'absent' as const,
     }
+    adapter.deleteWorkingTreeInventory.mockResolvedValue(deletion)
+    await expect(service.deleteInventory('daytona-org-1', 'friendly-name', receipt.request, signal)).resolves.toEqual(
+      deletion,
+    )
+    expect(adapter.deleteWorkingTreeInventory).toHaveBeenCalledWith('sandbox-1', receipt.request, signal)
+    expect(adapter.captureWorkingCopy).not.toHaveBeenCalled()
   })
 
-  it('reuses the complete sandbox owner and manifest authority for root enumeration', async () => {
-    const request = validWorkingTreeRequest()
-    request.generation.owner.userId = OTHER_ID
-    await expect(service.stoppedWorkingTree('daytona-org-1', 'sandbox-1', request)).rejects.toBeInstanceOf(
+  it('uses authenticated generated inventory operations with exact source requests', async () => {
+    const { receipt } = inventoryFixture()
+    const signal = new AbortController().signal
+    const client = SandboxApiAxiosParamCreator(new Configuration({ apiKey: 'Bearer token' }))
+    const prepared = await client.prepareWorkingTreeInventory('sandbox/encoded', receipt.request, { signal })
+    const pageRequest = { request: receipt.request, providerResourceId: receipt.providerResourceId, pageIndex: 0 }
+    const page = await client.readWorkingTreeInventoryPage('sandbox/encoded', pageRequest, { signal })
+    const deleted = await client.deleteWorkingTreeInventory('sandbox/encoded', receipt.request, { signal })
+    expect(prepared.url).toBe('/sandboxes/sandbox%2Fencoded/working-copy-captures/stopped-working-tree-inventories')
+    expect(page.url).toBe(prepared.url + '/read')
+    expect(deleted.url).toBe(prepared.url + '/delete')
+    expect(JSON.parse(prepared.options.data as string)).toEqual(receipt.request)
+    expect(JSON.parse(page.options.data as string)).toEqual(pageRequest)
+    expect(page.options.signal).toBe(signal)
+    expect(prepared.options.headers).toMatchObject({ Authorization: 'Bearer token' })
+  })
+
+  it('rejects foreign inventory owners before contacting a Runner', async () => {
+    const { receipt } = inventoryFixture()
+    receipt.request.generation.owner.tenantId = OTHER_ID
+    await expect(service.prepareInventory('daytona-org-1', 'sandbox-1', receipt.request)).rejects.toBeInstanceOf(
       ForbiddenException,
     )
-    expect(adapter.stoppedWorkingCopyWorkingTree).not.toHaveBeenCalled()
+    expect(adapter.prepareWorkingTreeInventory).not.toHaveBeenCalled()
+  })
+
+  it('does not return malformed complete indexes or pages as successful custody', async () => {
+    const { receipt, pages } = inventoryFixture()
+    adapter.prepareWorkingTreeInventory.mockResolvedValue({ ...receipt, entryCount: receipt.entryCount + 1 })
+    await expect(service.prepareInventory('daytona-org-1', 'sandbox-1', receipt.request)).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    )
+    const page = { ...pages[0], pageDigest: `sha256:${'a'.repeat(64)}` }
+    adapter.readWorkingTreeInventoryPage.mockResolvedValue(page)
+    await expect(
+      service.readInventoryPage('daytona-org-1', 'sandbox-1', {
+        request: receipt.request,
+        providerResourceId: receipt.providerResourceId,
+        pageIndex: 0,
+      }),
+    ).rejects.toBeInstanceOf(ConflictException)
   })
 
   it('admits private large capture and range bounds while preserving existing zone limits', async () => {
@@ -1139,56 +1115,6 @@ describe(WorkingCopyCaptureService.name, () => {
     )
   })
 })
-
-function validWorkingTreeRequest(): StoppedWorkingCopyWorkingTreeRequestDto {
-  const { selector, ...generation } = validBinding()
-  void selector
-  return {
-    generation,
-    excludedPaths: [],
-    maximumDepth: 64,
-    maximumEntries: 4096,
-    maximumFileBytes: MAXIMUM_USER_FILE_CAPTURE_BYTES,
-    maximumAggregateBytes: 8 * 1024 * 1024 * 1024,
-  }
-}
-
-function validWorkingTreeReceipt(
-  request: StoppedWorkingCopyWorkingTreeRequestDto,
-): StoppedWorkingCopyWorkingTreeReceiptDto {
-  const receipt: StoppedWorkingCopyWorkingTreeReceiptDto = {
-    request,
-    terminalGeneration: { ...request.generation.stopAuthority.terminalGeneration },
-    entries: [
-      { zoneRelativePath: 'custom', name: 'custom', kind: 'directory', size: 0, mode: '0755', sha256: null },
-      {
-        zoneRelativePath: 'custom/customer.bin',
-        name: 'customer.bin',
-        kind: 'regular_file',
-        size: 102 * 1024 * 1024,
-        mode: '0644',
-        sha256: `sha256:${'a'.repeat(64)}`,
-      },
-    ],
-    rosterDigest: '',
-    observedAt: '2026-09-08T12:00:00.000Z',
-  }
-  receipt.rosterDigest = workingTreeDigest(receipt)
-  return receipt
-}
-
-function workingTreeDigest(receipt: StoppedWorkingCopyWorkingTreeReceiptDto): string {
-  return `sha256:${createHash('sha256')
-    .update(
-      testCanonicalJson({
-        contract: 'ambit.working-copy-stopped-working-tree/v1',
-        request: receipt.request,
-        terminalGeneration: receipt.terminalGeneration,
-        entries: receipt.entries,
-      }),
-    )
-    .digest('hex')}`
-}
 
 function validBinding(): WorkingCopyCaptureBindingDto {
   const protocolDigest = `sha256:${'7'.repeat(64)}`

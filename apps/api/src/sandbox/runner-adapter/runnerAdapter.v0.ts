@@ -43,6 +43,15 @@ import { RunnerApiError } from '../errors/runner-api-error'
 import { createRunnerHttpClient } from './runner-http-client'
 import {
   WorkingCopyCaptureBindingDto,
+  MAXIMUM_WORKING_TREE_INVENTORY_PAGE_BYTES,
+  MAXIMUM_WORKING_TREE_INVENTORY_INDEX_BYTES,
+  WorkingTreeInventoryRequestDto,
+  WorkingTreeInventoryRangeRequestDto,
+  WorkingTreeInventoryRangeDto,
+  WorkingTreeInventoryReceiptDto,
+  WorkingTreeInventoryPageRequestDto,
+  WorkingTreeInventoryPageDto,
+  WorkingTreeInventoryDeletionReceiptDto,
   WorkingCopyCaptureCapabilitiesRequestDto,
   WorkingCopyCaptureCapabilitiesDto,
   WorkingCopyCaptureDeleteReceiptDto,
@@ -54,9 +63,6 @@ import {
   WorkingCopyCaptureReceiptDto,
   StoppedWorkingCopyDirectoryRosterRequestDto,
   StoppedWorkingCopyDirectoryRosterReceiptDto,
-  StoppedWorkingCopyWorkingTreeRequestDto,
-  StoppedWorkingCopyWorkingTreeReceiptDto,
-  MAXIMUM_WORKING_TREE_RECEIPT_BYTES,
 } from '../dto/working-copy-capture.dto'
 import {
   SandboxGenerationObservationDto,
@@ -157,6 +163,47 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     return response.data as WorkingCopyCaptureCapabilitiesDto
   }
 
+  async prepareWorkingTreeInventory(
+    sandboxId: string,
+    request: WorkingTreeInventoryRequestDto,
+    signal?: AbortSignal,
+  ): Promise<WorkingTreeInventoryReceiptDto> {
+    const response = await this.sandboxApiClient.prepareWorkingTreeInventory(sandboxId, request, {
+      signal,
+      maxContentLength: MAXIMUM_WORKING_TREE_INVENTORY_INDEX_BYTES + 256 * 1024,
+    })
+    return response.data as WorkingTreeInventoryReceiptDto
+  }
+
+  async readWorkingTreeInventoryPage(
+    sandboxId: string,
+    request: WorkingTreeInventoryPageRequestDto,
+    signal?: AbortSignal,
+  ): Promise<WorkingTreeInventoryPageDto> {
+    const response = await this.sandboxApiClient.readWorkingTreeInventoryPage(sandboxId, request, {
+      signal,
+      maxContentLength: MAXIMUM_WORKING_TREE_INVENTORY_PAGE_BYTES + 256 * 1024,
+    })
+    return response.data as WorkingTreeInventoryPageDto
+  }
+
+  async readWorkingTreeInventoryRange(sandboxId:string,request:WorkingTreeInventoryRangeRequestDto,signal?:AbortSignal):Promise<WorkingTreeInventoryRangeDto> {
+    const response=await this.sandboxApiClient.readWorkingTreeInventoryRange(sandboxId,request,{signal,maxContentLength:Math.ceil(request.maximumBytes/3)*4+256*1024})
+    return response.data as WorkingTreeInventoryRangeDto
+  }
+
+  async deleteWorkingTreeInventory(
+    sandboxId: string,
+    request: WorkingTreeInventoryRequestDto,
+    signal?: AbortSignal,
+  ): Promise<WorkingTreeInventoryDeletionReceiptDto> {
+    const response = await this.sandboxApiClient.deleteWorkingTreeInventory(sandboxId, request, {
+      signal,
+      maxContentLength: 256 * 1024,
+    })
+    return response.data as WorkingTreeInventoryDeletionReceiptDto
+  }
+
   async captureWorkingCopy(
     sandboxId: string,
     binding: WorkingCopyCaptureBindingDto,
@@ -209,18 +256,6 @@ export class RunnerAdapterV0 implements RunnerAdapter {
   ): Promise<StoppedWorkingCopyDirectoryRosterReceiptDto> {
     const response = await this.sandboxApiClient.stoppedWorkingCopyDirectoryRoster(sandboxId, request, { signal })
     return response.data as StoppedWorkingCopyDirectoryRosterReceiptDto
-  }
-
-  async stoppedWorkingCopyWorkingTree(
-    sandboxId: string,
-    request: StoppedWorkingCopyWorkingTreeRequestDto,
-    signal?: AbortSignal,
-  ): Promise<StoppedWorkingCopyWorkingTreeReceiptDto> {
-    const response = await this.sandboxApiClient.stoppedWorkingCopyWorkingTree(sandboxId, request, {
-      signal,
-      maxContentLength: MAXIMUM_WORKING_TREE_RECEIPT_BYTES,
-    })
-    return response.data as StoppedWorkingCopyWorkingTreeReceiptDto
   }
 
   async observeSandboxGeneration(

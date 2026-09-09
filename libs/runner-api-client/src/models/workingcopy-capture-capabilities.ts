@@ -14,9 +14,9 @@
 
 
 import type { WorkingcopyCaptureAuthority } from './workingcopy-capture-authority';
-import type { WorkingcopyStoppedWorkingTreeCapability } from './workingcopy-stopped-working-tree-capability';
+import type { WorkingcopyWorkingTreeInventoryCapability } from './workingcopy-working-tree-inventory-capability';
 
 export interface WorkingcopyCaptureCapabilities {
     'authority': WorkingcopyCaptureAuthority;
-    'stoppedWorkingTree': WorkingcopyStoppedWorkingTreeCapability;
+    'stoppedWorkingTreeInventory'?: WorkingcopyWorkingTreeInventoryCapability;
 }

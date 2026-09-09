@@ -21,6 +21,13 @@ import { OrganizationResourcePermission } from '../../organization/enums/organiz
 import { OrganizationAuthContextGuard } from '../../organization/guards/organization-auth-context.guard'
 import {
   WorkingCopyCaptureBindingDto,
+  WorkingTreeInventoryRequestDto,
+  WorkingTreeInventoryRangeRequestDto,
+  WorkingTreeInventoryRangeDto,
+  WorkingTreeInventoryReceiptDto,
+  WorkingTreeInventoryPageRequestDto,
+  WorkingTreeInventoryPageDto,
+  WorkingTreeInventoryDeletionReceiptDto,
   WorkingCopyCaptureCapabilitiesRequestDto,
   WorkingCopyCaptureCapabilitiesDto,
   WorkingCopyCaptureDeleteReceiptDto,
@@ -32,8 +39,6 @@ import {
   WorkingCopyCaptureReceiptDto,
   StoppedWorkingCopyDirectoryRosterRequestDto,
   StoppedWorkingCopyDirectoryRosterReceiptDto,
-  StoppedWorkingCopyWorkingTreeRequestDto,
-  StoppedWorkingCopyWorkingTreeReceiptDto,
 } from '../dto/working-copy-capture.dto'
 import { SandboxAccessGuard } from '../guards/sandbox-access.guard'
 import { WorkingCopyCaptureService } from '../services/working-copy-capture.service'
@@ -69,6 +74,96 @@ export class WorkingCopyCaptureController {
     @Res({ passthrough: true }) outgoing: ServerResponse<IncomingMessage>,
   ): Promise<WorkingCopyCaptureCapabilitiesDto> {
     return this.captures.capabilities(auth.organizationId, sandboxIdOrName, request, responseSignal(incoming, outgoing))
+  }
+
+  @Post('stopped-working-tree-inventories')
+  @HttpCode(200)
+  @ApiOperation({
+    operationId: 'sandboxPrepareInventory',
+    summary: 'Prepare immutable pages of an exact stopped working tree',
+  })
+  @ApiResponse({ status: 200, type: WorkingTreeInventoryReceiptDto })
+  @Audit({
+    action: AuditAction.CREATE,
+    targetType: AuditTarget.SANDBOX,
+    targetIdFromRequest: (request) => request.params.sandboxIdOrName,
+  })
+  prepareInventory(
+    @IsOrganizationAuthContext() auth: OrganizationAuthContext,
+    @Param('sandboxIdOrName') sandboxIdOrName: string,
+    @Body() request: WorkingTreeInventoryRequestDto,
+    @Req() incoming: IncomingMessage,
+    @Res({ passthrough: true }) outgoing: ServerResponse<IncomingMessage>,
+  ): Promise<WorkingTreeInventoryReceiptDto> {
+    return this.captures.prepareInventory(
+      auth.organizationId,
+      sandboxIdOrName,
+      request,
+      responseSignal(incoming, outgoing),
+    )
+  }
+
+  @Post('stopped-working-tree-inventories/read')
+  @HttpCode(200)
+  @ApiOperation({
+    operationId: 'sandboxReadInventoryPage',
+    summary: 'Read an immutable stopped working-tree inventory page',
+  })
+  @ApiResponse({ status: 200, type: WorkingTreeInventoryPageDto })
+  @Audit({
+    action: AuditAction.READ,
+    targetType: AuditTarget.SANDBOX,
+    targetIdFromRequest: (request) => request.params.sandboxIdOrName,
+  })
+  readInventoryPage(
+    @IsOrganizationAuthContext() auth: OrganizationAuthContext,
+    @Param('sandboxIdOrName') sandboxIdOrName: string,
+    @Body() request: WorkingTreeInventoryPageRequestDto,
+    @Req() incoming: IncomingMessage,
+    @Res({ passthrough: true }) outgoing: ServerResponse<IncomingMessage>,
+  ): Promise<WorkingTreeInventoryPageDto> {
+    return this.captures.readInventoryPage(
+      auth.organizationId,
+      sandboxIdOrName,
+      request,
+      responseSignal(incoming, outgoing),
+    )
+  }
+
+  @Post('stopped-working-tree-inventories/read-range')
+  @HttpCode(200)
+  @ApiOperation({operationId:'sandboxReadInventoryRange',summary:'Read a bounded immutable working-tree byte range'})
+  @ApiResponse({status:200,type:WorkingTreeInventoryRangeDto})
+  @Audit({action:AuditAction.READ,targetType:AuditTarget.SANDBOX,targetIdFromRequest:(request)=>request.params.sandboxIdOrName})
+  readInventoryRange(@IsOrganizationAuthContext() auth:OrganizationAuthContext,@Param('sandboxIdOrName') sandboxIdOrName:string,@Body() request:WorkingTreeInventoryRangeRequestDto,@Req() incoming:IncomingMessage,@Res({passthrough:true}) outgoing:ServerResponse<IncomingMessage>):Promise<WorkingTreeInventoryRangeDto> {
+    return this.captures.readInventoryRange(auth.organizationId,sandboxIdOrName,request,responseSignal(incoming,outgoing))
+  }
+
+  @Post('stopped-working-tree-inventories/delete')
+  @HttpCode(200)
+  @ApiOperation({
+    operationId: 'sandboxDeleteInventory',
+    summary: 'Delete exact inventory custody and prove its absence',
+  })
+  @ApiResponse({ status: 200, type: WorkingTreeInventoryDeletionReceiptDto })
+  @Audit({
+    action: AuditAction.DELETE,
+    targetType: AuditTarget.SANDBOX,
+    targetIdFromRequest: (request) => request.params.sandboxIdOrName,
+  })
+  deleteInventory(
+    @IsOrganizationAuthContext() auth: OrganizationAuthContext,
+    @Param('sandboxIdOrName') sandboxIdOrName: string,
+    @Body() request: WorkingTreeInventoryRequestDto,
+    @Req() incoming: IncomingMessage,
+    @Res({ passthrough: true }) outgoing: ServerResponse<IncomingMessage>,
+  ): Promise<WorkingTreeInventoryDeletionReceiptDto> {
+    return this.captures.deleteInventory(
+      auth.organizationId,
+      sandboxIdOrName,
+      request,
+      responseSignal(incoming, outgoing),
+    )
   }
 
   @Post()
@@ -155,33 +250,6 @@ export class WorkingCopyCaptureController {
     @Res({ passthrough: true }) outgoing: ServerResponse<IncomingMessage>,
   ): Promise<StoppedWorkingCopyDirectoryRosterReceiptDto> {
     return this.captures.stoppedDirectoryRoster(
-      auth.organizationId,
-      sandboxIdOrName,
-      request,
-      responseSignal(incoming, outgoing),
-    )
-  }
-
-  @Post('stopped-working-tree')
-  @HttpCode(200)
-  @ApiOperation({
-    operationId: 'stoppedSandboxWorkingCopyWorkingTree',
-    summary: 'List user files from an exact stopped sandbox generation',
-  })
-  @ApiResponse({ status: 200, type: StoppedWorkingCopyWorkingTreeReceiptDto })
-  @Audit({
-    action: AuditAction.READ,
-    targetType: AuditTarget.SANDBOX,
-    targetIdFromRequest: (request) => request.params.sandboxIdOrName,
-  })
-  stoppedWorkingTree(
-    @IsOrganizationAuthContext() auth: OrganizationAuthContext,
-    @Param('sandboxIdOrName') sandboxIdOrName: string,
-    @Body() request: StoppedWorkingCopyWorkingTreeRequestDto,
-    @Req() incoming: IncomingMessage,
-    @Res({ passthrough: true }) outgoing: ServerResponse<IncomingMessage>,
-  ): Promise<StoppedWorkingCopyWorkingTreeReceiptDto> {
-    return this.captures.stoppedWorkingTree(
       auth.organizationId,
       sandboxIdOrName,
       request,

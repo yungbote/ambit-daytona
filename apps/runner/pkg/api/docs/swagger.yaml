@@ -1,75 +1,69 @@
 definitions:
-  workingcopy.CaptureCapabilitiesRequest:
-    type: object
-    required:
-      - authority
-      - fence
-      - owner
-      - source
-    properties:
-      authority:
-        $ref: '#/definitions/workingcopy.CaptureAuthority'
-      source:
-        $ref: '#/definitions/generationstop.Source'
-      owner:
-        $ref: '#/definitions/generationstop.Owner'
-      fence:
-        $ref: '#/definitions/generationstop.Fence'
   workingcopy.CaptureCapabilities:
-    type: object
-    required:
-      - authority
-      - stoppedWorkingTree
     properties:
       authority:
-        $ref: '#/definitions/workingcopy.CaptureAuthority'
-      stoppedWorkingTree:
-        $ref: '#/definitions/workingcopy.StoppedWorkingTreeCapability'
-  workingcopy.StoppedWorkingTreeCapability:
-    type: object
+        $ref: "#/definitions/workingcopy.CaptureAuthority"
+      stoppedWorkingTreeInventory:
+        $ref: "#/definitions/workingcopy.WorkingTreeInventoryCapability"
     required:
-      - contract
-      - maximumAggregateBytes
-      - maximumDepth
-      - maximumEntries
-      - maximumFileBytes
-      - maximumReadBytes
-      - maximumReceiptBytes
-      - semanticZoneRef
+      - authority
+      - stoppedWorkingTreeInventory
+    type: object
+  workingcopy.CaptureCapabilitiesRequest:
     properties:
-      contract:
+      authority:
+        $ref: "#/definitions/workingcopy.CaptureAuthority"
+      fence:
+        $ref: "#/definitions/generationstop.Fence"
+      owner:
+        $ref: "#/definitions/generationstop.Owner"
+      source:
+        $ref: "#/definitions/generationstop.Source"
+    required:
+      - authority
+      - source
+      - owner
+      - fence
+    type: object
+  workingcopy.CaptureGenerationBinding:
+    properties:
+      authority:
+        $ref: "#/definitions/workingcopy.CaptureAuthority"
+      owner:
+        $ref: "#/definitions/generationstop.Owner"
+      providerName:
         type: string
-      semanticZoneRef:
+      requestFingerprint:
         type: string
-      maximumDepth:
-        type: integer
-      maximumEntries:
-        type: integer
-      maximumFileBytes:
-        type: integer
-      maximumAggregateBytes:
-        type: integer
-      maximumReadBytes:
-        type: integer
-      maximumReceiptBytes:
-        type: integer
+      source:
+        $ref: "#/definitions/generationstop.Source"
+      stopAuthority:
+        $ref: "#/definitions/generationstop.StopAuthority"
+    required:
+      - providerName
+      - requestFingerprint
+      - authority
+      - source
+      - owner
+      - stopAuthority
+    type: object
   workingcopy.StoppedWorkingTreeEntry:
-    type: object
-    required:
-      - kind
-      - mode
-      - name
-      - sha256
-      - size
-      - zoneRelativePath
     properties:
-      kind:
+      excludedKind:
+        enum:
+          - fifo
+          - character_device
+          - block_device
         type: string
+      kind:
         enum:
           - regular_file
           - directory
           - symlink
           - excluded
+        type: string
+      linkTarget:
+        type: string
       mode:
         type: string
         x-nullable: true
@@ -82,80 +76,169 @@ definitions:
         type: integer
       zoneRelativePath:
         type: string
-      linkTarget:
+    required:
+      - zoneRelativePath
+      - name
+      - kind
+      - size
+      - mode
+      - sha256
+    type: object
+  workingcopy.WorkingTreeInventoryCapability:
+    properties:
+      contract:
         type: string
-      excludedKind:
+      maximumAggregateBytes:
+        type: integer
+      maximumDepth:
+        type: integer
+      maximumFileBytes:
+        type: integer
+      maximumIndexBytes:
+        type: integer
+      maximumPageBytes:
+        type: integer
+      maximumPageEntries:
+        type: integer
+      maximumReadBytes:
+        type: integer
+      semanticZoneRef:
         type: string
+    required:
+      - contract
+      - semanticZoneRef
+      - maximumDepth
+      - maximumFileBytes
+      - maximumAggregateBytes
+      - maximumPageEntries
+      - maximumPageBytes
+      - maximumIndexBytes
+      - maximumReadBytes
+    type: object
+  workingcopy.WorkingTreeInventoryDeletionReceipt:
+    properties:
+      providerResourceId:
+        type: string
+      request:
+        $ref: "#/definitions/workingcopy.WorkingTreeInventoryRequest"
+      status:
         enum:
-          - fifo
-          - character_device
-          - block_device
-  workingcopy.StoppedWorkingTreeReceipt:
+          - absent
+        type: string
+    required:
+      - request
+      - providerResourceId
+      - status
+    type: object
+  workingcopy.WorkingTreeInventoryPage:
     properties:
       entries:
         items:
-          $ref: '#/definitions/workingcopy.StoppedWorkingTreeEntry'
+          $ref: "#/definitions/workingcopy.StoppedWorkingTreeEntry"
         type: array
-      observedAt:
+      pageDigest:
+        type: string
+      pageIndex:
+        type: integer
+      providerResourceId:
+        type: string
+    required:
+      - providerResourceId
+      - pageIndex
+      - entries
+      - pageDigest
+    type: object
+  workingcopy.WorkingTreeInventoryPageDescriptor:
+    properties:
+      byteLength:
+        type: integer
+      entryCount:
+        type: integer
+      firstPath:
+        type: string
+      lastPath:
+        type: string
+      pageIndex:
+        type: integer
+      sha256:
+        type: string
+    required:
+      - pageIndex
+      - entryCount
+      - byteLength
+      - sha256
+      - firstPath
+      - lastPath
+    type: object
+  workingcopy.WorkingTreeInventoryPageRequest:
+    properties:
+      pageIndex:
+        type: integer
+      providerResourceId:
         type: string
       request:
-        $ref: '#/definitions/workingcopy.StoppedWorkingTreeRequest'
-      rosterDigest:
-        type: string
-      terminalGeneration:
-        $ref: '#/definitions/generationstop.TerminalGeneration'
+        $ref: "#/definitions/workingcopy.WorkingTreeInventoryRequest"
     required:
-      - entries
-      - observedAt
       - request
-      - rosterDigest
-      - terminalGeneration
+      - providerResourceId
+      - pageIndex
     type: object
-  workingcopy.StoppedWorkingTreeRequest:
+  workingcopy.WorkingTreeInventoryReceipt:
+    properties:
+      aggregateBytes:
+        type: integer
+      entryCount:
+        type: integer
+      inventoryDigest:
+        type: string
+      observedAt:
+        type: string
+      pages:
+        items:
+          $ref: "#/definitions/workingcopy.WorkingTreeInventoryPageDescriptor"
+        type: array
+      providerResourceId:
+        type: string
+      request:
+        $ref: "#/definitions/workingcopy.WorkingTreeInventoryRequest"
+      terminalGeneration:
+        $ref: "#/definitions/generationstop.TerminalGeneration"
+    required:
+      - request
+      - providerResourceId
+      - terminalGeneration
+      - pages
+      - entryCount
+      - aggregateBytes
+      - inventoryDigest
+      - observedAt
+    type: object
+  workingcopy.WorkingTreeInventoryRequest:
     properties:
       excludedPaths:
         items:
           type: string
         type: array
       generation:
-        $ref: '#/definitions/workingcopy.CaptureGenerationBinding'
+        $ref: "#/definitions/workingcopy.CaptureGenerationBinding"
       maximumAggregateBytes:
         type: integer
       maximumDepth:
         type: integer
-      maximumEntries:
-        type: integer
       maximumFileBytes:
         type: integer
+      maximumPageBytes:
+        type: integer
+      maximumPageEntries:
+        type: integer
     required:
-      - excludedPaths
       - generation
-      - maximumAggregateBytes
+      - excludedPaths
       - maximumDepth
-      - maximumEntries
       - maximumFileBytes
-    type: object
-  workingcopy.CaptureGenerationBinding:
-    properties:
-      authority:
-        $ref: '#/definitions/workingcopy.CaptureAuthority'
-      owner:
-        $ref: '#/definitions/workingcopy.CaptureOwner'
-      providerName:
-        type: string
-      requestFingerprint:
-        type: string
-      source:
-        $ref: '#/definitions/workingcopy.SourceAddress'
-      stopAuthority:
-        $ref: '#/definitions/generationstop.StopAuthority'
-    required:
-      - authority
-      - owner
-      - providerName
-      - requestFingerprint
-      - source
-      - stopAuthority
+      - maximumAggregateBytes
+      - maximumPageEntries
+      - maximumPageBytes
     type: object
   BuildSnapshotRequestDTO:
     properties:
@@ -1254,11 +1337,134 @@ info:
   title: Daytona Runner API
   version: v0.0.0-dev
 paths:
+  /sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree-inventories:
+    post:
+      security:
+        - Bearer: []
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      tags:
+        - sandbox
+      summary: Prepare immutable pages of an exact stopped working tree
+      operationId: PrepareWorkingTreeInventory
+      parameters:
+        - type: string
+          description: Sandbox ID
+          name: sandboxId
+          in: path
+          required: true
+        - description: Exact stopped working-tree inventory authority
+          name: request
+          in: body
+          required: true
+          schema:
+            $ref: "#/definitions/workingcopy.WorkingTreeInventoryRequest"
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: "#/definitions/workingcopy.WorkingTreeInventoryReceipt"
+        "400":
+          description: Bad Request
+          schema:
+            $ref: "#/definitions/common_errors.ErrorResponse"
+        "409":
+          description: Conflict
+          schema:
+            $ref: "#/definitions/common_errors.ErrorResponse"
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: "#/definitions/common_errors.ErrorResponse"
+  /sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree-inventories/read:
+    post:
+      security:
+        - Bearer: []
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      tags:
+        - sandbox
+      summary: Read one immutable stopped working-tree inventory page
+      operationId: ReadWorkingTreeInventoryPage
+      parameters:
+        - type: string
+          description: Sandbox ID
+          name: sandboxId
+          in: path
+          required: true
+        - description: Exact stopped working-tree inventory authority
+          name: request
+          in: body
+          required: true
+          schema:
+            $ref: "#/definitions/workingcopy.WorkingTreeInventoryPageRequest"
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: "#/definitions/workingcopy.WorkingTreeInventoryPage"
+        "400":
+          description: Bad Request
+          schema:
+            $ref: "#/definitions/common_errors.ErrorResponse"
+        "409":
+          description: Conflict
+          schema:
+            $ref: "#/definitions/common_errors.ErrorResponse"
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: "#/definitions/common_errors.ErrorResponse"
+  /sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree-inventories/delete:
+    post:
+      security:
+        - Bearer: []
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      tags:
+        - sandbox
+      summary: Delete exact inventory custody and prove its absence
+      operationId: DeleteWorkingTreeInventory
+      parameters:
+        - type: string
+          description: Sandbox ID
+          name: sandboxId
+          in: path
+          required: true
+        - description: Exact stopped working-tree inventory authority
+          name: request
+          in: body
+          required: true
+          schema:
+            $ref: "#/definitions/workingcopy.WorkingTreeInventoryRequest"
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: "#/definitions/workingcopy.WorkingTreeInventoryDeletionReceipt"
+        "400":
+          description: Bad Request
+          schema:
+            $ref: "#/definitions/common_errors.ErrorResponse"
+        "409":
+          description: Conflict
+          schema:
+            $ref: "#/definitions/common_errors.ErrorResponse"
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: "#/definitions/common_errors.ErrorResponse"
   /sandboxes/{sandboxId}/working-copy-captures/capabilities:
     post:
       security:
         - Bearer: []
-      description: Read-only discovery bound to the admitted capture helper. The private tree preserves lexical symlink targets, records FIFO and device omissions, and excludes managed runtime roots and caller-owned mounts. Process state and sockets are not portable; Docker archives can omit sockets.
+      description: Read-only discovery of the inventory interface implemented by the assigned Runner, bound to operator-configured capture lineage. Capability discovery does not independently attest the Runner binary or image digest.
       consumes:
         - application/json
       produces:
@@ -1278,68 +1484,24 @@ paths:
           in: body
           required: true
           schema:
-            $ref: '#/definitions/workingcopy.CaptureCapabilitiesRequest'
+            $ref: "#/definitions/workingcopy.CaptureCapabilitiesRequest"
       responses:
-        '200':
+        "200":
           description: OK
           schema:
-            $ref: '#/definitions/workingcopy.CaptureCapabilities'
-        '400':
+            $ref: "#/definitions/workingcopy.CaptureCapabilities"
+        "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/common_errors.ErrorResponse'
-        '409':
+            $ref: "#/definitions/common_errors.ErrorResponse"
+        "409":
           description: Conflict
           schema:
-            $ref: '#/definitions/common_errors.ErrorResponse'
-        '503':
+            $ref: "#/definitions/common_errors.ErrorResponse"
+        "503":
           description: Service Unavailable
           schema:
-            $ref: '#/definitions/common_errors.ErrorResponse'
-  /sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree:
-    post:
-      description: Stream a complete bounded working-tree roster without an anchor
-        file. Managed runtime roots and exact host-provided mount paths are excluded;
-        unsupported user links and special files fail closed.
-      operationId: StoppedWorkingCopyWorkingTree
-      parameters:
-        - description: Sandbox ID
-          in: path
-          name: sandboxId
-          required: true
-          type: string
-        - description: Generation authority, exclusions, and bounds
-          in: body
-          name: body
-          required: true
-          schema:
-            $ref: '#/definitions/workingcopy.StoppedWorkingTreeRequest'
-      produces:
-        - application/json
-      responses:
-        '200':
-          description: OK
-          schema:
-            $ref: '#/definitions/workingcopy.StoppedWorkingTreeReceipt'
-        '400':
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-        '401':
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-        '409':
-          description: Conflict
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-        '503':
-          description: Service Unavailable
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-      summary: List user files from an exact stopped sandbox generation
-      tags:
-        - sandbox
+            $ref: "#/definitions/common_errors.ErrorResponse"
   /:
     get:
       description: Health check

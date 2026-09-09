@@ -14,7 +14,9 @@
     "/": {
       "get": {
         "description": "Health check",
-        "produces": ["application/json"],
+        "produces": [
+          "application/json"
+        ],
         "summary": "Health check",
         "operationId": "HealthCheck",
         "responses": {
@@ -33,7 +35,9 @@
     "/info": {
       "get": {
         "description": "Runner info with system metrics",
-        "produces": ["application/json"],
+        "produces": [
+          "application/json"
+        ],
         "summary": "Runner info",
         "operationId": "RunnerInfo",
         "responses": {
@@ -49,8 +53,12 @@
     "/sandboxes": {
       "post": {
         "description": "Create a sandbox",
-        "produces": ["application/json"],
-        "tags": ["sandbox"],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "sandbox"
+        ],
         "summary": "Create a sandbox",
         "operationId": "Create",
         "parameters": [
@@ -107,8 +115,12 @@
     "/sandboxes/{sandboxId}": {
       "get": {
         "description": "Get sandbox info",
-        "produces": ["application/json"],
-        "tags": ["sandbox"],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "sandbox"
+        ],
         "summary": "Get sandbox info",
         "operationId": "Info",
         "parameters": [
@@ -163,8 +175,12 @@
     "/sandboxes/{sandboxId}/backup": {
       "post": {
         "description": "Create sandbox backup",
-        "produces": ["application/json"],
-        "tags": ["sandbox"],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "sandbox"
+        ],
         "summary": "Create sandbox backup",
         "operationId": "CreateBackup",
         "parameters": [
@@ -228,8 +244,12 @@
     "/sandboxes/{sandboxId}/destroy": {
       "post": {
         "description": "Destroy sandbox",
-        "produces": ["application/json"],
-        "tags": ["sandbox"],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "sandbox"
+        ],
         "summary": "Destroy sandbox",
         "operationId": "Destroy",
         "parameters": [
@@ -283,8 +303,12 @@
     },
     "/sandboxes/{sandboxId}/generation/observe": {
       "post": {
-        "produces": ["application/json"],
-        "tags": ["sandbox"],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "sandbox"
+        ],
         "summary": "Observe one exact provider-owned container generation",
         "operationId": "ObserveSandboxGeneration",
         "parameters": [
@@ -348,9 +372,15 @@
     "/sandboxes/{sandboxId}/is-recoverable": {
       "post": {
         "description": "Check if the sandbox's error reason indicates a recoverable error",
-        "consumes": ["application/json"],
-        "produces": ["application/json"],
-        "tags": ["sandbox"],
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "sandbox"
+        ],
         "summary": "Check if sandbox error is recoverable",
         "operationId": "IsRecoverable",
         "parameters": [
@@ -390,8 +420,12 @@
     "/sandboxes/{sandboxId}/network-settings": {
       "get": {
         "description": "Get sandbox network settings",
-        "produces": ["application/json"],
-        "tags": ["sandbox"],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "sandbox"
+        ],
         "summary": "Get sandbox network settings",
         "operationId": "GetNetworkSettings",
         "parameters": [
@@ -444,8 +478,12 @@
       },
       "post": {
         "description": "Update sandbox network settings",
-        "produces": ["application/json"],
-        "tags": ["sandbox"],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "sandbox"
+        ],
         "summary": "Update sandbox network settings",
         "operationId": "UpdateNetworkSettings",
         "parameters": [
@@ -509,9 +547,15 @@
     "/sandboxes/{sandboxId}/recover": {
       "post": {
         "description": "Recover sandbox from error state using specified recovery type",
-        "consumes": ["application/json"],
-        "produces": ["application/json"],
-        "tags": ["sandbox"],
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "sandbox"
+        ],
         "summary": "Recover sandbox from error state",
         "operationId": "Recover",
         "parameters": [
@@ -575,8 +619,12 @@
     "/sandboxes/{sandboxId}/resize": {
       "post": {
         "description": "Resize sandbox",
-        "produces": ["application/json"],
-        "tags": ["sandbox"],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "sandbox"
+        ],
         "summary": "Resize sandbox",
         "operationId": "Resize",
         "parameters": [
@@ -640,8 +688,12 @@
     "/sandboxes/{sandboxId}/secrets": {
       "post": {
         "description": "Pushes the sandbox's desired secret env (env var name -> placeholder) so newly spawned processes in a running sandbox see it. A sandbox without secret-proxy wiring picks the change up on its next start instead.",
-        "produces": ["application/json"],
-        "tags": ["sandbox"],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "sandbox"
+        ],
         "summary": "Update sandbox secrets",
         "operationId": "UpdateSandboxSecrets",
         "parameters": [
@@ -705,8 +757,12 @@
     "/sandboxes/{sandboxId}/snapshot-from-sandbox": {
       "post": {
         "description": "Commit the sandbox container filesystem and push the image to the supplied registry under the canonical daytona-{hash}:daytona tag.",
-        "produces": ["application/json"],
-        "tags": ["sandbox"],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "sandbox"
+        ],
         "summary": "Snapshot a running sandbox",
         "operationId": "SnapshotFromSandbox",
         "parameters": [
@@ -770,8 +826,12 @@
     "/sandboxes/{sandboxId}/start": {
       "post": {
         "description": "Start sandbox",
-        "produces": ["application/json"],
-        "tags": ["sandbox"],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "sandbox"
+        ],
         "summary": "Start sandbox",
         "operationId": "Start",
         "parameters": [
@@ -846,8 +906,12 @@
     "/sandboxes/{sandboxId}/stop": {
       "post": {
         "description": "Stop sandbox",
-        "produces": ["application/json"],
-        "tags": ["sandbox"],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "sandbox"
+        ],
         "summary": "Stop sandbox",
         "operationId": "Stop",
         "parameters": [
@@ -909,8 +973,12 @@
     },
     "/sandboxes/{sandboxId}/stop-generation-once": {
       "post": {
-        "produces": ["application/json"],
-        "tags": ["sandbox"],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "sandbox"
+        ],
         "summary": "Durably stop one exact sandbox generation once",
         "operationId": "StopSandboxGenerationOnce",
         "parameters": [
@@ -967,8 +1035,12 @@
     },
     "/sandboxes/{sandboxId}/stop-generation-once/observe": {
       "post": {
-        "produces": ["application/json"],
-        "tags": ["sandbox"],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "sandbox"
+        ],
         "summary": "Observe one exact durable stopped-generation operation",
         "operationId": "ObserveSandboxGenerationStop",
         "parameters": [
@@ -1026,7 +1098,9 @@
     "/sandboxes/{sandboxId}/toolbox/{path}": {
       "get": {
         "description": "Forwards the request to the specified sandbox's container",
-        "tags": ["toolbox"],
+        "tags": [
+          "toolbox"
+        ],
         "summary": "Proxy requests to the sandbox toolbox",
         "parameters": [
           {
@@ -1083,7 +1157,9 @@
       },
       "post": {
         "description": "Forwards the request to the specified sandbox's container",
-        "tags": ["toolbox"],
+        "tags": [
+          "toolbox"
+        ],
         "summary": "Proxy requests to the sandbox toolbox",
         "parameters": [
           {
@@ -1140,7 +1216,9 @@
       },
       "delete": {
         "description": "Forwards the request to the specified sandbox's container",
-        "tags": ["toolbox"],
+        "tags": [
+          "toolbox"
+        ],
         "summary": "Proxy requests to the sandbox toolbox",
         "parameters": [
           {
@@ -1199,8 +1277,12 @@
     "/sandboxes/{sandboxId}/working-copy-captures": {
       "post": {
         "description": "Persist one host-admitted regular file from the exact stopped container generation.",
-        "produces": ["application/json"],
-        "tags": ["sandbox"],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "sandbox"
+        ],
         "summary": "Capture one stopped sandbox working-copy file",
         "operationId": "CaptureWorkingCopy",
         "parameters": [
@@ -1257,8 +1339,12 @@
     },
     "/sandboxes/{sandboxId}/working-copy-captures/delete": {
       "post": {
-        "produces": ["application/json"],
-        "tags": ["sandbox"],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "sandbox"
+        ],
         "summary": "Delete an exact private working-copy capture",
         "operationId": "DeleteWorkingCopyCapture",
         "parameters": [
@@ -1315,8 +1401,12 @@
     },
     "/sandboxes/{sandboxId}/working-copy-captures/exists": {
       "post": {
-        "produces": ["application/json"],
-        "tags": ["sandbox"],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "sandbox"
+        ],
         "summary": "Check an exact private working-copy capture identity",
         "operationId": "WorkingCopyCaptureExists",
         "parameters": [
@@ -1373,8 +1463,12 @@
     },
     "/sandboxes/{sandboxId}/working-copy-captures/observe": {
       "post": {
-        "produces": ["application/json"],
-        "tags": ["sandbox"],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "sandbox"
+        ],
         "summary": "Observe an exact working-copy capture",
         "operationId": "ObserveWorkingCopyCapture",
         "parameters": [
@@ -1431,8 +1525,12 @@
     },
     "/sandboxes/{sandboxId}/working-copy-captures/read": {
       "post": {
-        "produces": ["application/json"],
-        "tags": ["sandbox"],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "sandbox"
+        ],
         "summary": "Read an exact immutable working-copy capture",
         "operationId": "ReadWorkingCopyCapture",
         "parameters": [
@@ -1490,8 +1588,12 @@
     "/sandboxes/{sandboxId}/working-copy-captures/stopped-directory-roster": {
       "post": {
         "description": "Stream and validate a content-digested regular-file/directory roster through Docker host authority; archive link entries, special files, escapes, and bound overflows fail closed. Accepted regular-file entries are independent exact bytes; inode/link identity is not preserved.",
-        "produces": ["application/json"],
-        "tags": ["sandbox"],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "sandbox"
+        ],
         "summary": "List one bounded directory from an exact stopped sandbox generation",
         "operationId": "StoppedWorkingCopyDirectoryRoster",
         "parameters": [
@@ -1546,69 +1648,12 @@
         }
       }
     },
-    "/sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree": {
-      "post": {
-        "description": "Stream a complete bounded working-tree roster without an anchor file. Managed runtime roots and exact host-provided mount paths are excluded; unsupported user links and special files fail closed.",
-        "produces": ["application/json"],
-        "tags": ["sandbox"],
-        "summary": "List user files from an exact stopped sandbox generation",
-        "operationId": "StoppedWorkingCopyWorkingTree",
-        "parameters": [
-          {
-            "type": "string",
-            "description": "Sandbox ID",
-            "name": "sandboxId",
-            "in": "path",
-            "required": true
-          },
-          {
-            "description": "Generation authority, exclusions, and bounds",
-            "name": "body",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/workingcopy.StoppedWorkingTreeRequest"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "schema": {
-              "$ref": "#/definitions/workingcopy.StoppedWorkingTreeReceipt"
-            }
-          },
-          "400": {
-            "description": "Bad Request",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "409": {
-            "description": "Conflict",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          },
-          "503": {
-            "description": "Service Unavailable",
-            "schema": {
-              "$ref": "#/definitions/ErrorResponse"
-            }
-          }
-        }
-      }
-    },
     "/snapshots/build": {
       "post": {
         "description": "Build a snapshot from a Dockerfile and context hashes. The operation runs asynchronously and returns 202 immediately.",
-        "tags": ["snapshots"],
+        "tags": [
+          "snapshots"
+        ],
         "summary": "Build a snapshot",
         "operationId": "BuildSnapshot",
         "parameters": [
@@ -1665,8 +1710,12 @@
     "/snapshots/exists": {
       "get": {
         "description": "Check if a specified snapshot exists locally",
-        "produces": ["application/json"],
-        "tags": ["snapshots"],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "snapshots"
+        ],
         "summary": "Check if a snapshot exists",
         "operationId": "SnapshotExists",
         "parameters": [
@@ -1721,8 +1770,12 @@
     "/snapshots/info": {
       "get": {
         "description": "Get information about a specified snapshot including size and entrypoint. Returns 422 if the last pull/build operation failed, with the error reason in the message.",
-        "produces": ["application/json"],
-        "tags": ["snapshots"],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "snapshots"
+        ],
         "summary": "Get snapshot information",
         "operationId": "GetSnapshotInfo",
         "parameters": [
@@ -1777,8 +1830,12 @@
     "/snapshots/inspect": {
       "post": {
         "description": "Inspect a specified snapshot in a registry",
-        "produces": ["application/json"],
-        "tags": ["snapshots"],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "snapshots"
+        ],
         "summary": "Inspect a snapshot in a registry",
         "operationId": "InspectSnapshotInRegistry",
         "parameters": [
@@ -1829,7 +1886,9 @@
     "/snapshots/logs": {
       "get": {
         "description": "Stream build logs",
-        "tags": ["snapshots"],
+        "tags": [
+          "snapshots"
+        ],
         "summary": "Get build logs",
         "operationId": "GetBuildLogs",
         "parameters": [
@@ -1884,7 +1943,9 @@
     "/snapshots/pull": {
       "post": {
         "description": "Pull a snapshot from a registry and optionally push to another registry. The operation runs asynchronously and returns 202 immediately.",
-        "tags": ["snapshots"],
+        "tags": [
+          "snapshots"
+        ],
         "summary": "Pull a snapshot",
         "operationId": "PullSnapshot",
         "parameters": [
@@ -1941,8 +2002,12 @@
     "/snapshots/remove": {
       "post": {
         "description": "Remove a specified snapshot from the local system",
-        "produces": ["application/json"],
-        "tags": ["snapshots"],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "snapshots"
+        ],
         "summary": "Remove a snapshot",
         "operationId": "RemoveSnapshot",
         "parameters": [
@@ -1997,7 +2062,9 @@
     "/snapshots/tag": {
       "post": {
         "description": "Tag an existing local image with a new target reference",
-        "tags": ["snapshots"],
+        "tags": [
+          "snapshots"
+        ],
         "summary": "Tag an image",
         "operationId": "TagImage",
         "deprecated": true,
@@ -2059,10 +2126,16 @@
             "Bearer": []
           }
         ],
-        "description": "Read-only discovery bound to the admitted capture helper. The private tree preserves lexical symlink targets, records FIFO and device omissions, and excludes managed runtime roots and caller-owned mounts. Process state and sockets are not portable; Docker archives can omit sockets.",
-        "consumes": ["application/json"],
-        "produces": ["application/json"],
-        "tags": ["sandbox"],
+        "description": "Read-only discovery of the inventory interface implemented by the assigned Runner, bound to operator-configured capture lineage. Capability discovery does not independently attest the Runner binary or image digest.",
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "sandbox"
+        ],
         "summary": "Discover the assigned Runner capture surface before stopping a generation",
         "operationId": "WorkingCopyCaptureCapabilities",
         "parameters": [
@@ -2110,12 +2183,207 @@
           }
         }
       }
+    },
+    "/sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree-inventories": {
+      "post": {
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "sandbox"
+        ],
+        "summary": "Prepare immutable pages of an exact stopped working tree",
+        "operationId": "PrepareWorkingTreeInventory",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "Sandbox ID",
+            "name": "sandboxId",
+            "in": "path",
+            "required": true
+          },
+          {
+            "description": "Exact stopped working-tree inventory authority",
+            "name": "request",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/workingcopy.WorkingTreeInventoryRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/workingcopy.WorkingTreeInventoryReceipt"
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "schema": {
+              "$ref": "#/definitions/common_errors.ErrorResponse"
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "schema": {
+              "$ref": "#/definitions/common_errors.ErrorResponse"
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "schema": {
+              "$ref": "#/definitions/common_errors.ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "/sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree-inventories/read": {
+      "post": {
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "sandbox"
+        ],
+        "summary": "Read one immutable stopped working-tree inventory page",
+        "operationId": "ReadWorkingTreeInventoryPage",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "Sandbox ID",
+            "name": "sandboxId",
+            "in": "path",
+            "required": true
+          },
+          {
+            "description": "Exact stopped working-tree inventory authority",
+            "name": "request",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/workingcopy.WorkingTreeInventoryPageRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/workingcopy.WorkingTreeInventoryPage"
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "schema": {
+              "$ref": "#/definitions/common_errors.ErrorResponse"
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "schema": {
+              "$ref": "#/definitions/common_errors.ErrorResponse"
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "schema": {
+              "$ref": "#/definitions/common_errors.ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "/sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree-inventories/delete": {
+      "post": {
+        "security": [
+          {
+            "Bearer": []
+          }
+        ],
+        "consumes": [
+          "application/json"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "tags": [
+          "sandbox"
+        ],
+        "summary": "Delete exact inventory custody and prove its absence",
+        "operationId": "DeleteWorkingTreeInventory",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "Sandbox ID",
+            "name": "sandboxId",
+            "in": "path",
+            "required": true
+          },
+          {
+            "description": "Exact stopped working-tree inventory authority",
+            "name": "request",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/workingcopy.WorkingTreeInventoryRequest"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/workingcopy.WorkingTreeInventoryDeletionReceipt"
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "schema": {
+              "$ref": "#/definitions/common_errors.ErrorResponse"
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "schema": {
+              "$ref": "#/definitions/common_errors.ErrorResponse"
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "schema": {
+              "$ref": "#/definitions/common_errors.ErrorResponse"
+            }
+          }
+        }
+      }
     }
   },
   "definitions": {
     "BuildSnapshotRequestDTO": {
       "type": "object",
-      "required": ["dockerfile", "organizationId"],
+      "required": [
+        "dockerfile",
+        "organizationId"
+      ],
       "properties": {
         "context": {
           "type": "array",
@@ -2149,7 +2417,10 @@
     },
     "CreateBackupDTO": {
       "type": "object",
-      "required": ["registry", "snapshot"],
+      "required": [
+        "registry",
+        "snapshot"
+      ],
       "properties": {
         "registry": {
           "$ref": "#/definitions/RegistryDTO"
@@ -2161,7 +2432,12 @@
     },
     "CreateSandboxDTO": {
       "type": "object",
-      "required": ["id", "osUser", "snapshot", "userId"],
+      "required": [
+        "id",
+        "osUser",
+        "snapshot",
+        "userId"
+      ],
       "properties": {
         "authToken": {
           "type": "string"
@@ -2266,7 +2542,10 @@
     },
     "CreateSnapshotFromSandboxRequest": {
       "type": "object",
-      "required": ["name", "registry"],
+      "required": [
+        "name",
+        "registry"
+      ],
       "properties": {
         "name": {
           "type": "string",
@@ -2283,7 +2562,12 @@
     "ErrorResponse": {
       "description": "Error response",
       "type": "object",
-      "required": ["message", "path", "statusCode", "timestamp"],
+      "required": [
+        "message",
+        "path",
+        "statusCode",
+        "timestamp"
+      ],
       "properties": {
         "code": {
           "type": "string",
@@ -2313,7 +2597,9 @@
     },
     "InspectSnapshotInRegistryRequest": {
       "type": "object",
-      "required": ["snapshot"],
+      "required": [
+        "snapshot"
+      ],
       "properties": {
         "registry": {
           "$ref": "#/definitions/RegistryDTO"
@@ -2326,7 +2612,9 @@
     },
     "IsRecoverableDTO": {
       "type": "object",
-      "required": ["errorReason"],
+      "required": [
+        "errorReason"
+      ],
       "properties": {
         "errorReason": {
           "type": "string"
@@ -2343,7 +2631,9 @@
     },
     "PullSnapshotRequestDTO": {
       "type": "object",
-      "required": ["snapshot"],
+      "required": [
+        "snapshot"
+      ],
       "properties": {
         "destinationRef": {
           "type": "string"
@@ -2370,7 +2660,10 @@
     },
     "RecoverSandboxDTO": {
       "type": "object",
-      "required": ["osUser", "userId"],
+      "required": [
+        "osUser",
+        "userId"
+      ],
       "properties": {
         "backupErrorReason": {
           "type": "string"
@@ -2435,7 +2728,9 @@
     },
     "RegistryDTO": {
       "type": "object",
-      "required": ["url"],
+      "required": [
+        "url"
+      ],
       "properties": {
         "password": {
           "type": "string"
@@ -2526,7 +2821,10 @@
     },
     "RunnerServiceInfo": {
       "type": "object",
-      "required": ["healthy", "serviceName"],
+      "required": [
+        "healthy",
+        "serviceName"
+      ],
       "properties": {
         "errorReason": {
           "type": "string"
@@ -2592,14 +2890,22 @@
           "items": {
             "type": "string"
           },
-          "example": ["[\"nginx\"", "\"-g\"", "\"daemon off;\"]"]
+          "example": [
+            "[\"nginx\"",
+            "\"-g\"",
+            "\"daemon off;\"]"
+          ]
         },
         "entrypoint": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "example": ["[\"nginx\"", "\"-g\"", "\"daemon off;\"]"]
+          "example": [
+            "[\"nginx\"",
+            "\"-g\"",
+            "\"daemon off;\"]"
+          ]
         },
         "hash": {
           "type": "string",
@@ -2633,7 +2939,10 @@
     },
     "TagImageRequestDTO": {
       "type": "object",
-      "required": ["sourceImage", "targetImage"],
+      "required": [
+        "sourceImage",
+        "targetImage"
+      ],
       "properties": {
         "sourceImage": {
           "type": "string"
@@ -2688,7 +2997,13 @@
     },
     "enums.BackupState": {
       "type": "string",
-      "enum": ["NONE", "PENDING", "IN_PROGRESS", "COMPLETED", "FAILED"],
+      "enum": [
+        "NONE",
+        "PENDING",
+        "IN_PROGRESS",
+        "COMPLETED",
+        "FAILED"
+      ],
       "x-enum-varnames": [
         "BackupStateNone",
         "BackupStatePending",
@@ -2730,7 +3045,12 @@
     },
     "generationstop.ExpectedGeneration": {
       "type": "object",
-      "required": ["containerCreatedAt", "containerId", "executionStartedAt", "restartCount"],
+      "required": [
+        "containerCreatedAt",
+        "containerId",
+        "executionStartedAt",
+        "restartCount"
+      ],
       "properties": {
         "containerCreatedAt": {
           "type": "string"
@@ -2748,7 +3068,9 @@
     },
     "generationstop.Fence": {
       "type": "object",
-      "required": ["workspaceExecutionManifestRef"],
+      "required": [
+        "workspaceExecutionManifestRef"
+      ],
       "properties": {
         "workspaceExecutionManifestRef": {
           "type": "string"
@@ -2757,7 +3079,14 @@
     },
     "generationstop.GenerationObservation": {
       "type": "object",
-      "required": ["fence", "generation", "observedAt", "owner", "source", "state"],
+      "required": [
+        "fence",
+        "generation",
+        "observedAt",
+        "owner",
+        "source",
+        "state"
+      ],
       "properties": {
         "fence": {
           "$ref": "#/definitions/generationstop.Fence"
@@ -2781,7 +3110,11 @@
     },
     "generationstop.GenerationObservationRequest": {
       "type": "object",
-      "required": ["fence", "owner", "source"],
+      "required": [
+        "fence",
+        "owner",
+        "source"
+      ],
       "properties": {
         "fence": {
           "$ref": "#/definitions/generationstop.Fence"
@@ -2796,7 +3129,9 @@
     },
     "generationstop.Observation": {
       "type": "object",
-      "required": ["status"],
+      "required": [
+        "status"
+      ],
       "properties": {
         "receipt": {
           "$ref": "#/definitions/generationstop.Receipt"
@@ -2811,7 +3146,14 @@
     },
     "generationstop.Owner": {
       "type": "object",
-      "required": ["grantId", "runId", "tenantId", "userId", "workingCopyId", "workspaceId"],
+      "required": [
+        "grantId",
+        "runId",
+        "tenantId",
+        "userId",
+        "workingCopyId",
+        "workspaceId"
+      ],
       "properties": {
         "grantId": {
           "type": "string"
@@ -2835,7 +3177,9 @@
     },
     "generationstop.Purpose": {
       "type": "object",
-      "required": ["kind"],
+      "required": [
+        "kind"
+      ],
       "properties": {
         "kind": {
           "type": "string"
@@ -2853,7 +3197,15 @@
     },
     "generationstop.Receipt": {
       "type": "object",
-      "required": ["kind", "receiptDigest", "receiptRef", "request", "stoppedAt", "terminalGeneration", "version"],
+      "required": [
+        "kind",
+        "receiptDigest",
+        "receiptRef",
+        "request",
+        "stoppedAt",
+        "terminalGeneration",
+        "version"
+      ],
       "properties": {
         "kind": {
           "type": "string"
@@ -2880,7 +3232,10 @@
     },
     "generationstop.RendererProcessIdentity": {
       "type": "object",
-      "required": ["pid", "startTicks"],
+      "required": [
+        "pid",
+        "startTicks"
+      ],
       "properties": {
         "pid": {
           "type": "integer"
@@ -2892,7 +3247,11 @@
     },
     "generationstop.Source": {
       "type": "object",
-      "required": ["expectedProfile", "expectedRuntimeKind", "providerResourceId"],
+      "required": [
+        "expectedProfile",
+        "expectedRuntimeKind",
+        "providerResourceId"
+      ],
       "properties": {
         "expectedProfile": {
           "type": "string"
@@ -2907,7 +3266,13 @@
     },
     "generationstop.StopAuthority": {
       "type": "object",
-      "required": ["fence", "operationId", "receiptDigest", "receiptRef", "terminalGeneration"],
+      "required": [
+        "fence",
+        "operationId",
+        "receiptDigest",
+        "receiptRef",
+        "terminalGeneration"
+      ],
       "properties": {
         "fence": {
           "$ref": "#/definitions/generationstop.Fence"
@@ -2928,7 +3293,15 @@
     },
     "generationstop.StopRequest": {
       "type": "object",
-      "required": ["expectedGeneration", "fence", "operationId", "owner", "purpose", "requestFingerprint", "source"],
+      "required": [
+        "expectedGeneration",
+        "fence",
+        "operationId",
+        "owner",
+        "purpose",
+        "requestFingerprint",
+        "source"
+      ],
       "properties": {
         "expectedGeneration": {
           "$ref": "#/definitions/generationstop.ExpectedGeneration"
@@ -2990,7 +3363,13 @@
     },
     "workingcopy.CaptureAuthority": {
       "type": "object",
-      "required": ["authorityRef", "helper", "lineageRef", "protocol", "roleRef"],
+      "required": [
+        "authorityRef",
+        "helper",
+        "lineageRef",
+        "protocol",
+        "roleRef"
+      ],
       "properties": {
         "authorityRef": {
           "type": "string"
@@ -3011,7 +3390,10 @@
     },
     "workingcopy.CaptureAuthorityArtifact": {
       "type": "object",
-      "required": ["digest", "ref"],
+      "required": [
+        "digest",
+        "ref"
+      ],
       "properties": {
         "digest": {
           "type": "string"
@@ -3023,7 +3405,15 @@
     },
     "workingcopy.CaptureBinding": {
       "type": "object",
-      "required": ["authority", "owner", "providerName", "requestFingerprint", "selector", "source", "stopAuthority"],
+      "required": [
+        "authority",
+        "owner",
+        "providerName",
+        "requestFingerprint",
+        "selector",
+        "source",
+        "stopAuthority"
+      ],
       "properties": {
         "authority": {
           "$ref": "#/definitions/workingcopy.CaptureAuthority"
@@ -3141,14 +3531,12 @@
       }
     },
     "workingcopy.CaptureGenerationBinding": {
-      "type": "object",
-      "required": ["authority", "owner", "providerName", "requestFingerprint", "source", "stopAuthority"],
       "properties": {
         "authority": {
           "$ref": "#/definitions/workingcopy.CaptureAuthority"
         },
         "owner": {
-          "$ref": "#/definitions/workingcopy.CaptureOwner"
+          "$ref": "#/definitions/generationstop.Owner"
         },
         "providerName": {
           "type": "string"
@@ -3157,12 +3545,21 @@
           "type": "string"
         },
         "source": {
-          "$ref": "#/definitions/workingcopy.SourceAddress"
+          "$ref": "#/definitions/generationstop.Source"
         },
         "stopAuthority": {
           "$ref": "#/definitions/generationstop.StopAuthority"
         }
-      }
+      },
+      "required": [
+        "providerName",
+        "requestFingerprint",
+        "authority",
+        "source",
+        "owner",
+        "stopAuthority"
+      ],
+      "type": "object"
     },
     "workingcopy.CaptureIdentity": {
       "type": "object",
@@ -3205,7 +3602,9 @@
     },
     "workingcopy.CaptureObservation": {
       "type": "object",
-      "required": ["status"],
+      "required": [
+        "status"
+      ],
       "properties": {
         "binding": {
           "$ref": "#/definitions/workingcopy.CaptureBinding"
@@ -3223,7 +3622,14 @@
     },
     "workingcopy.CaptureOwner": {
       "type": "object",
-      "required": ["grantId", "runId", "tenantId", "userId", "workingCopyId", "workspaceId"],
+      "required": [
+        "grantId",
+        "runId",
+        "tenantId",
+        "userId",
+        "workingCopyId",
+        "workspaceId"
+      ],
       "properties": {
         "grantId": {
           "type": "string"
@@ -3413,7 +3819,10 @@
     },
     "workingcopy.CaptureSelector": {
       "type": "object",
-      "required": ["semanticZoneRef", "zoneRelativePath"],
+      "required": [
+        "semanticZoneRef",
+        "zoneRelativePath"
+      ],
       "properties": {
         "semanticZoneRef": {
           "type": "string"
@@ -3425,7 +3834,11 @@
     },
     "workingcopy.SourceAddress": {
       "type": "object",
-      "required": ["expectedProfile", "expectedRuntimeKind", "providerResourceId"],
+      "required": [
+        "expectedProfile",
+        "expectedRuntimeKind",
+        "providerResourceId"
+      ],
       "properties": {
         "expectedProfile": {
           "type": "string"
@@ -3440,7 +3853,14 @@
     },
     "workingcopy.StoppedDirectoryRosterEntry": {
       "type": "object",
-      "required": ["kind", "mode", "name", "sha256", "size", "zoneRelativePath"],
+      "required": [
+        "kind",
+        "mode",
+        "name",
+        "sha256",
+        "size",
+        "zoneRelativePath"
+      ],
       "properties": {
         "kind": {
           "type": "string"
@@ -3466,7 +3886,13 @@
     },
     "workingcopy.StoppedDirectoryRosterReceipt": {
       "type": "object",
-      "required": ["entries", "observedAt", "request", "rosterDigest", "terminalGeneration"],
+      "required": [
+        "entries",
+        "observedAt",
+        "request",
+        "rosterDigest",
+        "terminalGeneration"
+      ],
       "properties": {
         "entries": {
           "type": "array",
@@ -3490,7 +3916,14 @@
     },
     "workingcopy.StoppedDirectoryRosterRequest": {
       "type": "object",
-      "required": ["anchor", "maximumAggregateBytes", "maximumDepth", "maximumEntries", "maximumFileBytes", "selector"],
+      "required": [
+        "anchor",
+        "maximumAggregateBytes",
+        "maximumDepth",
+        "maximumEntries",
+        "maximumFileBytes",
+        "selector"
+      ],
       "properties": {
         "anchor": {
           "$ref": "#/definitions/workingcopy.CaptureBinding"
@@ -3512,140 +3945,65 @@
         }
       }
     },
-    "workingcopy.StoppedWorkingTreeReceipt": {
-      "type": "object",
-      "required": ["entries", "observedAt", "request", "rosterDigest", "terminalGeneration"],
-      "properties": {
-        "entries": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/workingcopy.StoppedWorkingTreeEntry"
-          }
-        },
-        "observedAt": {
-          "type": "string"
-        },
-        "request": {
-          "$ref": "#/definitions/workingcopy.StoppedWorkingTreeRequest"
-        },
-        "rosterDigest": {
-          "type": "string"
-        },
-        "terminalGeneration": {
-          "$ref": "#/definitions/generationstop.TerminalGeneration"
-        }
-      }
-    },
-    "workingcopy.StoppedWorkingTreeRequest": {
-      "type": "object",
-      "required": [
-        "excludedPaths",
-        "generation",
-        "maximumAggregateBytes",
-        "maximumDepth",
-        "maximumEntries",
-        "maximumFileBytes"
-      ],
-      "properties": {
-        "excludedPaths": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "generation": {
-          "$ref": "#/definitions/workingcopy.CaptureGenerationBinding"
-        },
-        "maximumAggregateBytes": {
-          "type": "integer"
-        },
-        "maximumDepth": {
-          "type": "integer"
-        },
-        "maximumEntries": {
-          "type": "integer"
-        },
-        "maximumFileBytes": {
-          "type": "integer"
-        }
-      }
-    },
     "workingcopy.CaptureCapabilitiesRequest": {
-      "type": "object",
-      "required": ["authority", "fence", "owner", "source"],
       "properties": {
         "authority": {
           "$ref": "#/definitions/workingcopy.CaptureAuthority"
         },
-        "source": {
-          "$ref": "#/definitions/generationstop.Source"
+        "fence": {
+          "$ref": "#/definitions/generationstop.Fence"
         },
         "owner": {
           "$ref": "#/definitions/generationstop.Owner"
         },
-        "fence": {
-          "$ref": "#/definitions/generationstop.Fence"
+        "source": {
+          "$ref": "#/definitions/generationstop.Source"
         }
-      }
+      },
+      "required": [
+        "authority",
+        "source",
+        "owner",
+        "fence"
+      ],
+      "type": "object"
     },
     "workingcopy.CaptureCapabilities": {
-      "type": "object",
-      "required": ["authority", "stoppedWorkingTree"],
       "properties": {
         "authority": {
           "$ref": "#/definitions/workingcopy.CaptureAuthority"
         },
-        "stoppedWorkingTree": {
-          "$ref": "#/definitions/workingcopy.StoppedWorkingTreeCapability"
+        "stoppedWorkingTreeInventory": {
+          "$ref": "#/definitions/workingcopy.WorkingTreeInventoryCapability"
         }
-      }
-    },
-    "workingcopy.StoppedWorkingTreeCapability": {
-      "type": "object",
+      },
       "required": [
-        "contract",
-        "maximumAggregateBytes",
-        "maximumDepth",
-        "maximumEntries",
-        "maximumFileBytes",
-        "maximumReadBytes",
-        "maximumReceiptBytes",
-        "semanticZoneRef"
+        "authority",
+        "stoppedWorkingTreeInventory"
       ],
-      "properties": {
-        "contract": {
-          "type": "string"
-        },
-        "semanticZoneRef": {
-          "type": "string"
-        },
-        "maximumDepth": {
-          "type": "integer"
-        },
-        "maximumEntries": {
-          "type": "integer"
-        },
-        "maximumFileBytes": {
-          "type": "integer"
-        },
-        "maximumAggregateBytes": {
-          "type": "integer"
-        },
-        "maximumReadBytes": {
-          "type": "integer"
-        },
-        "maximumReceiptBytes": {
-          "type": "integer"
-        }
-      }
+      "type": "object"
     },
     "workingcopy.StoppedWorkingTreeEntry": {
-      "type": "object",
-      "required": ["kind", "mode", "name", "sha256", "size", "zoneRelativePath"],
       "properties": {
+        "excludedKind": {
+          "enum": [
+            "fifo",
+            "character_device",
+            "block_device"
+          ],
+          "type": "string"
+        },
         "kind": {
-          "type": "string",
-          "enum": ["regular_file", "directory", "symlink", "excluded"]
+          "enum": [
+            "regular_file",
+            "directory",
+            "symlink",
+            "excluded"
+          ],
+          "type": "string"
+        },
+        "linkTarget": {
+          "type": "string"
         },
         "mode": {
           "type": "string",
@@ -3663,15 +4021,238 @@
         },
         "zoneRelativePath": {
           "type": "string"
-        },
-        "linkTarget": {
+        }
+      },
+      "required": [
+        "zoneRelativePath",
+        "name",
+        "kind",
+        "size",
+        "mode",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "workingcopy.WorkingTreeInventoryCapability": {
+      "properties": {
+        "contract": {
           "type": "string"
         },
-        "excludedKind": {
-          "type": "string",
-          "enum": ["fifo", "character_device", "block_device"]
+        "maximumAggregateBytes": {
+          "type": "integer"
+        },
+        "maximumDepth": {
+          "type": "integer"
+        },
+        "maximumFileBytes": {
+          "type": "integer"
+        },
+        "maximumIndexBytes": {
+          "type": "integer"
+        },
+        "maximumPageBytes": {
+          "type": "integer"
+        },
+        "maximumPageEntries": {
+          "type": "integer"
+        },
+        "maximumReadBytes": {
+          "type": "integer"
+        },
+        "semanticZoneRef": {
+          "type": "string"
         }
-      }
+      },
+      "required": [
+        "contract",
+        "semanticZoneRef",
+        "maximumDepth",
+        "maximumFileBytes",
+        "maximumAggregateBytes",
+        "maximumPageEntries",
+        "maximumPageBytes",
+        "maximumIndexBytes",
+        "maximumReadBytes"
+      ],
+      "type": "object"
+    },
+    "workingcopy.WorkingTreeInventoryDeletionReceipt": {
+      "properties": {
+        "providerResourceId": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/definitions/workingcopy.WorkingTreeInventoryRequest"
+        },
+        "status": {
+          "enum": [
+            "absent"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "request",
+        "providerResourceId",
+        "status"
+      ],
+      "type": "object"
+    },
+    "workingcopy.WorkingTreeInventoryPage": {
+      "properties": {
+        "entries": {
+          "items": {
+            "$ref": "#/definitions/workingcopy.StoppedWorkingTreeEntry"
+          },
+          "type": "array"
+        },
+        "pageDigest": {
+          "type": "string"
+        },
+        "pageIndex": {
+          "type": "integer"
+        },
+        "providerResourceId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "providerResourceId",
+        "pageIndex",
+        "entries",
+        "pageDigest"
+      ],
+      "type": "object"
+    },
+    "workingcopy.WorkingTreeInventoryPageDescriptor": {
+      "properties": {
+        "byteLength": {
+          "type": "integer"
+        },
+        "entryCount": {
+          "type": "integer"
+        },
+        "firstPath": {
+          "type": "string"
+        },
+        "lastPath": {
+          "type": "string"
+        },
+        "pageIndex": {
+          "type": "integer"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pageIndex",
+        "entryCount",
+        "byteLength",
+        "sha256",
+        "firstPath",
+        "lastPath"
+      ],
+      "type": "object"
+    },
+    "workingcopy.WorkingTreeInventoryPageRequest": {
+      "properties": {
+        "pageIndex": {
+          "type": "integer"
+        },
+        "providerResourceId": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/definitions/workingcopy.WorkingTreeInventoryRequest"
+        }
+      },
+      "required": [
+        "request",
+        "providerResourceId",
+        "pageIndex"
+      ],
+      "type": "object"
+    },
+    "workingcopy.WorkingTreeInventoryReceipt": {
+      "properties": {
+        "aggregateBytes": {
+          "type": "integer"
+        },
+        "entryCount": {
+          "type": "integer"
+        },
+        "inventoryDigest": {
+          "type": "string"
+        },
+        "observedAt": {
+          "type": "string"
+        },
+        "pages": {
+          "items": {
+            "$ref": "#/definitions/workingcopy.WorkingTreeInventoryPageDescriptor"
+          },
+          "type": "array"
+        },
+        "providerResourceId": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/definitions/workingcopy.WorkingTreeInventoryRequest"
+        },
+        "terminalGeneration": {
+          "$ref": "#/definitions/generationstop.TerminalGeneration"
+        }
+      },
+      "required": [
+        "request",
+        "providerResourceId",
+        "terminalGeneration",
+        "pages",
+        "entryCount",
+        "aggregateBytes",
+        "inventoryDigest",
+        "observedAt"
+      ],
+      "type": "object"
+    },
+    "workingcopy.WorkingTreeInventoryRequest": {
+      "properties": {
+        "excludedPaths": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "generation": {
+          "$ref": "#/definitions/workingcopy.CaptureGenerationBinding"
+        },
+        "maximumAggregateBytes": {
+          "type": "integer"
+        },
+        "maximumDepth": {
+          "type": "integer"
+        },
+        "maximumFileBytes": {
+          "type": "integer"
+        },
+        "maximumPageBytes": {
+          "type": "integer"
+        },
+        "maximumPageEntries": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "generation",
+        "excludedPaths",
+        "maximumDepth",
+        "maximumFileBytes",
+        "maximumAggregateBytes",
+        "maximumPageEntries",
+        "maximumPageBytes"
+      ],
+      "type": "object"
     }
   },
   "securityDefinitions": {

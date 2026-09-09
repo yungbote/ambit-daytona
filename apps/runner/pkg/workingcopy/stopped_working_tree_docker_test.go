@@ -83,21 +83,23 @@ s.close()
 		ExecutionFinishedAt: container.State.FinishedAt, ExitCode: container.State.ExitCode, OOMKilled: container.State.OOMKilled,
 	}
 	objects := newFakeObjectStore()
+	objects.directory = t.TempDir()
 	service, err := NewService(docker, objects, dockerTestStoppedAuthority{docker}, binding.Authority)
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := StoppedWorkingTreeRequest{
+	request := WorkingTreeInventoryRequest{
 		Generation: binding.generationBinding(), ExcludedPaths: []string{"mounted"},
-		MaximumDepth: MaximumWorkingTreeDepth, MaximumEntries: MaximumWorkingTreeEntries,
+		MaximumDepth: MaximumWorkingTreeDepth, MaximumPageEntries: 2, MaximumPageBytes: MaximumWorkingTreeInventoryPageBytes,
 		MaximumFileBytes: MaximumCaptureBytes, MaximumAggregateBytes: MaximumWorkingTreeAggregateBytes,
 	}
-	roster, err := service.StoppedWorkingTree(ctx, container.ID, request)
+	roster, err := service.PrepareWorkingTreeInventory(ctx, container.ID, request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	entries := make(map[string]StoppedWorkingTreeEntry, len(roster.Entries))
-	for _, entry := range roster.Entries {
+	observedEntries := readInventoryTestEntries(t, service, roster)
+	entries := make(map[string]StoppedWorkingTreeEntry, len(observedEntries))
+	for _, entry := range observedEntries {
 		if reservedWorkingTreePath(entry.ZoneRelativePath) || strings.HasPrefix(entry.ZoneRelativePath, "mounted") {
 			t.Fatalf("managed or mounted bytes entered private roster: %#v", entry)
 		}
@@ -123,8 +125,10 @@ s.close()
 	if _, exists := entries["runtime.sock"]; exists {
 		t.Fatal("Docker socket omission unexpectedly changed; reassess archive custody")
 	}
-	if len(objects.objects) != 0 {
-		t.Fatal("roster wrote durable file bytes")
+	for _, object := range objects.objects {
+		if len(object.data) > MaximumWorkingTreeInventoryPageBytes {
+			t.Fatal("inventory retained file payload bytes")
+		}
 	}
 	receipt, err := service.Capture(ctx, container.ID, binding)
 	if err != nil || receipt.TotalByteLength != 6*1024*1024 || entries["customer-large.bin"].SHA256 == nil ||
@@ -168,6 +172,9 @@ s.close()
 		}
 	}
 	if _, err := service.Delete(ctx, container.ID, receipt.CaptureIdentity); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.DeleteWorkingTreeInventory(ctx, container.ID, request); err != nil {
 		t.Fatal(err)
 	}
 	t.Log("Real Docker: lexical links preserved; FIFO/devices recorded; socket omitted; managed roots and bind mount excluded; 6MiB file captured and read in 4MiB ranges without following links.")

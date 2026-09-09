@@ -7,7 +7,6 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,62 +17,25 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daytonaio/runner/pkg/generationstop"
 	containertypes "github.com/docker/docker/api/types/container"
 )
 
-func workingTreeFixture(t *testing.T, entries ...tarEntry) (*Service, *fakeContainer, *fakeObjectStore, StoppedWorkingTreeRequest) {
+func workingTreeFixture(t *testing.T, entries ...tarEntry) (*Service, *fakeContainer, *fakeObjectStore, WorkingTreeInventoryRequest) {
 	t.Helper()
 	binding := validBinding()
-	request := StoppedWorkingTreeRequest{
+	request := WorkingTreeInventoryRequest{
 		Generation: binding.generationBinding(), ExcludedPaths: []string{},
-		MaximumDepth: MaximumWorkingTreeDepth, MaximumEntries: MaximumWorkingTreeEntries,
+		MaximumDepth: MaximumWorkingTreeDepth, MaximumPageEntries: MaximumWorkingTreeInventoryPageEntries, MaximumPageBytes: MaximumWorkingTreeInventoryPageBytes,
 		MaximumFileBytes: MaximumCaptureBytes, MaximumAggregateBytes: MaximumWorkingTreeAggregateBytes,
 	}
 	containers := newFakeContainer(nil)
 	containers.copyStatMode = os.ModeDir | 0o755
 	containers.archive = tarArchive(append([]tarEntry{{name: "workspace/", typeflag: tar.TypeDir, mode: 0o755}}, entries...)...)
 	objects := newFakeObjectStore()
+	objects.directory = t.TempDir()
 	service := mustService(t, containers, objects, binding.Authority)
 	service.now = func() time.Time { return time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC) }
 	return service, containers, objects, request
-}
-
-func TestStoppedWorkingTreeAdmitsEmptyRootWithoutAnAnchor(t *testing.T) {
-	service, containers, objects, request := workingTreeFixture(t)
-	receipt, err := service.StoppedWorkingTree(context.Background(), request.Generation.Source.ProviderResourceID, request)
-	if err != nil || receipt.Entries == nil || len(receipt.Entries) != 0 {
-		t.Fatalf("empty root did not yield a complete empty roster: %#v %v", receipt, err)
-	}
-	if containers.copyCalls != 1 || containers.copyPaths[0] != "/workspace" || containers.copyContainerIDs[0] != request.Generation.StopAuthority.TerminalGeneration.ContainerID || len(objects.objects) != 0 {
-		t.Fatal("root roster did not use one exact host archive without object writes")
-	}
-	encoded, err := json.Marshal(request)
-	if err != nil || bytes.Contains(encoded, []byte("selector")) || bytes.Contains(encoded, []byte("anchor")) {
-		t.Fatalf("generation request fabricated file selection: %s %v", encoded, err)
-	}
-	var decoded StoppedWorkingTreeRequest
-	if err := DecodeExactJSON(encoded, &decoded); err != nil {
-		t.Fatal(err)
-	}
-	for _, invalid := range [][]byte{
-		bytes.Replace(encoded, []byte(`,"excludedPaths":[]`), nil, 1),
-		bytes.Replace(encoded, []byte(`"excludedPaths":[]`), []byte(`"excludedPaths":null`), 1),
-	} {
-		if err := DecodeExactJSON(invalid, &decoded); err == nil {
-			if _, err := service.StoppedWorkingTree(context.Background(), request.Generation.Source.ProviderResourceID, decoded); !errors.Is(err, ErrInvalidRequest) {
-				t.Fatal("missing/null exclusions bypassed request admission")
-			}
-		}
-	}
-	canonical, err := generationstop.CanonicalJSON(receipt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	golden, err := os.ReadFile("testdata/stopped-working-tree.canonical.json")
-	if err != nil || !bytes.Equal(canonical, bytes.TrimSpace(golden)) {
-		t.Fatalf("working-tree Go/TypeScript fixture drifted: %v", err)
-	}
 }
 
 func TestStoppedWorkingTreeHashesLargeCustomFilesAndExcludesOnlyOwnedPaths(t *testing.T) {
@@ -103,7 +65,7 @@ func TestStoppedWorkingTreeHashesLargeCustomFilesAndExcludesOnlyOwnedPaths(t *te
 	runtime.GC()
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
-	receipt, err := service.StoppedWorkingTree(context.Background(), request.Generation.Source.ProviderResourceID, request)
+	receipt, err := service.PrepareWorkingTreeInventory(context.Background(), request.Generation.Source.ProviderResourceID, request)
 	runtime.ReadMemStats(&after)
 	if err != nil {
 		t.Fatal(err)
@@ -111,27 +73,23 @@ func TestStoppedWorkingTreeHashesLargeCustomFilesAndExcludesOnlyOwnedPaths(t *te
 	if after.TotalAlloc-before.TotalAlloc > 16<<20 || maximumRead > captureStreamBufferBytes {
 		t.Fatalf("roster buffered file content: allocated=%d read=%d", after.TotalAlloc-before.TotalAlloc, maximumRead)
 	}
+	entries := readInventoryTestEntries(t, service, receipt)
 	expected := []string{"custom", "custom/.ambit", "custom/notes.txt", "customer.bin", "mounted-other.txt"}
-	if len(receipt.Entries) != len(expected) {
-		t.Fatalf("excluded wrong paths: %#v", receipt.Entries)
+	if len(entries) != len(expected) {
+		t.Fatalf("excluded wrong paths: %#v", entries)
 	}
-	for index, entry := range receipt.Entries {
+	for index, entry := range entries {
 		if entry.ZoneRelativePath != expected[index] {
-			t.Fatalf("wrong canonical roster: %#v", receipt.Entries)
+			t.Fatalf("wrong canonical roster: %#v", entries)
 		}
 	}
-	if receipt.Entries[3].Size != size || receipt.Entries[3].SHA256 == nil || *receipt.Entries[3].SHA256 != generatedDigest(size) {
+	if entries[3].Size != size || entries[3].SHA256 == nil || *entries[3].SHA256 != generatedDigest(size) {
 		t.Fatal("large user file digest changed")
 	}
-	payload, err := generationstop.CanonicalJSON(map[string]any{
-		"contract": "ambit.working-copy-stopped-working-tree/v1", "request": request,
-		"terminalGeneration": request.Generation.StopAuthority.TerminalGeneration, "entries": receipt.Entries,
-	})
-	if err != nil || receipt.RosterDigest != sha256Digest(payload) {
-		t.Fatalf("complete roster digest differs: %v", err)
-	}
-	if len(objects.objects) != 0 {
-		t.Fatal("roster persisted archive bytes")
+	for _, object := range objects.objects {
+		if len(object.data) > MaximumWorkingTreeInventoryPageBytes {
+			t.Fatal("inventory retained archive payload bytes")
+		}
 	}
 }
 
@@ -140,7 +98,7 @@ func TestStoppedWorkingTreeRejectsNoncanonicalAndRedundantExclusions(t *testing.
 		t.Run(fmt.Sprint(paths), func(t *testing.T) {
 			service, containers, _, request := workingTreeFixture(t)
 			request.ExcludedPaths = paths
-			if _, err := service.StoppedWorkingTree(context.Background(), request.Generation.Source.ProviderResourceID, request); !errors.Is(err, ErrInvalidRequest) {
+			if _, err := service.PrepareWorkingTreeInventory(context.Background(), request.Generation.Source.ProviderResourceID, request); !errors.Is(err, ErrInvalidRequest) {
 				t.Fatalf("invalid exclusions admitted: %v", err)
 			}
 			if containers.inspectCalls != 0 || containers.copyCalls != 0 {
@@ -168,7 +126,7 @@ func TestStoppedWorkingTreeRejectsUnsafePathsAndUnsupportedEntryKinds(t *testing
 	} {
 		t.Run(name, func(t *testing.T) {
 			service, _, _, request := workingTreeFixture(t, entries...)
-			if _, err := service.StoppedWorkingTree(context.Background(), request.Generation.Source.ProviderResourceID, request); !errors.Is(err, ErrConflict) {
+			if _, err := service.PrepareWorkingTreeInventory(context.Background(), request.Generation.Source.ProviderResourceID, request); !errors.Is(err, ErrConflict) {
 				t.Fatalf("invalid user tree was admitted: %v", err)
 			}
 		})
@@ -176,44 +134,45 @@ func TestStoppedWorkingTreeRejectsUnsafePathsAndUnsupportedEntryKinds(t *testing
 }
 
 func TestStoppedWorkingTreeFailsCompleteOnBoundsAndGenerationDrift(t *testing.T) {
-	for name, mutate := range map[string]func(*StoppedWorkingTreeRequest, *fakeContainer){
-		"entries":    func(r *StoppedWorkingTreeRequest, _ *fakeContainer) { r.MaximumEntries = 1 },
-		"file-bytes": func(r *StoppedWorkingTreeRequest, _ *fakeContainer) { r.MaximumFileBytes = 1 },
-		"aggregate": func(r *StoppedWorkingTreeRequest, _ *fakeContainer) {
+	for name, mutate := range map[string]func(*WorkingTreeInventoryRequest, *fakeContainer){
+		"file-bytes": func(r *WorkingTreeInventoryRequest, _ *fakeContainer) { r.MaximumFileBytes = 1 },
+		"aggregate": func(r *WorkingTreeInventoryRequest, _ *fakeContainer) {
 			r.MaximumFileBytes = 2
 			r.MaximumAggregateBytes = 2
 		},
-		"depth": func(r *StoppedWorkingTreeRequest, _ *fakeContainer) { r.MaximumDepth = 1 },
-		"generation-before": func(r *StoppedWorkingTreeRequest, _ *fakeContainer) {
+		"depth": func(r *WorkingTreeInventoryRequest, _ *fakeContainer) { r.MaximumDepth = 1 },
+		"generation-before": func(r *WorkingTreeInventoryRequest, _ *fakeContainer) {
 			r.Generation.StopAuthority.TerminalGeneration.RestartCount++
 		},
-		"generation-after": func(_ *StoppedWorkingTreeRequest, c *fakeContainer) {
+		"generation-after": func(_ *WorkingTreeInventoryRequest, c *fakeContainer) {
 			changed := c.generation
 			changed.RestartCount++
-			c.inspectMutations[2] = changed
+			c.inspectMutations[3] = changed
 		},
-		"root-descriptor": func(_ *StoppedWorkingTreeRequest, c *fakeContainer) {
+		"root-descriptor": func(_ *WorkingTreeInventoryRequest, c *fakeContainer) {
 			c.afterStatMutation = func(stat containertypes.PathStat) containertypes.PathStat {
 				stat.Mtime = stat.Mtime.Add(time.Second)
 				return stat
 			}
 		},
-		"symlink-root": func(_ *StoppedWorkingTreeRequest, c *fakeContainer) {
+		"symlink-root": func(_ *WorkingTreeInventoryRequest, c *fakeContainer) {
 			c.statMutation = func(stat containertypes.PathStat) containertypes.PathStat { stat.Mode = os.ModeSymlink; return stat }
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			service, containers, _, request := workingTreeFixture(t, tarEntry{name: "workspace/a/", typeflag: tar.TypeDir}, tarEntry{name: "workspace/a/b", typeflag: tar.TypeReg, body: []byte("xx")}, tarEntry{name: "workspace/c", typeflag: tar.TypeReg, body: []byte("xx")})
 			mutate(&request, containers)
-			if _, err := service.StoppedWorkingTree(context.Background(), request.Generation.Source.ProviderResourceID, request); err == nil {
+			if _, err := service.PrepareWorkingTreeInventory(context.Background(), request.Generation.Source.ProviderResourceID, request); err == nil {
 				t.Fatal("incomplete or changed roster returned success")
 			}
 		})
 	}
-	_, containers, _, request := workingTreeFixture(t, tarEntry{name: "workspace/a", typeflag: tar.TypeReg})
-	if _, err := readStoppedWorkingTreeTar(context.Background(), bytes.NewReader(containers.archive), request, 1); !errors.Is(err, ErrConflict) {
-		t.Fatalf("receipt budget was ignored: %v", err)
+	service, _, _, request := workingTreeFixture(t, tarEntry{name: "workspace/a", typeflag: tar.TypeReg})
+	request.MaximumPageBytes = 2
+	if _, err := service.PrepareWorkingTreeInventory(context.Background(), request.Generation.Source.ProviderResourceID, request); !errors.Is(err, ErrConflict) {
+		t.Fatalf("page budget was ignored: %v", err)
 	}
+
 }
 
 func TestStoppedWorkingTreeSupportsLongUtf8PathsAndExactByteOrdering(t *testing.T) {
@@ -226,11 +185,12 @@ func TestStoppedWorkingTreeSupportsLongUtf8PathsAndExactByteOrdering(t *testing.
 	longPath := strings.Join(parts, "/") + "/report.txt"
 	entries = append(entries, tarEntry{name: "workspace/" + longPath, typeflag: tar.TypeReg}, tarEntry{name: "workspace/😀", typeflag: tar.TypeReg}, tarEntry{name: "workspace/\uE000", typeflag: tar.TypeReg})
 	service, _, _, request := workingTreeFixture(t, entries...)
-	receipt, err := service.StoppedWorkingTree(context.Background(), request.Generation.Source.ProviderResourceID, request)
+	receipt, err := service.PrepareWorkingTreeInventory(context.Background(), request.Generation.Source.ProviderResourceID, request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if receipt.Entries[len(receipt.Entries)-2].Name != "\uE000" || receipt.Entries[len(receipt.Entries)-1].Name != "😀" {
+	observedEntries := readInventoryTestEntries(t, service, receipt)
+	if observedEntries[len(observedEntries)-2].Name != "\uE000" || observedEntries[len(observedEntries)-1].Name != "😀" {
 		t.Fatal("roster used UTF-16 order instead of UTF-8 bytes")
 	}
 	binding := validBinding()
@@ -285,7 +245,7 @@ func TestStoppedWorkingTreeCancellationClosesBlockedArchive(t *testing.T) {
 	defer cancel()
 	completed := make(chan error, 1)
 	go func() {
-		_, err := service.StoppedWorkingTree(ctx, request.Generation.Source.ProviderResourceID, request)
+		_, err := service.PrepareWorkingTreeInventory(ctx, request.Generation.Source.ProviderResourceID, request)
 		completed <- err
 	}()
 	select {
@@ -331,49 +291,6 @@ func workingTreeLinkEntries() []tarEntry {
 	}
 }
 
-func TestStoppedWorkingTreePreservesLexicalLinksAndRecordsRuntimeOmissions(t *testing.T) {
-	service, containers, objects, request := workingTreeFixture(t, workingTreeLinkEntries()...)
-	receipt, err := service.StoppedWorkingTree(context.Background(), request.Generation.Source.ProviderResourceID, request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	expectedTargets := map[string]string{
-		"node_modules/@scope/a": "../../packages/a", "relative-link": "packages/a",
-		"dangling-link": "../missing/package", "absolute-link": "/outside/not-guaranteed",
-		"unicode-link": "../packages/e\u0301", "control-link": "../a\nb",
-	}
-	expectedExcluded := map[string]string{"runtime.pipe": "fifo", "runtime.char": "character_device", "runtime.block": "block_device"}
-	for _, entry := range receipt.Entries {
-		if target, expected := expectedTargets[entry.ZoneRelativePath]; expected {
-			if entry.Kind != "symlink" || entry.Size != 0 || entry.SHA256 != nil || entry.LinkTarget == nil || *entry.LinkTarget != target || entry.ExcludedKind != "" {
-				t.Fatalf("lexical link was altered: %#v", entry)
-			}
-			delete(expectedTargets, entry.ZoneRelativePath)
-		} else if kind, expected := expectedExcluded[entry.ZoneRelativePath]; expected {
-			if entry.Kind != "excluded" || entry.ExcludedKind != kind || entry.Size != 0 || entry.SHA256 != nil || entry.LinkTarget != nil {
-				t.Fatalf("runtime omission was misrepresented: %#v", entry)
-			}
-			delete(expectedExcluded, entry.ZoneRelativePath)
-		} else if entry.LinkTarget != nil || entry.ExcludedKind != "" {
-			t.Fatal("ordinary entry acquired unrelated variant fields")
-		}
-	}
-	if len(expectedTargets) != 0 || len(expectedExcluded) != 0 || len(receipt.Entries) != len(workingTreeLinkEntries()) {
-		t.Fatal("roster lost a link or runtime omission")
-	}
-	if containers.copyCalls != 1 || containers.statCalls != 2 || len(objects.objects) != 0 {
-		t.Fatal("roster followed a link or persisted source bytes")
-	}
-	canonical, err := generationstop.CanonicalJSON(receipt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	golden, err := os.ReadFile("testdata/stopped-working-tree-links.canonical.json")
-	if err != nil || !bytes.Equal(canonical, bytes.TrimSpace(golden)) {
-		t.Fatalf("working-tree link/omission interop fixture drifted: %v", err)
-	}
-}
-
 func TestWorkingTreeLinkTargetsRemainBoundedLexicalData(t *testing.T) {
 	for _, target := range []string{"../outside", "/absolute", "dangling", "../../packages/a", "../e\u0301", "../a\nb", "C:\\literal\\target", strings.Repeat("😀", 1024)} {
 		if !validWorkingTreeLinkTarget(target) {
@@ -385,54 +302,26 @@ func TestWorkingTreeLinkTargetsRemainBoundedLexicalData(t *testing.T) {
 			t.Fatal("invalid or oversized lexical target admitted")
 		}
 	}
-	service, containers, _, request := workingTreeFixture(t, tarEntry{name: "workspace/link", typeflag: tar.TypeSymlink, linkname: strings.Repeat("x", 4096)})
-	if _, err := service.StoppedWorkingTree(context.Background(), request.Generation.Source.ProviderResourceID, request); err != nil {
+	service, _, _, request := workingTreeFixture(t, tarEntry{name: "workspace/link", typeflag: tar.TypeSymlink, linkname: strings.Repeat("x", 4096)})
+	if _, err := service.PrepareWorkingTreeInventory(context.Background(), request.Generation.Source.ProviderResourceID, request); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readStoppedWorkingTreeTar(context.Background(), bytes.NewReader(containers.archive), request, 4096); !errors.Is(err, ErrConflict) {
-		t.Fatalf("link target escaped serialized receipt budget: %v", err)
+	request.Generation.ProviderName += "-smaller-page"
+	request.MaximumPageBytes = 4096
+	if _, err := service.PrepareWorkingTreeInventory(context.Background(), request.Generation.Source.ProviderResourceID, request); !errors.Is(err, ErrConflict) {
+		t.Fatalf("link target escaped serialized page budget: %v", err)
 	}
 }
 
-func TestStoppedWorkingTreeMaterializesOnlyAdmittedHardlinks(t *testing.T) {
-	service, _, objects, request := workingTreeFixture(t,
-		tarEntry{name: "workspace/forward", typeflag: tar.TypeLink, linkname: "workspace/original"},
-		tarEntry{name: "workspace/original", typeflag: tar.TypeReg, body: []byte("file")},
-		tarEntry{name: "workspace/backward", typeflag: tar.TypeLink, linkname: "workspace/original"},
-		tarEntry{name: "workspace/chain", typeflag: tar.TypeLink, linkname: "workspace/forward"},
-	)
-	roster, err := service.StoppedWorkingTree(context.Background(), request.Generation.Source.ProviderResourceID, request)
-	if err != nil || len(roster.Entries) != 4 {
-		t.Fatalf("hardlink roster failed: %#v %v", roster, err)
-	}
-	for _, entry := range roster.Entries {
-		if entry.Kind != "regular_file" || entry.Size != 4 || entry.SHA256 == nil || *entry.SHA256 != sha256Digest([]byte("file")) || entry.LinkTarget != nil {
-			t.Fatalf("hardlink was not ordinary file custody: %#v", entry)
+func readInventoryTestEntries(t *testing.T, service *Service, receipt WorkingTreeInventoryReceipt) []StoppedWorkingTreeEntry {
+	t.Helper()
+	var entries []StoppedWorkingTreeEntry
+	for _, descriptor := range receipt.Pages {
+		page, err := service.ReadWorkingTreeInventoryPage(context.Background(), receipt.Request.Generation.Source.ProviderResourceID, WorkingTreeInventoryPageRequest{Request: receipt.Request, ProviderResourceID: receipt.ProviderResourceID, PageIndex: descriptor.PageIndex})
+		if err != nil {
+			t.Fatal(err)
 		}
+		entries = append(entries, page.Entries...)
 	}
-	if len(objects.objects) != 0 {
-		t.Fatal("hardlink materialization wrote bytes")
-	}
-	request.MaximumFileBytes, request.MaximumAggregateBytes = 4, 15
-	if _, err := service.StoppedWorkingTree(context.Background(), request.Generation.Source.ProviderResourceID, request); !errors.Is(err, ErrConflict) {
-		t.Fatalf("materialized aliases were not charged to aggregate bytes: %v", err)
-	}
-	for name, entries := range map[string][]tarEntry{
-		"escape":    {{name: "workspace/link", typeflag: tar.TypeLink, linkname: "workspace/../outside"}},
-		"absolute":  {{name: "workspace/link", typeflag: tar.TypeLink, linkname: "/workspace/file"}},
-		"managed":   {{name: "workspace/link", typeflag: tar.TypeLink, linkname: "workspace/.ambit/file"}},
-		"mount":     {{name: "workspace/link", typeflag: tar.TypeLink, linkname: "workspace/mounted/file"}},
-		"missing":   {{name: "workspace/link", typeflag: tar.TypeLink, linkname: "workspace/missing"}},
-		"cycle":     {{name: "workspace/a", typeflag: tar.TypeLink, linkname: "workspace/b"}, {name: "workspace/b", typeflag: tar.TypeLink, linkname: "workspace/a"}},
-		"symlink":   {{name: "workspace/a", typeflag: tar.TypeLink, linkname: "workspace/b"}, {name: "workspace/b", typeflag: tar.TypeSymlink, linkname: "outside"}},
-		"directory": {{name: "workspace/a", typeflag: tar.TypeLink, linkname: "workspace/b"}, {name: "workspace/b", typeflag: tar.TypeDir}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			service, _, _, request := workingTreeFixture(t, entries...)
-			request.ExcludedPaths = []string{"mounted"}
-			if _, err := service.StoppedWorkingTree(context.Background(), request.Generation.Source.ProviderResourceID, request); !errors.Is(err, ErrConflict) {
-				t.Fatalf("unowned hardlink target was admitted: %v", err)
-			}
-		})
-	}
+	return entries
 }

@@ -45,19 +45,8 @@ type CaptureCapabilitiesRequest struct {
 }
 
 type CaptureCapabilities struct {
-	Authority          CaptureAuthority             `json:"authority" validate:"required"`
-	StoppedWorkingTree StoppedWorkingTreeCapability `json:"stoppedWorkingTree" validate:"required"`
-}
-
-type StoppedWorkingTreeCapability struct {
-	Contract              string `json:"contract" validate:"required"`
-	SemanticZoneRef       string `json:"semanticZoneRef" validate:"required"`
-	MaximumDepth          int    `json:"maximumDepth" validate:"required"`
-	MaximumEntries        int    `json:"maximumEntries" validate:"required"`
-	MaximumFileBytes      int64  `json:"maximumFileBytes" validate:"required"`
-	MaximumAggregateBytes int64  `json:"maximumAggregateBytes" validate:"required"`
-	MaximumReadBytes      int64  `json:"maximumReadBytes" validate:"required"`
-	MaximumReceiptBytes   int64  `json:"maximumReceiptBytes" validate:"required"`
+	Authority                   CaptureAuthority               `json:"authority" validate:"required"`
+	StoppedWorkingTreeInventory WorkingTreeInventoryCapability `json:"stoppedWorkingTreeInventory" validate:"required"`
 }
 
 type CaptureBinding struct {
@@ -89,23 +78,6 @@ func (binding CaptureBinding) generationBinding() CaptureGenerationBinding {
 	}
 }
 
-type StoppedWorkingTreeRequest struct {
-	Generation            CaptureGenerationBinding `json:"generation" validate:"required"`
-	ExcludedPaths         []string                 `json:"excludedPaths" validate:"required"`
-	MaximumDepth          int                      `json:"maximumDepth" validate:"required"`
-	MaximumEntries        int                      `json:"maximumEntries" validate:"required"`
-	MaximumFileBytes      int64                    `json:"maximumFileBytes" validate:"required"`
-	MaximumAggregateBytes int64                    `json:"maximumAggregateBytes" validate:"required"`
-}
-
-type StoppedWorkingTreeReceipt struct {
-	Request            StoppedWorkingTreeRequest         `json:"request" validate:"required"`
-	TerminalGeneration generationstop.TerminalGeneration `json:"terminalGeneration" validate:"required"`
-	Entries            []StoppedWorkingTreeEntry         `json:"entries" validate:"required"`
-	RosterDigest       string                            `json:"rosterDigest" validate:"required"`
-	ObservedAt         string                            `json:"observedAt" validate:"required"`
-}
-
 // Private working-tree entries preserve link targets as lexical data and
 // explicitly record runtime entries that are not portable. Docker archives
 // may omit sockets, so this roster is not a per-path socket inventory.
@@ -116,6 +88,7 @@ type StoppedWorkingTreeEntry struct {
 	Size             int64   `json:"size" validate:"required"`
 	Mode             *string `json:"mode" validate:"required" extensions:"x-nullable"`
 	SHA256           *string `json:"sha256" validate:"required" extensions:"x-nullable"`
+	ByteOffset       *int64  `json:"byteOffset,omitempty"`
 	LinkTarget       *string `json:"linkTarget,omitempty"`
 	ExcludedKind     string  `json:"excludedKind,omitempty" enums:"fifo,character_device,block_device"`
 }
