@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 # Retain every existing workspace/toolchain/document-helper layer. This is the
 # ordinary Daytona workspace lineage, not the C18 specialist-render image.
-ARG BASE_IMAGE=us-east4-docker.pkg.dev/mwcc-infrastructure/ambit/ambit-agent-workspace@sha256:1dbc9cac4326224679f4bae44402839f1c3c064db2bc2c34d62782aad625c950
+ARG BASE_IMAGE=us-east4-docker.pkg.dev/mwcc-infrastructure/ambit/ambit-agent-workspace@sha256:fa261983f89770cb8647b2a165abd68bfb81c9bbe7dd02e13d2dc51f04eeff46
 FROM ${BASE_IMAGE} AS driver
 ARG BASE_IMAGE
 USER root
@@ -25,7 +25,9 @@ COPY --from=driver /opt/ambit/browser/Cargo.lock /opt/ambit/browser/Cargo.lock
 COPY --chmod=0755 runtime/agent-browser /usr/local/bin/agent-browser
 COPY README.md /opt/ambit/browser/README.md
 RUN --mount=type=bind,source=build/inspect-executables.py,target=/source/inspect-executables.py,ro \
-    python3 /source/inspect-executables.py > /opt/ambit/runtime-base/workspace/lineage/executables.json
+    python3 /source/inspect-executables.py \
+      --component-lock /opt/ambit/browser/browser.lock.json \
+      --component-lock /opt/ambit/runtime-base/workspace/lineage/file-tools/file-tools.lock.json > /opt/ambit/runtime-base/workspace/lineage/executables.json
 ARG BUILD_SOURCE_REVISION=unbound
 LABEL org.opencontainers.image.revision="${BUILD_SOURCE_REVISION}" \
       io.ambit.browser-lock="/opt/ambit/browser/browser.lock.json" \
