@@ -66,7 +66,10 @@ func (s *SessionController) SessionExecuteCommand(c *gin.Context) {
 
 	executeResult, err := s.sessionService.Execute(sessionId, util.EmptyCommandID, request.Command, request.RunAsync, isCombinedOutput, skipServerDemux, request.SuppressInputEcho, request.CloseInputAfterCommand)
 	if err != nil {
-		c.Error(fmt.Errorf("failed to execute command: %w", err))
+		// The middleware classifies by concrete type, so a wrap here would erase
+		// the service's own not-found/gone/conflict status and reach the client
+		// as 500. Every sibling handler passes the typed error through unwrapped.
+		c.Error(err)
 		return
 	}
 

@@ -171,3 +171,49 @@ func TestCreateStillConflictsWithALiveOwner(t *testing.T) {
 		t.Fatalf("live owner reported scope %q, want running", observed.ProcessScope)
 	}
 }
+
+// Execution must carry the service's own status to the client. Wrapping the
+// typed error made every one of these a 500, which no caller can classify: a
+// restarted daemon's absent session looked identical to a daemon fault.
+func TestExecCarriesTypedStatusThroughTheMiddleware(t *testing.T) {
+	configDir := t.TempDir()
+	retain(t, configDir, "hp-absent")
+	engine := router(t, configDir)
+
+	// Absent: the restarted daemon retired the retained directory and owns no
+	// session at that ID, so submission is not-found, not a server fault.
+	code, body := call(t, engine, http.MethodPost, "/process/session/hp-absent/exec",
+		SessionExecuteRequest{Command: "printf never"})
+	if code != http.StatusNotFound {
+		t.Fatalf("EXEC on an absent session = %d %s, want 404", code, body)
+	}
+	var absent common_errors.ErrorResponse
+	if err := json.Unmarshal(body, &absent); err != nil {
+		t.Fatal(err)
+	}
+	if absent.Code != "NOT_FOUND" || absent.StatusCode != http.StatusNotFound {
+		t.Fatalf("absent exec reported %+v, want NOT_FOUND/404", absent)
+	}
+
+	// Gone: the scope stopped accepting commands after its input was closed.
+	if code, body := call(t, engine, http.MethodPost, "/process/session", CreateSessionRequest{SessionId: "hp-closed"}); code != http.StatusCreated {
+		t.Fatalf("CREATE = %d %s, want 201", code, body)
+	}
+	t.Cleanup(func() { call(t, engine, http.MethodDelete, "/process/session/hp-closed", nil) })
+	if code, body := call(t, engine, http.MethodPost, "/process/session/hp-closed/exec",
+		SessionExecuteRequest{Command: "printf owned", CloseInputAfterCommand: true}); code != http.StatusOK {
+		t.Fatalf("first EXEC = %d %s, want 200", code, body)
+	}
+	code, body = call(t, engine, http.MethodPost, "/process/session/hp-closed/exec",
+		SessionExecuteRequest{Command: "printf again"})
+	if code != http.StatusGone {
+		t.Fatalf("EXEC after input closed = %d %s, want 410", code, body)
+	}
+	var gone common_errors.ErrorResponse
+	if err := json.Unmarshal(body, &gone); err != nil {
+		t.Fatal(err)
+	}
+	if gone.Code != "GONE" || gone.StatusCode != http.StatusGone {
+		t.Fatalf("closed exec reported %+v, want GONE/410", gone)
+	}
+}
