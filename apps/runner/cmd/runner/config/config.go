@@ -46,6 +46,7 @@ type Config struct {
 	SpecialistRenderPolicyPath         string        `envconfig:"AMBIT_SPECIALIST_RENDER_POLICY_PATH"`
 	SpecialistRenderMaximumConcurrent  int           `envconfig:"AMBIT_SPECIALIST_RENDER_MAXIMUM_CONCURRENT" default:"1" validate:"min=1,max=64"`
 	ResourceLimitsDisabled             bool          `envconfig:"RESOURCE_LIMITS_DISABLED"`
+	WorkspaceSecurityProfile           string        `envconfig:"WORKSPACE_SECURITY_PROFILE" default:"legacy" validate:"oneof=legacy restricted-v1"`
 	DaemonStartTimeoutSec              int           `envconfig:"DAEMON_START_TIMEOUT_SEC"`
 	SandboxStartTimeoutSec             int           `envconfig:"SANDBOX_START_TIMEOUT_SEC"`
 	AndroidBootTimeoutSec              int           `envconfig:"ANDROID_BOOT_TIMEOUT_SEC"`

@@ -24,6 +24,7 @@ import (
 	"github.com/containerd/errdefs"
 	runnerdocker "github.com/daytonaio/runner/pkg/docker"
 	"github.com/daytonaio/runner/pkg/generationstop"
+	"github.com/daytonaio/runner/pkg/sandboxsecurity"
 	"github.com/daytonaio/runner/pkg/specialistrender"
 	types "github.com/docker/docker/api/types"
 	containertypes "github.com/docker/docker/api/types/container"
@@ -707,19 +708,10 @@ func lifecycleContexts(ctx context.Context) (
 }
 
 func processIdentity(pid int) (startTicks string, namespacePID int, err error) {
-	stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	startTicks, err = sandboxsecurity.ProcessStartTicks(pid)
 	if err != nil {
 		return "", 0, err
 	}
-	closeIndex := strings.LastIndexByte(string(stat), ')')
-	if closeIndex < 0 {
-		return "", 0, errors.New("process stat command terminator is absent")
-	}
-	fields := strings.Fields(string(stat[closeIndex+1:]))
-	if len(fields) <= 19 {
-		return "", 0, errors.New("process stat is incomplete")
-	}
-	startTicks = fields[19]
 	status, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
 	if err != nil {
 		return "", 0, err
@@ -738,33 +730,8 @@ func processIdentity(pid int) (startTicks string, namespacePID int, err error) {
 }
 
 func processSecurity(pid int) (bool, int, string, error) {
-	status, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
-	if err != nil {
-		return false, 0, "", err
-	}
-	noNewPrivileges := ""
-	seccomp := ""
-	capabilities := ""
-	for _, line := range strings.Split(string(status), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) != 2 {
-			continue
-		}
-		switch strings.TrimSuffix(fields[0], ":") {
-		case "NoNewPrivs":
-			noNewPrivileges = fields[1]
-		case "Seccomp":
-			seccomp = fields[1]
-		case "CapEff":
-			capabilities = strings.ToLower(fields[1])
-		}
-	}
-	seccompMode, err := strconv.Atoi(seccomp)
-	if err != nil || (noNewPrivileges != "0" && noNewPrivileges != "1") ||
-		len(capabilities) != 16 {
-		return false, 0, "", errors.New("process security status is incomplete")
-	}
-	return noNewPrivileges == "1", seccompMode, capabilities, nil
+	observed, err := sandboxsecurity.ObserveProcess(pid)
+	return observed.NoNewPrivileges, observed.SeccompMode, observed.EffectiveCapabilities, err
 }
 
 func processNamespaces(pid int) (string, string, error) {

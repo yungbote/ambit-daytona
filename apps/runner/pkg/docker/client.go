@@ -35,6 +35,7 @@ type DockerClientConfig struct {
 	NetRulesManager              *netrules.NetRulesManager
 	NetleashManager              *manager.Manager
 	ResourceLimitsDisabled       bool
+	WorkspaceSecurityProfile     string
 	DaemonStartTimeoutSec        int
 	SandboxStartTimeoutSec       int
 	AndroidBootTimeoutSec        int
@@ -76,6 +77,10 @@ type DockerClientConfig struct {
 }
 
 func NewDockerClient(ctx context.Context, config DockerClientConfig) (*DockerClient, error) {
+	workspaceSecurityProfile, err := normalizeWorkspaceSecurityProfile(config.WorkspaceSecurityProfile)
+	if err != nil {
+		return nil, err
+	}
 	logger := slog.Default().With(slog.String("component", "docker-client"))
 	if config.Logger != nil {
 		logger = config.Logger.With(slog.String("component", "docker-client"))
@@ -104,7 +109,7 @@ func NewDockerClient(ctx context.Context, config DockerClientConfig) (*DockerCli
 	}
 
 	var info system.Info
-	err := utils.RetryWithExponentialBackoff(
+	err = utils.RetryWithExponentialBackoff(
 		ctx,
 		"get Docker info",
 		8,
@@ -190,6 +195,7 @@ func NewDockerClient(ctx context.Context, config DockerClientConfig) (*DockerCli
 		netRulesManager:              config.NetRulesManager,
 		netleashManager:              config.NetleashManager,
 		resourceLimitsDisabled:       config.ResourceLimitsDisabled,
+		workspaceSecurityProfile:     workspaceSecurityProfile,
 		daemonStartTimeoutSec:        config.DaemonStartTimeoutSec,
 		sandboxStartTimeoutSec:       config.SandboxStartTimeoutSec,
 		androidBootTimeoutSec:        config.AndroidBootTimeoutSec,
@@ -271,6 +277,7 @@ type DockerClient struct {
 	netRulesManager              *netrules.NetRulesManager
 	netleashManager              *manager.Manager
 	resourceLimitsDisabled       bool
+	workspaceSecurityProfile     string
 	daemonStartTimeoutSec        int
 	sandboxStartTimeoutSec       int
 	androidBootTimeoutSec        int

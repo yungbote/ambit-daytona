@@ -31,13 +31,14 @@ import (
 )
 
 const (
-	captureRoleRef         = "ambit.runtime-component/working-copy-capture@2"
-	captureProtocolRef     = "ambit.runtime-interface/working-copy-capture@2"
-	privateRoot            = "private/working-copy-captures/v2"
-	maximumIntentBytes     = 32 * 1024
-	maximumReceiptBytes    = 32 * 1024
-	maximumDeletionBytes   = 32 * 1024
-	maximumArchiveOverhead = 1024 * 1024
+	captureRoleRef           = "ambit.runtime-component/working-copy-capture@2"
+	captureProtocolRef       = "ambit.runtime-interface/working-copy-capture@2"
+	privateRoot              = "private/working-copy-captures/v2"
+	maximumIntentBytes       = 32 * 1024
+	maximumReceiptBytes      = 32 * 1024
+	maximumDeletionBytes     = 32 * 1024
+	maximumArchiveOverhead   = 1024 * 1024
+	captureStreamBufferBytes = 64 * 1024
 	// Each admitted path can require an extended-name header, its padded
 	// payload, the concrete entry header, and one padding block. The additional
 	// MiB admits Docker-owned global archive metadata while keeping malformed
@@ -72,7 +73,7 @@ type clock func() time.Time
 
 type Service struct {
 	containers        ContainerClient
-	objects           storage.PrivateObjectStorageClient
+	objects           storage.PrivateObjectStreamStorageClient
 	stops             StoppedGenerationAuthority
 	admittedAuthority CaptureAuthority
 	now               clock
@@ -109,7 +110,7 @@ type objectKeys struct {
 }
 
 type capturedFile struct {
-	bytes      []byte
+	byteLength int64
 	digest     string
 	capturedAt string
 }
@@ -126,6 +127,10 @@ func NewService(
 	if objects == nil {
 		return nil, fmt.Errorf("%w: private object storage is not configured", ErrUnavailable)
 	}
+	streamObjects, ok := objects.(storage.PrivateObjectStreamStorageClient)
+	if !ok {
+		return nil, fmt.Errorf("%w: private object streaming storage is not configured", ErrUnavailable)
+	}
 	if stops == nil {
 		return nil, fmt.Errorf("%w: stopped-generation authority is not configured", ErrUnavailable)
 	}
@@ -134,7 +139,7 @@ func NewService(
 	}
 	return &Service{
 		containers:        containers,
-		objects:           objects,
+		objects:           streamObjects,
 		stops:             stops,
 		admittedAuthority: admittedAuthority,
 		now:               time.Now,
@@ -636,9 +641,23 @@ func (s *Service) resumeCapture(
 		return CaptureReceipt{}, err
 	}
 	if !stagedExists {
-		staged, err = s.captureStableFile(ctx, zonePath, intent)
+		// The completed file must remain private until path and generation
+		// reproof finishes. Unlink immediately so cancellation, failure and
+		// process exit all release scratch custody without a durable pathname.
+		content, createErr := os.CreateTemp("", "ambit-working-copy-*")
+		if createErr != nil {
+			return CaptureReceipt{}, fmt.Errorf("%w: create capture scratch file: %w", ErrUnavailable, createErr)
+		}
+		defer content.Close()
+		if err := os.Remove(content.Name()); err != nil {
+			return CaptureReceipt{}, fmt.Errorf("%w: unlink capture scratch file: %w", ErrUnavailable, err)
+		}
+		staged, err = s.captureStableFile(ctx, zonePath, intent, content)
 		if err != nil {
 			return CaptureReceipt{}, err
+		}
+		if _, err := content.Seek(0, io.SeekStart); err != nil {
+			return CaptureReceipt{}, fmt.Errorf("%w: rewind capture scratch file: %w", ErrUnavailable, err)
 		}
 		if err := s.ensureNotDeleting(ctx, intent); err != nil {
 			return CaptureReceipt{}, err
@@ -646,21 +665,22 @@ func (s *Service) resumeCapture(
 		metadata := map[string]string{
 			"captured-at":          staged.capturedAt,
 			"sha256":               staged.digest,
-			"byte-length":          strconv.FormatInt(int64(len(staged.bytes)), 10),
+			"byte-length":          strconv.FormatInt(staged.byteLength, 10),
 			"provider-resource-id": intent.ProviderResourceID,
 			"contract":             "ambit-working-copy-capture-content-v2",
 		}
-		if err := s.objects.CreatePrivateObject(
+		if err := s.objects.CreatePrivateObjectStream(
 			ctx,
 			keys.content,
-			staged.bytes,
+			captureContextReader{ctx: ctx, reader: content},
+			staged.byteLength,
 			"application/octet-stream",
 			metadata,
 		); err != nil {
 			winner, winnerExists, readErr := s.readStagedContent(ctx, intent)
 			if readErr != nil {
 				return CaptureReceipt{}, errors.Join(
-					fmt.Errorf("%w: persist capture content: %v", ErrOutcomeUnknown, err),
+					fmt.Errorf("%w: persist capture content: %w", ErrOutcomeUnknown, err),
 					readErr,
 				)
 			}
@@ -668,7 +688,7 @@ func (s *Service) resumeCapture(
 				if errors.Is(err, storage.ErrPrivateObjectAlreadyExists) {
 					return CaptureReceipt{}, fmt.Errorf("%w: capture content disappeared during admission", ErrConflict)
 				}
-				return CaptureReceipt{}, fmt.Errorf("%w: persist capture content: %v", ErrOutcomeUnknown, err)
+				return CaptureReceipt{}, fmt.Errorf("%w: persist capture content: %w", ErrOutcomeUnknown, err)
 			}
 			staged = winner
 		}
@@ -720,6 +740,7 @@ func (s *Service) captureStableFile(
 	ctx context.Context,
 	zonePath string,
 	intent captureIntent,
+	content io.Writer,
 ) (capturedFile, error) {
 	beforeStop, err := s.requireCurrentStop(ctx, intent.Binding)
 	if err != nil {
@@ -739,21 +760,14 @@ func (s *Service) captureStableFile(
 		return capturedFile{}, dockerReadError("open Docker archive", err)
 	}
 	defer archive.Close()
+	stopClosing := context.AfterFunc(ctx, func() { _ = archive.Close() })
+	defer stopClosing()
 	if !samePathStat(fileBefore, copyStat) {
 		return capturedFile{}, fmt.Errorf("%w: source descriptor changed before archive read", ErrConflict)
 	}
 
-	archiveBytes, err := io.ReadAll(io.LimitReader(
-		archive,
-		MaximumCaptureBytes+maximumArchiveOverhead+1,
-	))
-	if err != nil {
-		return capturedFile{}, fmt.Errorf("%w: Docker archive stream failed: %v", ErrUnavailable, err)
-	}
-	if int64(len(archiveBytes)) > MaximumCaptureBytes+maximumArchiveOverhead {
-		return capturedFile{}, invalidf("Docker archive exceeds the bounded single-file envelope")
-	}
-	content, err := readExactRegularTar(archiveBytes, fileBefore, path.Base(zonePath))
+	hasher := sha256.New()
+	byteLength, err := copyExactRegularTar(ctx, archive, fileBefore, path.Base(zonePath), io.MultiWriter(content, hasher))
 	if err != nil {
 		return capturedFile{}, err
 	}
@@ -774,8 +788,8 @@ func (s *Service) captureStableFile(
 	}
 
 	return capturedFile{
-		bytes:      content,
-		digest:     sha256Digest(content),
+		byteLength: byteLength,
+		digest:     "sha256:" + hex.EncodeToString(hasher.Sum(nil)),
 		capturedAt: s.now().UTC().Truncate(time.Millisecond).Format("2006-01-02T15:04:05.000Z"),
 	}, nil
 }
@@ -1196,13 +1210,16 @@ func (s *Service) readStagedContent(
 	intent captureIntent,
 ) (capturedFile, bool, error) {
 	key := keysForIntent(intent).content
-	info, err := s.objects.StatPrivateObject(ctx, key)
+	content, info, err := s.objects.OpenPrivateObject(ctx, key)
 	if errors.Is(err, storage.ErrPrivateObjectNotFound) {
 		return capturedFile{}, false, nil
 	}
 	if err != nil {
-		return capturedFile{}, false, objectReadError("stat capture content", err)
+		return capturedFile{}, false, objectReadError("open staged capture content", err)
 	}
+	defer content.Close()
+	stopClosing := context.AfterFunc(ctx, func() { _ = content.Close() })
+	defer stopClosing()
 	if info.Size < 0 || info.Size > MaximumCaptureBytes {
 		return capturedFile{}, false, fmt.Errorf("%w: staged capture length is invalid", ErrConflict)
 	}
@@ -1217,15 +1234,18 @@ func (s *Service) readStagedContent(
 		timeErr != nil || capturedAt.Location() != time.UTC {
 		return capturedFile{}, false, fmt.Errorf("%w: staged capture metadata is invalid", ErrConflict)
 	}
-	data, err := s.objects.GetPrivateObject(ctx, key, MaximumCaptureBytes)
+	hasher := sha256.New()
+	readBytes, err := io.CopyBuffer(hasher, io.LimitReader(
+		captureContextReader{ctx: ctx, reader: content}, info.Size+1,
+	), make([]byte, captureStreamBufferBytes))
 	if err != nil {
-		return capturedFile{}, false, objectReadError("read staged capture content", err)
+		return capturedFile{}, false, fmt.Errorf("%w: read staged capture content: %w", ErrUnavailable, err)
 	}
-	if int64(len(data)) != info.Size || sha256Digest(data) != metadata["sha256"] {
+	if readBytes != info.Size || "sha256:"+hex.EncodeToString(hasher.Sum(nil)) != metadata["sha256"] {
 		return capturedFile{}, false, fmt.Errorf("%w: staged capture content drifted", ErrConflict)
 	}
 	return capturedFile{
-		bytes:      data,
+		byteLength: readBytes,
 		digest:     metadata["sha256"],
 		capturedAt: metadata["captured-at"],
 	}, true, nil
@@ -1366,36 +1386,86 @@ func canonicalRelativePath(value string) bool {
 	return true
 }
 
-func readExactRegularTar(
-	archive []byte,
+func copyExactRegularTar(
+	ctx context.Context,
+	archive io.Reader,
 	stat containertypes.PathStat,
 	expectedName string,
-) ([]byte, error) {
-	reader := tar.NewReader(bytes.NewReader(archive))
+	content io.Writer,
+) (int64, error) {
+	archiveLimit := stat.Size + maximumArchiveOverhead
+	bounded := &io.LimitedReader{
+		R: captureContextReader{ctx: ctx, reader: archive}, N: archiveLimit + 1,
+	}
+	reader := tar.NewReader(bounded)
 	header, err := reader.Next()
 	if err != nil {
-		return nil, fmt.Errorf("%w: Docker archive has no exact file entry", ErrConflict)
+		return 0, captureArchiveError(ctx, "Docker archive has no exact file entry", err)
 	}
 	if header.Name != expectedName || path.Base(header.Name) != header.Name ||
 		header.Linkname != "" ||
 		(header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA) ||
 		!header.FileInfo().Mode().IsRegular() {
-		return nil, fmt.Errorf("%w: Docker archive entry is not the admitted regular file", ErrConflict)
+		return 0, fmt.Errorf("%w: Docker archive entry is not the admitted regular file", ErrConflict)
 	}
 	if header.Size < 0 || header.Size > MaximumCaptureBytes || header.Size != stat.Size {
-		return nil, fmt.Errorf("%w: Docker archive descriptor size drifted", ErrConflict)
+		return 0, fmt.Errorf("%w: Docker archive descriptor size drifted", ErrConflict)
 	}
-	content, err := io.ReadAll(io.LimitReader(reader, MaximumCaptureBytes+1))
+	buffer := make([]byte, captureStreamBufferBytes)
+	readBytes, err := io.CopyBuffer(content, reader, buffer)
 	if err != nil {
-		return nil, fmt.Errorf("%w: Docker archive content read failed", ErrConflict)
+		return 0, captureArchiveError(ctx, "Docker archive content read failed", err)
 	}
-	if int64(len(content)) != header.Size {
-		return nil, fmt.Errorf("%w: Docker archive content size drifted", ErrConflict)
+	if readBytes != header.Size {
+		return 0, fmt.Errorf("%w: Docker archive content size drifted", ErrConflict)
 	}
-	if _, err := reader.Next(); !errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("%w: Docker archive contains multiple entries", ErrConflict)
+	if _, err := reader.Next(); err == nil {
+		return 0, fmt.Errorf("%w: Docker archive contains multiple entries", ErrConflict)
+	} else if !errors.Is(err, io.EOF) {
+		return 0, captureArchiveError(ctx, "Docker archive trailer is invalid", err)
 	}
-	return content, nil
+	// Consume the transport through EOF, preserving its error and envelope
+	// checks. Only archive padding may follow the single admitted entry.
+	for {
+		count, readErr := bounded.Read(buffer)
+		if bounded.N == 0 {
+			return 0, invalidf("Docker archive exceeds the bounded single-file envelope")
+		}
+		if len(bytes.Trim(buffer[:count], "\x00")) != 0 {
+			return 0, fmt.Errorf("%w: Docker archive contains trailing content", ErrConflict)
+		}
+		if readErr != nil {
+			if !errors.Is(readErr, io.EOF) {
+				return 0, captureArchiveError(ctx, "Docker archive stream failed", readErr)
+			}
+			break
+		}
+	}
+	return readBytes, nil
+}
+
+// Keep cancellation and transfer memory bounded even when an SDK asks for a
+// larger buffer or implements a Copy fast path of its own.
+type captureContextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (reader captureContextReader) Read(buffer []byte) (int, error) {
+	if err := reader.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return reader.reader.Read(buffer[:min(len(buffer), captureStreamBufferBytes)])
+}
+
+func captureArchiveError(ctx context.Context, message string, err error) error {
+	if contextErr := ctx.Err(); contextErr != nil {
+		return fmt.Errorf("%w: %s: %w", ErrUnavailable, message, contextErr)
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, tar.ErrHeader) {
+		return fmt.Errorf("%w: %s: %w", ErrConflict, message, err)
+	}
+	return fmt.Errorf("%w: %s: %w", ErrUnavailable, message, err)
 }
 
 func bindingObjectRoot(binding CaptureBinding) string {
@@ -1454,7 +1524,7 @@ func identityFromIntent(intent captureIntent) CaptureIdentity {
 func receiptFromIntent(intent captureIntent, staged capturedFile) CaptureReceipt {
 	return CaptureReceipt{
 		CaptureIdentity:      identityFromIntent(intent),
-		TotalByteLength:      int64(len(staged.bytes)),
+		TotalByteLength:      staged.byteLength,
 		ProviderSHA256Digest: staged.digest,
 		CapturedAt:           staged.capturedAt,
 	}
