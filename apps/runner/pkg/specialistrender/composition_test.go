@@ -34,6 +34,35 @@ func TestDecodeCompositionAdmissionBindsExactFourPackRoutingAndImages(t *testing
 	}
 }
 
+func TestCompositionAdmitsOneExactNewRevisionWithoutOtherSpecialists(t *testing.T) {
+	routing, composition := compositionFixture(t)
+	routing.Routes = routing.Routes[1:2]
+	routing.Digest, _ = semanticDigest(routingBody{Version: routing.Version, Kind: routing.Kind, ExchangePolicy: routing.ExchangePolicy, Routes: routing.Routes})
+	routing.RoutingRef = "runtime-capability-composition-routing:" + routing.Digest
+	composition.Composition.Executors = composition.Composition.Executors[1:2]
+	composition.Composition.Executors[0].PackRevisionRefs = []string{"ambit.runtime-pack/office-authoring@2"}
+	composition.ProfileRevisionRef = composition.Composition.Executors[0].ExecutorProfileRef
+	composition.Composition.RoutingReceipt = Pin{Ref: routing.RoutingRef, Digest: routing.Digest}
+	receiptDigest, _ := semanticDigest(compositionEvidence{Mode: composition.Composition.Mode, Routing: composition.Composition.Routing, Executors: composition.Composition.Executors, RoutingReceipt: composition.Composition.RoutingReceipt})
+	composition.Composition.CompositionReceipt = Pin{Ref: "runtime-full-image-composition-receipt:" + receiptDigest, Digest: receiptDigest}
+	composition.Digest, _ = semanticDigest(compositionBody{Version: composition.Version, Kind: composition.Kind, ProfileRevisionRef: composition.ProfileRevisionRef, DeploymentTarget: composition.DeploymentTarget, Composition: composition.Composition})
+	composition.CompositionRef = "runtime-full-image-composition:" + composition.Digest
+	routingBytes, _ := generationstop.CanonicalJSON(routing)
+	compositionBytes, _ := generationstop.CanonicalJSON(composition)
+	admitted, err := DecodeCompositionAdmission(compositionBytes, routingBytes)
+	if err != nil || len(admitted.Executors) != 1 {
+		t.Fatalf("single Office child rejected: %v", err)
+	}
+	if _, err := exactSpecialistPack([]string{"ambit.runtime-pack/office-authoring@1", "ambit.runtime-pack/office-authoring@2"}); err == nil {
+		t.Fatal("ambiguous revisions were accepted")
+	}
+	for _, ref := range []string{"ambit.runtime-pack/office-authoring@0", "ambit.runtime-pack/office-authoring@02", "ambit.runtime-pack/unknown@1"} {
+		if _, _, err := SpecialistPackRevisionIdentity(ref); err == nil {
+			t.Fatalf("invalid pack reference accepted: %s", ref)
+		}
+	}
+}
+
 func TestCanonicalCompositionSortUsesUTF16CodeUnits(t *testing.T) {
 	astral := "route:\U00010000"
 	bmpPrivateUse := "route:\uE000"
