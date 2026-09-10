@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf16"
 
@@ -153,8 +154,8 @@ func DecodeCompositionAdmission(
 		}
 		executors[pack] = executor
 	}
-	if len(executors) != len(packExecutables) {
-		return CompositionAdmission{}, errors.New("composition does not contain the exact specialist pack roster")
+	if len(executors) < 1 || len(executors) > len(packExecutables) {
+		return CompositionAdmission{}, errors.New("composition specialist pack roster is empty or exceeds its bound")
 	}
 	return CompositionAdmission{
 		Pin:       Pin{Ref: composition.CompositionRef, Digest: composition.Digest},
@@ -165,7 +166,7 @@ func DecodeCompositionAdmission(
 func validateRouting(value CompositionRouting) error {
 	if value.Version != 1 || value.Kind != "runtime_capability_composition_routing" ||
 		value.ExchangePolicy != "authorized_immutable_refs_only" ||
-		len(value.Routes) < 2 || len(value.Routes) > 64 {
+		len(value.Routes) < 1 || len(value.Routes) > 64 {
 		return errors.New("runtime capability composition routing is invalid")
 	}
 	routeRefs := make([]string, len(value.Routes))
@@ -204,7 +205,7 @@ func validateComposition(value FullImageComposition, routing CompositionRouting)
 		value.DeploymentTarget.Provider != "daytona" || value.DeploymentTarget.Platform.OS != "linux" ||
 		value.DeploymentTarget.Platform.Architecture != "amd64" ||
 		multi.Mode != "explicit_multi_executor" || multi.Routing != "capability_coverage_map" ||
-		len(multi.Executors) != len(packExecutables) ||
+		len(multi.Executors) < 1 || len(multi.Executors) > len(packExecutables) ||
 		multi.RoutingReceipt != (Pin{Ref: routing.RoutingRef, Digest: routing.Digest}) {
 		return errors.New("runtime capability full-image composition is invalid")
 	}
@@ -290,18 +291,30 @@ func validateReproducibility(value CompositionReproducibility) error {
 
 func exactSpecialistPack(refs []string) (string, error) {
 	matches := make([]string, 0, 1)
-	for pack := range packExecutables {
-		wanted := "ambit.runtime-pack/" + pack + "@1"
-		for _, ref := range refs {
-			if ref == wanted {
-				matches = append(matches, pack)
-			}
+	for _, ref := range refs {
+		if pack, _, err := SpecialistPackRevisionIdentity(ref); err == nil {
+			matches = append(matches, pack)
 		}
 	}
 	if len(matches) != 1 {
 		return "", errors.New("composition executor does not bind exactly one specialist pack")
 	}
 	return matches[0], nil
+}
+
+// Revision ownership is independent from qualification. The exact source
+// lock, image and provider policy still have to bind the selected revision.
+func SpecialistPackRevisionIdentity(ref string) (string, string, error) {
+	if !strings.HasPrefix(ref, "ambit.runtime-pack/") || len(ref) > 512 {
+		return "", "", errors.New("specialist pack revision is invalid")
+	}
+	pack, revision, found := strings.Cut(strings.TrimPrefix(ref, "ambit.runtime-pack/"), "@")
+	_, known := packExecutables[pack]
+	number, err := strconv.ParseUint(revision, 10, 64)
+	if !found || !known || err != nil || number == 0 || strconv.FormatUint(number, 10) != revision {
+		return "", "", errors.New("specialist pack revision is invalid")
+	}
+	return pack, revision, nil
 }
 
 func validPin(value Pin) bool {

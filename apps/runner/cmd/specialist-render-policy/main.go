@@ -37,18 +37,20 @@ type interfaceLock struct {
 }
 
 type executorLock struct {
-	Digest    string               `json:"digest"`
-	Facets    []string             `json:"facets"`
-	Ref       string               `json:"ref"`
-	Schema    string               `json:"schema"`
-	Transport specialistrender.Pin `json:"transport"`
+	Digest     string               `json:"digest"`
+	Facets     []string             `json:"facets,omitempty"`
+	Operations []string             `json:"operations,omitempty"`
+	Ref        string               `json:"ref"`
+	Schema     string               `json:"schema"`
+	Transport  specialistrender.Pin `json:"transport"`
 }
 
 type executorDigestBody struct {
-	Facets    []string             `json:"facets"`
-	Ref       string               `json:"ref"`
-	Schema    string               `json:"schema"`
-	Transport specialistrender.Pin `json:"transport"`
+	Facets     []string             `json:"facets,omitempty"`
+	Operations []string             `json:"operations,omitempty"`
+	Ref        string               `json:"ref"`
+	Schema     string               `json:"schema"`
+	Transport  specialistrender.Pin `json:"transport"`
 }
 
 func main() {
@@ -71,7 +73,7 @@ func run() int {
 		!absoluteNormalizedPath(*compositionPath) || !absoluteNormalizedPath(*routingPath) ||
 		!absoluteNormalizedPath(*outputRoot) || *seccompRuntimePath != runtimeSeccompPath ||
 		!gitObject(*sourceRevision) || !gitObject(*sourceTree) || !exactSHA256(*sourceSetDigest) ||
-		!c18oci.ValidRegistryAuthority(*registryInspectAuthority, true, true) {
+		!c18oci.ValidRegistryAuthority(*registryInspectAuthority, false, true) {
 		fmt.Fprintln(os.Stderr, "exact source identity, source inputs, runtime seccomp path, and new output root are required")
 		return 64
 	}
@@ -158,6 +160,20 @@ func run() int {
 			return fail(fmt.Errorf("unsupported pack %q", pack))
 		}
 		executorEvidence := composition.Executors[pack]
+		packData, err := readRegularFileSnapshot(filepath.Join(*sourceRoot, pack, "pack.lock.json"), 1024*1024)
+		if err != nil {
+			return fail(err)
+		}
+		var packLock struct {
+			PackRevisionRef string `json:"packRevisionRef"`
+		}
+		if err := json.Unmarshal(packData, &packLock); err != nil {
+			return fail(err)
+		}
+		packIdentity, _, err := specialistrender.SpecialistPackRevisionIdentity(packLock.PackRevisionRef)
+		if err != nil || packIdentity != pack || !contains(executorEvidence.PackRevisionRefs, packLock.PackRevisionRef) {
+			return fail(fmt.Errorf("%s source pack revision differs from composition", pack))
+		}
 		if executorEvidence.Image.SourceIdentity.Digest != *sourceSetDigest {
 			return fail(fmt.Errorf("%s composition source identity differs", pack))
 		}
@@ -179,7 +195,7 @@ func run() int {
 		if err != nil || image.ID != executorEvidence.Image.ConfigDigest ||
 			!contains(image.RepoDigests, inspectImageRef) ||
 			image.Config == nil || image.Config.User != "1000:1000" ||
-			image.Config.Labels["io.ambit.runtime-pack"] != "ambit.runtime-pack/"+pack+"@1" ||
+			image.Config.Labels["io.ambit.runtime-pack"] != packLock.PackRevisionRef ||
 			image.Config.Labels["io.ambit.activation"] != "provider-policy-and-composition-bound-only" ||
 			image.Config.Labels["org.opencontainers.image.revision"] != *sourceRevision ||
 			image.Config.Labels["io.ambit.source-tree"] != *sourceTree ||
@@ -194,13 +210,7 @@ func run() int {
 		if err := generationstop.DecodeExactJSON(executorData, &executor); err != nil {
 			return fail(fmt.Errorf("%s executor lock is invalid", pack))
 		}
-		executorBody, bodyErr := generationstop.CanonicalJSON(executorDigestBody{
-			Facets: executor.Facets, Ref: executor.Ref, Schema: executor.Schema, Transport: executor.Transport,
-		})
-		if bodyErr != nil || executor.Digest != digestBytes(executorBody) ||
-			executor.Transport.Ref != interfaceContract.InterfaceRef || executor.Transport.Digest != transport.Digest ||
-			executor.Ref != "ambit://specialist-render-executors/"+pack+"@1" ||
-			!contains(executorEvidence.PackRevisionRefs, "ambit.runtime-pack/"+pack+"@1") {
+		if err := validateExecutorLock(executor, packLock.PackRevisionRef, specialistrender.Pin{Ref: interfaceContract.InterfaceRef, Digest: transport.Digest}); err != nil {
 			return fail(fmt.Errorf("%s executor lock differs from interface", pack))
 		}
 		environment, err := generationstop.CanonicalJSON(image.Config.Env)
@@ -214,7 +224,7 @@ func run() int {
 		policy := specialistrender.Policy{
 			Authority:             specialistrender.Pin{Ref: "ambit.runtime-provider/specialist-render-" + pack + "@1"},
 			Composition:           composition.Pin,
-			Image:                 specialistrender.ImagePin{Ref: imageRef, ConfigDigest: image.ID, PackID: pack, PackRef: "ambit.runtime-pack/" + pack + "@1"},
+			Image:                 specialistrender.ImagePin{Ref: imageRef, ConfigDigest: image.ID, PackID: pack, PackRef: packLock.PackRevisionRef},
 			Interface:             specialistrender.Pin{Ref: interfaceContract.InterfaceRef, Digest: transport.Digest},
 			Executor:              specialistrender.Pin{Ref: executor.Ref, Digest: executor.Digest},
 			Executable:            "/opt/ambit/runtime-pack/" + pack + "/bin/ambit-specialist-render",
@@ -298,6 +308,11 @@ func run() int {
 }
 
 func pullExactImage(ctx context.Context, docker *client.Client, imageRef string) error {
+	if existing, err := docker.ImageInspect(ctx, imageRef); err == nil && contains(existing.RepoDigests, imageRef) {
+		// An authenticated release preload already established this immutable
+		// digest. The caller still verifies its config and source labels below.
+		return nil
+	}
 	stream, err := docker.ImagePull(ctx, imageRef, imagetypes.PullOptions{})
 	if err != nil {
 		return err
@@ -325,6 +340,43 @@ func pullExactImage(ctx context.Context, docker *client.Client, imageRef string)
 			return errors.New("exact image pull failed")
 		}
 	}
+}
+
+func validateExecutorLock(executor executorLock, packRef string, transport specialistrender.Pin) error {
+	_, _, err := specialistrender.SpecialistPackRevisionIdentity(packRef)
+	if err != nil {
+		return err
+	}
+	scopes := executor.Facets
+	switch executor.Schema {
+	case "ambit.c18-specialist-render-executor-lock/v2":
+		if len(executor.Operations) != 0 {
+			return errors.New("facet executor has operation scope")
+		}
+	case "ambit.c18-specialist-render-executor-lock/v3":
+		if len(executor.Facets) != 0 {
+			return errors.New("operation executor has facet scope")
+		}
+		scopes = executor.Operations
+	default:
+		return errors.New("executor lock schema is unsupported")
+	}
+	if len(scopes) == 0 {
+		return errors.New("executor scope is empty")
+	}
+	for index, scope := range scopes {
+		if scope == "" || (index > 0 && scopes[index-1] >= scope) {
+			return errors.New("executor scope is not sorted and unique")
+		}
+	}
+	body, err := generationstop.CanonicalJSON(executorDigestBody{
+		Facets: executor.Facets, Operations: executor.Operations, Ref: executor.Ref, Schema: executor.Schema, Transport: executor.Transport,
+	})
+	if err != nil || executor.Digest != digestBytes(body) || executor.Transport != transport ||
+		executor.Ref != strings.Replace(packRef, "ambit.runtime-pack/", "ambit://specialist-render-executors/", 1) {
+		return errors.New("executor identity, transport or seal differs")
+	}
+	return nil
 }
 
 func probeProcessExecutable(ctx context.Context, imageID string, seccomp []byte) (string, string, error) {

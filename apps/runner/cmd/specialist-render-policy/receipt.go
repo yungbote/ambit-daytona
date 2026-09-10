@@ -138,21 +138,21 @@ func validatePolicyGenerationReceiptBody(value policyGenerationReceipt) error {
 		value.Inputs.SeccompSourceFileSHA256 != specialistrender.SpecialistSeccompDigest ||
 		value.Inputs.SeccompCopiedFileSHA256 != value.Inputs.SeccompSourceFileSHA256 ||
 		value.Inputs.SeccompRuntimePath != runtimeSeccompPath ||
-		!c18oci.ValidRegistryAuthority(value.Registry.InspectAuthority, true, true) ||
-		!c18oci.ValidRegistryAuthority(value.Registry.RuntimeAuthority, true, false) ||
-		value.Policy.Schema != specialistrender.PolicySetSchema || value.Policy.RowCount != 4 ||
+		!c18oci.ValidRegistryAuthority(value.Registry.InspectAuthority, false, true) ||
+		!c18oci.ValidRegistryAuthority(value.Registry.RuntimeAuthority, false, false) ||
+		value.Policy.Schema != specialistrender.PolicySetSchema || value.Policy.RowCount < 1 || value.Policy.RowCount > 64 ||
 		!exactSHA256(value.Policy.FileSHA256) || !exactMillisecondInstant(value.ObservedAt) {
 		return errors.New("policy generation receipt body is invalid")
 	}
-	expectedPacks := []string{"data-research", "office-authoring", "pdf-ocr", "web-browser"}
-	if len(value.Images) != len(expectedPacks) {
+	if len(value.Images) != value.Policy.RowCount {
 		return errors.New("policy generation receipt image roster is invalid")
 	}
 	for index, image := range value.Images {
 		inspectRef, runtimeAuthority, manifestDigest, err := rewriteRegistryAuthority(
 			image.RuntimeImageRef, value.Registry.InspectAuthority,
 		)
-		if err != nil || image.PackID != expectedPacks[index] ||
+		_, _, packErr := specialistrender.SpecialistPackRevisionIdentity("ambit.runtime-pack/" + image.PackID + "@1")
+		if err != nil || packErr != nil || (index > 0 && value.Images[index-1].PackID >= image.PackID) ||
 			runtimeAuthority != value.Registry.RuntimeAuthority || image.InspectImageRef != inspectRef ||
 			image.ManifestDigest != manifestDigest || !exactSHA256(image.ConfigDigest) {
 			return errors.New("policy generation receipt image identity is invalid")
@@ -189,7 +189,7 @@ func publishAuthorityDirectory(
 	}
 	var policy specialistrender.PolicySet
 	if err := generationstop.DecodeCanonicalJSON(policyBytes, &policy); err != nil ||
-		policy.Schema != specialistrender.PolicySetSchema || len(policy.Policies) != 4 {
+		policy.Schema != specialistrender.PolicySetSchema || len(policy.Policies) != len(receipt.Images) {
 		return errors.New("authority policy output is invalid")
 	}
 	for index, row := range policy.Policies {
@@ -449,7 +449,7 @@ func exactMillisecondInstant(value string) bool {
 }
 
 func rewriteRegistryAuthority(runtimeReference, inspectAuthority string) (string, string, string, error) {
-	if !c18oci.ValidRegistryAuthority(inspectAuthority, true, true) ||
+	if !c18oci.ValidRegistryAuthority(inspectAuthority, false, true) ||
 		!c18oci.ValidImmutableReference(runtimeReference) {
 		return "", "", "", errors.New("registry image authority is invalid")
 	}
@@ -461,7 +461,7 @@ func rewriteRegistryAuthority(runtimeReference, inspectAuthority string) (string
 	runtimeAuthority := name[:slash]
 	repositoryPath := name[slash+1:]
 	inspectReference := inspectAuthority + "/" + repositoryPath + "@" + manifestDigest
-	if !c18oci.ValidRegistryAuthority(runtimeAuthority, true, false) ||
+	if !c18oci.ValidRegistryAuthority(runtimeAuthority, false, false) ||
 		!c18oci.ValidImmutableSourceReference(inspectReference) {
 		return "", "", "", errors.New("runtime image reference is invalid")
 	}

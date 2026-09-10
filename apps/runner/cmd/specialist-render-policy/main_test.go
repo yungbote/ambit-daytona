@@ -36,6 +36,45 @@ func TestPolicyGenerationReceiptGoldenIsCanonicalAndPathPrivate(t *testing.T) {
 	}
 }
 
+func TestPolicyReceiptUsesTheDeclaredImageRosterAndDefaultRegistryPort(t *testing.T) {
+	_, receipt, _ := policyAuthorityFixture(t)
+	receipt.Images = receipt.Images[1:2]
+	receipt.Policy.RowCount = 1
+	receipt.Registry.RuntimeAuthority = "registry.example"
+	receipt.Registry.InspectAuthority = "registry.example"
+	image := &receipt.Images[0]
+	_, location, _ := strings.Cut(image.RuntimeImageRef, "/")
+	image.RuntimeImageRef = "registry.example/" + location
+	image.InspectImageRef = image.RuntimeImageRef
+	if _, err := sealPolicyGenerationReceipt(receipt); err != nil {
+		t.Fatal(err)
+	}
+	receipt.Policy.RowCount = 0
+	if _, err := sealPolicyGenerationReceipt(receipt); err == nil {
+		t.Fatal("empty policy scope accepted")
+	}
+}
+
+func TestSourceExecutorLocksAdmitExactFacetAndOperationRevisions(t *testing.T) {
+	for _, pack := range []string{"office-authoring", "data-research"} {
+		data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "images", "ambit-agent-workspace", "capabilities", "c18-specialist-packs", pack, "executor.lock.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var lock executorLock
+		if err := generationstop.DecodeExactJSON(data, &lock); err != nil {
+			t.Fatal(err)
+		}
+		packRef := strings.Replace(lock.Ref, "ambit://specialist-render-executors/", "ambit.runtime-pack/", 1)
+		if err := validateExecutorLock(lock, packRef, lock.Transport); err != nil {
+			t.Fatal(err)
+		}
+		if err := validateExecutorLock(lock, "ambit.runtime-pack/"+pack+"@99", lock.Transport); err == nil {
+			t.Fatal("source revision substitution accepted")
+		}
+	}
+}
+
 func TestPolicyGenerationReceiptRejectsRuntimePathAndImageSubstitution(t *testing.T) {
 	_, receipt, _ := policyAuthorityFixture(t)
 	for _, mutate := range []func(*policyGenerationReceipt){
