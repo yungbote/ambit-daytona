@@ -25,6 +25,7 @@ export interface WorkingCopyCaptureSelector {
 export const WorkingCopyCaptureSelectorSemanticZoneRefEnum = {
     AMBIT_WORKSPACE_ZONE_WORK_1: 'ambit.workspace-zone/work@1',
     AMBIT_WORKSPACE_ZONE_OUTPUTS_1: 'ambit.workspace-zone/outputs@1',
+    AMBIT_WORKSPACE_ZONE_USER_FILES_1: 'ambit.workspace-zone/user-files@1',
     UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 

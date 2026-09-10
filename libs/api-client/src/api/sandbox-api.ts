@@ -107,6 +107,24 @@ import type { WorkingCopyCaptureRead } from '../models';
 import type { WorkingCopyCaptureReadResponse } from '../models';
 // @ts-ignore
 import type { WorkingCopyCaptureReceipt } from '../models';
+// @ts-ignore
+import type { WorkingCopyCaptureCapabilities } from '../models';
+// @ts-ignore
+import type { WorkingCopyCaptureCapabilitiesRequest } from '../models';
+// @ts-ignore
+import type { WorkingTreeInventoryDeletionReceipt } from '../models';
+// @ts-ignore
+import type { WorkingTreeInventoryPage } from '../models';
+// @ts-ignore
+import type { WorkingTreeInventoryPageRequest } from '../models';
+// @ts-ignore
+import type { WorkingTreeInventoryRange } from '../models';
+// @ts-ignore
+import type { WorkingTreeInventoryRangeRequest } from '../models';
+// @ts-ignore
+import type { WorkingTreeInventoryReceipt } from '../models';
+// @ts-ignore
+import type { WorkingTreeInventoryRequest } from '../models';
 /**
  * SandboxApi - axios parameter creator
  */
@@ -2982,6 +3000,251 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
                 options: localVarRequestOptions,
             };
         },
+        /**
+         *
+         * @summary Delete exact inventory custody and prove its absence
+         * @param {string} sandboxIdOrName
+         * @param {WorkingTreeInventoryRequest} workingTreeInventoryRequest
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        sandboxDeleteInventory: async (sandboxIdOrName: string, workingTreeInventoryRequest: WorkingTreeInventoryRequest, xDaytonaOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxIdOrName' is not null or undefined
+            assertParamExists('sandboxDeleteInventory', 'sandboxIdOrName', sandboxIdOrName)
+            // verify required parameter 'workingTreeInventoryRequest' is not null or undefined
+            assertParamExists('sandboxDeleteInventory', 'workingTreeInventoryRequest', workingTreeInventoryRequest)
+            const localVarPath = `/sandbox/{sandboxIdOrName}/working-copy-captures/stopped-working-tree-inventories/delete`
+                .replace(`{${"sandboxIdOrName"}}`, encodeURIComponent(String(sandboxIdOrName)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            if (xDaytonaOrganizationID != null) {
+                localVarHeaderParameter['X-Daytona-Organization-ID'] = String(xDaytonaOrganizationID);
+            }
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(workingTreeInventoryRequest, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         *
+         * @summary Prepare immutable pages of an exact stopped working tree
+         * @param {string} sandboxIdOrName
+         * @param {WorkingTreeInventoryRequest} workingTreeInventoryRequest
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        sandboxPrepareInventory: async (sandboxIdOrName: string, workingTreeInventoryRequest: WorkingTreeInventoryRequest, xDaytonaOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxIdOrName' is not null or undefined
+            assertParamExists('sandboxPrepareInventory', 'sandboxIdOrName', sandboxIdOrName)
+            // verify required parameter 'workingTreeInventoryRequest' is not null or undefined
+            assertParamExists('sandboxPrepareInventory', 'workingTreeInventoryRequest', workingTreeInventoryRequest)
+            const localVarPath = `/sandbox/{sandboxIdOrName}/working-copy-captures/stopped-working-tree-inventories`
+                .replace(`{${"sandboxIdOrName"}}`, encodeURIComponent(String(sandboxIdOrName)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            if (xDaytonaOrganizationID != null) {
+                localVarHeaderParameter['X-Daytona-Organization-ID'] = String(xDaytonaOrganizationID);
+            }
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(workingTreeInventoryRequest, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         *
+         * @summary Read an immutable stopped working-tree inventory page
+         * @param {string} sandboxIdOrName
+         * @param {WorkingTreeInventoryPageRequest} workingTreeInventoryPageRequest
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        sandboxReadInventoryPage: async (sandboxIdOrName: string, workingTreeInventoryPageRequest: WorkingTreeInventoryPageRequest, xDaytonaOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxIdOrName' is not null or undefined
+            assertParamExists('sandboxReadInventoryPage', 'sandboxIdOrName', sandboxIdOrName)
+            // verify required parameter 'workingTreeInventoryPageRequest' is not null or undefined
+            assertParamExists('sandboxReadInventoryPage', 'workingTreeInventoryPageRequest', workingTreeInventoryPageRequest)
+            const localVarPath = `/sandbox/{sandboxIdOrName}/working-copy-captures/stopped-working-tree-inventories/read`
+                .replace(`{${"sandboxIdOrName"}}`, encodeURIComponent(String(sandboxIdOrName)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            if (xDaytonaOrganizationID != null) {
+                localVarHeaderParameter['X-Daytona-Organization-ID'] = String(xDaytonaOrganizationID);
+            }
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(workingTreeInventoryPageRequest, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         *
+         * @summary Read a bounded immutable working-tree byte range
+         * @param {string} sandboxIdOrName
+         * @param {WorkingTreeInventoryRangeRequest} workingTreeInventoryRangeRequest
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        sandboxReadInventoryRange: async (sandboxIdOrName: string, workingTreeInventoryRangeRequest: WorkingTreeInventoryRangeRequest, xDaytonaOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxIdOrName' is not null or undefined
+            assertParamExists('sandboxReadInventoryRange', 'sandboxIdOrName', sandboxIdOrName)
+            // verify required parameter 'workingTreeInventoryRangeRequest' is not null or undefined
+            assertParamExists('sandboxReadInventoryRange', 'workingTreeInventoryRangeRequest', workingTreeInventoryRangeRequest)
+            const localVarPath = `/sandbox/{sandboxIdOrName}/working-copy-captures/stopped-working-tree-inventories/read-range`
+                .replace(`{${"sandboxIdOrName"}}`, encodeURIComponent(String(sandboxIdOrName)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            if (xDaytonaOrganizationID != null) {
+                localVarHeaderParameter['X-Daytona-Organization-ID'] = String(xDaytonaOrganizationID);
+            }
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(workingTreeInventoryRangeRequest, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         *
+         * @summary Discover the assigned Runner capture surface before stopping a generation
+         * @param {string} sandboxIdOrName
+         * @param {WorkingCopyCaptureCapabilitiesRequest} workingCopyCaptureCapabilitiesRequest
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        sandboxWorkingCopyCaptureCapabilities: async (sandboxIdOrName: string, workingCopyCaptureCapabilitiesRequest: WorkingCopyCaptureCapabilitiesRequest, xDaytonaOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxIdOrName' is not null or undefined
+            assertParamExists('sandboxWorkingCopyCaptureCapabilities', 'sandboxIdOrName', sandboxIdOrName)
+            // verify required parameter 'workingCopyCaptureCapabilitiesRequest' is not null or undefined
+            assertParamExists('sandboxWorkingCopyCaptureCapabilities', 'workingCopyCaptureCapabilitiesRequest', workingCopyCaptureCapabilitiesRequest)
+            const localVarPath = `/sandbox/{sandboxIdOrName}/working-copy-captures/capabilities`
+                .replace(`{${"sandboxIdOrName"}}`, encodeURIComponent(String(sandboxIdOrName)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            if (xDaytonaOrganizationID != null) {
+                localVarHeaderParameter['X-Daytona-Organization-ID'] = String(xDaytonaOrganizationID);
+            }
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(workingCopyCaptureCapabilitiesRequest, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
     }
 };
 
@@ -3841,6 +4104,81 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             const localVarOperationServerBasePath = operationServerMap['SandboxApi.validateSshAccess']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
+        /**
+         *
+         * @summary Delete exact inventory custody and prove its absence
+         * @param {string} sandboxIdOrName
+         * @param {WorkingTreeInventoryRequest} workingTreeInventoryRequest
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async sandboxDeleteInventory(sandboxIdOrName: string, workingTreeInventoryRequest: WorkingTreeInventoryRequest, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingTreeInventoryDeletionReceipt>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.sandboxDeleteInventory(sandboxIdOrName, workingTreeInventoryRequest, xDaytonaOrganizationID, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.sandboxDeleteInventory']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         *
+         * @summary Prepare immutable pages of an exact stopped working tree
+         * @param {string} sandboxIdOrName
+         * @param {WorkingTreeInventoryRequest} workingTreeInventoryRequest
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async sandboxPrepareInventory(sandboxIdOrName: string, workingTreeInventoryRequest: WorkingTreeInventoryRequest, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingTreeInventoryReceipt>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.sandboxPrepareInventory(sandboxIdOrName, workingTreeInventoryRequest, xDaytonaOrganizationID, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.sandboxPrepareInventory']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         *
+         * @summary Read an immutable stopped working-tree inventory page
+         * @param {string} sandboxIdOrName
+         * @param {WorkingTreeInventoryPageRequest} workingTreeInventoryPageRequest
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async sandboxReadInventoryPage(sandboxIdOrName: string, workingTreeInventoryPageRequest: WorkingTreeInventoryPageRequest, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingTreeInventoryPage>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.sandboxReadInventoryPage(sandboxIdOrName, workingTreeInventoryPageRequest, xDaytonaOrganizationID, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.sandboxReadInventoryPage']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         *
+         * @summary Read a bounded immutable working-tree byte range
+         * @param {string} sandboxIdOrName
+         * @param {WorkingTreeInventoryRangeRequest} workingTreeInventoryRangeRequest
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async sandboxReadInventoryRange(sandboxIdOrName: string, workingTreeInventoryRangeRequest: WorkingTreeInventoryRangeRequest, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingTreeInventoryRange>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.sandboxReadInventoryRange(sandboxIdOrName, workingTreeInventoryRangeRequest, xDaytonaOrganizationID, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.sandboxReadInventoryRange']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         *
+         * @summary Discover the assigned Runner capture surface before stopping a generation
+         * @param {string} sandboxIdOrName
+         * @param {WorkingCopyCaptureCapabilitiesRequest} workingCopyCaptureCapabilitiesRequest
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async sandboxWorkingCopyCaptureCapabilities(sandboxIdOrName: string, workingCopyCaptureCapabilitiesRequest: WorkingCopyCaptureCapabilitiesRequest, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingCopyCaptureCapabilities>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.sandboxWorkingCopyCaptureCapabilities(sandboxIdOrName, workingCopyCaptureCapabilitiesRequest, xDaytonaOrganizationID, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.sandboxWorkingCopyCaptureCapabilities']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
     }
 };
 
@@ -4538,6 +4876,66 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
         validateSshAccess(token: string, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<SshAccessValidationDto> {
             return localVarFp.validateSshAccess(token, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
         },
+        /**
+         *
+         * @summary Delete exact inventory custody and prove its absence
+         * @param {string} sandboxIdOrName
+         * @param {WorkingTreeInventoryRequest} workingTreeInventoryRequest
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        sandboxDeleteInventory(sandboxIdOrName: string, workingTreeInventoryRequest: WorkingTreeInventoryRequest, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<WorkingTreeInventoryDeletionReceipt> {
+            return localVarFp.sandboxDeleteInventory(sandboxIdOrName, workingTreeInventoryRequest, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
+        },
+        /**
+         *
+         * @summary Prepare immutable pages of an exact stopped working tree
+         * @param {string} sandboxIdOrName
+         * @param {WorkingTreeInventoryRequest} workingTreeInventoryRequest
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        sandboxPrepareInventory(sandboxIdOrName: string, workingTreeInventoryRequest: WorkingTreeInventoryRequest, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<WorkingTreeInventoryReceipt> {
+            return localVarFp.sandboxPrepareInventory(sandboxIdOrName, workingTreeInventoryRequest, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
+        },
+        /**
+         *
+         * @summary Read an immutable stopped working-tree inventory page
+         * @param {string} sandboxIdOrName
+         * @param {WorkingTreeInventoryPageRequest} workingTreeInventoryPageRequest
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        sandboxReadInventoryPage(sandboxIdOrName: string, workingTreeInventoryPageRequest: WorkingTreeInventoryPageRequest, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<WorkingTreeInventoryPage> {
+            return localVarFp.sandboxReadInventoryPage(sandboxIdOrName, workingTreeInventoryPageRequest, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
+        },
+        /**
+         *
+         * @summary Read a bounded immutable working-tree byte range
+         * @param {string} sandboxIdOrName
+         * @param {WorkingTreeInventoryRangeRequest} workingTreeInventoryRangeRequest
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        sandboxReadInventoryRange(sandboxIdOrName: string, workingTreeInventoryRangeRequest: WorkingTreeInventoryRangeRequest, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<WorkingTreeInventoryRange> {
+            return localVarFp.sandboxReadInventoryRange(sandboxIdOrName, workingTreeInventoryRangeRequest, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
+        },
+        /**
+         *
+         * @summary Discover the assigned Runner capture surface before stopping a generation
+         * @param {string} sandboxIdOrName
+         * @param {WorkingCopyCaptureCapabilitiesRequest} workingCopyCaptureCapabilitiesRequest
+         * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        sandboxWorkingCopyCaptureCapabilities(sandboxIdOrName: string, workingCopyCaptureCapabilitiesRequest: WorkingCopyCaptureCapabilitiesRequest, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<WorkingCopyCaptureCapabilities> {
+            return localVarFp.sandboxWorkingCopyCaptureCapabilities(sandboxIdOrName, workingCopyCaptureCapabilitiesRequest, xDaytonaOrganizationID, options).then((request) => request(axios, basePath));
+        },
     };
 };
 
@@ -4556,7 +4954,6 @@ export class SandboxApi extends BaseAPI {
     public archiveSandbox(sandboxIdOrName: string, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return SandboxApiFp(this.configuration).archiveSandbox(sandboxIdOrName, xDaytonaOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
-
     /**
      *
      * @summary Capture one file from an exact stopped sandbox generation
@@ -5285,6 +5682,71 @@ export class SandboxApi extends BaseAPI {
      */
     public validateSshAccess(token: string, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return SandboxApiFp(this.configuration).validateSshAccess(token, xDaytonaOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     *
+     * @summary Delete exact inventory custody and prove its absence
+     * @param {string} sandboxIdOrName
+     * @param {WorkingTreeInventoryRequest} workingTreeInventoryRequest
+     * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public sandboxDeleteInventory(sandboxIdOrName: string, workingTreeInventoryRequest: WorkingTreeInventoryRequest, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).sandboxDeleteInventory(sandboxIdOrName, workingTreeInventoryRequest, xDaytonaOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     *
+     * @summary Prepare immutable pages of an exact stopped working tree
+     * @param {string} sandboxIdOrName
+     * @param {WorkingTreeInventoryRequest} workingTreeInventoryRequest
+     * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public sandboxPrepareInventory(sandboxIdOrName: string, workingTreeInventoryRequest: WorkingTreeInventoryRequest, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).sandboxPrepareInventory(sandboxIdOrName, workingTreeInventoryRequest, xDaytonaOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     *
+     * @summary Read an immutable stopped working-tree inventory page
+     * @param {string} sandboxIdOrName
+     * @param {WorkingTreeInventoryPageRequest} workingTreeInventoryPageRequest
+     * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public sandboxReadInventoryPage(sandboxIdOrName: string, workingTreeInventoryPageRequest: WorkingTreeInventoryPageRequest, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).sandboxReadInventoryPage(sandboxIdOrName, workingTreeInventoryPageRequest, xDaytonaOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     *
+     * @summary Read a bounded immutable working-tree byte range
+     * @param {string} sandboxIdOrName
+     * @param {WorkingTreeInventoryRangeRequest} workingTreeInventoryRangeRequest
+     * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public sandboxReadInventoryRange(sandboxIdOrName: string, workingTreeInventoryRangeRequest: WorkingTreeInventoryRangeRequest, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).sandboxReadInventoryRange(sandboxIdOrName, workingTreeInventoryRangeRequest, xDaytonaOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     *
+     * @summary Discover the assigned Runner capture surface before stopping a generation
+     * @param {string} sandboxIdOrName
+     * @param {WorkingCopyCaptureCapabilitiesRequest} workingCopyCaptureCapabilitiesRequest
+     * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public sandboxWorkingCopyCaptureCapabilities(sandboxIdOrName: string, workingCopyCaptureCapabilitiesRequest: WorkingCopyCaptureCapabilitiesRequest, xDaytonaOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).sandboxWorkingCopyCaptureCapabilities(sandboxIdOrName, workingCopyCaptureCapabilitiesRequest, xDaytonaOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 }
 

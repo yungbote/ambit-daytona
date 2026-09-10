@@ -37,6 +37,18 @@ type CaptureSelector struct {
 	ZoneRelativePath string `json:"zoneRelativePath" validate:"required"`
 }
 
+type CaptureCapabilitiesRequest struct {
+	Authority CaptureAuthority     `json:"authority" validate:"required"`
+	Source    SourceAddress        `json:"source" validate:"required"`
+	Owner     CaptureOwner         `json:"owner" validate:"required"`
+	Fence     generationstop.Fence `json:"fence" validate:"required"`
+}
+
+type CaptureCapabilities struct {
+	Authority                   CaptureAuthority               `json:"authority" validate:"required"`
+	StoppedWorkingTreeInventory WorkingTreeInventoryCapability `json:"stoppedWorkingTreeInventory" validate:"required"`
+}
+
 type CaptureBinding struct {
 	ProviderName       string                       `json:"providerName" validate:"required"`
 	RequestFingerprint string                       `json:"requestFingerprint" validate:"required"`
@@ -45,6 +57,40 @@ type CaptureBinding struct {
 	Owner              CaptureOwner                 `json:"owner" validate:"required"`
 	StopAuthority      generationstop.StopAuthority `json:"stopAuthority" validate:"required"`
 	Selector           CaptureSelector              `json:"selector" validate:"required"`
+}
+
+// CaptureGenerationBinding admits a stopped generation independently from
+// selecting any individual file within it.
+type CaptureGenerationBinding struct {
+	ProviderName       string                       `json:"providerName" validate:"required"`
+	RequestFingerprint string                       `json:"requestFingerprint" validate:"required"`
+	Authority          CaptureAuthority             `json:"authority" validate:"required"`
+	Source             SourceAddress                `json:"source" validate:"required"`
+	Owner              CaptureOwner                 `json:"owner" validate:"required"`
+	StopAuthority      generationstop.StopAuthority `json:"stopAuthority" validate:"required"`
+}
+
+func (binding CaptureBinding) generationBinding() CaptureGenerationBinding {
+	return CaptureGenerationBinding{
+		ProviderName: binding.ProviderName, RequestFingerprint: binding.RequestFingerprint,
+		Authority: binding.Authority, Source: binding.Source,
+		Owner: binding.Owner, StopAuthority: binding.StopAuthority,
+	}
+}
+
+// Private working-tree entries preserve link targets as lexical data and
+// explicitly record runtime entries that are not portable. Docker archives
+// may omit sockets, so this roster is not a per-path socket inventory.
+type StoppedWorkingTreeEntry struct {
+	ZoneRelativePath string  `json:"zoneRelativePath" validate:"required"`
+	Name             string  `json:"name" validate:"required"`
+	Kind             string  `json:"kind" validate:"required" enums:"regular_file,directory,symlink,excluded"`
+	Size             int64   `json:"size" validate:"required"`
+	Mode             *string `json:"mode" validate:"required" extensions:"x-nullable"`
+	SHA256           *string `json:"sha256" validate:"required" extensions:"x-nullable"`
+	ByteOffset       *int64  `json:"byteOffset,omitempty"`
+	LinkTarget       *string `json:"linkTarget,omitempty"`
+	ExcludedKind     string  `json:"excludedKind,omitempty" enums:"fifo,character_device,block_device"`
 }
 
 type CaptureIdentity struct {

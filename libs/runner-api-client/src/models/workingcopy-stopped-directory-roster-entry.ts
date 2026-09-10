@@ -13,6 +13,7 @@
  */
 
 
+
 export interface WorkingcopyStoppedDirectoryRosterEntry {
     'kind': string;
     'mode': string | null;

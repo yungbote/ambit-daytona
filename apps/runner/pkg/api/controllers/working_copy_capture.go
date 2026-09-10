@@ -17,6 +17,41 @@ import (
 
 const maximumWorkingCopyCaptureRequestBytes = 128 * 1024
 
+// WorkingCopyCaptureCapabilities godoc
+//
+//	@Tags sandbox
+//	@Summary Discover the assigned Runner capture surface before stopping a generation
+//	@Description Read-only discovery of the inventory interface implemented by the assigned Runner, bound to operator-configured capture lineage. Capability discovery does not independently attest the Runner binary or image digest.
+//	@Accept json
+//	@Produce json
+//	@Param sandboxId path string true "Sandbox ID"
+//	@Param request body workingcopy.CaptureCapabilitiesRequest true "Current capture authority"
+//	@Success 200 {object} workingcopy.CaptureCapabilities
+//	@Failure 400 {object} common_errors.ErrorResponse
+//	@Failure 409 {object} common_errors.ErrorResponse
+//	@Failure 503 {object} common_errors.ErrorResponse
+//	@Security Bearer
+//	@Router /sandboxes/{sandboxId}/working-copy-captures/capabilities [post]
+//	@id WorkingCopyCaptureCapabilities
+func WorkingCopyCaptureCapabilities(ctx *gin.Context) {
+	var request workingcopy.CaptureCapabilitiesRequest
+	if err := decodeExactCaptureBody(ctx, &request); err != nil {
+		ctx.Error(common_errors.NewBadRequestError(err))
+		return
+	}
+	service, err := workingCopyCaptureService()
+	if err != nil {
+		writeWorkingCopyCaptureError(ctx, err)
+		return
+	}
+	response, err := service.Capabilities(ctx.Request.Context(), ctx.Param("sandboxId"), request)
+	if err != nil {
+		writeWorkingCopyCaptureError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, response)
+}
+
 // CaptureWorkingCopy godoc
 //
 //	@Tags			sandbox
@@ -266,4 +301,140 @@ func decodeExactCaptureBody(ctx *gin.Context, target any) error {
 		return errors.New("request body is empty or exceeds the bounded capture envelope")
 	}
 	return workingcopy.DecodeExactJSON(data, target)
+}
+
+// PrepareWorkingTreeInventory godoc
+//
+//	@Tags sandbox
+//	@Summary Prepare immutable pages of an exact stopped working tree
+//	@Accept json
+//	@Produce json
+//	@Param sandboxId path string true "Sandbox ID"
+//	@Param request body workingcopy.WorkingTreeInventoryRequest true "Exact stopped working-tree inventory authority"
+//	@Success 200 {object} workingcopy.WorkingTreeInventoryReceipt
+//	@Failure 400 {object} common_errors.ErrorResponse
+//	@Failure 409 {object} common_errors.ErrorResponse
+//	@Failure 503 {object} common_errors.ErrorResponse
+//	@Security Bearer
+//	@Router /sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree-inventories [post]
+//	@id PrepareWorkingTreeInventory
+func PrepareWorkingTreeInventory(ctx *gin.Context) {
+	var request workingcopy.WorkingTreeInventoryRequest
+	if err := decodeExactCaptureBody(ctx, &request); err != nil {
+		ctx.Error(common_errors.NewBadRequestError(err))
+		return
+	}
+	service, err := workingCopyCaptureService()
+	if err != nil {
+		writeWorkingCopyCaptureError(ctx, err)
+		return
+	}
+	response, err := service.PrepareWorkingTreeInventory(ctx.Request.Context(), ctx.Param("sandboxId"), request)
+	if err != nil {
+		writeWorkingCopyCaptureError(ctx, err)
+		return
+	}
+	ctx.PureJSON(http.StatusOK, response)
+}
+
+// ReadWorkingTreeInventoryPage godoc
+//
+//	@Tags sandbox
+//	@Summary Read one immutable stopped working-tree inventory page
+//	@Accept json
+//	@Produce json
+//	@Param sandboxId path string true "Sandbox ID"
+//	@Param request body workingcopy.WorkingTreeInventoryPageRequest true "Exact stopped working-tree inventory authority"
+//	@Success 200 {object} workingcopy.WorkingTreeInventoryPage
+//	@Failure 400 {object} common_errors.ErrorResponse
+//	@Failure 409 {object} common_errors.ErrorResponse
+//	@Failure 503 {object} common_errors.ErrorResponse
+//	@Security Bearer
+//	@Router /sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree-inventories/read [post]
+//	@id ReadWorkingTreeInventoryPage
+func ReadWorkingTreeInventoryPage(ctx *gin.Context) {
+	var request workingcopy.WorkingTreeInventoryPageRequest
+	if err := decodeExactCaptureBody(ctx, &request); err != nil {
+		ctx.Error(common_errors.NewBadRequestError(err))
+		return
+	}
+	service, err := workingCopyCaptureService()
+	if err != nil {
+		writeWorkingCopyCaptureError(ctx, err)
+		return
+	}
+	response, err := service.ReadWorkingTreeInventoryPage(ctx.Request.Context(), ctx.Param("sandboxId"), request)
+	if err != nil {
+		writeWorkingCopyCaptureError(ctx, err)
+		return
+	}
+	ctx.PureJSON(http.StatusOK, response)
+}
+
+// ReadWorkingTreeInventoryRange godoc
+//
+//	@Summary Read a bounded immutable working-tree byte range
+//	@Tags sandbox
+//	@Accept json
+//	@Produce json
+//	@Param sandboxId path string true "Sandbox ID"
+//	@Param request body workingcopy.WorkingTreeInventoryRangeRequest true "Exact inventory and byte range"
+//	@Success 200 {object} workingcopy.WorkingTreeInventoryRange
+//	@Failure 400 {object} common_errors.ErrorResponse
+//	@Failure 409 {object} common_errors.ErrorResponse
+//	@Failure 503 {object} common_errors.ErrorResponse
+//	@Security Bearer
+//	@Router /sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree-inventories/read-range [post]
+//	@id ReadWorkingTreeInventoryRange
+func ReadWorkingTreeInventoryRange(ctx *gin.Context) {
+	var request workingcopy.WorkingTreeInventoryRangeRequest
+	if err := decodeExactCaptureBody(ctx, &request); err != nil {
+		ctx.Error(common_errors.NewBadRequestError(err))
+		return
+	}
+	service, err := workingCopyCaptureService()
+	if err != nil {
+		writeWorkingCopyCaptureError(ctx, err)
+		return
+	}
+	response, err := service.ReadWorkingTreeInventoryRange(ctx.Request.Context(), ctx.Param("sandboxId"), request)
+	if err != nil {
+		writeWorkingCopyCaptureError(ctx, err)
+		return
+	}
+	ctx.PureJSON(http.StatusOK, response)
+}
+
+// DeleteWorkingTreeInventory godoc
+//
+//	@Tags sandbox
+//	@Summary Delete exact inventory custody and prove its absence
+//	@Accept json
+//	@Produce json
+//	@Param sandboxId path string true "Sandbox ID"
+//	@Param request body workingcopy.WorkingTreeInventoryRequest true "Exact stopped working-tree inventory authority"
+//	@Success 200 {object} workingcopy.WorkingTreeInventoryDeletionReceipt
+//	@Failure 400 {object} common_errors.ErrorResponse
+//	@Failure 409 {object} common_errors.ErrorResponse
+//	@Failure 503 {object} common_errors.ErrorResponse
+//	@Security Bearer
+//	@Router /sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree-inventories/delete [post]
+//	@id DeleteWorkingTreeInventory
+func DeleteWorkingTreeInventory(ctx *gin.Context) {
+	var request workingcopy.WorkingTreeInventoryRequest
+	if err := decodeExactCaptureBody(ctx, &request); err != nil {
+		ctx.Error(common_errors.NewBadRequestError(err))
+		return
+	}
+	service, err := workingCopyCaptureService()
+	if err != nil {
+		writeWorkingCopyCaptureError(ctx, err)
+		return
+	}
+	response, err := service.DeleteWorkingTreeInventory(ctx.Request.Context(), ctx.Param("sandboxId"), request)
+	if err != nil {
+		writeWorkingCopyCaptureError(ctx, err)
+		return
+	}
+	ctx.PureJSON(http.StatusOK, response)
 }

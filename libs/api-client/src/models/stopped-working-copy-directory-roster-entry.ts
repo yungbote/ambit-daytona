@@ -13,6 +13,7 @@
  */
 
 
+
 export interface StoppedWorkingCopyDirectoryRosterEntry {
     'zoneRelativePath': string;
     'name': string;
@@ -23,8 +24,9 @@ export interface StoppedWorkingCopyDirectoryRosterEntry {
 }
 
 export const StoppedWorkingCopyDirectoryRosterEntryKindEnum = {
-    RegularFile: 'regular_file',
-    Directory: 'directory'
+    REGULAR_FILE: 'regular_file',
+    DIRECTORY: 'directory',
+    UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 
 export type StoppedWorkingCopyDirectoryRosterEntryKindEnum = typeof StoppedWorkingCopyDirectoryRosterEntryKindEnum[keyof typeof StoppedWorkingCopyDirectoryRosterEntryKindEnum];

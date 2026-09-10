@@ -16,7 +16,13 @@
 
 export interface SandboxExecutionGeneration {
     'containerId': string;
-    'containerCreatedAt': Date;
-    'executionStartedAt': Date;
+    /**
+     * Exact provider timestamp; preserve its original fractional precision.
+     */
+    'containerCreatedAt': string;
+    /**
+     * Exact provider timestamp; preserve its original fractional precision.
+     */
+    'executionStartedAt': string;
     'restartCount': number;
 }
