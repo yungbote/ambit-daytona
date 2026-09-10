@@ -5,7 +5,7 @@
     "xlsxwriter"
   ],
   "installScripts": "forbidden",
-  "packRef": "ambit.runtime-pack/office-authoring@1",
+  "packRef": "ambit.runtime-pack/office-authoring@2",
   "platform": "linux/amd64-glibc-manylinux_2_28",
   "pythonVersion": "3.14.7",
   "resolvedDistributionCount": 7,

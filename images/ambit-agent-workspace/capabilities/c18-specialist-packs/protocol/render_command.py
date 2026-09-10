@@ -13,6 +13,19 @@ from public_preview import MEDIA_TYPE as PREVIEW_MEDIA_TYPE
 
 REQUEST_CONTRACT = "ambit.c18-specialist-render-command-request/v2"
 RESULT_CONTRACT = "ambit.c18-specialist-render-command-result/v2"
+PDF_REQUEST_CONTRACT = "ambit.c18-specialist-render-command-request/v3"
+PDF_RESULT_CONTRACT = "ambit.c18-specialist-render-command-result/v3"
+PDF_OPERATION = "convert_to_pdf"
+PDF_MEDIA_TYPE = "application/pdf"
+OFFICE_EXECUTABLE = "/opt/ambit/runtime-pack/office-authoring/bin/ambit-specialist-render"
+OFFICE_SOURCE_SUFFIXES = {
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+}
+OFFICE_MEDIA_TYPES = frozenset(OFFICE_SOURCE_SUFFIXES)
+MAXIMUM_OFFICE_SOURCE_BYTES = 64 * 1024 * 1024
+MAXIMUM_PDF_BYTES = 256 * 1024 * 1024
 EVIDENCE_CONTRACT = "ambit.c18-specialist-render-check-evidence/v1"
 EVIDENCE_MEDIA_TYPE = "application/vnd.ambit.c18-specialist-render-check-evidence+json"
 MAXIMUM_COMMAND_BYTES = 2 * 1024 * 1024
@@ -252,6 +265,8 @@ def _labeled_checks(value: object, name: str) -> list[dict[str, str]]:
 
 
 def pack_check_names(request: dict[str, Any]) -> list[str]:
+    if request.get("operation") == PDF_OPERATION:
+        return []
     return [item["check"] for item in request["packRequiredChecks"]]
 
 
@@ -380,6 +395,96 @@ def _parse_output(value: object) -> dict[str, Any]:
     }
 
 
+def create_pdf_request(value: object) -> dict[str, Any]:
+    """A bounded document read shares operation custody, without authoring policy."""
+    record = _exact_record(
+        value,
+        {
+            "deadlineAt", "jobRef", "jobRoot", "output", "requestPath",
+            "renderer", "runtime", "source",
+        },
+        "PDF conversion request body",
+    )
+    source = _parse_source(record["source"])
+    if (
+        source["mediaType"] not in OFFICE_MEDIA_TYPES
+        or source["byteLength"] > MAXIMUM_OFFICE_SOURCE_BYTES
+    ):
+        raise RenderCommandError("PDF conversion source type or size is unsupported")
+    renderer = _exact_record(
+        record["renderer"], {"executablePath", "rendererRef", "policyRef"},
+        "PDF conversion renderer",
+    )
+    if renderer["executablePath"] != OFFICE_EXECUTABLE:
+        raise RenderCommandError("PDF conversion executable is not owned by the Office pack")
+    renderer = {
+        "executablePath": OFFICE_EXECUTABLE,
+        "rendererRef": _operational_ref(renderer["rendererRef"], "PDF renderer ref"),
+        "policyRef": _operational_ref(renderer["policyRef"], "PDF policy ref"),
+    }
+    output = _exact_record(
+        record["output"],
+        {"jobOutputRoot", "resultPath", "pdfPath", "maximumPdfBytes"},
+        "PDF conversion output",
+    )
+    output = {
+        "jobOutputRoot": _safe_path(output["jobOutputRoot"], "outputs", "job output root"),
+        "resultPath": _safe_path(output["resultPath"], "outputs", "result path"),
+        "pdfPath": _safe_path(output["pdfPath"], "outputs", "PDF path"),
+        "maximumPdfBytes": _integer(
+            output["maximumPdfBytes"], "maximum PDF bytes", 1, MAXIMUM_PDF_BYTES
+        ),
+    }
+    if (
+        output["resultPath"] == output["pdfPath"]
+        or any(
+            not _is_beneath(output[key], output["jobOutputRoot"])
+            for key in ("resultPath", "pdfPath")
+        )
+    ):
+        raise RenderCommandError("PDF output paths overlap or escape their job root")
+    request_path = _safe_path(record["requestPath"], "inputs", "request path")
+    if source["path"] == request_path:
+        raise RenderCommandError("request and source paths overlap")
+    job_ref = _operational_ref(record["jobRef"], "request job ref")
+    job_root = _job_root(record["jobRoot"])
+    runtime = _parse_runtime(record["runtime"])
+    _require_job_root_authority(job_root, job_ref, runtime["profileRevision"]["ref"])
+    return _seal(
+        PDF_REQUEST_CONTRACT,
+        {
+            "operation": PDF_OPERATION,
+            "jobRef": job_ref,
+            "jobRoot": job_root,
+            "requestPath": request_path,
+            "source": source,
+            "renderer": renderer,
+            "runtime": runtime,
+            "output": output,
+            "deadlineAt": _iso_instant(record["deadlineAt"], "request deadline"),
+        },
+    )
+
+
+def _parse_pdf_request(value: object) -> dict[str, Any]:
+    record = _exact_record(
+        value,
+        {
+            "contract", "digest", "operation", "deadlineAt", "jobRef", "jobRoot",
+            "output", "requestPath", "renderer", "runtime", "source",
+        },
+        "PDF conversion request",
+    )
+    if record["operation"] != PDF_OPERATION:
+        raise RenderCommandError("PDF conversion operation is invalid")
+    parsed = create_pdf_request(
+        {key: child for key, child in record.items() if key not in {"contract", "digest", "operation"}}
+    )
+    if record != parsed:
+        raise RenderCommandError("PDF conversion request is noncanonical or forged")
+    return parsed
+
+
 def create_request(value: object) -> dict[str, Any]:
     record = _exact_record(
         value,
@@ -440,6 +545,8 @@ def create_request(value: object) -> dict[str, Any]:
 
 
 def parse_request(value: object) -> dict[str, Any]:
+    if isinstance(value, dict) and value.get("contract") == PDF_REQUEST_CONTRACT:
+        return _parse_pdf_request(value)
     record = _exact_record(
         value,
         {
@@ -524,8 +631,69 @@ def _parse_result_checks(value: object) -> list[dict[str, Any]]:
     return checks
 
 
+def _parse_execution(value: object) -> dict[str, Any]:
+    record = _exact_record(
+        value, {"completedAt", "executorRevision", "startedAt"}, "result execution"
+    )
+    started_at = _iso_instant(record["startedAt"], "execution start")
+    completed_at = _iso_instant(record["completedAt"], "execution completion")
+    if completed_at < started_at:
+        raise RenderCommandError("execution completion precedes start")
+    return {
+        "executorRevision": _pinned(record["executorRevision"], "executor revision"),
+        "startedAt": started_at,
+        "completedAt": completed_at,
+    }
+
+
+def _parse_failure(value: object) -> dict[str, str] | None:
+    if value is None:
+        return None
+    record = _exact_record(value, {"code", "message"}, "result failure")
+    return {
+        "code": _token(record["code"], "failure code"),
+        "message": _printable(record["message"], "failure message", 2_048),
+    }
+
+
+def _create_pdf_result(request: dict[str, Any], value: object) -> dict[str, Any]:
+    record = _exact_record(
+        value, {"execution", "failure", "outcome", "pdf"}, "PDF conversion result body"
+    )
+    outcome = record["outcome"]
+    if outcome not in {"cancelled", "failed", "succeeded"}:
+        raise RenderCommandError("PDF conversion outcome is invalid")
+    failure = _parse_failure(record["failure"])
+    pdf = None if record["pdf"] is None else _parse_evidence(record["pdf"])
+    if outcome == "succeeded":
+        if (
+            failure is not None
+            or pdf is None
+            or pdf["mediaType"] != PDF_MEDIA_TYPE
+            or pdf["path"] != request["output"]["pdfPath"]
+            or pdf["byteLength"] > request["output"]["maximumPdfBytes"]
+        ):
+            raise RenderCommandError("successful PDF result has no exact bounded PDF")
+    elif pdf is not None or failure is None:
+        raise RenderCommandError("non-success PDF result must not publish PDF bytes")
+    return _seal(
+        PDF_RESULT_CONTRACT,
+        {
+            "operation": PDF_OPERATION,
+            "request": {key: request[key] for key in ("jobRef", "jobRoot", "digest")},
+            "source": {key: request["source"][key] for key in ("mediaType", "digest", "byteLength")},
+            "outcome": outcome,
+            "execution": _parse_execution(record["execution"]),
+            "pdf": pdf,
+            "failure": failure,
+        },
+    )
+
+
 def create_result(request_value: object, value: object) -> dict[str, Any]:
     request = parse_request(request_value)
+    if request["operation"] == PDF_OPERATION:
+        return _create_pdf_result(request, value)
     record = _exact_record(
         value,
         {"checks", "execution", "failure", "outcome", "preview"},
@@ -534,18 +702,7 @@ def create_result(request_value: object, value: object) -> dict[str, Any]:
     outcome = record["outcome"]
     if outcome not in {"cancelled", "failed", "succeeded"}:
         raise RenderCommandError("result outcome is invalid")
-    execution_record = _exact_record(
-        record["execution"], {"completedAt", "executorRevision", "startedAt"}, "result execution"
-    )
-    started_at = _iso_instant(execution_record["startedAt"], "execution start")
-    completed_at = _iso_instant(execution_record["completedAt"], "execution completion")
-    if completed_at < started_at:
-        raise RenderCommandError("execution completion precedes start")
-    execution = {
-        "executorRevision": _pinned(execution_record["executorRevision"], "executor revision"),
-        "startedAt": started_at,
-        "completedAt": completed_at,
-    }
+    execution = _parse_execution(record["execution"])
     checks = _parse_result_checks(record["checks"])
     preview = None
     if record["preview"] is not None:
@@ -567,13 +724,7 @@ def create_result(request_value: object, value: object) -> dict[str, Any]:
                 preview_record["envelopeDigest"], "result preview envelope digest"
             ),
         }
-    failure = None
-    if record["failure"] is not None:
-        failure_record = _exact_record(record["failure"], {"code", "message"}, "result failure")
-        failure = {
-            "code": _token(failure_record["code"], "failure code"),
-            "message": _printable(failure_record["message"], "failure message", 2_048),
-        }
+    failure = _parse_failure(record["failure"])
     requested_checks = pack_check_names(request)
     if outcome == "succeeded":
         if (
@@ -617,6 +768,18 @@ def create_result(request_value: object, value: object) -> dict[str, Any]:
 
 def parse_result(request_value: object, value: object) -> dict[str, Any]:
     request = parse_request(request_value)
+    if request["operation"] == PDF_OPERATION:
+        record = _exact_record(
+            value,
+            {"contract", "digest", "operation", "request", "source", "execution", "outcome", "pdf", "failure"},
+            "PDF conversion result",
+        )
+        parsed = _create_pdf_result(
+            request, {key: record[key] for key in ("execution", "outcome", "pdf", "failure")}
+        )
+        if record != parsed:
+            raise RenderCommandError("PDF result identity is noncanonical or forged")
+        return parsed
     record = _exact_record(
         value,
         {"checks", "contract", "digest", "execution", "failure", "outcome", "preview", "request"},

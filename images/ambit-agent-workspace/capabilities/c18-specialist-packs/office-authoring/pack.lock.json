@@ -33,9 +33,9 @@
     "external-font-substitution-remains-visible"
   ],
   "packRef": "ambit.runtime-pack/office-authoring",
-  "packRevisionRef": "ambit.runtime-pack/office-authoring@1",
+  "packRevisionRef": "ambit.runtime-pack/office-authoring@2",
   "promotion": "forbidden-until-provider-policy-and-composition-binding-passes",
-  "revision": 1,
+  "revision": 2,
   "runtime": {
     "hostSockets": "absent",
     "networkDuringConformance": "none",

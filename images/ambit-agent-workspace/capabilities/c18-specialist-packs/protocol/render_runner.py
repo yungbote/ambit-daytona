@@ -48,6 +48,9 @@ from public_preview import (
 from render_command import (
     EVIDENCE_MEDIA_TYPE,
     MAXIMUM_COMMAND_BYTES,
+    OFFICE_SOURCE_SUFFIXES,
+    PDF_MEDIA_TYPE,
+    PDF_OPERATION,
     RenderCommandError,
     canonical_bytes,
     create_check_evidence,
@@ -757,7 +760,15 @@ def _atomic_publish_file(
     target: str,
     scratch: Path,
     roots: SemanticJobRoots,
+    *,
+    maximum_bytes: int = MAXIMUM_EVIDENCE_ARTIFACT_BYTES,
 ) -> dict[str, Any]:
+    if (
+        isinstance(maximum_bytes, bool)
+        or not isinstance(maximum_bytes, int)
+        or not 1 <= maximum_bytes <= MAXIMUM_EVIDENCE_ARTIFACT_BYTES
+    ):
+        raise RenderCommandError("render output byte bound is invalid")
     source = source.resolve(strict=True)
     try:
         source.relative_to(scratch.resolve(strict=True))
@@ -769,7 +780,7 @@ def _atomic_publish_file(
         or stat.S_ISLNK(metadata.st_mode)
         or metadata.st_nlink != 1
         or metadata.st_size < 1
-        or metadata.st_size > MAXIMUM_EVIDENCE_ARTIFACT_BYTES
+        or metadata.st_size > maximum_bytes
     ):
         raise RenderCommandError("evidence artifact is not a bounded regular file")
     _reprove_semantic_roots(roots)
@@ -784,7 +795,7 @@ def _atomic_publish_file(
         with source.open("rb") as input_file, os.fdopen(descriptor, "wb", closefd=True) as output:
             while chunk := input_file.read(READ_CHUNK_BYTES):
                 copied += len(chunk)
-                if copied > MAXIMUM_EVIDENCE_ARTIFACT_BYTES:
+                if copied > maximum_bytes:
                     raise RenderCommandError("evidence artifact exceeded its byte bound")
                 digest.update(chunk)
                 output.write(chunk)
@@ -828,18 +839,30 @@ def _atomic_publish_file(
     }
 
 
-def _load_executor(pack_root: Path, facet: str | None) -> dict[str, str]:
+def _load_executor(
+    pack_root: Path,
+    facet: str | None,
+    operation: str | None = None,
+) -> dict[str, str]:
     lock_path = pack_root / "executor.lock.json"
     lock = json.loads(lock_path.read_text(encoding="utf-8"))
-    facets = lock.get("facets") if isinstance(lock, dict) else None
+    if not isinstance(lock, dict):
+        raise RenderCommandError("executor lock is invalid")
+    legacy = lock.get("schema") == "ambit.c18-specialist-render-executor-lock/v2"
+    scope_key = "facets" if legacy else "operations"
+    scopes = lock.get(scope_key)
     if (
-        not isinstance(lock, dict)
-        or set(lock) != {"digest", "facets", "ref", "schema", "transport"}
-        or lock["schema"] != "ambit.c18-specialist-render-executor-lock/v2"
-        or not isinstance(facets, list)
-        or not facets
-        or not all(isinstance(value, str) for value in facets)
-        or (facet is not None and facet not in facets)
+        set(lock) != {"digest", scope_key, "ref", "schema", "transport"}
+        or lock["schema"] not in {
+            "ambit.c18-specialist-render-executor-lock/v2",
+            "ambit.c18-specialist-render-executor-lock/v3",
+        }
+        or not isinstance(scopes, list)
+        or not scopes
+        or not all(isinstance(value, str) for value in scopes)
+        or (legacy and operation not in {None, "render_validate"})
+        or (legacy and facet is not None and facet not in scopes)
+        or (not legacy and operation is not None and operation not in scopes)
         or not isinstance(lock["ref"], str)
         or not isinstance(lock["digest"], str)
         or lock["transport"] != _load_interface(pack_root)
@@ -847,10 +870,10 @@ def _load_executor(pack_root: Path, facet: str | None) -> dict[str, str]:
         raise RenderCommandError("executor lock does not own the request facet")
     body = {
         key: lock[key]
-        for key in ("facets", "ref", "schema", "transport")
+        for key in (scope_key, "ref", "schema", "transport")
     }
     if (
-        facets != sorted(set(facets))
+        scopes != sorted(set(scopes))
         or lock["digest"] != sha256_bytes(canonical_bytes(body))
     ):
         raise RenderCommandError("executor lock identity is forged")
@@ -883,15 +906,15 @@ def _process_identity() -> dict[str, object]:
     return {"pid": os.getpid(), "startTicks": fields[19]}
 
 
-def _load_adapter(pack_root: Path) -> ModuleType:
+def _load_adapter(pack_root: Path, operation: str = "render_validate") -> ModuleType:
     path = pack_root / "runtime/adapter.py"
     specification = importlib.util.spec_from_file_location("ambit_specialist_adapter", path)
     if specification is None or specification.loader is None:
         raise RenderCommandError("specialist adapter cannot be loaded")
     module = importlib.util.module_from_spec(specification)
     specification.loader.exec_module(module)
-    if not callable(getattr(module, "render_validate", None)):
-        raise RenderCommandError("specialist adapter has no render_validate entrypoint")
+    if not callable(getattr(module, operation, None)):
+        raise RenderCommandError(f"specialist adapter has no {operation} entrypoint")
     return module
 
 
@@ -1067,7 +1090,13 @@ def _settle_result(
     checks: list[dict[str, Any]],
     preview: dict[str, Any] | None,
     failure: dict[str, str] | None,
+    pdf: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    output = (
+        {"pdf": pdf}
+        if request["operation"] == PDF_OPERATION
+        else {"preview": preview, "checks": checks}
+    )
     result = create_result(
         request,
         {
@@ -1077,8 +1106,7 @@ def _settle_result(
                 "startedAt": started_at,
                 "completedAt": instant_now(),
             },
-            "preview": preview,
-            "checks": checks,
+            **output,
             "failure": failure,
         },
     )
@@ -1225,7 +1253,14 @@ def _framed_output_roster(
             raise RenderCommandError("framed result executor identity differs")
         seen = {result_file.path}
         deferred_artifacts: dict[str, tuple[str, int, str]] = {}
-        preview_descriptor = result["preview"]
+        pdf_descriptor = result.get("pdf")
+        if pdf_descriptor is not None:
+            deferred_artifacts[pdf_descriptor["path"]] = (
+                pdf_descriptor["mediaType"],
+                pdf_descriptor["byteLength"],
+                pdf_descriptor["digest"],
+            )
+        preview_descriptor = result.get("preview")
         if preview_descriptor is not None:
             path = preview_descriptor["path"]
             if path in seen:
@@ -1252,7 +1287,7 @@ def _framed_output_roster(
                 raise RenderCommandError("framed preview envelope identity differs")
             files.append(preview_file)
             seen.add(path)
-        for check in result["checks"]:
+        for check in result.get("checks", []):
             evidence_descriptor = check["evidence"]
             if evidence_descriptor is None:
                 continue
@@ -1386,6 +1421,37 @@ def _stream_framed_output_files(
     _reprove_semantic_roots(roots)
 
 
+def _render_pdf_conversion(
+    adapter: ModuleType,
+    request: dict[str, Any],
+    source: Path,
+    scratch: Path,
+    deadline: float,
+    executor: dict[str, str],
+    started_at: str,
+    roots: SemanticJobRoots,
+) -> int:
+    converted = adapter.convert_to_pdf(
+        request=request, source_path=source, scratch=scratch, deadline=deadline,
+    )
+    if not isinstance(converted, dict) or set(converted) != {"pdfPath"}:
+        raise RenderCommandError("PDF adapter result shape is invalid")
+    identity = _atomic_publish_file(
+        Path(converted["pdfPath"]), request["output"]["pdfPath"], scratch, roots,
+        maximum_bytes=request["output"]["maximumPdfBytes"],
+    )
+    _check_deadline(deadline)
+    try:
+        _settle_result(
+            request, request["output"]["resultPath"], executor, started_at, roots,
+            outcome="succeeded", checks=[], preview=None, failure=None,
+            pdf={"path": request["output"]["pdfPath"], "mediaType": PDF_MEDIA_TYPE, **identity},
+        )
+    except Exception as error:
+        raise ResultPublicationFailure from error
+    return 0
+
+
 def _render(
     pack_root: Path,
     request: dict[str, Any],
@@ -1395,15 +1461,25 @@ def _render(
     roots: SemanticJobRoots,
 ) -> int:
     deadline = _deadline_monotonic(request["deadlineAt"])
-    adapter = _load_adapter(pack_root)
+    adapter = _load_adapter(pack_root, request["operation"])
 
     with tempfile.TemporaryDirectory(
         prefix="ambit-specialist-render-",
         dir=TASK_SCRATCH_ROOT,
     ) as temporary:
-        local_source = Path(temporary) / ("source" + Path(request["source"]["path"]).suffix)
+        source_suffix = (
+            OFFICE_SOURCE_SUFFIXES[request["source"]["mediaType"]]
+            if request["operation"] == PDF_OPERATION
+            else Path(request["source"]["path"]).suffix
+        )
+        local_source = Path(temporary) / ("source" + source_suffix)
         _copy_exact_source(request, local_source, deadline, roots)
         _check_deadline(deadline)
+        if request["operation"] == PDF_OPERATION:
+            return _render_pdf_conversion(
+                adapter, request, local_source, Path(temporary), deadline,
+                executor, started_at, roots,
+            )
         rendered = adapter.render_validate(
             request=request,
             source_path=local_source,
@@ -1654,7 +1730,7 @@ def _file_main(pack_root: Path, request_argument: str, result_argument: str) -> 
         return 64
 
     try:
-        executor = _load_executor(pack_root, request["facet"])
+        executor = _load_executor(pack_root, request.get("facet"), request["operation"])
     except (OSError, json.JSONDecodeError, RenderCommandError) as error:
         _close_semantic_job_roots(roots)
         print(
@@ -1783,7 +1859,7 @@ def _framed_main(
                     raise RenderCommandError(
                         "the framed interface is reserved for product render authority"
                     )
-                executor = _load_executor(pack_root, request["facet"])
+                executor = _load_executor(pack_root, request.get("facet"), request["operation"])
                 _admit_streamed_source(
                     request,
                     roots,

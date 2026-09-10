@@ -575,6 +575,7 @@ type helperCommandRenderer struct {
 }
 
 type helperCommand struct {
+	pdfConversion      *helperPDFCommand     `json:"-"`
 	Contract           string                `json:"contract"`
 	DeadlineAt         string                `json:"deadlineAt"`
 	Digest             string                `json:"digest"`
@@ -616,6 +617,15 @@ func parseHelperCommand(input Input, authority Request, policy Policy) (helperCo
 	}
 	if sha256Digest(value) != authority.RequestDigest {
 		return helperCommand{}, errors.New("canonical helper command differs from transport digest")
+	}
+	var version struct {
+		Contract string `json:"contract"`
+	}
+	if err := json.Unmarshal(value, &version); err != nil {
+		return helperCommand{}, errors.New("canonical helper command is invalid")
+	}
+	if version.Contract == officePDFRequestContract {
+		return parseOfficePDFCommand(value, authority, policy)
 	}
 	var command helperCommand
 	if err := generationstop.DecodeCanonicalJSON(value, &command); err != nil {
@@ -774,6 +784,9 @@ func (collector *helperCollector) validateSemantics(start helperResponseStart) e
 	resultBytes, err := readPayloadBounded(collector.files[0], MaximumRequestBytes)
 	if err != nil {
 		return fmt.Errorf("helper semantic result read failed: %w", err)
+	}
+	if collector.command.pdfConversion != nil {
+		return collector.validateOfficePDFResult(start, resultBytes)
 	}
 	var result helperSemanticResult
 	if err := generationstop.DecodeCanonicalJSON(resultBytes, &result); err != nil {

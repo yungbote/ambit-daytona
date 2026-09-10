@@ -4,6 +4,7 @@
 package specialistrender
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
@@ -14,6 +15,29 @@ import (
 
 	"github.com/daytonaio/runner/pkg/generationstop"
 )
+
+func TestFrameBoundsDoNotDependOnReaderBufferSize(t *testing.T) {
+	for _, capacity := range []int{16, 4096, 65536, MaximumFrameBytes + 1} {
+		for _, size := range []int{1, 4097, 65537, MaximumFrameBytes - 1} {
+			body := bytes.Repeat([]byte{'x'}, size)
+			wire := append(append([]byte(nil), body...), '\n')
+			reader := bufio.NewReaderSize(bytes.NewReader(wire), capacity)
+			actual, err := readFrameLine(reader)
+			if err != nil || !bytes.Equal(actual, body) {
+				t.Fatalf("valid frame size %d failed with buffer %d: %v", size, capacity, err)
+			}
+		}
+		for _, wire := range [][]byte{
+			append(bytes.Repeat([]byte{'x'}, MaximumFrameBytes), '\n'),
+			bytes.Repeat([]byte{'x'}, MaximumFrameBytes+1),
+			[]byte("truncated"), []byte("\n"), []byte("invalid\r\n"),
+		} {
+			if _, err := readFrameLine(bufio.NewReaderSize(bytes.NewReader(wire), capacity)); err == nil {
+				t.Fatalf("invalid frame was admitted with buffer %d", capacity)
+			}
+		}
+	}
+}
 
 func TestDecodeRequestStreamAcceptsExactCanonicalFrames(t *testing.T) {
 	policy := testPolicy(t)

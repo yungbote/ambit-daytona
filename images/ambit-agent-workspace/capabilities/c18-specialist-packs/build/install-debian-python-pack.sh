@@ -49,7 +49,7 @@ if [[ ${pack_id} == office-authoring ]]; then
   base_debs=()
   for file in "${input_root}"/debian/*.deb; do
     case "$(basename "${file}")" in
-      libreoffice-calc-nogui_*|libreoffice-draw-nogui_*|libreoffice-impress-nogui_*) ;;
+      libreoffice-calc-nogui_*|libreoffice-draw-nogui_*|libreoffice-impress-nogui_*|libreoffice-writer-nogui_*) ;;
       *) base_debs+=("${file}") ;;
     esac
   done
@@ -57,7 +57,8 @@ if [[ ${pack_id} == office-authoring ]]; then
   dpkg -i \
     "${input_root}"/debian/libreoffice-calc-nogui_*.deb \
     "${input_root}"/debian/libreoffice-draw-nogui_*.deb \
-    "${input_root}"/debian/libreoffice-impress-nogui_*.deb
+    "${input_root}"/debian/libreoffice-impress-nogui_*.deb \
+    "${input_root}"/debian/libreoffice-writer-nogui_*.deb
 else
   dpkg -i "${input_root}"/debian/*.deb
 fi

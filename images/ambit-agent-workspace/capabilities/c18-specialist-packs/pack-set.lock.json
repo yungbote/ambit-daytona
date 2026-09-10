@@ -30,7 +30,7 @@
   "packs": [
     {
       "directory": "office-authoring",
-      "packRevisionRef": "ambit.runtime-pack/office-authoring@1",
+      "packRevisionRef": "ambit.runtime-pack/office-authoring@2",
       "provides": [
         "presentations_design",
         "python",

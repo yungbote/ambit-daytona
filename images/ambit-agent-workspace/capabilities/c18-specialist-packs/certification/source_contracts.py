@@ -15,7 +15,7 @@ from wheel_lock import requirements_from_lock
 
 PACKS = {
     "office-authoring": {
-        "ref": "ambit.runtime-pack/office-authoring@1",
+        "ref": "ambit.runtime-pack/office-authoring@2",
         "provides": ["presentations_design", "python", "spreadsheets"],
         "requires": ["core", "documents_publishing"],
         "directPython": ["openpyxl", "python-pptx", "xlsxwriter"],
@@ -544,22 +544,24 @@ def _framed_interface_pin(root: Path) -> dict[str, str]:
 
 def _verify_executor(root: Path, pack_id: str) -> None:
     lock = _load_json(root / pack_id / "executor.lock.json")
+    operations = pack_id == "office-authoring"
+    scope_key = "operations" if operations else "facets"
     _require(
         isinstance(lock, dict)
-        and set(lock) == {"digest", "facets", "ref", "schema", "transport"},
+        and set(lock) == {"digest", scope_key, "ref", "schema", "transport"},
         f"{pack_id} executor lock fields are invalid",
     )
     body = {
         key: lock[key]
-        for key in ("facets", "ref", "schema", "transport")
+        for key in (scope_key, "ref", "schema", "transport")
     }
     expected_digest = "sha256:" + hashlib.sha256(
         json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8")
     ).hexdigest()
     _require(
-        lock["schema"] == "ambit.c18-specialist-render-executor-lock/v2"
-        and lock["facets"] == EXECUTOR_FACETS[pack_id]
-        and lock["ref"] == f"ambit://specialist-render-executors/{pack_id}@1"
+        lock["schema"] == f"ambit.c18-specialist-render-executor-lock/v{3 if operations else 2}"
+        and lock[scope_key] == (["convert_to_pdf", "render_validate"] if operations else EXECUTOR_FACETS[pack_id])
+        and lock["ref"] == PACKS[pack_id]["ref"].replace("ambit.runtime-pack/", "ambit://specialist-render-executors/")
         and lock["transport"] == _framed_interface_pin(root)
         and lock["digest"] == expected_digest,
         f"{pack_id} executor lock identity is invalid",
@@ -651,7 +653,7 @@ def verify_source(root: Path, *, verify_hashes: bool = True) -> dict[str, object
         pack = _load_json(root / pack_id / "pack.lock.json")
         _require(pack.get("schema") == "ambit.c18-specialist-pack/v1", f"{pack_id} schema is invalid")
         _require(pack.get("packRevisionRef") == expected["ref"], f"{pack_id} revision ref mismatch")
-        _require(pack.get("revision") == 1 and pack.get("installMode") == "image_layer", f"{pack_id} revision/install mode is invalid")
+        _require(pack.get("revision") == int(expected["ref"].rsplit("@", 1)[1]) and pack.get("installMode") == "image_layer", f"{pack_id} revision/install mode is invalid")
         _require(pack.get("state") == "candidate", f"{pack_id} source state is invalid")
         _require(
             pack.get("promotion")

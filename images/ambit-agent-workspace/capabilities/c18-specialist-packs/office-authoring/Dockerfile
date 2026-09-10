@@ -13,12 +13,12 @@ RUN --network=none \
     && /source/build/verify-input-context.sh office-authoring /source /inputs \
     && /source/build/install-debian-python-pack.sh office-authoring /source /inputs
 LABEL org.opencontainers.image.title="ambit-c18-office-authoring" \
-      org.opencontainers.image.description="Ambit C18 Linux LibreOffice spreadsheet and presentation specialist pack" \
-      org.opencontainers.image.version="1.0.0-candidate" \
+      org.opencontainers.image.description="Ambit C18 private Office conversion, spreadsheet and presentation specialist pack" \
+      org.opencontainers.image.version="2.0.0-candidate" \
       org.opencontainers.image.revision="${BUILD_SOURCE_REVISION}" \
       io.ambit.source-tree="${BUILD_SOURCE_TREE}" \
       io.ambit.source-set-sha256="${BUILD_SOURCE_SET_SHA256}" \
-      io.ambit.runtime-pack="ambit.runtime-pack/office-authoring@1" \
+      io.ambit.runtime-pack="ambit.runtime-pack/office-authoring@2" \
       io.ambit.native-microsoft-office-fidelity="unsupported" \
       io.ambit.activation="provider-policy-and-composition-bound-only"
 ENV PATH=/opt/ambit/runtime-pack/office-authoring/python/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
