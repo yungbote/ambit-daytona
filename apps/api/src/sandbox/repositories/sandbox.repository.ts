@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { DataSource, EntityManager, FindOptionsWhere } from 'typeorm'
+import { DataSource, EntityManager, FindOptionsWhere, IsNull } from 'typeorm'
 import { Sandbox } from '../entities/sandbox.entity'
 import { SandboxLastActivity } from '../entities/sandbox-last-activity.entity'
 import { Injectable, Logger, NotFoundException } from '@nestjs/common'
@@ -21,6 +21,9 @@ import { SandboxLookupCacheInvalidationService } from '../services/sandbox-looku
 import { SandboxFork } from '../entities/sandbox-fork.entity'
 import { SandboxSecret } from '../entities/sandbox-secret.entity'
 import { SandboxState } from '../enums/sandbox-state.enum'
+import { Runner } from '../entities/runner.entity'
+import { RunnerState } from '../enums/runner-state.enum'
+import { isSandboxQuiescent } from '../utils/sandbox-quiescence'
 
 @Injectable()
 export class SandboxRepository extends BaseRepository<Sandbox> {
@@ -47,6 +50,7 @@ export class SandboxRepository extends BaseRepository<Sandbox> {
     sandbox.enforceInvariants()
 
     await this.dataSource.transaction(async (entityManager) => {
+      await this.assertRunnerAdmission(entityManager, sandbox)
       await entityManager.insert(Sandbox, sandbox)
       await this.upsertLastActivity(entityManager, sandbox.id, sandbox.createdAt)
       sandbox.lastActivityAt = { sandboxId: sandbox.id, lastActivityAt: sandbox.createdAt }
@@ -100,6 +104,12 @@ export class SandboxRepository extends BaseRepository<Sandbox> {
     const { updateData, entity } = params
 
     if (raw) {
+      // Raw housekeeping may skip entity invariants, but it must not create a
+      // second route for assigning, waking, or transferring a sandbox.
+      if (['runnerId', 'state', 'desiredState', 'pending', 'organizationId'].some((key) => key in updateData)) {
+        await this.updateWhere(id, { updateData, whereCondition: {} })
+        return
+      }
       await this.repository.update(id, updateData)
       return
     }
@@ -116,6 +126,25 @@ export class SandboxRepository extends BaseRepository<Sandbox> {
     const invariantChanges = sandbox.enforceInvariants()
 
     await this.dataSource.transaction(async (entityManager) => {
+      // Match updateWhere's lock order: sandbox first, runner second. Revalidate
+      // prefetched state before a runner selected earlier can admit new work.
+      const current = await entityManager.findOne(Sandbox, {
+        where: {
+          id: previousSandbox.id,
+          state: previousSandbox.state,
+          desiredState: previousSandbox.desiredState,
+          pending: previousSandbox.pending,
+          organizationId: previousSandbox.organizationId,
+          runnerId: previousSandbox.runnerId ?? IsNull(),
+        },
+        lock: { mode: 'pessimistic_write' },
+        relations: [],
+        loadEagerRelations: false,
+      })
+      if (!current) {
+        throw new SandboxConflictError()
+      }
+      await this.assertRunnerAdmission(entityManager, sandbox, current)
       const result = await entityManager.update(
         Sandbox,
         {
@@ -190,6 +219,7 @@ export class SandboxRepository extends BaseRepository<Sandbox> {
       sandbox.assertValid()
       const invariantChanges = sandbox.enforceInvariants()
 
+      await this.assertRunnerAdmission(entityManager, sandbox, previousSandbox)
       await entityManager.update(Sandbox, id, { ...updateData, ...invariantChanges })
       sandbox.updatedAt = new Date()
 
@@ -207,6 +237,31 @@ export class SandboxRepository extends BaseRepository<Sandbox> {
 
       return sandbox
     })
+  }
+
+  private async assertRunnerAdmission(
+    manager: EntityManager,
+    sandbox: Sandbox,
+    previous?: Pick<Sandbox, 'runnerId' | 'organizationId' | 'state' | 'desiredState' | 'pending'>,
+  ): Promise<void> {
+    if (!sandbox.runnerId) return
+    const requiresAdmission =
+      !previous ||
+      previous.runnerId !== sandbox.runnerId ||
+      previous.organizationId !== sandbox.organizationId ||
+      (isSandboxQuiescent(previous) && !isSandboxQuiescent(sandbox))
+    if (!requiresAdmission) return
+
+    // Serialize admission with RunnerService's exclusive scheduling lock.
+    // In-flight work may finish, stop, archive, or detach under a fence. Once
+    // every assigned sandbox is quiescent, new work cannot cross the fence.
+    const runner = await manager.findOne(Runner, {
+      where: { id: sandbox.runnerId },
+      lock: { mode: 'pessimistic_read' },
+    })
+    if (!runner || runner.unschedulable || runner.draining || runner.state !== RunnerState.READY) {
+      throw new SandboxConflictError('Runner is not accepting new sandbox work; retry when it is schedulable')
+    }
   }
 
   /**

@@ -4,6 +4,7 @@
  */
 
 import { BadRequestException, ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common'
+import { randomUUID } from 'node:crypto'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import {
@@ -52,6 +53,8 @@ import { normalizeGpuType } from '../utils/gpu-type-normalizer.util'
 import { SandboxRepository } from '../repositories/sandbox.repository'
 import { SnapshotRepository } from '../repositories/snapshot.repository'
 import { RunnerServiceInfo } from '../common/runner-service-info'
+import { RunnerSchedulingFenceDto } from '../dto/runner-scheduling-fence.dto'
+import { QUIESCENT_SANDBOX_STATES } from '../utils/sandbox-quiescence'
 
 const SYSBOX_SERVICE_NAMES = ['sysbox-mgr', 'sysbox-fs']
 
@@ -856,17 +859,67 @@ export class RunnerService {
   }
 
   async updateSchedulingStatus(id: string, unschedulable: boolean): Promise<Runner> {
-    const runner = await this.findOneOrFail(id)
-    runner.unschedulable = unschedulable
-    await this.runnerRepository.save(runner)
-    return runner
+    if (typeof unschedulable !== 'boolean') {
+      throw new BadRequestException('unschedulable must be a boolean')
+    }
+    return this.changeRunnerScheduling(id, (runner) => {
+      runner.unschedulable = unschedulable
+      // An explicit operator write supersedes automation even when the Boolean
+      // is already true. A stale controller token must never undo maintenance.
+      runner.schedulingFenceOwner = null
+      runner.schedulingFenceToken = null
+    })
+  }
+
+  async acquireSchedulingFence(id: string, owner: string): Promise<RunnerSchedulingFenceDto> {
+    if (typeof owner !== 'string' || owner.trim().length === 0 || owner.length > 128) {
+      throw new BadRequestException('Fence owner must be a nonempty string of at most 128 characters')
+    }
+    const token = randomUUID()
+    await this.changeRunnerScheduling(id, (runner) => {
+      if (runner.unschedulable || runner.draining) {
+        throw new ConflictException('Runner scheduling is already fenced or draining')
+      }
+      runner.unschedulable = true
+      runner.schedulingFenceOwner = owner
+      runner.schedulingFenceToken = token
+    })
+    return { owner, token }
+  }
+
+  async releaseSchedulingFence(id: string, token: string): Promise<void> {
+    await this.changeRunnerScheduling(id, (runner) => {
+      if (
+        !runner.unschedulable ||
+        !runner.schedulingFenceToken ||
+        runner.schedulingFenceToken !== token ||
+        runner.draining
+      ) {
+        throw new ConflictException('Scheduling fence no longer belongs to this token or the runner is draining')
+      }
+      runner.unschedulable = false
+      runner.schedulingFenceOwner = null
+      runner.schedulingFenceToken = null
+    })
   }
 
   async updateDrainingStatus(id: string, draining: boolean): Promise<Runner> {
-    const runner = await this.findOneOrFail(id)
-    runner.draining = draining
-    await this.runnerRepository.save(runner)
-    return runner
+    return this.changeRunnerScheduling(id, (runner) => {
+      runner.draining = draining
+    })
+  }
+
+  private async changeRunnerScheduling(id: string, change: (runner: Runner) => void): Promise<Runner> {
+    return this.dataSource.transaction(async (manager) => {
+      // Never use a cached runner here. All scheduling writers share the row
+      // lock, including repeated admin writes and draining changes.
+      const runner = await manager.findOne(Runner, { where: { id }, lock: { mode: 'pessimistic_write' } })
+      if (!runner) {
+        throw new NotFoundException(`Runner with ID ${id} not found`)
+      }
+      change(runner)
+      return manager.save(runner)
+    })
   }
 
   async getRandomAvailableRunner(params: GetRunnerParams): Promise<Runner> {
@@ -1040,16 +1093,26 @@ export class RunnerService {
    */
   async getRunnerCapacity(): Promise<RunnerCapacity[]> {
     const runners = await this.runnerRepository.find({ order: { domain: 'ASC' } })
-    const rows: { runnerId: string; cpu: string; mem: string; count: string }[] = await this.sandboxRepository
-      .createQueryBuilder('sandbox')
-      .select('sandbox.runnerId', 'runnerId')
-      .addSelect('COALESCE(SUM(sandbox.cpu), 0)', 'cpu')
-      .addSelect('COALESCE(SUM(sandbox.mem), 0)', 'mem')
-      .addSelect('COUNT(*)', 'count')
-      .where('sandbox.runnerId IS NOT NULL')
-      .andWhere('sandbox.state IN (:...states)', { states: RESERVING_SANDBOX_STATES })
-      .groupBy('sandbox.runnerId')
-      .getRawMany()
+    const rows: { runnerId: string; cpu: string; mem: string; count: string; busy: string }[] =
+      await this.sandboxRepository
+        .createQueryBuilder('sandbox')
+        .select('sandbox.runnerId', 'runnerId')
+        .addSelect('COALESCE(SUM(sandbox.cpu) FILTER (WHERE sandbox.state IN (:...states)), 0)', 'cpu')
+        .addSelect('COALESCE(SUM(sandbox.mem) FILTER (WHERE sandbox.state IN (:...states)), 0)', 'mem')
+        .addSelect('COUNT(*) FILTER (WHERE sandbox.state IN (:...states))', 'count')
+        .addSelect(
+          `COUNT(*) FILTER (WHERE sandbox.pending IS DISTINCT FROM false
+          OR sandbox.state::text IS DISTINCT FROM sandbox."desiredState"::text
+          OR sandbox.state NOT IN (:...quiescentStates))`,
+          'busy',
+        )
+        .where('sandbox.runnerId IS NOT NULL')
+        .setParameters({
+          states: RESERVING_SANDBOX_STATES,
+          quiescentStates: QUIESCENT_SANDBOX_STATES,
+        })
+        .groupBy('sandbox.runnerId')
+        .getRawMany()
     const reserved = new Map(rows.map((row) => [row.runnerId, row]))
     return runners.map((runner) => {
       const row = reserved.get(runner.id)
@@ -1060,6 +1123,9 @@ export class RunnerService {
         sandboxClass: runner.sandboxClass,
         state: runner.state,
         unschedulable: runner.unschedulable === true,
+        schedulingFence: runner.schedulingFenceToken
+          ? { owner: runner.schedulingFenceOwner, token: runner.schedulingFenceToken }
+          : null,
         draining: runner.draining === true,
         availabilityScore: runner.availabilityScore,
         cpu: runner.cpu,
@@ -1068,6 +1134,9 @@ export class RunnerService {
         reservedCpu: Number(row?.cpu ?? 0),
         reservedMemoryGiB: Number(row?.mem ?? 0),
         activeSandboxes: Number(row?.count ?? 0),
+        // Reservation accounting alone omits transitions such as destroying or
+        // resuming. Only settled terminal/stopped rows establish quiescence.
+        busySandboxes: Number(row?.busy ?? 0),
       }
     })
   }
@@ -1413,6 +1482,7 @@ export type RunnerCapacity = {
   sandboxClass: SandboxClass
   state: RunnerState
   unschedulable: boolean
+  schedulingFence: RunnerSchedulingFenceDto | null
   draining: boolean
   availabilityScore: number
   cpu: number
@@ -1421,6 +1491,7 @@ export type RunnerCapacity = {
   reservedCpu: number
   reservedMemoryGiB: number
   activeSandboxes: number
+  busySandboxes: number
 }
 
 export class GetRunnerParams {

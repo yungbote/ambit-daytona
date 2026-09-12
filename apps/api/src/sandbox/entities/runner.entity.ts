@@ -163,6 +163,12 @@ export class Runner {
   })
   unschedulable: boolean
 
+  @Column({ type: 'character varying', length: 128, nullable: true })
+  schedulingFenceOwner: string | null
+
+  @Column({ type: 'uuid', nullable: true })
+  schedulingFenceToken: string | null
+
   @Column({
     default: false,
   })

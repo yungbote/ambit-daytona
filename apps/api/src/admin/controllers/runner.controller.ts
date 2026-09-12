@@ -32,6 +32,7 @@ import { RunnerService, RunnerCapacity } from '../../sandbox/services/runner.ser
 import { SystemRole } from '../../user/enums/system-role.enum'
 import { AuthStrategy } from '../../auth/decorators/auth-strategy.decorator'
 import { AuthStrategyType } from '../../auth/enums/auth-strategy-type.enum'
+import { CreateRunnerSchedulingFenceDto, RunnerSchedulingFenceDto } from '../../sandbox/dto/runner-scheduling-fence.dto'
 
 @Controller('admin/runners')
 @ApiTags('admin')
@@ -175,6 +176,50 @@ export class AdminRunnerController {
     @Body('unschedulable') unschedulable: boolean,
   ): Promise<void> {
     await this.runnerService.updateSchedulingStatus(id, unschedulable)
+  }
+
+  @Post(':id/scheduling/fences')
+  @ApiOperation({
+    summary: 'Acquire a controller-owned scheduling fence',
+    operationId: 'adminAcquireRunnerSchedulingFence',
+    description: 'Fences a schedulable runner. Explicit scheduling writes supersede the returned token.',
+  })
+  @ApiResponse({ status: 201, type: RunnerSchedulingFenceDto })
+  @ApiResponse({ status: 409, description: 'Runner is already fenced or draining' })
+  @Audit({
+    action: AuditAction.UPDATE_SCHEDULING,
+    targetType: AuditTarget.RUNNER,
+    targetIdFromRequest: (req) => req.params.id,
+    requestMetadata: {
+      body: (req: TypedRequest<CreateRunnerSchedulingFenceDto>) => ({ owner: req.body?.owner }),
+    },
+  })
+  async acquireSchedulingFence(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: CreateRunnerSchedulingFenceDto,
+  ): Promise<RunnerSchedulingFenceDto> {
+    return this.runnerService.acquireSchedulingFence(id, body.owner)
+  }
+
+  @Delete(':id/scheduling/fences/:token')
+  @HttpCode(204)
+  @ApiOperation({
+    summary: 'Release a controller-owned scheduling fence',
+    operationId: 'adminReleaseRunnerSchedulingFence',
+    description: 'Reopens the runner only if this token still owns its scheduling fence.',
+  })
+  @ApiResponse({ status: 204 })
+  @ApiResponse({ status: 409, description: 'Fence ownership changed or runner is draining' })
+  @Audit({
+    action: AuditAction.UPDATE_SCHEDULING,
+    targetType: AuditTarget.RUNNER,
+    targetIdFromRequest: (req) => req.params.id,
+  })
+  async releaseSchedulingFence(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('token', ParseUUIDPipe) token: string,
+  ): Promise<void> {
+    await this.runnerService.releaseSchedulingFence(id, token)
   }
 
   @Patch(':id/capacity')
