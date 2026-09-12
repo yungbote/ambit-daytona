@@ -8,6 +8,7 @@ crate graph; source and Chrome archives are independently pinned by SHA-256.
 import hashlib
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -26,6 +27,64 @@ def verify_input(artifact):
     if actual != artifact["sha256"]:
         raise ValueError(f"Browser input checksum mismatch: {name}")
     return source
+
+
+def install_debian_packages(lock, scratch):
+    """Resolve the locked packages only against authenticated, frozen indexes.
+
+    APT still owns signature, index and package verification. Temporary APT
+    paths leave the inherited workspace's runtime package sources unchanged.
+    """
+    snapshots = lock["debianSnapshots"]
+    packages = lock["debianPackages"]
+    if not snapshots or not packages:
+        raise ValueError("Browser Debian inputs require snapshots and package versions")
+    entries = []
+    for source in snapshots:
+        if not re.fullmatch(
+            r"https://snapshot\.debian\.org/archive/debian(?:-security)?/[0-9]{8}T[0-9]{6}Z/",
+            source["snapshot"],
+        ) or not re.fullmatch(r"[a-z0-9][a-z0-9-]*", source["suite"]):
+            raise ValueError("Browser Debian sources must name exact HTTPS snapshots")
+        if not re.fullmatch(r"[0-9a-f]{64}", source["inReleaseSha256"]):
+            raise ValueError("Browser Debian snapshot requires an InRelease SHA-256")
+        entries.append(
+            f"Types: deb\nURIs: {source['snapshot']}\nSuites: {source['suite']}\n"
+            "Components: main\nSigned-By: /usr/share/keyrings/debian-archive-keyring.gpg\n"
+            # Expiry is intentionally inapplicable to frozen historical bytes;
+            # signature verification and the independent byte pin still apply.
+            "Check-Valid-Until: no\n"
+        )
+    scratch.chmod(0o755)  # APT's unprivileged downloader must traverse this path.
+    sources = scratch / "browser.sources"
+    sources.write_text("\n".join(entries))
+    sources.chmod(0o644)
+    sourceparts, lists, cache = (scratch / name for name in ("sourceparts", "lists", "cache"))
+    for directory in (sourceparts, lists, cache / "archives"):
+        directory.mkdir(parents=True)
+    apt = [
+        "apt-get",
+        "-o", f"Dir::Etc::sourcelist={sources}",
+        "-o", f"Dir::Etc::sourceparts={sourceparts}",
+        "-o", f"Dir::State::lists={lists}",
+        "-o", f"Dir::Cache={cache}",
+        "-o", "APT::Update::Error-Mode=any",
+    ]
+    subprocess.run([*apt, "update"], check=True)
+    observed = []
+    for path in lists.glob("*_InRelease"):
+        with path.open("rb") as release:
+            observed.append(hashlib.file_digest(release, "sha256").hexdigest())
+    if sorted(observed) != sorted(source["inReleaseSha256"] for source in snapshots):
+        raise ValueError("Browser Debian InRelease bytes differ from the locked snapshots")
+    subprocess.run([
+        *apt, "install", "-y", "--no-install-recommends", "--no-remove",
+        *[f"{name}={version}" for name, version in packages.items()],
+    ], check=True)
+    for name, expected in packages.items():
+        installed = subprocess.check_output(["dpkg-query", "-W", "-f=${Version}", name], text=True)
+        if installed != expected:
+            raise ValueError(f"Browser package version mismatch: {name}")
 
 
 def main():
@@ -84,13 +143,7 @@ def main():
             if observed != f"agent-browser {source['version']}":
                 raise ValueError(f"Unexpected driver version: {observed}")
         elif mode == "chrome":
-            packages = lock["debianPackages"]
-            subprocess.run(["apt-get", "update"], check=True)
-            subprocess.run(["apt-get", "install", "-y", "--no-install-recommends", *[f"{name}={version}" for name, version in packages.items()]], check=True)
-            for name, expected in packages.items():
-                observed = subprocess.check_output(["dpkg-query", "-W", "-f=${Version}", name], text=True)
-                if observed != expected:
-                    raise ValueError(f"Browser package version mismatch: {name}")
+            install_debian_packages(lock, scratch)
             archive = verify_input(lock["chrome"])
             with zipfile.ZipFile(archive) as bundle:
                 bundle.extractall(scratch)
@@ -104,7 +157,6 @@ def main():
                 raise ValueError(f"Unexpected Chrome version: {observed}")
             installed = subprocess.check_output(["dpkg-query", "-W", "-f=${Package}\t${Version}\n"], text=True)
             (root / "installed-dpkg.lock").write_text("\n".join(sorted(installed.splitlines())) + "\n")
-            shutil.rmtree("/var/lib/apt/lists")
         else:
             raise ValueError("Unknown browser install mode")
     shutil.copy2(lock_path, root / "browser.lock.json")

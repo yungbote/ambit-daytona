@@ -17,6 +17,18 @@
     "archiveName": "chrome-linux64.zip",
     "sha256": "0704631fb3e4f741092e08f55272f90abc3e307f991f05f332924364415b02e0"
   },
+  "debianSnapshots": [
+    {
+      "snapshot": "https://snapshot.debian.org/archive/debian/20260909T022729Z/",
+      "suite": "trixie",
+      "inReleaseSha256": "98b25b5cd185c59d34aa6e4c3e9b5b8f01bbe9d104fe2dcfbcd30dc0a14a59ed"
+    },
+    {
+      "snapshot": "https://snapshot.debian.org/archive/debian-security/20260909T031704Z/",
+      "suite": "trixie-security",
+      "inReleaseSha256": "741dbb9dcd6363228a3c347281906d9ef628faae3f29d1f14ba7c7936f459090"
+    }
+  ],
   "debianPackages": {
     "at-spi2-common": "2.56.2-1+deb13u1",
     "libatk1.0-0t64": "2.56.2-1+deb13u1",
