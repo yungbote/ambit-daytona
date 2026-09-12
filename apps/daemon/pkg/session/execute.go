@@ -95,9 +95,9 @@ func (s *SessionService) Execute(sessionId, cmdId, cmd string, async, isCombined
 		command.InputFilePath(session.Dir(s.configDir)), // %q  -> input
 		toOctalEscapes(log.STDOUT_PREFIX),               // %s  -> stdout prefix
 		toOctalEscapes(log.STDERR_PREFIX),               // %s  -> stderr prefix
+		exitCodeFilePath,                                // %q  -> durable command result
 		cmdFilePath,                                     // %q  -> command file path
 		stdinRedirect,                                   // %s  -> stdin behavior
-		exitCodeFilePath,                                // %q
 	)
 
 	_, err = scope.input.Write([]byte(cmdToExec))
@@ -243,27 +243,35 @@ var cmdWrapperFormat string = `
 	rm -f "$sp" "$ep" "$ip" && mkfifo "$sp" "$ep" "$ip" || exit 1
 
 	cleanup() { rm -f "$sp" "$ep" "$ip"; }
-	trap 'cleanup' EXIT HUP INT TERM
+	trap 'cleanup' HUP INT TERM
 
   # prefix each stream and append to shared log
 	( while IFS= read -r line || [ -n "$line" ]; do printf '%s%%s\n' "$line"; done < "$sp" ) >> "$log" & r1=$!
 	( while IFS= read -r line || [ -n "$line" ]; do printf '%s%%s\n' "$line"; done < "$ep" ) >> "$log" & r2=$!
 
-	# Run your command from file (avoids heredoc parsing issues with pipe-fed shells)
-	# Sync input is /dev/null. Async input opens the FIFO read/write, retaining
-	# its writer until this command ends without a racing holder subprocess.
+	# The sourced command can exit this shell explicitly or through errexit.
+	# Preserve that exact status before draining output, including on that path.
+	finish_command() {
+		_ec=$1
+		wait "$r1" "$r2" || return
+		# Publish atomically only after both streams drain: readers cannot see
+		# the empty file between creation and writing its complete exit code.
+		result=%q
+		printf '%%s\n' "$_ec" > "$result.pending" && mv -f "$result.pending" "$result"
+		cleanup
+	}
+	# An exit from inside the redirected source still owns the FIFO writer FDs.
+	# Close them before waiting, otherwise its own labelers never receive EOF.
+	trap '_exit_code=$?; exec > /dev/null 2>&1; finish_command "$_exit_code"' EXIT
+
+	# Source the command so ordinary stateful session semantics are preserved.
+	# Sync input is /dev/null; async input retains its FIFO writer until done.
 	{ . %q; } %s > "$sp" 2> "$ep"
 	_ec=$?
+	finish_command "$_ec"
+	# Normal completion already recorded the result; a later shell exit only
+	# performs cleanup and cannot overwrite this command's status.
+	trap 'cleanup' EXIT
 
-	# drain labelers (cleanup via trap)
-	wait "$r1" "$r2"
-
-	# Write exit code only after labelers have flushed all output to the log file.
-	# Previously echo "$?" ran before wait, creating a race where clients polling
-	# the exit-code file would read an empty/incomplete log.
-	echo "$_ec" >> %q
-
-	# Ensure unlink even if the waits failed
-	cleanup
 }
 `

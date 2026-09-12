@@ -834,18 +834,22 @@ func TestBlockedInputWriteHonorsRequestCancellation(t *testing.T) {
 	}
 }
 
-func TestSynchronousShellExitRetainsBackgroundWithoutWaitingForAResult(t *testing.T) {
+func TestSynchronousShellExitReportsResultWhileRetainingBackground(t *testing.T) {
 	svc := newStdinTestService(t)
 	openSession(t, svc, "sync-shell-exit")
-	result := make(chan error, 1)
+	type commandResult struct {
+		observation *SessionExecute
+		err         error
+	}
+	result := make(chan commandResult, 1)
 	go func() {
-		_, err := svc.Execute("sync-shell-exit", "main", "sleep 20 </dev/null >/dev/null 2>&1 & exit 7", false, true, true, false)
-		result <- err
+		observation, err := svc.Execute("sync-shell-exit", "main", "sleep 20 </dev/null >/dev/null 2>&1 & exit 7", false, true, true, false)
+		result <- commandResult{observation: observation, err: err}
 	}()
 	select {
-	case err := <-result:
-		if err == nil || !strings.Contains(err.Error(), "shell ended without a command result") {
-			t.Fatalf("unexpected shell-exit result: %v", err)
+	case value := <-result:
+		if value.err != nil || value.observation == nil || value.observation.ExitCode == nil || *value.observation.ExitCode != 7 {
+			t.Fatalf("unexpected shell-exit result: observation=%+v error=%v", value.observation, value.err)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("synchronous call waited for a result after its shell exited")
