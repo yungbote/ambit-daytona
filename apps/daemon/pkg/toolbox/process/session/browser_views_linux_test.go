@@ -120,6 +120,12 @@ func serveBrowserFixture(connection *websocket.Conn, mode string) {
 		}
 		acknowledged++
 	}
+	if mode == "driver-finished" {
+		_ = send(map[string]any{"type": "finished", "private": browserFixtureSecret})
+	}
+	if mode == "driver-eof" {
+		return
+	}
 	drainBrowserFixture(connection)
 }
 
@@ -496,12 +502,68 @@ func TestBrowserPortRequiresTheAdvertisedProcessesListeningSocket(t *testing.T) 
 	}
 	port := uint16(listener.Addr().(*net.TCPAddr).Port)
 	defer listener.Close()
-	if owned, err := processOwnsBrowserPort(os.Getpid(), port); err != nil || !owned {
-		t.Fatalf("own listener was not observed: owned=%v error=%v", owned, err)
+	first, err := processBrowserListener(os.Getpid(), port)
+	if err != nil || first == "" {
+		t.Fatalf("own listener was not observed: listener=%q error=%v", first, err)
 	}
 	listener.Close()
-	if owned, err := processOwnsBrowserPort(os.Getpid(), port); err != nil || owned {
-		t.Fatalf("closed listener remained owned: owned=%v error=%v", owned, err)
+	if observed, err := processBrowserListener(os.Getpid(), port); err != nil || observed != "" {
+		t.Fatalf("closed listener remained owned: listener=%q error=%v", observed, err)
+	}
+	reopened, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if current, err := processBrowserListener(os.Getpid(), port); err != nil || current == "" || current == first {
+		t.Fatalf("reopened port reused its old listening-socket identity: first=%q current=%q error=%v", first, current, err)
+	}
+}
+
+func TestBrowserStreamFinishesBeforeTheDriverProcessExits(t *testing.T) {
+	workspace := newBrowserWorkspace(t)
+	workspace.open(t, "browser-owner")
+	workspace.runDriver(t, "browser-owner", "primary", "driver-finished")
+	id, _ := workspace.only(t, "browser-owner", "primary")
+	code, records := openStream(t, workspace.engine, "browser-owner", id)
+	if code != http.StatusOK {
+		t.Fatalf("stream = %d, want 200", code)
+	}
+	for index := 0; index < browserFixtureFrames+2; index++ {
+		if record := nextRecord(t, records, 10*time.Second); record["type"] == "finished" {
+			t.Fatal("view finished before its final frame")
+		}
+	}
+	end := nextRecord(t, records, 10*time.Second)
+	if len(end) != 1 || end["type"] != "finished" {
+		t.Fatalf("terminal record %v, want only the native finished record", end)
+	}
+	expectStreamEnd(t, records, 10*time.Second)
+	if current, _ := workspace.only(t, "browser-owner", "primary"); current != id {
+		t.Fatal("the test did not retain the same live driver through stream closure")
+	}
+}
+
+func TestBrowserTransportEOFDoesNotFinishTheLiveView(t *testing.T) {
+	workspace := newBrowserWorkspace(t)
+	workspace.open(t, "browser-owner")
+	workspace.runDriver(t, "browser-owner", "primary", "driver-eof")
+	id, _ := workspace.only(t, "browser-owner", "primary")
+	for attempt := 0; attempt < 2; attempt++ {
+		code, records := openStream(t, workspace.engine, "browser-owner", id)
+		if code != http.StatusOK {
+			t.Fatalf("stream attempt %d = %d, want 200", attempt, code)
+		}
+		for index := 0; index < browserFixtureFrames+2; index++ {
+			record := nextRecord(t, records, 10*time.Second)
+			if record["type"] == "finished" {
+				t.Fatal("transport loss was restated as an ended browser")
+			}
+		}
+		expectStreamEnd(t, records, 10*time.Second)
+		if current, _ := workspace.only(t, "browser-owner", "primary"); current != id {
+			t.Fatal("a transient disconnect changed the live view instance")
+		}
 	}
 }
 
@@ -522,6 +584,9 @@ func TestVisualStreamRejectsCommandsAndNonvisualData(t *testing.T) {
 	// A driver failure is a fact the viewer is owed; its text is not.
 	if body, _, kind := browserViewMessage([]byte(`{"type":"error","message":"secret task input"}`)); kind != browserRecordFailed || body != nil {
 		t.Fatalf("driver failure was relayed as %v with body %s", kind, body)
+	}
+	if body, ack, kind := browserViewMessage([]byte(`{"type":"finished","private":"secret task input"}`)); kind != browserRecordFinished || body != nil || ack != 0 {
+		t.Fatalf("explicit stream completion retained driver data: kind=%v body=%s ack=%d", kind, body, ack)
 	}
 	frame := []byte(`{"type":"frame","seq":17,"data":"AA==","metadata":{"deviceWidth":1280,"deviceHeight":720}}`)
 	if body, ack, kind := browserViewMessage(frame); kind != browserRecordVisual || ack != 17 || string(body) != string(frame) {

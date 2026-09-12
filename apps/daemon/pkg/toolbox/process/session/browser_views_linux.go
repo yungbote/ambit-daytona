@@ -104,18 +104,20 @@ func (s *SessionController) browserViewAt(ctx context.Context, sessionID, name, 
 	if err != nil {
 		return browserView{}, err
 	}
-	listening, err := processOwnsBrowserPort(identity.PID, port)
+	listener, err := processBrowserListener(identity.PID, port)
 	if err != nil {
 		return browserView{}, err
 	}
-	if !listening {
+	if listener == "" {
 		return browserView{}, errors.New("browser stream listener changed")
 	}
 	current, err := s.sessionService.ObserveOwnedProcess(sessionID, identity.PID)
 	if err != nil || current != identity {
 		return browserView{}, errors.New("browser process custody changed")
 	}
-	hash := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%d\x00%s", sessionID, name, identity.PID, identity.StartTime)))
+	// A stream can be disabled and reopened without replacing the driver.
+	// Its listening socket, not only the PID, identifies that visual instance.
+	hash := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%d\x00%s\x00%s", sessionID, name, identity.PID, identity.StartTime, listener)))
 	return browserView{ID: hex.EncodeToString(hash[:]), Name: name, SessionID: sessionID, pid: identity.PID, born: identity.StartTime, port: port}, nil
 }
 
@@ -138,13 +140,12 @@ func browserStreamPort(path string) (uint16, error) {
 	return uint16(port), nil
 }
 
-// processOwnsBrowserPort asks the kernel whether this exact process holds the
-// listening socket behind the advertised port, so an unrelated local listener
-// cannot be relayed as the session's browser.
-func processOwnsBrowserPort(pid int, port uint16) (bool, error) {
+// processBrowserListener returns the kernel identity of this process's exact
+// listening socket. Reopening the same port creates a different view instance.
+func processBrowserListener(pid int, port uint16) (string, error) {
 	entries, err := os.ReadDir(fmt.Sprintf("/proc/%d/fd", pid))
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	inodes := map[string]bool{}
 	for _, entry := range entries {
@@ -153,7 +154,7 @@ func processOwnsBrowserPort(pid int, port uint16) (bool, error) {
 			continue
 		}
 		if err != nil {
-			return false, err
+			return "", err
 		}
 		if strings.HasPrefix(target, "socket:[") && strings.HasSuffix(target, "]") {
 			inodes[strings.TrimSuffix(strings.TrimPrefix(target, "socket:["), "]")] = true
@@ -161,16 +162,16 @@ func processOwnsBrowserPort(pid int, port uint16) (bool, error) {
 	}
 	table, err := os.ReadFile(fmt.Sprintf("/proc/%d/net/tcp", pid))
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	address := fmt.Sprintf("0100007F:%04X", port)
 	for _, line := range strings.Split(string(table), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) >= 10 && fields[1] == address && fields[3] == "0A" && inodes[fields[9]] {
-			return true, nil
+			return fields[9], nil
 		}
 	}
-	return false, nil
+	return "", nil
 }
 
 // browserViews observes the sockets in the workspace browser directory. With no
@@ -302,6 +303,11 @@ func (s *SessionController) StreamBrowserView(c *gin.Context) {
 		}
 		filtered, sequence, kind := browserViewMessage(message)
 		switch kind {
+		case browserRecordFinished:
+			// The admitted driver ended this stream explicitly. Do not race
+			// its subsequent process exit or forward any of its extra fields.
+			_ = writeBrowserRecord(c, browserFinishedRecord)
+			return
 		case browserRecordFailed:
 			// The driver reported that it cannot produce frames. The viewer is
 			// owed that fact, never the driver's own text.
@@ -371,6 +377,8 @@ const (
 	browserRecordVisual
 	// The driver's own failure. Its text never leaves the daemon.
 	browserRecordFailed
+	// Explicit terminal state from the already-attributed stream publisher.
+	browserRecordFinished
 )
 
 func browserViewMessage(message []byte) ([]byte, uint64, browserRecordKind) {
@@ -394,6 +402,8 @@ func browserViewMessage(message []byte) ([]byte, uint64, browserRecordKind) {
 		return body, 0, browserRecordVisual
 	case "error":
 		return nil, 0, browserRecordFailed
+	case "finished":
+		return nil, 0, browserRecordFinished
 	default:
 		return nil, 0, browserRecordDropped
 	}
