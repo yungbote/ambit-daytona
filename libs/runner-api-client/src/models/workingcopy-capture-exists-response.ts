@@ -30,11 +30,15 @@ import type { WorkingcopyCaptureReceipt } from './workingcopy-capture-receipt';
 import type { WorkingcopyCaptureSelector } from './workingcopy-capture-selector';
 // May contain unused imports in some cases
 // @ts-ignore
+import type { WorkingcopyFileSnapshotSource } from './workingcopy-file-snapshot-source';
+// May contain unused imports in some cases
+// @ts-ignore
 import type { WorkingcopySourceAddress } from './workingcopy-source-address';
 
 export interface WorkingcopyCaptureExistsResponse {
     'authority': WorkingcopyCaptureAuthority;
     'exists'?: boolean;
+    'fileSnapshot'?: WorkingcopyFileSnapshotSource;
     'owner': WorkingcopyCaptureOwner;
     'providerName': string;
     'providerResourceId': string;
@@ -43,5 +47,5 @@ export interface WorkingcopyCaptureExistsResponse {
     'selector': WorkingcopyCaptureSelector;
     'source': WorkingcopySourceAddress;
     'status': string;
-    'stopAuthority': GenerationstopStopAuthority;
+    'stopAuthority'?: GenerationstopStopAuthority;
 }

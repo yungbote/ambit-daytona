@@ -254,7 +254,7 @@ function assertFence(fence: SandboxGenerationFenceDto): void {
   }
 }
 
-function assertExpectedGeneration(generation: SandboxExecutionGenerationDto): void {
+export function assertExpectedGeneration(generation: SandboxExecutionGenerationDto): void {
   exactKeys(
     generation,
     ['containerCreatedAt', 'containerId', 'executionStartedAt', 'restartCount'],

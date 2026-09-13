@@ -3483,12 +3483,14 @@ const docTemplate = `{
                 "providerName",
                 "requestFingerprint",
                 "selector",
-                "source",
-                "stopAuthority"
+                "source"
             ],
             "properties": {
                 "authority": {
                     "$ref": "#/definitions/workingcopy.CaptureAuthority"
+                },
+                "fileSnapshot": {
+                    "$ref": "#/definitions/workingcopy.FileSnapshotSource"
                 },
                 "owner": {
                     "$ref": "#/definitions/workingcopy.CaptureOwner"
@@ -3519,6 +3521,9 @@ const docTemplate = `{
             "properties": {
                 "authority": {
                     "$ref": "#/definitions/workingcopy.CaptureAuthority"
+                },
+                "fileSnapshot": {
+                    "$ref": "#/definitions/workingcopy.FileSnapshotCapability"
                 },
                 "stoppedWorkingTreeInventory": {
                     "$ref": "#/definitions/workingcopy.WorkingTreeInventoryCapability"
@@ -3558,12 +3563,14 @@ const docTemplate = `{
                 "providerResourceId",
                 "requestFingerprint",
                 "selector",
-                "source",
-                "stopAuthority"
+                "source"
             ],
             "properties": {
                 "authority": {
                     "$ref": "#/definitions/workingcopy.CaptureAuthority"
+                },
+                "fileSnapshot": {
+                    "$ref": "#/definitions/workingcopy.FileSnapshotSource"
                 },
                 "outcome": {
                     "type": "string"
@@ -3601,8 +3608,7 @@ const docTemplate = `{
                 "requestFingerprint",
                 "selector",
                 "source",
-                "status",
-                "stopAuthority"
+                "status"
             ],
             "properties": {
                 "authority": {
@@ -3610,6 +3616,9 @@ const docTemplate = `{
                 },
                 "exists": {
                     "type": "boolean"
+                },
+                "fileSnapshot": {
+                    "$ref": "#/definitions/workingcopy.FileSnapshotSource"
                 },
                 "owner": {
                     "$ref": "#/definitions/workingcopy.CaptureOwner"
@@ -3680,12 +3689,14 @@ const docTemplate = `{
                 "providerResourceId",
                 "requestFingerprint",
                 "selector",
-                "source",
-                "stopAuthority"
+                "source"
             ],
             "properties": {
                 "authority": {
                     "$ref": "#/definitions/workingcopy.CaptureAuthority"
+                },
+                "fileSnapshot": {
+                    "$ref": "#/definitions/workingcopy.FileSnapshotSource"
                 },
                 "owner": {
                     "$ref": "#/definitions/workingcopy.CaptureOwner"
@@ -3774,8 +3785,7 @@ const docTemplate = `{
                 "providerResourceId",
                 "requestFingerprint",
                 "selector",
-                "source",
-                "stopAuthority"
+                "source"
             ],
             "properties": {
                 "authority": {
@@ -3786,6 +3796,9 @@ const docTemplate = `{
                 },
                 "expectedTotalByteLength": {
                     "type": "integer"
+                },
+                "fileSnapshot": {
+                    "$ref": "#/definitions/workingcopy.FileSnapshotSource"
                 },
                 "maximumBytes": {
                     "type": "integer"
@@ -3828,7 +3841,6 @@ const docTemplate = `{
                 "requestFingerprint",
                 "selector",
                 "source",
-                "stopAuthority",
                 "totalByteLength"
             ],
             "properties": {
@@ -3843,6 +3855,9 @@ const docTemplate = `{
                 },
                 "eof": {
                     "type": "boolean"
+                },
+                "fileSnapshot": {
+                    "$ref": "#/definitions/workingcopy.FileSnapshotSource"
                 },
                 "offset": {
                     "type": "integer"
@@ -3888,7 +3903,6 @@ const docTemplate = `{
                 "requestFingerprint",
                 "selector",
                 "source",
-                "stopAuthority",
                 "totalByteLength"
             ],
             "properties": {
@@ -3897,6 +3911,9 @@ const docTemplate = `{
                 },
                 "capturedAt": {
                     "type": "string"
+                },
+                "fileSnapshot": {
+                    "$ref": "#/definitions/workingcopy.FileSnapshotSource"
                 },
                 "owner": {
                     "$ref": "#/definitions/workingcopy.CaptureOwner"
@@ -4433,6 +4450,40 @@ const docTemplate = `{
                 },
                 "maximumPageEntries": {
                     "type": "integer"
+                }
+            }
+        },
+        "workingcopy.FileSnapshotCapability": {
+            "type": "object",
+            "required": [
+                "contract",
+                "maximumBytes"
+            ],
+            "properties": {
+                "contract": {
+                    "type": "string"
+                },
+                "maximumBytes": {
+                    "type": "integer"
+                }
+            }
+        },
+        "workingcopy.FileSnapshotSource": {
+            "type": "object",
+            "required": [
+                "contract",
+                "fence",
+                "generation"
+            ],
+            "properties": {
+                "contract": {
+                    "type": "string"
+                },
+                "fence": {
+                    "$ref": "#/definitions/generationstop.Fence"
+                },
+                "generation": {
+                    "$ref": "#/definitions/generationstop.ExpectedGeneration"
                 }
             }
         }

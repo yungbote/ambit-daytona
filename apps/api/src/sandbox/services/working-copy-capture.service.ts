@@ -17,6 +17,7 @@ import {
 
 import {
   MAXIMUM_WORKING_COPY_CAPTURE_BYTES,
+  FILE_SNAPSHOT_CONTRACT,
   MAXIMUM_USER_FILE_CAPTURE_BYTES,
   MAXIMUM_USER_FILE_READ_BYTES,
   MAXIMUM_WORKING_TREE_DEPTH,
@@ -56,6 +57,7 @@ import {
 } from '../dto/working-copy-capture.dto'
 import {
   assertGenerationObservationRequest,
+  assertExpectedGeneration,
   assertStopAuthority as assertGenerationStopAuthority,
 } from '../dto/sandbox-generation-stop.contract'
 import { RunnerApiError } from '../errors/runner-api-error'
@@ -99,7 +101,11 @@ export class WorkingCopyCaptureService {
       const tree = response.stoppedWorkingTreeInventory
       assertExactKeys(
         response,
-        ['authority', ...(tree !== undefined ? ['stoppedWorkingTreeInventory'] : [])],
+        [
+          'authority',
+          ...(tree !== undefined ? ['stoppedWorkingTreeInventory'] : []),
+          ...(response.fileSnapshot !== undefined ? ['fileSnapshot'] : []),
+        ],
         'capture capabilities',
         ConflictException,
       )
@@ -127,6 +133,20 @@ export class WorkingCopyCaptureService {
           if (!Number.isSafeInteger(tree[key]) || tree[key] < 1)
             throw new ConflictException('Runner working-tree inventory capability bound is invalid.')
         }
+      }
+      if (response.fileSnapshot !== undefined) {
+        assertExactKeys(
+          response.fileSnapshot,
+          ['contract', 'maximumBytes'],
+          'file snapshot capability',
+          ConflictException,
+        )
+        if (
+          response.fileSnapshot.contract !== FILE_SNAPSHOT_CONTRACT ||
+          !Number.isSafeInteger(response.fileSnapshot.maximumBytes) ||
+          response.fileSnapshot.maximumBytes < 1
+        )
+          throw new ConflictException('Runner file snapshot capability is invalid.')
       }
       signal?.throwIfAborted()
       return response
@@ -338,7 +358,7 @@ export class WorkingCopyCaptureService {
       sandboxIdOrName,
       binding.source,
       binding.owner,
-      binding.stopAuthority.fence,
+      captureFence(binding),
     )
     try {
       const receipt = await adapter.captureWorkingCopy(sandbox.id, binding, signal)
@@ -360,7 +380,7 @@ export class WorkingCopyCaptureService {
       sandboxIdOrName,
       binding.source,
       binding.owner,
-      binding.stopAuthority.fence,
+      captureFence(binding),
     )
     try {
       const observation = await adapter.observeWorkingCopyCapture(sandbox.id, binding)
@@ -384,7 +404,7 @@ export class WorkingCopyCaptureService {
       sandboxIdOrName,
       request.source,
       request.owner,
-      request.stopAuthority.fence,
+      captureFence(request),
     )
     try {
       const response = await adapter.readWorkingCopyCapture(sandbox.id, request, signal)
@@ -403,7 +423,7 @@ export class WorkingCopyCaptureService {
           'requestFingerprint',
           'selector',
           'source',
-          'stopAuthority',
+          captureSourceKey(request),
           'totalByteLength',
         ],
         'capture read response',
@@ -467,7 +487,7 @@ export class WorkingCopyCaptureService {
       sandboxIdOrName,
       identity.source,
       identity.owner,
-      identity.stopAuthority.fence,
+      captureFence(identity),
     )
     try {
       const receipt = await adapter.deleteWorkingCopyCapture(sandbox.id, identity)
@@ -483,7 +503,7 @@ export class WorkingCopyCaptureService {
             'requestFingerprint',
             'selector',
             'source',
-            'stopAuthority',
+            captureSourceKey(identity),
           ],
           'capture deletion receipt',
           ConflictException,
@@ -514,7 +534,7 @@ export class WorkingCopyCaptureService {
       sandboxIdOrName,
       identity.source,
       identity.owner,
-      identity.stopAuthority.fence,
+      captureFence(identity),
     )
     try {
       const response = await adapter.workingCopyCaptureExists(sandbox.id, identity)
@@ -529,7 +549,7 @@ export class WorkingCopyCaptureService {
         'selector',
         'source',
         'status',
-        'stopAuthority',
+        captureSourceKey(identity),
       ]
       assertExactKeys(response, expectedKeys, 'capture exists response', ConflictException)
       assertProviderIdentity(response)
@@ -568,6 +588,8 @@ function assertStoppedDirectoryRosterRequest(request: StoppedWorkingCopyDirector
     BadRequestException,
   )
   assertBinding(request.anchor)
+  if (request.anchor.fileSnapshot !== undefined)
+    throw new BadRequestException('Directory capture requires a stopped-generation anchor.')
   assertExactKeys(request.selector, ['semanticZoneRef', 'zoneRelativePath'], 'roster selector', BadRequestException)
   if (
     request.selector.semanticZoneRef === USER_FILES_SEMANTIC_ZONE_REF ||
@@ -688,20 +710,29 @@ function assertStoppedDirectoryRosterEntry(
 function assertBinding(binding: WorkingCopyCaptureBindingDto): void {
   assertExactKeys(
     binding,
-    ['authority', 'owner', 'providerName', 'requestFingerprint', 'selector', 'source', 'stopAuthority'],
+    ['authority', 'owner', 'providerName', 'requestFingerprint', 'selector', 'source', captureSourceKey(binding)],
     'capture binding',
     BadRequestException,
   )
   assertBindingValues(binding)
 }
 
-function assertGenerationValues(binding: WorkingCopyCaptureGenerationDto): void {
+function assertGenerationValues(binding: WorkingCopyCaptureGenerationDto | WorkingCopyCaptureBindingDto): void {
   if (!boundedRef(binding.providerName, 512) || !/^[0-9a-f]{64}$/.test(binding.requestFingerprint)) {
     throw new BadRequestException('Working-copy capture identity is not canonical.')
   }
   assertAuthority(binding.authority)
   try {
-    assertGenerationStopAuthority(binding.stopAuthority)
+    if ('fileSnapshot' in binding && binding.fileSnapshot !== undefined) {
+      if (binding.stopAuthority !== undefined) throw new Error('conflicting source authority')
+      const snapshot = binding.fileSnapshot
+      assertExactKeys(snapshot, ['contract', 'fence', 'generation'], 'file snapshot source', BadRequestException)
+      if (snapshot.contract !== FILE_SNAPSHOT_CONTRACT) throw new Error('unsupported file snapshot')
+      assertGenerationObservationRequest({ source: binding.source, owner: binding.owner, fence: snapshot.fence })
+      assertExpectedGeneration(snapshot.generation)
+    } else {
+      assertGenerationStopAuthority(binding.stopAuthority)
+    }
   } catch {
     throw new BadRequestException('Stopped-generation authority is invalid.')
   }
@@ -738,6 +769,8 @@ function assertGenerationValues(binding: WorkingCopyCaptureGenerationDto): void 
 
 function assertBindingValues(binding: WorkingCopyCaptureBindingDto): void {
   assertGenerationValues(binding)
+  if (binding.fileSnapshot !== undefined && binding.selector.semanticZoneRef === USER_FILES_SEMANTIC_ZONE_REF)
+    throw new BadRequestException('File snapshot cannot replace whole-tree capture.')
   assertExactKeys(binding.selector, ['semanticZoneRef', 'zoneRelativePath'], 'capture selector', BadRequestException)
   if (
     !['ambit.workspace-zone/work@1', 'ambit.workspace-zone/outputs@1', USER_FILES_SEMANTIC_ZONE_REF].includes(
@@ -791,7 +824,7 @@ function assertIdentity(identity: WorkingCopyCaptureIdentityDto): void {
       'requestFingerprint',
       'selector',
       'source',
-      'stopAuthority',
+      captureSourceKey(identity),
     ],
     'capture identity',
     BadRequestException,
@@ -817,7 +850,7 @@ function assertRead(request: WorkingCopyCaptureReadDto): void {
       'requestFingerprint',
       'selector',
       'source',
-      'stopAuthority',
+      captureSourceKey(request),
     ],
     'capture read',
     BadRequestException,
@@ -858,7 +891,7 @@ function assertReceipt(receipt: WorkingCopyCaptureReceiptDto, expectedBinding: W
       'requestFingerprint',
       'selector',
       'source',
-      'stopAuthority',
+      captureSourceKey(expectedBinding),
       'totalByteLength',
     ],
     'capture receipt',
@@ -918,7 +951,7 @@ function assertObservation(
         'requestFingerprint',
         'selector',
         'source',
-        'stopAuthority',
+        captureSourceKey(expectedBinding),
       ],
       'partial capture identity',
       ConflictException,
@@ -943,7 +976,7 @@ function assertObservation(
 function assertProviderBinding(binding: WorkingCopyCaptureBindingDto): void {
   assertExactKeys(
     binding,
-    ['authority', 'owner', 'providerName', 'requestFingerprint', 'selector', 'source', 'stopAuthority'],
+    ['authority', 'owner', 'providerName', 'requestFingerprint', 'selector', 'source', captureSourceKey(binding)],
     'provider capture binding',
     ConflictException,
   )
@@ -954,8 +987,16 @@ function assertProviderBinding(binding: WorkingCopyCaptureBindingDto): void {
   }
 }
 
+function captureSourceKey(binding: WorkingCopyCaptureBindingDto): 'fileSnapshot' | 'stopAuthority' {
+  return binding.fileSnapshot !== undefined ? 'fileSnapshot' : 'stopAuthority'
+}
+
+function captureFence(binding: WorkingCopyCaptureBindingDto) {
+  return binding.fileSnapshot !== undefined ? binding.fileSnapshot.fence : binding.stopAuthority.fence
+}
+
 function sameBinding(left: WorkingCopyCaptureBindingDto, right: WorkingCopyCaptureBindingDto): boolean {
-  return JSON.stringify(bindingData(left)) === JSON.stringify(bindingData(right))
+  return canonicalJson(bindingData(left)) === canonicalJson(bindingData(right))
 }
 
 function bindingData(value: WorkingCopyCaptureBindingDto): object {
@@ -982,15 +1023,9 @@ function bindingData(value: WorkingCopyCaptureBindingDto): object {
       grantId: value.owner.grantId,
       workingCopyId: value.owner.workingCopyId,
     },
-    stopAuthority: {
-      operationId: value.stopAuthority.operationId,
-      receiptRef: value.stopAuthority.receiptRef,
-      receiptDigest: value.stopAuthority.receiptDigest,
-      terminalGeneration: { ...value.stopAuthority.terminalGeneration },
-      fence: {
-        workspaceExecutionManifestRef: value.stopAuthority.fence.workspaceExecutionManifestRef,
-      },
-    },
+    ...(value.fileSnapshot !== undefined
+      ? { fileSnapshot: value.fileSnapshot }
+      : { stopAuthority: value.stopAuthority }),
     selector: {
       semanticZoneRef: value.selector.semanticZoneRef,
       zoneRelativePath: value.selector.zoneRelativePath,

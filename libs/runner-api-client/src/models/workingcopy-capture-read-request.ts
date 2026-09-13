@@ -27,12 +27,16 @@ import type { WorkingcopyCaptureOwner } from './workingcopy-capture-owner';
 import type { WorkingcopyCaptureSelector } from './workingcopy-capture-selector';
 // May contain unused imports in some cases
 // @ts-ignore
+import type { WorkingcopyFileSnapshotSource } from './workingcopy-file-snapshot-source';
+// May contain unused imports in some cases
+// @ts-ignore
 import type { WorkingcopySourceAddress } from './workingcopy-source-address';
 
 export interface WorkingcopyCaptureReadRequest {
     'authority': WorkingcopyCaptureAuthority;
     'expectedProviderSha256Digest': string;
     'expectedTotalByteLength': number;
+    'fileSnapshot'?: WorkingcopyFileSnapshotSource;
     'maximumBytes': number;
     'offset': number;
     'owner': WorkingcopyCaptureOwner;
@@ -41,5 +45,5 @@ export interface WorkingcopyCaptureReadRequest {
     'requestFingerprint': string;
     'selector': WorkingcopyCaptureSelector;
     'source': WorkingcopySourceAddress;
-    'stopAuthority': GenerationstopStopAuthority;
+    'stopAuthority'?: GenerationstopStopAuthority;
 }

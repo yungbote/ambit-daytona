@@ -18,9 +18,13 @@
 import type { WorkingCopyCaptureAuthority } from './working-copy-capture-authority';
 // May contain unused imports in some cases
 // @ts-ignore
+import type { WorkingCopyFileSnapshotCapability } from './working-copy-file-snapshot-capability';
+// May contain unused imports in some cases
+// @ts-ignore
 import type { WorkingTreeInventoryCapability } from './working-tree-inventory-capability';
 
 export interface WorkingCopyCaptureCapabilities {
     'authority': WorkingCopyCaptureAuthority;
     'stoppedWorkingTreeInventory'?: WorkingTreeInventoryCapability;
+    'fileSnapshot'?: WorkingCopyFileSnapshotCapability;
 }

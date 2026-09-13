@@ -47,6 +47,22 @@ type CaptureCapabilitiesRequest struct {
 type CaptureCapabilities struct {
 	Authority                   CaptureAuthority               `json:"authority" validate:"required"`
 	StoppedWorkingTreeInventory WorkingTreeInventoryCapability `json:"stoppedWorkingTreeInventory" validate:"required"`
+	FileSnapshot                *FileSnapshotCapability        `json:"fileSnapshot,omitempty"`
+}
+
+const FileSnapshotContract = "ambit.working-copy-file-snapshot/v1"
+
+// FileSnapshotSource selects bytes from one execution epoch without authorizing
+// its termination. The native reader must exclude writers while copying bytes.
+type FileSnapshotSource struct {
+	Contract   string                            `json:"contract" validate:"required"`
+	Fence      generationstop.Fence              `json:"fence" validate:"required"`
+	Generation generationstop.ExpectedGeneration `json:"generation" validate:"required"`
+}
+
+type FileSnapshotCapability struct {
+	Contract     string `json:"contract" validate:"required"`
+	MaximumBytes int64  `json:"maximumBytes" validate:"required"`
 }
 
 type CaptureBinding struct {
@@ -55,7 +71,8 @@ type CaptureBinding struct {
 	Authority          CaptureAuthority             `json:"authority" validate:"required"`
 	Source             SourceAddress                `json:"source" validate:"required"`
 	Owner              CaptureOwner                 `json:"owner" validate:"required"`
-	StopAuthority      generationstop.StopAuthority `json:"stopAuthority" validate:"required"`
+	StopAuthority      generationstop.StopAuthority `json:"stopAuthority,omitzero"`
+	FileSnapshot       FileSnapshotSource           `json:"fileSnapshot,omitzero"`
 	Selector           CaptureSelector              `json:"selector" validate:"required"`
 }
 

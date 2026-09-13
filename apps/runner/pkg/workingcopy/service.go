@@ -78,6 +78,7 @@ type Service struct {
 	admittedAuthority CaptureAuthority
 	now               clock
 	locks             keyedLocks
+	fileSnapshots     FileSnapshotReader
 }
 
 type keyedLocks struct {
@@ -94,7 +95,7 @@ type captureIntent struct {
 	Version            int                               `json:"version"`
 	Binding            CaptureBinding                    `json:"binding"`
 	ProviderResourceID string                            `json:"providerResourceId"`
-	Generation         generationstop.TerminalGeneration `json:"generation"`
+	Generation         generationstop.TerminalGeneration `json:"generation,omitzero"`
 }
 
 type captureDeletion struct {
@@ -120,6 +121,7 @@ func NewService(
 	objects storage.PrivateObjectStorageClient,
 	stops StoppedGenerationAuthority,
 	admittedAuthority CaptureAuthority,
+	fileSnapshots ...FileSnapshotReader,
 ) (*Service, error) {
 	if containers == nil {
 		return nil, fmt.Errorf("%w: Docker archive client is not configured", ErrUnavailable)
@@ -137,14 +139,21 @@ func NewService(
 	if err := validateAuthority(admittedAuthority); err != nil {
 		return nil, fmt.Errorf("%w: admitted capture authority is invalid: %v", ErrUnavailable, err)
 	}
-	return &Service{
+	service := &Service{
 		containers:        containers,
 		objects:           streamObjects,
 		stops:             stops,
 		admittedAuthority: admittedAuthority,
 		now:               time.Now,
 		locks:             keyedLocks{items: make(map[string]*keyedLock)},
-	}, nil
+	}
+	if len(fileSnapshots) > 1 {
+		return nil, fmt.Errorf("%w: multiple file snapshot readers", ErrUnavailable)
+	}
+	if len(fileSnapshots) == 1 {
+		service.fileSnapshots = fileSnapshots[0]
+	}
+	return service, nil
 }
 
 func NewCaptureAuthority(lineageRef, protocolDigest, helperDigest string) (CaptureAuthority, error) {
@@ -202,11 +211,16 @@ func (s *Service) Capture(
 		return s.resumeCapture(ctx, zonePath, existing)
 	}
 
-	stopReceipt, err := s.requireCurrentStop(ctx, binding)
-	if err != nil {
-		return CaptureReceipt{}, err
+	var generation generationstop.TerminalGeneration
+	if binding.FileSnapshot.Contract == "" {
+		stopReceipt, err := s.requireCurrentStop(ctx, binding)
+		if err != nil {
+			return CaptureReceipt{}, err
+		}
+		generation = stopReceipt.TerminalGeneration
+	} else if s.fileSnapshots == nil {
+		return CaptureReceipt{}, fmt.Errorf("%w: native file snapshots are not configured", ErrUnavailable)
 	}
-	generation := stopReceipt.TerminalGeneration
 	intent := captureIntent{
 		Version:            1,
 		Binding:            binding,
@@ -523,13 +537,17 @@ func (s *Service) Delete(
 			// the intent has already disappeared, rederive the only admissible
 			// identity from the exact binding and the current terminal generation
 			// before publishing the irreversible retirement tombstone.
-			stopReceipt, stopErr := s.requireCurrentStop(ctx, identity.CaptureBinding)
-			if stopErr != nil {
-				return CaptureDeleteReceipt{}, stopErr
+			var terminal generationstop.TerminalGeneration
+			if identity.FileSnapshot.Contract == "" {
+				stopReceipt, stopErr := s.requireCurrentStop(ctx, identity.CaptureBinding)
+				if stopErr != nil {
+					return CaptureDeleteReceipt{}, stopErr
+				}
+				terminal = stopReceipt.TerminalGeneration
 			}
 			expectedProviderResourceID := providerResourceID(
 				identity.CaptureBinding,
-				stopReceipt.TerminalGeneration,
+				terminal,
 			)
 			if identity.ProviderResourceID != expectedProviderResourceID {
 				return CaptureDeleteReceipt{}, fmt.Errorf(
@@ -613,12 +631,14 @@ func (s *Service) resumeCapture(
 	zonePath string,
 	intent captureIntent,
 ) (CaptureReceipt, error) {
-	currentStop, err := s.requireCurrentStop(ctx, intent.Binding)
-	if err != nil {
-		return CaptureReceipt{}, err
-	}
-	if currentStop.TerminalGeneration != intent.Generation {
-		return CaptureReceipt{}, fmt.Errorf("%w: stopped generation differs from immutable capture intent", ErrConflict)
+	if intent.Binding.FileSnapshot.Contract == "" {
+		currentStop, err := s.requireCurrentStop(ctx, intent.Binding)
+		if err != nil {
+			return CaptureReceipt{}, err
+		}
+		if currentStop.TerminalGeneration != intent.Generation {
+			return CaptureReceipt{}, fmt.Errorf("%w: stopped generation differs from immutable capture intent", ErrConflict)
+		}
 	}
 	if err := s.ensureNotDeleting(ctx, intent); err != nil {
 		return CaptureReceipt{}, err
@@ -650,7 +670,14 @@ func (s *Service) resumeCapture(
 		}
 		defer content.Close()
 
-		staged, err = s.captureStableFile(ctx, zonePath, intent, content, MaximumCaptureBytes)
+		if intent.Binding.FileSnapshot.Contract != "" {
+			if s.fileSnapshots == nil {
+				return CaptureReceipt{}, fmt.Errorf("%w: native file snapshots are not configured", ErrUnavailable)
+			}
+			staged, err = s.fileSnapshots.Capture(ctx, intent.Binding, content, MaximumCaptureBytes)
+		} else {
+			staged, err = s.captureStableFile(ctx, zonePath, intent, content, MaximumCaptureBytes)
+		}
 		if err != nil {
 			return CaptureReceipt{}, err
 		}
@@ -835,6 +862,9 @@ func (s *Service) validateStoppedDirectoryRosterRequest(
 	anchorPath, err := s.validateBinding(sandboxID, request.Anchor)
 	if err != nil {
 		return "", err
+	}
+	if request.Anchor.FileSnapshot.Contract != "" {
+		return "", invalidf("directory roster requires a stopped-generation anchor")
 	}
 	if request.Anchor.Selector.SemanticZoneRef == userFilesSemanticZoneRef {
 		return "", invalidf("private working-tree captures do not admit an anchor directory roster")
@@ -1067,9 +1097,11 @@ func (s *Service) readIntent(
 	}
 	if err := validateProviderResourceID(intent.ProviderResourceID); err != nil ||
 		intent.ProviderResourceID != providerResourceID(intent.Binding, intent.Generation) ||
-		intent.Generation.ContainerID == "" || intent.Generation.ContainerCreatedAt == "" ||
-		intent.Generation.ExecutionStartedAt == "" || intent.Generation.ExecutionFinishedAt == "" ||
-		intent.Generation.RestartCount < 0 {
+		(intent.Binding.FileSnapshot.Contract == "" &&
+			(intent.Generation.ContainerID == "" || intent.Generation.ContainerCreatedAt == "" ||
+				intent.Generation.ExecutionStartedAt == "" || intent.Generation.ExecutionFinishedAt == "" ||
+				intent.Generation.RestartCount < 0)) ||
+		(intent.Binding.FileSnapshot.Contract != "" && intent.Generation != (generationstop.TerminalGeneration{})) {
 		return captureIntent{}, false, fmt.Errorf("%w: capture intent identity is invalid", ErrConflict)
 	}
 	return intent, true, nil
@@ -1314,7 +1346,7 @@ func (s *Service) requireGenerationStop(
 }
 
 func (s *Service) validateBinding(sandboxID string, binding CaptureBinding) (string, error) {
-	if err := s.validateGenerationBinding(sandboxID, binding.generationBinding()); err != nil {
+	if err := s.validateCaptureSource(sandboxID, binding); err != nil {
 		return "", err
 	}
 	root, ok := semanticZoneRoot(binding.Selector.SemanticZoneRef)

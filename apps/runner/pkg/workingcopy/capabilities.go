@@ -35,7 +35,7 @@ func (s *Service) Capabilities(ctx context.Context, sandboxID string, request Ca
 		!boundedRef(request.Fence.WorkspaceExecutionManifestRef, 2048) {
 		return CaptureCapabilities{}, invalidf("capture capability source or fence is not admitted")
 	}
-	return CaptureCapabilities{
+	capabilities := CaptureCapabilities{
 		Authority: s.admittedAuthority,
 		StoppedWorkingTreeInventory: WorkingTreeInventoryCapability{
 			Contract: workingTreeInventoryContract, SemanticZoneRef: userFilesSemanticZoneRef,
@@ -43,5 +43,9 @@ func (s *Service) Capabilities(ctx context.Context, sandboxID string, request Ca
 			MaximumPageEntries: MaximumWorkingTreeInventoryPageEntries, MaximumPageBytes: MaximumWorkingTreeInventoryPageBytes,
 			MaximumIndexBytes: MaximumWorkingTreeInventoryIndexBytes, MaximumReadBytes: MaximumReadBytes,
 		},
-	}, nil
+	}
+	if s.fileSnapshots != nil {
+		capabilities.FileSnapshot = &FileSnapshotCapability{Contract: FileSnapshotContract, MaximumBytes: MaximumCaptureBytes}
+	}
+	return capabilities, nil
 }

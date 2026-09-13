@@ -29,6 +29,8 @@ import {
 } from './sandbox-execution-authority.dto'
 import {
   SandboxGenerationObservationRequestDto,
+  SandboxGenerationFenceDto,
+  SandboxExecutionGenerationDto,
   SandboxGenerationStopAuthorityDto,
   SandboxTerminalGenerationDto,
 } from './sandbox-generation-stop.dto'
@@ -146,6 +148,37 @@ export class WorkingTreeInventoryCapabilityDto {
   maximumIndexBytes: number
 }
 
+export const FILE_SNAPSHOT_CONTRACT = 'ambit.working-copy-file-snapshot/v1'
+
+@ApiSchema({ name: 'WorkingCopyFileSnapshotSource' })
+export class WorkingCopyFileSnapshotSourceDto {
+  @ApiProperty({ enum: [FILE_SNAPSHOT_CONTRACT] })
+  @Equals(FILE_SNAPSHOT_CONTRACT)
+  contract: typeof FILE_SNAPSHOT_CONTRACT
+
+  @ApiProperty({ type: SandboxGenerationFenceDto })
+  @ValidateNested()
+  @Type(() => SandboxGenerationFenceDto)
+  fence: SandboxGenerationFenceDto
+
+  @ApiProperty({ type: SandboxExecutionGenerationDto })
+  @ValidateNested()
+  @Type(() => SandboxExecutionGenerationDto)
+  generation: SandboxExecutionGenerationDto
+}
+
+@ApiSchema({ name: 'WorkingCopyFileSnapshotCapability' })
+export class WorkingCopyFileSnapshotCapabilityDto {
+  @ApiProperty({ enum: [FILE_SNAPSHOT_CONTRACT] })
+  @Equals(FILE_SNAPSHOT_CONTRACT)
+  contract: typeof FILE_SNAPSHOT_CONTRACT
+
+  @ApiProperty({ minimum: 1 })
+  @IsInt()
+  @Min(1)
+  maximumBytes: number
+}
+
 @ApiSchema({ name: 'WorkingCopyCaptureCapabilities' })
 export class WorkingCopyCaptureCapabilitiesDto {
   @ApiProperty({ type: WorkingCopyCaptureAuthorityDto })
@@ -158,6 +191,12 @@ export class WorkingCopyCaptureCapabilitiesDto {
   @ValidateNested()
   @Type(() => WorkingTreeInventoryCapabilityDto)
   stoppedWorkingTreeInventory?: WorkingTreeInventoryCapabilityDto
+
+  @ApiPropertyOptional({ type: WorkingCopyFileSnapshotCapabilityDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => WorkingCopyFileSnapshotCapabilityDto)
+  fileSnapshot?: WorkingCopyFileSnapshotCapabilityDto
 }
 
 @ApiSchema({ name: 'WorkingCopyCaptureSelector' })
@@ -205,10 +244,17 @@ export class WorkingCopyCaptureBindingDto {
   @Type(() => WorkingCopyCaptureOwnerDto)
   owner: WorkingCopyCaptureOwnerDto
 
-  @ApiProperty({ type: SandboxGenerationStopAuthorityDto })
+  @ApiPropertyOptional({ type: SandboxGenerationStopAuthorityDto })
+  @ValidateIf((value) => value.fileSnapshot === undefined || value.stopAuthority !== undefined)
   @ValidateNested()
   @Type(() => SandboxGenerationStopAuthorityDto)
-  stopAuthority: SandboxGenerationStopAuthorityDto
+  stopAuthority?: SandboxGenerationStopAuthorityDto
+
+  @ApiPropertyOptional({ type: WorkingCopyFileSnapshotSourceDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => WorkingCopyFileSnapshotSourceDto)
+  fileSnapshot?: WorkingCopyFileSnapshotSourceDto
 
   @ApiProperty({ type: WorkingCopyCaptureSelectorDto })
   @ValidateNested()
@@ -450,7 +496,15 @@ export class StoppedWorkingCopyDirectoryRosterReceiptDto {
 }
 
 @ApiSchema({ name: 'WorkingCopyCaptureGeneration' })
-export class WorkingCopyCaptureGenerationDto extends OmitType(WorkingCopyCaptureBindingDto, ['selector'] as const) {}
+export class WorkingCopyCaptureGenerationDto extends OmitType(WorkingCopyCaptureBindingDto, [
+  'selector',
+  'fileSnapshot',
+] as const) {
+  @ApiProperty({ type: SandboxGenerationStopAuthorityDto })
+  @ValidateNested()
+  @Type(() => SandboxGenerationStopAuthorityDto)
+  declare stopAuthority: SandboxGenerationStopAuthorityDto
+}
 
 @ApiSchema({ name: 'StoppedWorkingCopyWorkingTreeEntry' })
 export class StoppedWorkingCopyWorkingTreeEntryDto extends OmitType(StoppedWorkingCopyDirectoryRosterEntryDto, [

@@ -107,6 +107,48 @@ describe(WorkingCopyCaptureService.name, () => {
     service = new WorkingCopyCaptureService(executionAuthority)
   })
 
+  it('routes exact file snapshot capture and replay without minting stopped-generation authority', async () => {
+    const binding = liveFileBinding()
+    const receipt = validReceipt(binding)
+    adapter.captureWorkingCopy.mockResolvedValue(receipt)
+    adapter.observeWorkingCopyCapture.mockResolvedValue({ status: 'complete', receipt })
+    await expect(service.capture('daytona-org-1', 'sandbox-1', binding)).resolves.toEqual(receipt)
+    await expect(service.observe('daytona-org-1', 'sandbox-1', binding)).resolves.toEqual({
+      status: 'complete',
+      receipt,
+    })
+    expect(adapter.captureWorkingCopy.mock.calls[0][1]).not.toHaveProperty('stopAuthority')
+    expect(validateSync(plainToInstance(WorkingCopyCaptureBindingDto, binding))).toEqual([])
+  })
+
+  it.each(['both', 'neither', 'wrong_contract', 'wrong_fence', 'generation_extra', 'generation_missing'])(
+    'rejects %s file snapshot authority before dispatch',
+    async (scenario) => {
+      const binding = liveFileBinding()
+      if (scenario === 'both') binding.stopAuthority = validBinding().stopAuthority
+      if (scenario === 'neither') delete binding.fileSnapshot
+      if (scenario === 'wrong_contract') Object.assign(binding.fileSnapshot, { contract: 'other' })
+      if (scenario === 'wrong_fence') binding.fileSnapshot.fence.workspaceExecutionManifestRef = 'other'
+      if (scenario === 'generation_extra') Object.assign(binding.fileSnapshot.generation, { exitCode: 0 })
+      if (scenario === 'generation_missing')
+        delete (binding.fileSnapshot.generation as Partial<typeof binding.fileSnapshot.generation>).containerId
+      await expect(service.capture('daytona-org-1', 'sandbox-1', binding)).rejects.toThrow()
+      expect(adapter.captureWorkingCopy).not.toHaveBeenCalled()
+    },
+  )
+
+  it('forwards advertised native file snapshot capability and rejects a substituted contract', async () => {
+    const request = capabilityRequest()
+    const response = {
+      ...capabilities(request),
+      fileSnapshot: { contract: 'ambit.working-copy-file-snapshot/v1' as const, maximumBytes: 1024 * 1024 * 1024 },
+    }
+    adapter.workingCopyCaptureCapabilities.mockResolvedValue(response)
+    await expect(service.capabilities('daytona-org-1', 'sandbox-1', request)).resolves.toEqual(response)
+    Object.assign(response.fileSnapshot, { contract: 'unsupported' })
+    await expect(service.capabilities('daytona-org-1', 'sandbox-1', request)).rejects.toThrow(ConflictException)
+  })
+
   function capabilityRequest(): WorkingCopyCaptureCapabilitiesRequestDto {
     const binding = validBinding()
     return {
@@ -1364,6 +1406,23 @@ function validBinding(): WorkingCopyCaptureBindingDto {
   }
 }
 
+function liveFileBinding(): WorkingCopyCaptureBindingDto {
+  const binding = validBinding()
+  const source = binding.stopAuthority
+  delete binding.stopAuthority
+  binding.fileSnapshot = {
+    contract: 'ambit.working-copy-file-snapshot/v1',
+    fence: source.fence,
+    generation: {
+      containerId: source.terminalGeneration.containerId,
+      containerCreatedAt: source.terminalGeneration.containerCreatedAt,
+      executionStartedAt: source.terminalGeneration.executionStartedAt,
+      restartCount: source.terminalGeneration.restartCount,
+    },
+  }
+  return binding
+}
+
 function exactBinding(binding: WorkingCopyCaptureBindingDto): WorkingCopyCaptureBindingDto {
   return {
     providerName: binding.providerName,
@@ -1371,7 +1430,9 @@ function exactBinding(binding: WorkingCopyCaptureBindingDto): WorkingCopyCapture
     authority: structuredClone(binding.authority),
     source: structuredClone(binding.source),
     owner: structuredClone(binding.owner),
-    stopAuthority: structuredClone(binding.stopAuthority),
+    ...(binding.fileSnapshot
+      ? { fileSnapshot: structuredClone(binding.fileSnapshot) }
+      : { stopAuthority: structuredClone(binding.stopAuthority) }),
     selector: structuredClone(binding.selector),
   }
 }

@@ -1,5 +1,62 @@
 # Private working-tree capture
 
+## Live file capture
+
+The same capture API also accepts `fileSnapshot` with contract
+`ambit.working-copy-file-snapshot/v1`, an exact execution generation, and its
+workspace manifest fence. This source authority is mutually exclusive with
+`stopAuthority`. Capability discovery advertises `fileSnapshot` only when the
+Runner has the native reader. It grants no permission to stop a workspace.
+
+The native reader independently proves the container's owner, manifest,
+execution epoch and running PID through the existing Docker generation
+adapter. It opens the source through that task's pinned `/proc/<pid>/root`.
+The semantic zone may be an admitted mount; descendant traversal rejects
+symlinks, magic links, additional mounts, nonregular files and hardlink aliases.
+Final path reproof starts at the container root again and compares the zone's
+mount identity and the selected file's inode.
+
+A Linux read lease excludes writable file descriptions and writable shared
+mappings while the file is copied into the existing private, immediately
+unlinked scratch. The reader checks the lease and exact file metadata before
+accepting the copy, and rechecks the container generation. A pending or forced
+lease break, cancellation, source change, busy writer, or unsupported filesystem
+produces no completed content object or receipt. There is no ordinary-stream
+or whole-workspace-stop fallback. Writers can proceed after the lease is
+released; the browser and other processes keep running during capture.
+
+After that proof, the existing conditional content write, immutable receipt,
+range reads, response-loss reconciliation and retirement tombstone own the
+bytes. A replay with retained content never reads the mutable source again.
+Capture does not claim a coherent multi-file application state: directory and
+portable checkpoint operations still require their stopped-generation source.
+
+Release compatible backend and host API readers before the Runner advertises
+the new field. Roll out the native writer, verify its capability on every
+assigned Runner, then enable the backend's ordinary publication selection.
+Retained live-file capture intents require compatible readers through cleanup.
+The backend migration refuses removal while any such intent is retained.
+
+Native qualification uses the unchanged browser image in a disposable DinD
+Runner with the existing rootless seccomp profile, dropped capabilities and
+no-new-privileges. The test binary must run in the same PID namespace as that
+Runner's Docker daemon; a remote Docker socket alone cannot supply the native
+source descriptor. The observed configuration is Docker 28.5.2 with overlay2.
+Other provider/kernel/filesystem targets require their own qualification and
+must report unsupported writer exclusion honestly.
+
+```sh
+DAYTONA_FILE_SNAPSHOT_BROWSER_IMAGE=<already-installed-browser-image> \
+  ./workingcopy.test -test.run TestFileSnapshotDockerBrowserAndCustody -test.v
+DAYTONA_FILE_SNAPSHOT_FORCE_BREAK_TEST=1 \
+  ./workingcopy.test -test.run TestFileSnapshotKernelForcedLeaseBreakDiscardsCopy -test.v
+```
+
+The second test reads the existing kernel lease-break timeout and waits for a
+real forced break. It never changes the host or namespace sysctl.
+
+## Stopped working-tree capture
+
 `POST /sandboxes/:sandboxId/working-copy-captures/capabilities` discovers the
 assigned Runner's admitted capture authority without reading Docker, stopping
 a generation, or creating custody. The host API authorizes the sandbox, owner,

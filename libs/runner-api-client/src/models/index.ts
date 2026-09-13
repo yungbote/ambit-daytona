@@ -69,3 +69,5 @@ export * from './workingcopy-working-tree-inventory-range';
 export * from './workingcopy-working-tree-inventory-range-request';
 export * from './workingcopy-working-tree-inventory-receipt';
 export * from './workingcopy-working-tree-inventory-request';
+export * from './workingcopy-file-snapshot-capability';
+export * from './workingcopy-file-snapshot-source';

@@ -725,6 +725,8 @@ definitions:
     properties:
       authority:
         $ref: '#/definitions/workingcopy.CaptureAuthority'
+      fileSnapshot:
+        $ref: '#/definitions/workingcopy.FileSnapshotSource'
       owner:
         $ref: '#/definitions/workingcopy.CaptureOwner'
       providerName:
@@ -738,23 +740,24 @@ definitions:
       stopAuthority:
         $ref: '#/definitions/generationstop.StopAuthority'
     required:
-      - authority
-      - owner
-      - providerName
-      - requestFingerprint
-      - selector
-      - source
-      - stopAuthority
+    - authority
+    - owner
+    - providerName
+    - requestFingerprint
+    - selector
+    - source
     type: object
   workingcopy.CaptureCapabilities:
     properties:
       authority:
         $ref: '#/definitions/workingcopy.CaptureAuthority'
+      fileSnapshot:
+        $ref: '#/definitions/workingcopy.FileSnapshotCapability'
       stoppedWorkingTreeInventory:
         $ref: '#/definitions/workingcopy.WorkingTreeInventoryCapability'
     required:
-      - authority
-      - stoppedWorkingTreeInventory
+    - authority
+    - stoppedWorkingTreeInventory
     type: object
   workingcopy.CaptureCapabilitiesRequest:
     properties:
@@ -776,6 +779,8 @@ definitions:
     properties:
       authority:
         $ref: '#/definitions/workingcopy.CaptureAuthority'
+      fileSnapshot:
+        $ref: '#/definitions/workingcopy.FileSnapshotSource'
       outcome:
         type: string
       owner:
@@ -793,15 +798,14 @@ definitions:
       stopAuthority:
         $ref: '#/definitions/generationstop.StopAuthority'
     required:
-      - authority
-      - outcome
-      - owner
-      - providerName
-      - providerResourceId
-      - requestFingerprint
-      - selector
-      - source
-      - stopAuthority
+    - authority
+    - outcome
+    - owner
+    - providerName
+    - providerResourceId
+    - requestFingerprint
+    - selector
+    - source
     type: object
   workingcopy.CaptureExistsResponse:
     properties:
@@ -809,6 +813,8 @@ definitions:
         $ref: '#/definitions/workingcopy.CaptureAuthority'
       exists:
         type: boolean
+      fileSnapshot:
+        $ref: '#/definitions/workingcopy.FileSnapshotSource'
       owner:
         $ref: '#/definitions/workingcopy.CaptureOwner'
       providerName:
@@ -828,15 +834,14 @@ definitions:
       stopAuthority:
         $ref: '#/definitions/generationstop.StopAuthority'
     required:
-      - authority
-      - owner
-      - providerName
-      - providerResourceId
-      - requestFingerprint
-      - selector
-      - source
-      - status
-      - stopAuthority
+    - authority
+    - owner
+    - providerName
+    - providerResourceId
+    - requestFingerprint
+    - selector
+    - source
+    - status
     type: object
   workingcopy.CaptureGenerationBinding:
     properties:
@@ -864,6 +869,8 @@ definitions:
     properties:
       authority:
         $ref: '#/definitions/workingcopy.CaptureAuthority'
+      fileSnapshot:
+        $ref: '#/definitions/workingcopy.FileSnapshotSource'
       owner:
         $ref: '#/definitions/workingcopy.CaptureOwner'
       providerName:
@@ -879,14 +886,13 @@ definitions:
       stopAuthority:
         $ref: '#/definitions/generationstop.StopAuthority'
     required:
-      - authority
-      - owner
-      - providerName
-      - providerResourceId
-      - requestFingerprint
-      - selector
-      - source
-      - stopAuthority
+    - authority
+    - owner
+    - providerName
+    - providerResourceId
+    - requestFingerprint
+    - selector
+    - source
     type: object
   workingcopy.CaptureObservation:
     properties:
@@ -931,6 +937,8 @@ definitions:
         type: string
       expectedTotalByteLength:
         type: integer
+      fileSnapshot:
+        $ref: '#/definitions/workingcopy.FileSnapshotSource'
       maximumBytes:
         type: integer
       offset:
@@ -950,18 +958,17 @@ definitions:
       stopAuthority:
         $ref: '#/definitions/generationstop.StopAuthority'
     required:
-      - authority
-      - expectedProviderSha256Digest
-      - expectedTotalByteLength
-      - maximumBytes
-      - offset
-      - owner
-      - providerName
-      - providerResourceId
-      - requestFingerprint
-      - selector
-      - source
-      - stopAuthority
+    - authority
+    - expectedProviderSha256Digest
+    - expectedTotalByteLength
+    - maximumBytes
+    - offset
+    - owner
+    - providerName
+    - providerResourceId
+    - requestFingerprint
+    - selector
+    - source
     type: object
   workingcopy.CaptureReadResponse:
     properties:
@@ -973,6 +980,8 @@ definitions:
         type: string
       eof:
         type: boolean
+      fileSnapshot:
+        $ref: '#/definitions/workingcopy.FileSnapshotSource'
       offset:
         type: integer
       owner:
@@ -994,17 +1003,16 @@ definitions:
       totalByteLength:
         type: integer
     required:
-      - authority
-      - offset
-      - owner
-      - providerName
-      - providerResourceId
-      - providerSha256Digest
-      - requestFingerprint
-      - selector
-      - source
-      - stopAuthority
-      - totalByteLength
+    - authority
+    - offset
+    - owner
+    - providerName
+    - providerResourceId
+    - providerSha256Digest
+    - requestFingerprint
+    - selector
+    - source
+    - totalByteLength
     type: object
   workingcopy.CaptureReceipt:
     properties:
@@ -1012,6 +1020,8 @@ definitions:
         $ref: '#/definitions/workingcopy.CaptureAuthority'
       capturedAt:
         type: string
+      fileSnapshot:
+        $ref: '#/definitions/workingcopy.FileSnapshotSource'
       owner:
         $ref: '#/definitions/workingcopy.CaptureOwner'
       providerName:
@@ -1031,17 +1041,16 @@ definitions:
       totalByteLength:
         type: integer
     required:
-      - authority
-      - capturedAt
-      - owner
-      - providerName
-      - providerResourceId
-      - providerSha256Digest
-      - requestFingerprint
-      - selector
-      - source
-      - stopAuthority
-      - totalByteLength
+    - authority
+    - capturedAt
+    - owner
+    - providerName
+    - providerResourceId
+    - providerSha256Digest
+    - requestFingerprint
+    - selector
+    - source
+    - totalByteLength
     type: object
   workingcopy.CaptureSelector:
     properties:
@@ -1402,6 +1411,29 @@ definitions:
       - maximumFileBytes
       - maximumPageBytes
       - maximumPageEntries
+    type: object
+  workingcopy.FileSnapshotCapability:
+    properties:
+      contract:
+        type: string
+      maximumBytes:
+        type: integer
+    required:
+    - contract
+    - maximumBytes
+    type: object
+  workingcopy.FileSnapshotSource:
+    properties:
+      contract:
+        type: string
+      fence:
+        $ref: '#/definitions/generationstop.Fence'
+      generation:
+        $ref: '#/definitions/generationstop.ExpectedGeneration'
+    required:
+    - contract
+    - fence
+    - generation
     type: object
 info:
   contact: {}

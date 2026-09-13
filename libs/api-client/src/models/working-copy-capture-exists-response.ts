@@ -31,6 +31,9 @@ import type { WorkingCopyCaptureReceipt } from './working-copy-capture-receipt';
 // May contain unused imports in some cases
 // @ts-ignore
 import type { WorkingCopyCaptureSelector } from './working-copy-capture-selector';
+// May contain unused imports in some cases
+// @ts-ignore
+import type { WorkingCopyFileSnapshotSource } from './working-copy-file-snapshot-source';
 
 export interface WorkingCopyCaptureExistsResponse {
     'providerName': string;
@@ -38,7 +41,8 @@ export interface WorkingCopyCaptureExistsResponse {
     'authority': WorkingCopyCaptureAuthority;
     'source': SandboxExecutionSource;
     'owner': SandboxExecutionOwner;
-    'stopAuthority': SandboxGenerationStopAuthority;
+    'stopAuthority'?: SandboxGenerationStopAuthority;
+    'fileSnapshot'?: WorkingCopyFileSnapshotSource;
     'selector': WorkingCopyCaptureSelector;
     'providerResourceId': string;
     'status': WorkingCopyCaptureExistsResponseStatusEnum;
