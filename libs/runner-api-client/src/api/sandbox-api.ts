@@ -103,8 +103,8 @@ import type { WorkingcopyWorkingTreeInventoryRequest } from '../models';
 export const SandboxApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
         /**
-         * Persist one host-admitted regular file from the exact stopped container generation.
-         * @summary Capture one stopped sandbox working-copy file
+         * Persist one host-admitted regular file using its exact file-snapshot or stopped-generation authority.
+         * @summary Capture one immutable workspace file
          * @param {string} sandboxId Sandbox ID
          * @param {WorkingcopyCaptureBinding} body Exact capture binding
          * @param {*} [options] Override http request option.
@@ -1233,8 +1233,8 @@ export const SandboxApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = SandboxApiAxiosParamCreator(configuration)
     return {
         /**
-         * Persist one host-admitted regular file from the exact stopped container generation.
-         * @summary Capture one stopped sandbox working-copy file
+         * Persist one host-admitted regular file using its exact file-snapshot or stopped-generation authority.
+         * @summary Capture one immutable workspace file
          * @param {string} sandboxId Sandbox ID
          * @param {WorkingcopyCaptureBinding} body Exact capture binding
          * @param {*} [options] Override http request option.
@@ -1618,8 +1618,8 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
     const localVarFp = SandboxApiFp(configuration)
     return {
         /**
-         * Persist one host-admitted regular file from the exact stopped container generation.
-         * @summary Capture one stopped sandbox working-copy file
+         * Persist one host-admitted regular file using its exact file-snapshot or stopped-generation authority.
+         * @summary Capture one immutable workspace file
          * @param {string} sandboxId Sandbox ID
          * @param {WorkingcopyCaptureBinding} body Exact capture binding
          * @param {*} [options] Override http request option.
@@ -1920,8 +1920,8 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
  */
 export class SandboxApi extends BaseAPI {
     /**
-     * Persist one host-admitted regular file from the exact stopped container generation.
-     * @summary Capture one stopped sandbox working-copy file
+     * Persist one host-admitted regular file using its exact file-snapshot or stopped-generation authority.
+     * @summary Capture one immutable workspace file
      * @param {string} sandboxId Sandbox ID
      * @param {WorkingcopyCaptureBinding} body Exact capture binding
      * @param {*} [options] Override http request option.

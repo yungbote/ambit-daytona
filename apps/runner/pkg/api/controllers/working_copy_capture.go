@@ -55,8 +55,8 @@ func WorkingCopyCaptureCapabilities(ctx *gin.Context) {
 // CaptureWorkingCopy godoc
 //
 //	@Tags			sandbox
-//	@Summary		Capture one stopped sandbox working-copy file
-//	@Description	Persist one host-admitted regular file from the exact stopped container generation.
+//	@Summary		Capture one immutable workspace file
+//	@Description	Persist one host-admitted regular file using its exact file-snapshot or stopped-generation authority.
 //	@Param			sandboxId	path	string						true	"Sandbox ID"
 //	@Param			body		body	workingcopy.CaptureBinding	true	"Exact capture binding"
 //	@Produce		json

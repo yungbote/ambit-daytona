@@ -188,7 +188,7 @@ export class WorkingCopyCaptureController {
   @HttpCode(200)
   @ApiOperation({
     operationId: 'captureSandboxWorkingCopy',
-    summary: 'Capture one file from an exact stopped sandbox generation',
+    summary: 'Capture one immutable file from its exact workspace generation',
   })
   @ApiResponse({ status: 200, type: WorkingCopyCaptureReceiptDto })
   @Audit({

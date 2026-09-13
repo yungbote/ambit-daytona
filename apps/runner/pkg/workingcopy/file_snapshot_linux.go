@@ -148,6 +148,8 @@ func (s *NativeFileSnapshotReader) Capture(ctx context.Context, binding CaptureB
 	var originalZone, resolvedZone unix.Statx_t
 	if unix.Statx(zoneFD, "", unix.AT_EMPTY_PATH, unix.STATX_INO|unix.STATX_MNT_ID, &originalZone) != nil ||
 		unix.Statx(currentZone, "", unix.AT_EMPTY_PATH, unix.STATX_INO|unix.STATX_MNT_ID, &resolvedZone) != nil ||
+		originalZone.Mask&(unix.STATX_INO|unix.STATX_MNT_ID) != unix.STATX_INO|unix.STATX_MNT_ID ||
+		resolvedZone.Mask&(unix.STATX_INO|unix.STATX_MNT_ID) != unix.STATX_INO|unix.STATX_MNT_ID ||
 		originalZone.Ino != resolvedZone.Ino || originalZone.Mnt_id != resolvedZone.Mnt_id ||
 		originalZone.Dev_major != resolvedZone.Dev_major || originalZone.Dev_minor != resolvedZone.Dev_minor {
 		return capturedFile{}, fmt.Errorf("%w: file snapshot semantic zone was replaced", ErrConflict)

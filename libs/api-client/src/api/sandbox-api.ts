@@ -176,7 +176,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
         },
         /**
          *
-         * @summary Capture one file from an exact stopped sandbox generation
+         * @summary Capture one immutable file from its exact workspace generation
          * @param {string} sandboxIdOrName
          * @param {WorkingCopyCaptureBinding} workingCopyCaptureBinding
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -3270,7 +3270,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
         },
         /**
          *
-         * @summary Capture one file from an exact stopped sandbox generation
+         * @summary Capture one immutable file from its exact workspace generation
          * @param {string} sandboxIdOrName
          * @param {WorkingCopyCaptureBinding} workingCopyCaptureBinding
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -4201,7 +4201,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
         },
         /**
          *
-         * @summary Capture one file from an exact stopped sandbox generation
+         * @summary Capture one immutable file from its exact workspace generation
          * @param {string} sandboxIdOrName
          * @param {WorkingCopyCaptureBinding} workingCopyCaptureBinding
          * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID
@@ -4956,7 +4956,7 @@ export class SandboxApi extends BaseAPI {
     }
     /**
      *
-     * @summary Capture one file from an exact stopped sandbox generation
+     * @summary Capture one immutable file from its exact workspace generation
      * @param {string} sandboxIdOrName
      * @param {WorkingCopyCaptureBinding} workingCopyCaptureBinding
      * @param {string} [xDaytonaOrganizationID] Use with JWT to specify the organization ID

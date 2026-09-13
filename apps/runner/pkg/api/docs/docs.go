@@ -1284,14 +1284,14 @@ const docTemplate = `{
         },
         "/sandboxes/{sandboxId}/working-copy-captures": {
             "post": {
-                "description": "Persist one host-admitted regular file from the exact stopped container generation.",
+                "description": "Persist one host-admitted regular file using its exact file-snapshot or stopped-generation authority.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "sandbox"
                 ],
-                "summary": "Capture one stopped sandbox working-copy file",
+                "summary": "Capture one immutable workspace file",
                 "operationId": "CaptureWorkingCopy",
                 "parameters": [
                     {
