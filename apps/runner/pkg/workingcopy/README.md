@@ -54,6 +54,7 @@ must report unsupported writer exclusion honestly.
 
 ```sh
 DAYTONA_FILE_SNAPSHOT_BROWSER_IMAGE=<already-installed-browser-image> \
+DAYTONA_FILE_SNAPSHOT_EXPECTED_IMAGE_ID=sha256:<independently-verified-config-id> \
   ./workingcopy.test -test.run TestFileSnapshotDockerBrowserAndCustody -test.v
 DAYTONA_FILE_SNAPSHOT_FORCE_BREAK_TEST=1 \
   ./workingcopy.test -test.run TestFileSnapshotKernelForcedLeaseBreakDiscardsCopy -test.v

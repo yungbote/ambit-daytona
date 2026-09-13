@@ -33,6 +33,13 @@ func TestFileSnapshotDockerBrowserAndCustody(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	name := fmt.Sprintf("file-snapshot-browser-%d-%d", os.Getpid(), time.Now().UnixNano())
+	// The image reference selects what to run; the config ID proves what ran.
+	// It must come from an independent inspection of the approved registry
+	// digest, never from the daemon this test drives.
+	expectedImage := os.Getenv("DAYTONA_FILE_SNAPSHOT_EXPECTED_IMAGE_ID")
+	if len(expectedImage) != len("sha256:")+64 || !strings.HasPrefix(expectedImage, "sha256:") {
+		t.Fatal("require an independently resolved immutable Docker image config ID")
+	}
 	run := func(args ...string) []byte {
 		t.Helper()
 		out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
@@ -74,6 +81,11 @@ func TestFileSnapshotDockerBrowserAndCustody(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer docker.Close()
+	inspected, err := docker.ContainerInspect(ctx, name)
+	if err != nil || inspected.Image != expectedImage {
+		t.Fatalf("source image differs from independent immutable image proof: actual=%s expected=%s err=%v", inspected.Image, expectedImage, err)
+	}
+	t.Logf("source image identity: config=%s sandbox=%s", inspected.Image, inspected.ID)
 	adapter, err := generationstopdocker.New(docker)
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +121,7 @@ func TestFileSnapshotDockerBrowserAndCustody(t *testing.T) {
 	if err != nil || !bytes.Equal(snapshot.Bytes(), body) || proof.digest != sha256Digest(body) {
 		t.Fatalf("browser snapshot differs: %#v %v", proof, err)
 	}
-	if out := run("exec", name, "agent-browser", "get", "text", "button"); !strings.Contains(string(out), "\n1\n") {
+	if out := run("exec", name, "agent-browser", "get", "text", "button"); !strings.Contains("\n"+strings.TrimSpace(string(out))+"\n", "\n1\n") {
 		t.Fatalf("live browser lost control: %s", out)
 	}
 	after, err := adapter.InspectGeneration(ctx, name)
@@ -160,7 +172,7 @@ func TestFileSnapshotDockerBrowserAndCustody(t *testing.T) {
 		if err := os.WriteFile(evidence+"/browser.png", body, 0600); err != nil {
 			t.Fatal(err)
 		}
-		data, _ := json.MarshalIndent(map[string]any{"before": before, "after": after, "receipt": first, "bytes": len(body)}, "", "  ")
+		data, _ := json.MarshalIndent(map[string]any{"before": before, "after": after, "receipt": first, "bytes": len(body), "sourceImageId": inspected.Image, "sourceContainerId": inspected.ID}, "", "  ")
 		if err := os.WriteFile(evidence+"/native-proof.json", data, 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -237,6 +249,45 @@ func TestFileSnapshotDockerBrowserAndCustody(t *testing.T) {
 			}
 		})
 	}
+	// A later ordinary file may be published after an independent stop. It
+	// reuses the observed stopped-file reader without waking or stopping it.
+	run("stop", name)
+	stopped, err := adapter.InspectGeneration(ctx, name)
+	if err != nil || stopped.State.Running || stopped.State.PID != 0 {
+		t.Fatalf("source did not become stopped: %#v %v", stopped, err)
+	}
+	stoppedBinding := binding
+	stoppedBinding.ProviderName += "-already-stopped"
+	stoppedBinding.RequestFingerprint = strings.Repeat("e", 64)
+	stoppedBinding.FileSnapshot.Generation = stopped.Generation.ExpectedGeneration
+	stoppedBinding.Selector.ZoneRelativePath = "sub/source"
+	stoppedReceipt, err := restarted.Capture(ctx, name, stoppedBinding)
+	if err != nil || stoppedReceipt.ProviderSHA256Digest != sha256Digest([]byte("intact")) {
+		t.Fatalf("already-stopped file capture failed: %#v %v", stoppedReceipt, err)
+	}
+	stoppedRange, err := restarted.Read(ctx, name, CaptureReadRequest{CaptureIdentity: stoppedReceipt.CaptureIdentity, ExpectedTotalByteLength: stoppedReceipt.TotalByteLength, ExpectedProviderSHA256Digest: stoppedReceipt.ProviderSHA256Digest, MaximumBytes: MaximumReadBytes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stoppedBytes, err := base64.StdEncoding.DecodeString(stoppedRange.BytesBase64)
+	if err != nil || string(stoppedBytes) != "intact" {
+		t.Fatalf("stopped source download differs: %q %v", stoppedBytes, err)
+	}
+	stillStopped, err := adapter.InspectGeneration(ctx, name)
+	if err != nil || stillStopped != stopped {
+		t.Fatalf("file publication mutated stopped source: %#v %v", stillStopped, err)
+	}
+	if evidence := os.Getenv("DAYTONA_FILE_SNAPSHOT_EVIDENCE_DIR"); evidence != "" {
+		proof, _ := json.MarshalIndent(map[string]any{"before": stopped, "after": stillStopped, "receipt": stoppedReceipt, "sourceImageId": inspected.Image, "sourceContainerId": inspected.ID}, "", "  ")
+		if err := os.WriteFile(evidence+"/stopped-source-proof.json", proof, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := restarted.Delete(ctx, name, stoppedReceipt.CaptureIdentity); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("already-stopped publication passed without wake or stop dispatch: epoch=%s", stopped.Generation.ExecutionStartedAt)
+
 }
 
 type rejectSnapshotStopAuthority struct{}
