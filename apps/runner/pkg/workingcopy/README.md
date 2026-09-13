@@ -4,7 +4,8 @@
 
 The same capture API also accepts `fileSnapshot` with contract
 `ambit.working-copy-file-snapshot/v1`, an exact execution generation, and its
-workspace manifest fence. This source authority is mutually exclusive with
+workspace manifest fence. The bound generation may still be running or may
+already have exited. This source authority is mutually exclusive with
 `stopAuthority`. Capability discovery advertises `fileSnapshot` only when the
 Runner has the native reader. It grants no permission to stop a workspace.
 
@@ -16,14 +17,20 @@ symlinks, magic links, additional mounts, nonregular files and hardlink aliases.
 Final path reproof starts at the container root again and compares the zone's
 mount identity and the selected file's inode.
 
-A Linux read lease excludes writable file descriptions and writable shared
-mappings while the file is copied into the existing private, immediately
-unlinked scratch. The reader checks the lease and exact file metadata before
-accepting the copy, and rechecks the container generation. A pending or forced
-lease break, cancellation, source change, busy writer, or unsupported filesystem
-produces no completed content object or receipt. There is no ordinary-stream
-or whole-workspace-stop fallback. Writers can proceed after the lease is
-released; the browser and other processes keep running during capture.
+For a running source, a Linux read lease excludes writable file descriptions
+and writable shared mappings while the file is copied into the existing
+private, immediately unlinked scratch. The reader checks the lease and exact
+file metadata before accepting the copy, and rechecks the container generation.
+A pending or forced lease break, cancellation, source change, busy writer, or
+unsupported filesystem produces no completed content object or receipt. There
+is no ordinary-stream or whole-workspace-stop fallback. Writers can proceed
+after the lease is released; the browser and other processes keep running
+during capture.
+
+For a source whose bound generation has already exited, the existing bounded
+Docker archive reader proves that exact exited generation before and after
+reading. It neither wakes the source, dispatches a stop, nor invents a
+stopped-generation receipt; a generation that restarted is a conflict.
 
 After that proof, the existing conditional content write, immutable receipt,
 range reads, response-loss reconciliation and retirement tombstone own the

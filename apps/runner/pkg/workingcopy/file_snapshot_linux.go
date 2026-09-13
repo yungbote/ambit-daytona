@@ -19,8 +19,11 @@ import (
 )
 
 // FileSnapshotReader shares the capture owner's private scratch and durable
-// publication. It must return only a coherent, bounded copy of one source file.
+// publication. ObserveGeneration proves the binding's exact source generation
+// and reports whether it is still running or has already exited; Capture must
+// return only a coherent, bounded copy of one file from a running source.
 type FileSnapshotReader interface {
+	ObserveGeneration(context.Context, CaptureBinding) (generationstop.CurrentGenerationObservation, error)
 	Capture(context.Context, CaptureBinding, io.Writer, int64) (capturedFile, error)
 }
 
@@ -67,23 +70,46 @@ func (s *Service) validateCaptureSource(sandboxID string, binding CaptureBinding
 	return nil
 }
 
-func (s *NativeFileSnapshotReader) requireCurrent(ctx context.Context, binding CaptureBinding) (int, error) {
+func (s *NativeFileSnapshotReader) ObserveGeneration(ctx context.Context, binding CaptureBinding) (generationstop.CurrentGenerationObservation, error) {
 	if s == nil || s.generations == nil {
-		return 0, fmt.Errorf("%w: file snapshot generation inspector is unavailable", ErrUnavailable)
+		return generationstop.CurrentGenerationObservation{}, fmt.Errorf("%w: file snapshot generation inspector is unavailable", ErrUnavailable)
 	}
 	current, err := s.generations.InspectGeneration(ctx, binding.Source.ProviderResourceID)
 	if err != nil {
-		return 0, fmt.Errorf("%w: inspect file snapshot generation: %w", ErrUnavailable, err)
+		return current, fmt.Errorf("%w: inspect file snapshot generation: %w", ErrUnavailable, err)
 	}
 	owner := generationstop.ProviderOwner{
 		TenantID: binding.Owner.TenantID, UserID: binding.Owner.UserID, WorkspaceID: binding.Owner.WorkspaceID,
 		RunID: binding.Owner.RunID, GrantID: binding.Owner.GrantID,
 	}
+	// Exactly two source states are admitted: the bound generation still
+	// running, or that same generation already exited. Anything else, including
+	// a restarted generation, is a conflict rather than a different source.
+	state := current.State
+	running := state.Status == "running" && state.Running && state.PID > 0 && current.Generation.ExecutionFinishedAt == ""
+	stopped := state.Status == "exited" && !state.Running && state.PID == 0 && current.Generation.ExecutionFinishedAt != ""
 	if current.Source != binding.Source || current.Owner != owner || current.Fence != binding.FileSnapshot.Fence ||
-		current.Generation.ExpectedGeneration != binding.FileSnapshot.Generation || current.Generation.ExecutionFinishedAt != "" ||
-		current.State.Status != "running" || !current.State.Running || current.State.Paused || current.State.Restarting ||
-		current.State.Dead || current.State.PID <= 0 {
-		return 0, fmt.Errorf("%w: file snapshot lost its exact running source generation", ErrConflict)
+		current.Generation.ExpectedGeneration != binding.FileSnapshot.Generation ||
+		state.Paused || state.Restarting || state.Dead || (!running && !stopped) {
+		return current, fmt.Errorf("%w: file snapshot lost its exact source generation", ErrConflict)
+	}
+	if stopped {
+		finished, err := time.Parse(time.RFC3339Nano, current.Generation.ExecutionFinishedAt)
+		started, startErr := time.Parse(time.RFC3339Nano, current.Generation.ExecutionStartedAt)
+		if err != nil || startErr != nil || finished.Before(started) {
+			return current, fmt.Errorf("%w: file snapshot source has invalid terminal facts", ErrConflict)
+		}
+	}
+	return current, nil
+}
+
+func (s *NativeFileSnapshotReader) requireCurrent(ctx context.Context, binding CaptureBinding) (int, error) {
+	current, err := s.ObserveGeneration(ctx, binding)
+	if err != nil {
+		return 0, err
+	}
+	if !current.State.Running {
+		return 0, fmt.Errorf("%w: source stopped before live file snapshot", ErrConflict)
 	}
 	return current.State.PID, nil
 }

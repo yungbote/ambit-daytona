@@ -674,7 +674,15 @@ func (s *Service) resumeCapture(
 			if s.fileSnapshots == nil {
 				return CaptureReceipt{}, fmt.Errorf("%w: native file snapshots are not configured", ErrUnavailable)
 			}
-			staged, err = s.fileSnapshots.Capture(ctx, intent.Binding, content, MaximumCaptureBytes)
+			generation, observeErr := s.fileSnapshots.ObserveGeneration(ctx, intent.Binding)
+			if observeErr != nil {
+				return CaptureReceipt{}, observeErr
+			}
+			if generation.State.Running {
+				staged, err = s.fileSnapshots.Capture(ctx, intent.Binding, content, MaximumCaptureBytes)
+			} else {
+				staged, err = s.captureStableFile(ctx, zonePath, intent, content, MaximumCaptureBytes)
+			}
 		} else {
 			staged, err = s.captureStableFile(ctx, zonePath, intent, content, MaximumCaptureBytes)
 		}
@@ -768,14 +776,11 @@ func (s *Service) captureStableFile(
 	content io.Writer,
 	maximumBytes int64,
 ) (capturedFile, error) {
-	beforeStop, err := s.requireCurrentStop(ctx, intent.Binding)
+	beforeStop, err := s.requireCaptureStoppedGeneration(ctx, intent)
 	if err != nil {
 		return capturedFile{}, err
 	}
-	if beforeStop.TerminalGeneration != intent.Generation {
-		return capturedFile{}, fmt.Errorf("%w: stopped generation changed before capture", ErrConflict)
-	}
-	containerID := intent.Generation.ContainerID
+	containerID := beforeStop.ContainerID
 	before, err := s.statPathChain(ctx, containerID, zonePath)
 	if err != nil {
 		return capturedFile{}, err
@@ -808,11 +813,11 @@ func (s *Service) captureStableFile(
 	if !samePathStatChain(before, after) {
 		return capturedFile{}, fmt.Errorf("%w: source path changed during capture", ErrConflict)
 	}
-	afterStop, err := s.requireCurrentStop(ctx, intent.Binding)
+	afterStop, err := s.requireCaptureStoppedGeneration(ctx, intent)
 	if err != nil {
 		return capturedFile{}, err
 	}
-	if afterStop.TerminalGeneration != intent.Generation {
+	if afterStop != beforeStop {
 		return capturedFile{}, fmt.Errorf("%w: stopped generation changed during capture", ErrConflict)
 	}
 
@@ -821,6 +826,33 @@ func (s *Service) captureStableFile(
 		digest:     "sha256:" + hex.EncodeToString(hasher.Sum(nil)),
 		capturedAt: s.now().UTC().Truncate(time.Millisecond).Format("2006-01-02T15:04:05.000Z"),
 	}, nil
+}
+
+// Both physical paths reuse the existing stopped-file archive proof. A file
+// snapshot observes real terminal state; it never invents a stop operation or
+// dispatches one. Historical stopped captures retain their durable stop receipt.
+func (s *Service) requireCaptureStoppedGeneration(ctx context.Context, intent captureIntent) (generationstop.TerminalGeneration, error) {
+	if intent.Binding.FileSnapshot.Contract == "" {
+		receipt, err := s.requireCurrentStop(ctx, intent.Binding)
+		if err != nil {
+			return generationstop.TerminalGeneration{}, err
+		}
+		if receipt.TerminalGeneration != intent.Generation {
+			return generationstop.TerminalGeneration{}, fmt.Errorf("%w: stopped generation differs from capture intent", ErrConflict)
+		}
+		return receipt.TerminalGeneration, nil
+	}
+	if s.fileSnapshots == nil {
+		return generationstop.TerminalGeneration{}, fmt.Errorf("%w: file snapshot source observer is unavailable", ErrUnavailable)
+	}
+	current, err := s.fileSnapshots.ObserveGeneration(ctx, intent.Binding)
+	if err != nil {
+		return generationstop.TerminalGeneration{}, err
+	}
+	if current.State.Running {
+		return generationstop.TerminalGeneration{}, fmt.Errorf("%w: stopped file snapshot source restarted", ErrConflict)
+	}
+	return generationstop.TerminalGeneration{ExpectedGeneration: current.Generation.ExpectedGeneration, ExecutionFinishedAt: current.Generation.ExecutionFinishedAt, ExitCode: current.Generation.ExitCode, OOMKilled: current.Generation.OOMKilled}, nil
 }
 
 func (s *Service) statPathChain(
