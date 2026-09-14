@@ -7,8 +7,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -30,7 +32,7 @@ func TestFileSnapshotLeaseCopiesExactBytesAndReleasesWriterExclusion(t *testing.
 		}
 		defer source.Close()
 		var result bytes.Buffer
-		captured, err := copyLeasedFile(context.Background(), source, source, &result, MaximumCaptureBytes)
+		captured, err := copyLeasedFile(context.Background(), source, sameFile(source), &result, MaximumCaptureBytes)
 		if err != nil || !bytes.Equal(result.Bytes(), body) || captured.digest != sha256Digest(body) || captured.byteLength != int64(len(body)) {
 			t.Fatalf("snapshot differs: %#v %v", captured, err)
 		}
@@ -72,7 +74,7 @@ func TestFileSnapshotRejectsExistingWritableDescriptionsAndMappings(t *testing.T
 		}
 		defer source.Close()
 		var result bytes.Buffer
-		if _, err := copyLeasedFile(context.Background(), source, source, &result, MaximumCaptureBytes); !errors.Is(err, ErrUnavailable) || result.Len() != 0 {
+		if _, err := copyLeasedFile(context.Background(), source, sameFile(source), &result, MaximumCaptureBytes); !errors.Is(err, ErrUnavailable) || result.Len() != 0 {
 			t.Fatalf("existing writer/mapping admitted: mapped=%v bytes=%d err=%v", mapped, result.Len(), err)
 		}
 	}
@@ -103,7 +105,7 @@ func TestFileSnapshotRejectsConcurrentWriterWithoutAdmittingMixedBytes(t *testin
 		}
 		return len(data), nil
 	})
-	if _, err := copyLeasedFile(context.Background(), source, source, writer, MaximumCaptureBytes); !errors.Is(err, ErrConflict) {
+	if _, err := copyLeasedFile(context.Background(), source, sameFile(source), writer, MaximumCaptureBytes); !errors.Is(err, ErrConflict) {
 		t.Fatalf("lease break did not discard capture: %v", err)
 	}
 	if err := os.WriteFile(path, []byte("writer progresses"), 0600); err != nil {
@@ -139,7 +141,7 @@ func TestFileSnapshotCancellationBoundsAndHardlinksReleaseCustody(t *testing.T) 
 			case "too large":
 				maximum = 2048
 			}
-			if _, err := copyLeasedFile(ctx, source, source, writer, maximum); err == nil {
+			if _, err := copyLeasedFile(ctx, source, sameFile(source), writer, maximum); err == nil {
 				t.Fatal("invalid snapshot succeeded")
 			}
 			lease, err := unix.FcntlInt(source.Fd(), unix.F_GETLEASE, 0)
@@ -188,7 +190,7 @@ func TestFileSnapshotKernelForcedLeaseBreakDiscardsCopy(t *testing.T) {
 			return 0, ctx.Err()
 		}
 	})
-	if _, err := copyLeasedFile(ctx, source, source, writer, MaximumCaptureBytes); !errors.Is(err, ErrConflict) {
+	if _, err := copyLeasedFile(ctx, source, sameFile(source), writer, MaximumCaptureBytes); !errors.Is(err, ErrConflict) {
 		t.Fatalf("forced lease break admitted bytes: %v", err)
 	}
 	if time.Since(started) < time.Duration(seconds-1)*time.Second {
@@ -198,4 +200,148 @@ func TestFileSnapshotKernelForcedLeaseBreakDiscardsCopy(t *testing.T) {
 		t.Fatalf("lease remains after force break: %d %v", lease, err)
 	}
 	t.Logf("kernel forced lease break after %s; capture rejected and writer progressed", time.Since(started))
+}
+
+func sameFile(file *os.File) func() (*os.File, error) {
+	return func() (*os.File, error) { return file, nil }
+}
+
+type fakeUpperLayer string
+
+func (upper fakeUpperLayer) InspectUpperLayer(context.Context, string) (string, error) {
+	return string(upper), nil
+}
+
+// TestFileSnapshotOverlayWriterBearingInode mounts a private overlayfs in a
+// user namespace and drives the reader's bearing-file resolution through it:
+// a lower-only file is leased directly, a copied-up file additionally leases
+// its upper inode (and refuses a shared writable mapping that outlived its
+// descriptor), a mismatched upper is rejected, and a zone on a foreign
+// overlay mount is refused.
+func TestFileSnapshotOverlayWriterBearingInode(t *testing.T) {
+	if os.Getenv("DAYTONA_OVERLAY_TEST_INNER") == "" {
+		if _, err := exec.LookPath("unshare"); err != nil {
+			t.Skip("unshare is unavailable")
+		}
+		inner := exec.Command("unshare", "-Urm", os.Args[0], "-test.run", "^TestFileSnapshotOverlayWriterBearingInode$", "-test.v", "-test.count=1")
+		inner.Env = append(os.Environ(), "DAYTONA_OVERLAY_TEST_INNER=1")
+		out, err := inner.CombinedOutput()
+		if err != nil {
+			if strings.Contains(string(out), "overlay mount unsupported") {
+				t.Skipf("user namespace overlay mount unsupported: %s", out)
+			}
+			t.Fatalf("inner overlay test failed: %s %v", out, err)
+		}
+		if !strings.Contains(string(out), "--- PASS: TestFileSnapshotOverlayWriterBearingInode") {
+			t.Fatalf("inner overlay test did not run to a pass: %s", out)
+		}
+		t.Logf("inner overlay test:\n%s", out)
+		return
+	}
+	root := t.TempDir()
+	for _, dir := range []string{"lower/zone", "upper", "work", "merged", "other/zone", "lower2", "upper2", "work2"} {
+		if err := os.MkdirAll(root+"/"+dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(root+"/lower/zone/only", []byte("lower-only-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(root+"/lower/zone/promoted", []byte("promoted-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	options := fmt.Sprintf("lowerdir=%s/lower,upperdir=%s/upper,workdir=%s/work", root, root, root)
+	if err := unix.Mount("overlay", root+"/merged", "overlay", 0, options); err != nil {
+		t.Fatalf("overlay mount unsupported: %v", err)
+	}
+	defer unix.Unmount(root+"/merged", unix.MNT_DETACH)
+	// Copy up "promoted" through the merged view and create a pure-upper file.
+	if err := os.Chmod(root+"/merged/zone/promoted", 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(root+"/merged/zone/fresh", []byte("fresh-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rootFD, err := unix.Open(root+"/merged", unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(rootFD)
+	reader := &NativeFileSnapshotReader{upperLayers: fakeUpperLayer(root + "/upper")}
+	binding := validBinding()
+	capture := func(path string, r *NativeFileSnapshotReader) (capturedFile, *bytes.Buffer, error) {
+		selected, err := os.OpenFile(root+"/merged"+path, os.O_RDONLY|unix.O_NONBLOCK, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer selected.Close()
+		var result bytes.Buffer
+		captured, err := copyLeasedFile(context.Background(), selected, func() (*os.File, error) {
+			return r.openWriterBearingFile(context.Background(), binding, rootFD, selected, path)
+		}, &result, MaximumCaptureBytes)
+		return captured, &result, err
+	}
+	for _, path := range []string{"/zone/only", "/zone/promoted", "/zone/fresh"} {
+		captured, result, err := capture(path, reader)
+		expected, _ := os.ReadFile(root + "/merged" + path)
+		if err != nil || !bytes.Equal(result.Bytes(), expected) || captured.byteLength != int64(len(expected)) {
+			t.Fatalf("%s: coherent copy failed: %v %q", path, err, result.Bytes())
+		}
+	}
+	if _, err := os.Stat(root + "/upper/zone/only"); !os.IsNotExist(err) {
+		t.Fatalf("lower-only file was copied up by the reader: %v", err)
+	}
+	// A shared writable mapping whose only descriptor is closed must be
+	// refused for a copied-up file: only the upper inode still counts it.
+	holder := exec.Command("python3", "-c", `
+import ctypes, os, sys, time
+libc=ctypes.CDLL(None, use_errno=True); libc.mmap.restype=ctypes.c_void_p
+libc.mmap.argtypes=[ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_long]
+fd=os.open(sys.argv[1], os.O_RDWR); size=os.fstat(fd).st_size
+addr=libc.mmap(None, size, 3, 1, fd, 0); os.close(fd)
+assert not any(os.readlink('/proc/self/fd/'+x).endswith('/fresh') for x in os.listdir('/proc/self/fd') if os.path.exists('/proc/self/fd/'+x))
+ctypes.memset(addr, ord('z'), size)
+print('ready', flush=True)
+time.sleep(60)
+`, root+"/merged/zone/fresh")
+	ready, err := holder.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := holder.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Process.Kill()
+	if line := make([]byte, 6); func() error { _, err := io.ReadFull(ready, line); return err }() != nil || string(line) != "ready\n" {
+		t.Fatalf("mapping holder did not become ready: %q", line)
+	}
+	if _, _, err := capture("/zone/fresh", reader); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("descriptorless writable mapping was not refused as unavailable: %v", err)
+	}
+	holder.Process.Kill()
+	// An upper layer that does not describe the selected file is a conflict.
+	if err := os.MkdirAll(root+"/other/zone", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(root+"/other/zone/promoted", []byte("someone else"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := capture("/zone/promoted", &NativeFileSnapshotReader{upperLayers: fakeUpperLayer(root + "/other")}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("mismatched upper layer was not rejected as a conflict: %v", err)
+	}
+	// A zone that is itself a foreign overlay mount has no known upper layer.
+	if err := os.WriteFile(root+"/lower2/foreign", []byte("foreign-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(root+"/merged/foreign-zone", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	options2 := fmt.Sprintf("lowerdir=%s/lower2,upperdir=%s/upper2,workdir=%s/work2", root, root, root)
+	if err := unix.Mount("overlay", root+"/merged/foreign-zone", "overlay", 0, options2); err != nil {
+		t.Fatalf("second overlay mount: %v", err)
+	}
+	defer unix.Unmount(root+"/merged/foreign-zone", unix.MNT_DETACH)
+	if _, _, err := capture("/foreign-zone/foreign", reader); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("foreign overlay zone was not refused as unavailable: %v", err)
+	}
 }
