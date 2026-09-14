@@ -220,8 +220,13 @@ func (upper fakeUpperLayer) InspectUpperLayer(context.Context, string) (string, 
 // overlay mount is refused.
 func TestFileSnapshotOverlayWriterBearingInode(t *testing.T) {
 	if os.Getenv("DAYTONA_OVERLAY_TEST_INNER") == "" {
-		if _, err := exec.LookPath("unshare"); err != nil {
-			t.Skip("unshare is unavailable")
+		for _, tool := range []string{"unshare", "python3"} {
+			if _, err := exec.LookPath(tool); err != nil {
+				t.Skipf("%s is unavailable", tool)
+			}
+		}
+		if out, err := exec.Command("unshare", "-Urm", "true").CombinedOutput(); err != nil {
+			t.Skipf("unprivileged user and mount namespaces are unavailable: %s %v", out, err)
 		}
 		inner := exec.Command("unshare", "-Urm", os.Args[0], "-test.run", "^TestFileSnapshotOverlayWriterBearingInode$", "-test.v", "-test.count=1")
 		inner.Env = append(os.Environ(), "DAYTONA_OVERLAY_TEST_INNER=1")
@@ -283,9 +288,9 @@ func TestFileSnapshotOverlayWriterBearingInode(t *testing.T) {
 	}
 	for _, path := range []string{"/zone/only", "/zone/promoted", "/zone/fresh"} {
 		captured, result, err := capture(path, reader)
-		expected, _ := os.ReadFile(root + "/merged" + path)
-		if err != nil || !bytes.Equal(result.Bytes(), expected) || captured.byteLength != int64(len(expected)) {
-			t.Fatalf("%s: coherent copy failed: %v %q", path, err, result.Bytes())
+		expected, readErr := os.ReadFile(root + "/merged" + path)
+		if err != nil || readErr != nil || !bytes.Equal(result.Bytes(), expected) || captured.byteLength != int64(len(expected)) {
+			t.Fatalf("%s: coherent copy failed: %v %v %q", path, err, readErr, result.Bytes())
 		}
 	}
 	if _, err := os.Stat(root + "/upper/zone/only"); !os.IsNotExist(err) {
@@ -315,6 +320,17 @@ time.sleep(60)
 	if line := make([]byte, 6); func() error { _, err := io.ReadFull(ready, line); return err }() != nil || string(line) != "ready\n" {
 		t.Fatalf("mapping holder did not become ready: %q", line)
 	}
+	// The overlay inode alone still grants a lease to this mapping; only the
+	// upper inode refuses it, so the refusal below must come from that lease.
+	overlayOnly, err := os.OpenFile(root+"/merged/zone/fresh", os.O_RDONLY|unix.O_NONBLOCK, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var overlayCopy bytes.Buffer
+	if _, err := copyLeasedFile(context.Background(), overlayOnly, sameFile(overlayOnly), &overlayCopy, MaximumCaptureBytes); err != nil {
+		t.Fatalf("overlay-only lease unexpectedly refused the descriptorless mapping: %v", err)
+	}
+	overlayOnly.Close()
 	if _, _, err := capture("/zone/fresh", reader); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("descriptorless writable mapping was not refused as unavailable: %v", err)
 	}
