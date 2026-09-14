@@ -734,7 +734,7 @@ function assertGenerationValues(binding: WorkingCopyCaptureGenerationDto | Worki
       assertGenerationStopAuthority(binding.stopAuthority)
     }
   } catch {
-    throw new BadRequestException('Stopped-generation authority is invalid.')
+    throw new BadRequestException('Working-copy capture source authority is invalid.')
   }
   assertExactKeys(
     binding.source,

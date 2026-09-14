@@ -105,7 +105,7 @@ func TestFileSnapshotDockerBrowserAndCustody(t *testing.T) {
 	run("exec", name, "agent-browser", "open", "data:text/html,<title>Live capture</title><button onclick='this.textContent=Number(this.textContent)+1'>0</button>")
 	run("exec", name, "agent-browser", "screenshot", "/workspace/outputs/browser.png")
 	body := run("exec", name, "cat", "/workspace/outputs/browser.png")
-	reader := NewNativeFileSnapshotReader(adapter)
+	reader := NewNativeFileSnapshotReader(adapter, adapter)
 	var snapshot bytes.Buffer
 	// A browser control operation runs while the source file is leased and
 	// copied. The browser and the workspace generation must remain alive.
@@ -179,16 +179,35 @@ func TestFileSnapshotDockerBrowserAndCustody(t *testing.T) {
 	}
 	t.Logf("exact browser bytes=%d digest=%s generation=%s PID=%d; no stop authority invoked", len(body), proof.digest, before.Generation.ExecutionStartedAt, before.State.PID)
 
-	for _, scenario := range []string{"writable_fd", "writable_mmap", "symlink", "hardlink", "file_replaced", "zone_replaced", "parent_symlink", "descendant_bind", "writer_arrives", "source_restart"} {
+	// Writer scenarios must be refused as unavailable; every path, identity and
+	// generation scenario is a conflict. The exact class matters because the
+	// host retries unavailability and abandons conflicts.
+	expected := map[string]error{
+		"writable_fd": ErrUnavailable, "writable_mmap": ErrUnavailable, "writable_mmap_closed_fd": ErrUnavailable,
+		"symlink": ErrConflict, "hardlink": ErrConflict, "file_replaced": ErrConflict, "zone_replaced": ErrConflict,
+		"parent_symlink": ErrConflict, "descendant_bind": ErrConflict, "writer_arrives": ErrConflict, "source_restart": ErrConflict,
+	}
+	for _, scenario := range []string{"writable_fd", "writable_mmap", "writable_mmap_closed_fd", "symlink", "hardlink", "file_replaced", "zone_replaced", "parent_symlink", "descendant_bind", "writer_arrives", "source_restart"} {
 		t.Run(scenario, func(t *testing.T) {
 			run("exec", name, "sh", "-c", "mkdir -p /workspace/outputs/sub && printf intact > /workspace/outputs/sub/source")
 			request := binding
 			request.Selector.ZoneRelativePath = "sub/source"
 			var holder string
-			if scenario == "writable_fd" || scenario == "writable_mmap" {
+			if strings.HasPrefix(scenario, "writable_") {
 				code := "import os,time; f=open('/workspace/outputs/sub/source','r+b'); "
-				if scenario == "writable_mmap" {
+				switch scenario {
+				case "writable_mmap":
 					code += "import mmap; m=mmap.mmap(f.fileno(),0); f.close(); "
+				case "writable_mmap_closed_fd":
+					// A shared writable mapping that outlives its only descriptor.
+					// CPython's mmap dups the descriptor, so map through libc and
+					// close the sole descriptor; the overlay inode then reports
+					// no writer while stores through the mapping still land.
+					code += "import ctypes; libc=ctypes.CDLL(None, use_errno=True); libc.mmap.restype=ctypes.c_void_p; " +
+						"libc.mmap.argtypes=[ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_long]; " +
+						"size=os.fstat(f.fileno()).st_size; addr=libc.mmap(None, size, 3, 1, f.fileno(), 0); assert addr not in (None, ctypes.c_void_p(-1).value); f.close(); " +
+						"assert not any(os.readlink('/proc/self/fd/'+fd).endswith('/sub/source') for fd in os.listdir('/proc/self/fd') if os.path.exists('/proc/self/fd/'+fd)); " +
+						"ctypes.memset(addr, ord('x'), size); "
 				}
 				code += "open('/workspace/holder.ready','w').write(str(os.getpid())); time.sleep(60)"
 				run("exec", "--detach", name, "python3", "-c", code)
@@ -235,8 +254,8 @@ func TestFileSnapshotDockerBrowserAndCustody(t *testing.T) {
 				}
 				return len(data), nil
 			})
-			if _, err := reader.Capture(ctx, request, output, MaximumCaptureBytes); err == nil {
-				t.Fatalf("%s snapshot was admitted", scenario)
+			if _, err := reader.Capture(ctx, request, output, MaximumCaptureBytes); !errors.Is(err, expected[scenario]) {
+				t.Fatalf("%s snapshot was not refused as %v: %v", scenario, expected[scenario], err)
 			}
 			if scenario == "descendant_bind" {
 				output, err := exec.CommandContext(ctx, "nsenter", fmt.Sprintf("--mount=/proc/%d/ns/mnt", before.State.PID), fmt.Sprintf("--pid=/proc/%d/ns/pid", before.State.PID), fmt.Sprintf("--root=/proc/%d/root", before.State.PID), "--wd=/", "--", "umount", "/workspace/outputs/sub").CombinedOutput()
