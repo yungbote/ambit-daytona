@@ -26,11 +26,15 @@ also opens that file under the storage driver's upper layer, with the same
 path restrictions, and leases it too; an upper layer the driver does not
 expose, or a mismatch between the two inodes, refuses the capture. A file
 that is not copied up, or one on an admitted non-overlay mount, is leased
-directly: any write must first open it through the selected path, which
-breaks that lease. The reader checks every lease and exact file metadata
-before accepting the copy, and rechecks the container generation. A pending
-or forced lease break, cancellation, source change, busy writer, or
-unsupported filesystem produces no completed content object or receipt.
+directly: the upper layer is resolved only while that lease is held, so any
+write must first open it through the selected path, which breaks the lease.
+A zone mount that is itself a foreign overlayfs has no known upper layer and
+is refused. Leases do not stop a read-only open with O_TRUNC or a copy-up
+caused by a metadata change; the exact metadata reproof after the copy
+rejects those. The reader checks every lease and exact file metadata before
+accepting the copy, and rechecks the container generation. A pending or
+forced lease break, cancellation, source change, busy writer, or unsupported
+filesystem produces no completed content object or receipt.
 There is no ordinary-stream or whole-workspace-stop fallback. Writers can
 proceed after the leases are released; the browser and other processes keep
 running during capture.
@@ -58,7 +62,12 @@ no-new-privileges. The test binary must run in the same PID and mount
 namespaces as that Runner's Docker daemon, exactly as the production Runner
 process does beside its own daemon; a remote Docker socket alone cannot supply
 the native source descriptor or the upper layer path. The observed
-configuration is Docker 28.5.2 with overlay2 on ext4. Other
+configurations are Docker 28.5.2 with overlay2 on ext4, qualified with
+metacopy on (the DinD daemon) and observed in production with metacopy off;
+the reader is insensitive to that setting because bytes are read through the
+overlay descriptor and the upper lease serves exclusion only. The host unit
+test mounts its own overlayfs in a user namespace to exercise lower-only,
+copied-up, mismatched-upper and foreign-mount files. Other
 provider/kernel/filesystem targets require their own qualification and must
 report unsupported writer exclusion honestly.
 

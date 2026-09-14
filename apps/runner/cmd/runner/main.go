@@ -317,13 +317,19 @@ func run() int {
 		if authorityErr != nil {
 			logger.Warn("Working-copy capture is unavailable", "error", authorityErr)
 		} else {
+			// Advertise live file capture only with a live Docker adapter; a
+			// typed nil adapter would satisfy the reader's interfaces silently.
+			var fileSnapshots []workingcopy.FileSnapshotReader
+			if generationAdapter != nil {
+				fileSnapshots = append(fileSnapshots, workingcopy.NewNativeFileSnapshotReader(generationAdapter, generationAdapter))
+			}
 			var captureErr error
 			workingCopyCaptures, captureErr = workingcopy.NewService(
 				cli,
 				privateObjects,
 				generationStops,
 				captureAuthority,
-				workingcopy.NewNativeFileSnapshotReader(generationAdapter, generationAdapter),
+				fileSnapshots...,
 			)
 			if captureErr != nil {
 				logger.Warn("Working-copy capture is unavailable", "error", captureErr)

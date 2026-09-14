@@ -179,14 +179,9 @@ func (s *NativeFileSnapshotReader) Capture(ctx context.Context, binding CaptureB
 	if err := s.requireSamePID(ctx, binding, pid); err != nil {
 		return capturedFile{}, err
 	}
-	bearing, err := s.openWriterBearingFile(ctx, binding, source, zone+"/"+binding.Selector.ZoneRelativePath)
-	if err != nil {
-		return capturedFile{}, err
-	}
-	if bearing != source {
-		defer bearing.Close()
-	}
-	captured, err := copyLeasedFile(ctx, source, bearing, output, maximumBytes)
+	captured, err := copyLeasedFile(ctx, source, func() (*os.File, error) {
+		return s.openWriterBearingFile(ctx, binding, root, source, zone+"/"+binding.Selector.ZoneRelativePath)
+	}, output, maximumBytes)
 	if err != nil {
 		return capturedFile{}, err
 	}
@@ -237,14 +232,25 @@ func (s *NativeFileSnapshotReader) Capture(ctx context.Context, binding CaptureB
 // the storage driver's upper layer with the same path restrictions. A file
 // that is not copied up, or that lives on an admitted non-overlay mount, has no
 // such hidden writer: every write must first open it through the selected path,
-// which breaks the lease held there.
-func (s *NativeFileSnapshotReader) openWriterBearingFile(ctx context.Context, binding CaptureBinding, selected *os.File, containerPath string) (*os.File, error) {
+// which breaks the lease held there. That argument needs the selected file's
+// lease to be held already, so the caller resolves the bearing file only
+// inside the exclusion window. The upper layer belongs to the container root
+// filesystem alone; an admitted zone mount that is itself a foreign overlayfs
+// has no known upper layer and is refused.
+func (s *NativeFileSnapshotReader) openWriterBearingFile(ctx context.Context, binding CaptureBinding, root int, selected *os.File, containerPath string) (*os.File, error) {
 	var filesystem unix.Statfs_t
 	if err := unix.Fstatfs(int(selected.Fd()), &filesystem); err != nil {
 		return nil, fmt.Errorf("%w: inspect file snapshot filesystem: %w", ErrUnavailable, err)
 	}
 	if filesystem.Type != unix.OVERLAYFS_SUPER_MAGIC {
 		return selected, nil
+	}
+	var rootMount, selectedMount unix.Statx_t
+	if unix.Statx(root, "", unix.AT_EMPTY_PATH, unix.STATX_MNT_ID, &rootMount) != nil ||
+		unix.Statx(int(selected.Fd()), "", unix.AT_EMPTY_PATH, unix.STATX_MNT_ID, &selectedMount) != nil ||
+		rootMount.Mask&unix.STATX_MNT_ID == 0 || selectedMount.Mask&unix.STATX_MNT_ID == 0 ||
+		rootMount.Mnt_id != selectedMount.Mnt_id {
+		return nil, fmt.Errorf("%w: file snapshot cannot exclude writers on an overlay mount other than the container root", ErrUnavailable)
 	}
 	if s.upperLayers == nil {
 		return nil, fmt.Errorf("%w: file snapshot upper layer resolver is unavailable", ErrUnavailable)
@@ -341,18 +347,25 @@ func (leased leasedFile) unchanged() bool {
 }
 
 // copyLeasedFile copies the selected file while both it and the file bearing
-// its write references are leased. The two are the same file unless the
-// selected path is a copied-up overlayfs file. Never publish bytes on a
-// metadata-only or ordinary-stream fallback.
-func copyLeasedFile(ctx context.Context, selected, bearing *os.File, output io.Writer, maximumBytes int64) (capturedFile, error) {
+// its write references are leased. The bearing file is resolved only after
+// the selected file's lease is held, so a copy-up racing that resolution must
+// open through the selected path and break the lease. The two are the same
+// file unless the selected path is a copied-up overlayfs file. Leases do not
+// stop a read-only open with O_TRUNC or a copy-up caused by a metadata
+// change; the metadata reproof after the copy rejects those. Never publish
+// bytes on a metadata-only or ordinary-stream fallback.
+func copyLeasedFile(ctx context.Context, selected *os.File, bearing func() (*os.File, error), output io.Writer, maximumBytes int64) (capturedFile, error) {
 	leased, err := leaseFile(selected, maximumBytes)
 	if err != nil {
 		return capturedFile{}, err
 	}
 	defer leased.lease.release()
 	writerBearing := leased
-	if bearing != selected {
-		if writerBearing, err = leaseFile(bearing, maximumBytes); err != nil {
+	if bearingFile, err := bearing(); err != nil {
+		return capturedFile{}, err
+	} else if bearingFile != selected {
+		defer bearingFile.Close()
+		if writerBearing, err = leaseFile(bearingFile, maximumBytes); err != nil {
 			return capturedFile{}, err
 		}
 		defer writerBearing.lease.release()
