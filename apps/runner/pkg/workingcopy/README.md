@@ -17,15 +17,23 @@ symlinks, magic links, additional mounts, nonregular files and hardlink aliases.
 Final path reproof starts at the container root again and compares the zone's
 mount identity and the selected file's inode.
 
-For a running source, a Linux read lease excludes writable file descriptions
+For a running source, Linux read leases exclude writable file descriptions
 and writable shared mappings while the file is copied into the existing
-private, immediately unlinked scratch. The reader checks the lease and exact
-file metadata before accepting the copy, and rechecks the container generation.
-A pending or forced lease break, cancellation, source change, busy writer, or
-unsupported filesystem produces no completed content object or receipt. There
-is no ordinary-stream or whole-workspace-stop fallback. Writers can proceed
-after the lease is released; the browser and other processes keep running
-during capture.
+private, immediately unlinked scratch. A lease watches one inode. On
+overlayfs the writers of a copied-up file hold its upper inode, and the
+overlay inode reports no writer once their descriptors close, so the reader
+also opens that file under the storage driver's upper layer, with the same
+path restrictions, and leases it too; an upper layer the driver does not
+expose, or a mismatch between the two inodes, refuses the capture. A file
+that is not copied up, or one on an admitted non-overlay mount, is leased
+directly: any write must first open it through the selected path, which
+breaks that lease. The reader checks every lease and exact file metadata
+before accepting the copy, and rechecks the container generation. A pending
+or forced lease break, cancellation, source change, busy writer, or
+unsupported filesystem produces no completed content object or receipt.
+There is no ordinary-stream or whole-workspace-stop fallback. Writers can
+proceed after the leases are released; the browser and other processes keep
+running during capture.
 
 For a source whose bound generation has already exited, the existing bounded
 Docker archive reader proves that exact exited generation before and after
@@ -46,11 +54,13 @@ The backend migration refuses removal while any such intent is retained.
 
 Native qualification uses the unchanged browser image in a disposable DinD
 Runner with the existing rootless seccomp profile, dropped capabilities and
-no-new-privileges. The test binary must run in the same PID namespace as that
-Runner's Docker daemon; a remote Docker socket alone cannot supply the native
-source descriptor. The observed configuration is Docker 28.5.2 with overlay2.
-Other provider/kernel/filesystem targets require their own qualification and
-must report unsupported writer exclusion honestly.
+no-new-privileges. The test binary must run in the same PID and mount
+namespaces as that Runner's Docker daemon, exactly as the production Runner
+process does beside its own daemon; a remote Docker socket alone cannot supply
+the native source descriptor or the upper layer path. The observed
+configuration is Docker 28.5.2 with overlay2 on ext4. Other
+provider/kernel/filesystem targets require their own qualification and must
+report unsupported writer exclusion honestly.
 
 ```sh
 DAYTONA_FILE_SNAPSHOT_BROWSER_IMAGE=<already-installed-browser-image> \

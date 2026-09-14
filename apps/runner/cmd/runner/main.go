@@ -323,7 +323,7 @@ func run() int {
 				privateObjects,
 				generationStops,
 				captureAuthority,
-				workingcopy.NewNativeFileSnapshotReader(generationAdapter),
+				workingcopy.NewNativeFileSnapshotReader(generationAdapter, generationAdapter),
 			)
 			if captureErr != nil {
 				logger.Warn("Working-copy capture is unavailable", "error", captureErr)

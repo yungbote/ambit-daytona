@@ -30,7 +30,7 @@ func TestFileSnapshotLeaseCopiesExactBytesAndReleasesWriterExclusion(t *testing.
 		}
 		defer source.Close()
 		var result bytes.Buffer
-		captured, err := copyLeasedFile(context.Background(), source, &result, MaximumCaptureBytes)
+		captured, err := copyLeasedFile(context.Background(), source, source, &result, MaximumCaptureBytes)
 		if err != nil || !bytes.Equal(result.Bytes(), body) || captured.digest != sha256Digest(body) || captured.byteLength != int64(len(body)) {
 			t.Fatalf("snapshot differs: %#v %v", captured, err)
 		}
@@ -72,7 +72,7 @@ func TestFileSnapshotRejectsExistingWritableDescriptionsAndMappings(t *testing.T
 		}
 		defer source.Close()
 		var result bytes.Buffer
-		if _, err := copyLeasedFile(context.Background(), source, &result, MaximumCaptureBytes); !errors.Is(err, ErrUnavailable) || result.Len() != 0 {
+		if _, err := copyLeasedFile(context.Background(), source, source, &result, MaximumCaptureBytes); !errors.Is(err, ErrUnavailable) || result.Len() != 0 {
 			t.Fatalf("existing writer/mapping admitted: mapped=%v bytes=%d err=%v", mapped, result.Len(), err)
 		}
 	}
@@ -103,7 +103,7 @@ func TestFileSnapshotRejectsConcurrentWriterWithoutAdmittingMixedBytes(t *testin
 		}
 		return len(data), nil
 	})
-	if _, err := copyLeasedFile(context.Background(), source, writer, MaximumCaptureBytes); !errors.Is(err, ErrConflict) {
+	if _, err := copyLeasedFile(context.Background(), source, source, writer, MaximumCaptureBytes); !errors.Is(err, ErrConflict) {
 		t.Fatalf("lease break did not discard capture: %v", err)
 	}
 	if err := os.WriteFile(path, []byte("writer progresses"), 0600); err != nil {
@@ -139,7 +139,7 @@ func TestFileSnapshotCancellationBoundsAndHardlinksReleaseCustody(t *testing.T) 
 			case "too large":
 				maximum = 2048
 			}
-			if _, err := copyLeasedFile(ctx, source, writer, maximum); err == nil {
+			if _, err := copyLeasedFile(ctx, source, source, writer, maximum); err == nil {
 				t.Fatal("invalid snapshot succeeded")
 			}
 			lease, err := unix.FcntlInt(source.Fd(), unix.F_GETLEASE, 0)
@@ -188,7 +188,7 @@ func TestFileSnapshotKernelForcedLeaseBreakDiscardsCopy(t *testing.T) {
 			return 0, ctx.Err()
 		}
 	})
-	if _, err := copyLeasedFile(ctx, source, writer, MaximumCaptureBytes); !errors.Is(err, ErrConflict) {
+	if _, err := copyLeasedFile(ctx, source, source, writer, MaximumCaptureBytes); !errors.Is(err, ErrConflict) {
 		t.Fatalf("forced lease break admitted bytes: %v", err)
 	}
 	if time.Since(started) < time.Duration(seconds-1)*time.Second {

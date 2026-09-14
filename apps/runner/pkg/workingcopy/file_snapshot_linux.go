@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -27,12 +28,20 @@ type FileSnapshotReader interface {
 	Capture(context.Context, CaptureBinding, io.Writer, int64) (capturedFile, error)
 }
 
-type NativeFileSnapshotReader struct {
-	generations generationstop.GenerationInspector
+// UpperLayerResolver reports the directory the storage driver mounts as a
+// container root filesystem's writable upper layer. On overlayfs that layer
+// holds the inode every writer of a copied-up file actually references.
+type UpperLayerResolver interface {
+	InspectUpperLayer(ctx context.Context, providerResourceID string) (string, error)
 }
 
-func NewNativeFileSnapshotReader(generations generationstop.GenerationInspector) *NativeFileSnapshotReader {
-	return &NativeFileSnapshotReader{generations: generations}
+type NativeFileSnapshotReader struct {
+	generations generationstop.GenerationInspector
+	upperLayers UpperLayerResolver
+}
+
+func NewNativeFileSnapshotReader(generations generationstop.GenerationInspector, upperLayers UpperLayerResolver) *NativeFileSnapshotReader {
+	return &NativeFileSnapshotReader{generations: generations, upperLayers: upperLayers}
 }
 
 func (s *Service) validateCaptureSource(sandboxID string, binding CaptureBinding) error {
@@ -114,6 +123,19 @@ func (s *NativeFileSnapshotReader) requireCurrent(ctx context.Context, binding C
 	return current.State.PID, nil
 }
 
+// requireSamePID re-proves the running generation and that its init task is
+// still the pinned one. An observation failure keeps its own classification.
+func (s *NativeFileSnapshotReader) requireSamePID(ctx context.Context, binding CaptureBinding, pid int) error {
+	currentPID, err := s.requireCurrent(ctx, binding)
+	if err != nil {
+		return err
+	}
+	if currentPID != pid {
+		return fmt.Errorf("%w: source generation changed during file snapshot", ErrConflict)
+	}
+	return nil
+}
+
 func (s *NativeFileSnapshotReader) Capture(ctx context.Context, binding CaptureBinding, output io.Writer, maximumBytes int64) (capturedFile, error) {
 	pid, err := s.requireCurrent(ctx, binding)
 	if err != nil {
@@ -154,10 +176,17 @@ func (s *NativeFileSnapshotReader) Capture(ctx context.Context, binding CaptureB
 	}
 	source := os.NewFile(uintptr(file), "working-copy-source")
 	defer source.Close()
-	if currentPID, err := s.requireCurrent(ctx, binding); err != nil || currentPID != pid {
-		return capturedFile{}, fmt.Errorf("%w: source generation changed while opening file: %v", ErrConflict, err)
+	if err := s.requireSamePID(ctx, binding, pid); err != nil {
+		return capturedFile{}, err
 	}
-	captured, err := copyLeasedFile(ctx, source, output, maximumBytes)
+	bearing, err := s.openWriterBearingFile(ctx, binding, source, zone+"/"+binding.Selector.ZoneRelativePath)
+	if err != nil {
+		return capturedFile{}, err
+	}
+	if bearing != source {
+		defer bearing.Close()
+	}
+	captured, err := copyLeasedFile(ctx, source, bearing, output, maximumBytes)
 	if err != nil {
 		return capturedFile{}, err
 	}
@@ -193,52 +222,158 @@ func (s *NativeFileSnapshotReader) Capture(ctx context.Context, binding CaptureB
 		selected.Dev != current.Dev || selected.Ino != current.Ino || current.Nlink != 1 {
 		return capturedFile{}, fmt.Errorf("%w: file snapshot path names different source bytes", ErrConflict)
 	}
-	if currentPID, err := s.requireCurrent(ctx, binding); err != nil || currentPID != pid {
-		return capturedFile{}, fmt.Errorf("%w: source generation changed during file snapshot: %v", ErrConflict, err)
+	if err := s.requireSamePID(ctx, binding, pid); err != nil {
+		return capturedFile{}, err
 	}
 	return captured, nil
 }
 
-// A read lease excludes existing writable descriptions/mappings and prevents
-// new writable opens/truncation while held. It is not an advisory file lock.
-// A conflicting open marks the lease breaking before the writer can proceed;
-// F_GETLEASE then returns F_UNLCK, so even a forced timeout discards the copy.
-// Never publish bytes on a metadata-only or ordinary-stream fallback.
-func copyLeasedFile(ctx context.Context, source *os.File, output io.Writer, maximumBytes int64) (capturedFile, error) {
-	fd := source.Fd()
-	var before unix.Stat_t
-	if err := unix.Fstat(int(fd), &before); err != nil || before.Mode&unix.S_IFMT != unix.S_IFREG || before.Nlink != 1 {
-		return capturedFile{}, fmt.Errorf("%w: file snapshot requires one regular file without hardlink aliases", ErrConflict)
+// openWriterBearingFile returns the file whose inode carries every write
+// reference to the selected file. On overlayfs the writable descriptions and
+// shared mappings of a copied-up file belong to the upper inode; the overlay
+// inode a lease would otherwise watch reports no writer once those descriptors
+// close, so a mapping that outlived its descriptor could keep storing while a
+// lease there was granted. The upper file is therefore opened directly under
+// the storage driver's upper layer with the same path restrictions. A file
+// that is not copied up, or that lives on an admitted non-overlay mount, has no
+// such hidden writer: every write must first open it through the selected path,
+// which breaks the lease held there.
+func (s *NativeFileSnapshotReader) openWriterBearingFile(ctx context.Context, binding CaptureBinding, selected *os.File, containerPath string) (*os.File, error) {
+	var filesystem unix.Statfs_t
+	if err := unix.Fstatfs(int(selected.Fd()), &filesystem); err != nil {
+		return nil, fmt.Errorf("%w: inspect file snapshot filesystem: %w", ErrUnavailable, err)
 	}
-	if before.Size < 0 || before.Size > maximumBytes {
-		return capturedFile{}, fmt.Errorf("%w: file snapshot exceeds its byte bound", ErrConflict)
+	if filesystem.Type != unix.OVERLAYFS_SUPER_MAGIC {
+		return selected, nil
 	}
-	if _, err := unix.FcntlInt(fd, unix.F_SETLEASE, unix.F_RDLCK); err != nil {
-		return capturedFile{}, fmt.Errorf("%w: file is being written or its filesystem cannot exclude writers: %w", ErrUnavailable, err)
+	if s.upperLayers == nil {
+		return nil, fmt.Errorf("%w: file snapshot upper layer resolver is unavailable", ErrUnavailable)
 	}
-	defer unix.FcntlInt(fd, unix.F_SETLEASE, unix.F_UNLCK)
-	// The reader polls the lease at the proof boundary. Do not deliver a
-	// process-wide asynchronous signal to the long-lived Runner.
-	if _, err := unix.FcntlInt(fd, unix.F_SETOWN, 0); err != nil {
-		return capturedFile{}, fmt.Errorf("%w: configure file snapshot lease: %w", ErrUnavailable, err)
+	upperDir, err := s.upperLayers.InspectUpperLayer(ctx, binding.Source.ProviderResourceID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: locate file snapshot upper layer: %w", ErrUnavailable, err)
 	}
-	if err := unix.Fstat(int(fd), &before); err != nil || before.Nlink != 1 || before.Size < 0 || before.Size > maximumBytes {
-		return capturedFile{}, fmt.Errorf("%w: file changed before writer exclusion", ErrConflict)
+	upperRoot, err := unix.Open(upperDir, unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, fmt.Errorf("%w: open file snapshot upper layer: %w", ErrUnavailable, err)
+	}
+	defer unix.Close(upperRoot)
+	fd, err := unix.Openat2(upperRoot, strings.TrimPrefix(containerPath, "/"), &unix.OpenHow{
+		Flags:   unix.O_RDONLY | unix.O_NONBLOCK | unix.O_NOFOLLOW | unix.O_CLOEXEC,
+		Resolve: unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_XDEV,
+	})
+	if errors.Is(err, unix.ENOENT) {
+		// Not copied up: no writable description or mapping can exist yet.
+		return selected, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: resolve file snapshot upper file: %w", ErrConflict, err)
+	}
+	return os.NewFile(uintptr(fd), "working-copy-upper"), nil
+}
+
+// A read lease excludes existing writable descriptions/mappings of its inode
+// and prevents new writable opens/truncation while held. It is not an
+// advisory file lock. A conflicting open marks the lease breaking before the
+// writer can proceed; F_GETLEASE then returns F_UNLCK, so even a forced
+// timeout discards the copy. The reader polls the lease at the proof boundary
+// and never delivers a process-wide asynchronous signal to the Runner.
+type readLease struct{ fd int }
+
+func acquireReadLease(fd int) (readLease, error) {
+	if _, err := unix.FcntlInt(uintptr(fd), unix.F_SETLEASE, unix.F_RDLCK); err != nil {
+		return readLease{}, fmt.Errorf("%w: file is being written or its filesystem cannot exclude writers: %w", ErrUnavailable, err)
+	}
+	if _, err := unix.FcntlInt(uintptr(fd), unix.F_SETOWN, 0); err != nil {
+		unix.FcntlInt(uintptr(fd), unix.F_SETLEASE, unix.F_UNLCK)
+		return readLease{}, fmt.Errorf("%w: configure file snapshot lease: %w", ErrUnavailable, err)
+	}
+	return readLease{fd: fd}, nil
+}
+
+func (lease readLease) intact() bool {
+	kind, err := unix.FcntlInt(uintptr(lease.fd), unix.F_GETLEASE, 0)
+	return err == nil && kind == unix.F_RDLCK
+}
+
+func (lease readLease) release() {
+	unix.FcntlInt(uintptr(lease.fd), unix.F_SETLEASE, unix.F_UNLCK)
+}
+
+// leasedFile is one regular file whose writers are excluded, with the exact
+// metadata observed after that exclusion took effect.
+type leasedFile struct {
+	file  *os.File
+	lease readLease
+	stat  unix.Stat_t
+}
+
+func leaseFile(file *os.File, maximumBytes int64) (leasedFile, error) {
+	fd := int(file.Fd())
+	var stat unix.Stat_t
+	if err := unix.Fstat(fd, &stat); err != nil || stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Nlink != 1 {
+		return leasedFile{}, fmt.Errorf("%w: file snapshot requires one regular file without hardlink aliases", ErrConflict)
+	}
+	if stat.Size < 0 || stat.Size > maximumBytes {
+		return leasedFile{}, fmt.Errorf("%w: file snapshot exceeds its byte bound", ErrConflict)
+	}
+	lease, err := acquireReadLease(fd)
+	if err != nil {
+		return leasedFile{}, err
+	}
+	if err := unix.Fstat(fd, &stat); err != nil || stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Nlink != 1 || stat.Size < 0 || stat.Size > maximumBytes {
+		lease.release()
+		return leasedFile{}, fmt.Errorf("%w: file changed before writer exclusion", ErrConflict)
+	}
+	return leasedFile{file: file, lease: lease, stat: stat}, nil
+}
+
+// unchanged reports whether the lease is still held and the inode metadata
+// still equals what was observed after writer exclusion.
+func (leased leasedFile) unchanged() bool {
+	var after unix.Stat_t
+	if unix.Fstat(int(leased.file.Fd()), &after) != nil || !leased.lease.intact() {
+		return false
+	}
+	before := leased.stat
+	return before.Dev == after.Dev && before.Ino == after.Ino && before.Size == after.Size &&
+		before.Nlink == after.Nlink && before.Mtim == after.Mtim && before.Ctim == after.Ctim
+}
+
+// copyLeasedFile copies the selected file while both it and the file bearing
+// its write references are leased. The two are the same file unless the
+// selected path is a copied-up overlayfs file. Never publish bytes on a
+// metadata-only or ordinary-stream fallback.
+func copyLeasedFile(ctx context.Context, selected, bearing *os.File, output io.Writer, maximumBytes int64) (capturedFile, error) {
+	leased, err := leaseFile(selected, maximumBytes)
+	if err != nil {
+		return capturedFile{}, err
+	}
+	defer leased.lease.release()
+	writerBearing := leased
+	if bearing != selected {
+		if writerBearing, err = leaseFile(bearing, maximumBytes); err != nil {
+			return capturedFile{}, err
+		}
+		defer writerBearing.lease.release()
+		// Overlayfs answers getattr for a copied-up file from its upper inode,
+		// so the upper file must describe exactly the selected file's bytes.
+		if selectedStat, upperStat := leased.stat, writerBearing.stat; selectedStat.Size != upperStat.Size ||
+			selectedStat.Mtim != upperStat.Mtim || selectedStat.Ctim != upperStat.Ctim {
+			return capturedFile{}, fmt.Errorf("%w: file snapshot upper layer does not describe the selected file", ErrConflict)
+		}
 	}
 	digest := sha256.New()
-	bytes, err := io.CopyBuffer(io.MultiWriter(output, digest), io.LimitReader(captureContextReader{ctx: ctx, reader: source}, before.Size+1), make([]byte, captureStreamBufferBytes))
+	bytes, err := io.CopyBuffer(io.MultiWriter(output, digest), io.LimitReader(captureContextReader{ctx: ctx, reader: selected}, leased.stat.Size+1), make([]byte, captureStreamBufferBytes))
 	if err != nil {
 		return capturedFile{}, fmt.Errorf("%w: file snapshot copy interrupted: %w", ErrUnavailable, err)
 	}
-	var after unix.Stat_t
-	statErr := unix.Fstat(int(fd), &after)
-	lease, leaseErr := unix.FcntlInt(fd, unix.F_GETLEASE, 0)
+	selectedIntact := leased.unchanged()
+	bearingIntact := writerBearing.unchanged()
 	if ctx.Err() != nil {
-		return capturedFile{}, ctx.Err()
+		return capturedFile{}, fmt.Errorf("%w: file snapshot canceled: %w", ErrUnavailable, ctx.Err())
 	}
-	if statErr != nil || leaseErr != nil || lease != unix.F_RDLCK || bytes != before.Size ||
-		before.Dev != after.Dev || before.Ino != after.Ino || before.Size != after.Size || before.Nlink != after.Nlink ||
-		before.Mtim != after.Mtim || before.Ctim != after.Ctim {
+	if bytes != leased.stat.Size || !selectedIntact || !bearingIntact {
 		return capturedFile{}, fmt.Errorf("%w: file changed or writer exclusion was withdrawn during snapshot", ErrConflict)
 	}
 	return capturedFile{byteLength: bytes, digest: "sha256:" + hex.EncodeToString(digest.Sum(nil)), capturedAt: time.Now().UTC().Truncate(time.Millisecond).Format("2006-01-02T15:04:05.000Z")}, nil
