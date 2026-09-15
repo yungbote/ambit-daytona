@@ -1,0 +1,290 @@
+// Copyright Daytona Platforms Inc.
+// SPDX-License-Identifier: AGPL-3.0
+package main
+
+import (
+	"math"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/robotn/xgb/xproto"
+	"github.com/robotn/xgb/xtest"
+	"github.com/robotn/xgbutil/keybind"
+)
+
+type inputEvent struct {
+	Type                  string  `json:"type"`
+	EventType             string  `json:"eventType"`
+	X                     float64 `json:"x,omitempty"`
+	Y                     float64 `json:"y,omitempty"`
+	Button                string  `json:"button,omitempty"`
+	Buttons               int     `json:"buttons,omitempty"`
+	ClickCount            int     `json:"clickCount,omitempty"`
+	DeltaX                float64 `json:"deltaX,omitempty"`
+	DeltaY                float64 `json:"deltaY,omitempty"`
+	Modifiers             int     `json:"modifiers,omitempty"`
+	Key                   string  `json:"key,omitempty"`
+	Code                  string  `json:"code,omitempty"`
+	Text                  string  `json:"text,omitempty"`
+	WindowsVirtualKeyCode int     `json:"windowsVirtualKeyCode,omitempty"`
+}
+
+func (d *display) loadKeys() error {
+	setup := xproto.Setup(d.conn)
+	reply, err := xproto.GetKeyboardMapping(d.conn, setup.MinKeycode, byte(int(setup.MaxKeycode)-int(setup.MinKeycode)+1)).Reply()
+	if err != nil {
+		return err
+	}
+	d.keysyms = map[string]byte{}
+	for index, sym := range reply.Keysyms {
+		if sym == 0 {
+			continue
+		}
+		name := strings.ToLower(keybind.KeysymToStr(sym))
+		if name != "" {
+			if _, present := d.keysyms[name]; !present {
+				d.keysyms[name] = byte(int(setup.MinKeycode) + index/int(reply.KeysymsPerKeycode))
+			}
+		}
+	}
+	return nil
+}
+
+var physicalNames = map[string]string{
+	"Backquote": "grave", "Minus": "minus", "Equal": "equal", "BracketLeft": "bracketleft", "BracketRight": "bracketright", "Backslash": "backslash", "Semicolon": "semicolon", "Quote": "apostrophe", "Comma": "comma", "Period": "period", "Slash": "slash", "Space": "space",
+	"ShiftLeft": "Shift_L", "ShiftRight": "Shift_R", "ControlLeft": "Control_L", "ControlRight": "Control_R", "AltLeft": "Alt_L", "AltRight": "Alt_R", "MetaLeft": "Super_L", "MetaRight": "Super_R", "CapsLock": "Caps_Lock", "NumLock": "Num_Lock", "ScrollLock": "Scroll_Lock", "ContextMenu": "Menu",
+	"Enter": "Return", "NumpadEnter": "KP_Enter", "Backspace": "BackSpace", "Escape": "Escape", "Tab": "Tab", "Delete": "Delete", "Insert": "Insert", "Home": "Home", "End": "End", "PageUp": "Prior", "PageDown": "Next", "ArrowLeft": "Left", "ArrowRight": "Right", "ArrowUp": "Up", "ArrowDown": "Down",
+	"NumpadAdd": "KP_Add", "NumpadSubtract": "KP_Subtract", "NumpadMultiply": "KP_Multiply", "NumpadDivide": "KP_Divide", "NumpadDecimal": "KP_Decimal", "NumpadEqual": "KP_Equal",
+}
+
+func (d *display) keycode(event inputEvent) byte {
+	name := event.Code
+	if mapped, ok := physicalNames[name]; ok {
+		name = mapped
+	} else if len(name) == 4 && strings.HasPrefix(name, "Key") {
+		name = name[3:]
+	} else if len(name) == 6 && strings.HasPrefix(name, "Digit") {
+		name = name[5:]
+	} else if len(name) == 7 && strings.HasPrefix(name, "Numpad") {
+		name = "KP_" + name[6:]
+	} else if name == "" || name == "Unidentified" {
+		name = event.Key
+		if mapped, ok := physicalNames[name]; ok {
+			name = mapped
+		}
+		if name == " " {
+			name = "space"
+		}
+	}
+	return d.keysyms[strings.ToLower(name)]
+}
+func (d *display) validateEvent(event inputEvent, width, height int) error {
+	if event.Modifiers < 0 || event.Modifiers > 15 {
+		return invalid()
+	}
+	switch event.Type {
+	case "input_mouse":
+		if math.IsNaN(event.X) || math.IsNaN(event.Y) || math.IsInf(event.X, 0) || math.IsInf(event.Y, 0) || event.X < 0 || event.Y < 0 || event.X >= float64(width) || event.Y >= float64(height) || math.Abs(event.DeltaX) > 32768 || math.Abs(event.DeltaY) > 32768 {
+			return invalid()
+		}
+		switch event.EventType {
+		case "mouseMoved":
+		case "mousePressed", "mouseReleased":
+			if mouseButton(event.Button) == 0 {
+				return invalid()
+			}
+		case "mouseWheel":
+		default:
+			return invalid()
+		}
+	case "input_keyboard":
+		switch event.EventType {
+		case "insertText", "char":
+			if event.Text == "" || !utf8.ValidString(event.Text) {
+				return invalid()
+			}
+		case "keyDown", "rawKeyDown", "keyUp":
+			if d.keycode(event) == 0 {
+				return invalid()
+			}
+		default:
+			return invalid()
+		}
+	default:
+		return invalid()
+	}
+	return nil
+}
+func mouseButton(value string) byte {
+	switch value {
+	case "left":
+		return 1
+	case "middle":
+		return 2
+	case "right":
+		return 3
+	case "back":
+		return 8
+	case "forward":
+		return 9
+	}
+	return 0
+}
+func (d *display) fake(typ, detail byte, x, y int) error {
+	return xtest.FakeInputChecked(d.conn, typ, detail, 0, d.screen.Root, int16(x), int16(y), 0).Check()
+}
+func (d *display) key(code byte, down bool) error {
+	typ := byte(xproto.KeyRelease)
+	if down {
+		typ = xproto.KeyPress
+	}
+	if err := d.fake(typ, code, 0, 0); err != nil {
+		return unknown()
+	}
+	if down {
+		d.keys[code] = true
+	} else {
+		delete(d.keys, code)
+	}
+	return nil
+}
+func (d *display) button(button byte, down bool) error {
+	typ := byte(xproto.ButtonRelease)
+	if down {
+		typ = xproto.ButtonPress
+	}
+	if err := d.fake(typ, button, 0, 0); err != nil {
+		return unknown()
+	}
+	if down {
+		d.buttons[button] = true
+	} else {
+		delete(d.buttons, button)
+	}
+	return nil
+}
+func (d *display) modifiers(mask int) error {
+	for _, modifier := range []struct {
+		bit  int
+		name string
+	}{{1, "Alt_L"}, {2, "Control_L"}, {4, "Super_L"}, {8, "Shift_L"}} {
+		code := d.keysyms[strings.ToLower(modifier.name)]
+		if code == 0 {
+			return unavailable()
+		}
+		desired := mask&modifier.bit != 0
+		if d.keys[code] != desired {
+			if err := d.key(code, desired); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+func (d *display) input(events []inputEvent) error {
+	width, height, err := d.size()
+	if err != nil {
+		return err
+	}
+	// Validate the entire batch before the first external input effect.
+	for _, event := range events {
+		if err := d.validateEvent(event, width, height); err != nil {
+			return err
+		}
+	}
+	for _, event := range events {
+		if event.EventType == "insertText" || event.EventType == "char" {
+			if err := d.paste(event.Text); err != nil {
+				return unknown()
+			}
+			continue
+		}
+		if err := d.modifiers(event.Modifiers); err != nil {
+			return unknown()
+		}
+		if event.Type == "input_keyboard" {
+			if err := d.key(d.keycode(event), event.EventType != "keyUp"); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := d.fake(xproto.MotionNotify, 0, int(math.Round(event.X)), int(math.Round(event.Y))); err != nil {
+			return unknown()
+		}
+		switch event.EventType {
+		case "mousePressed":
+			err = d.button(mouseButton(event.Button), true)
+		case "mouseReleased":
+			err = d.button(mouseButton(event.Button), false)
+		case "mouseWheel":
+			for _, axis := range []struct {
+				delta              float64
+				negative, positive byte
+			}{{event.DeltaY, 4, 5}, {event.DeltaX, 6, 7}} {
+				button := axis.positive
+				if axis.delta < 0 {
+					button = axis.negative
+				}
+				for count := 0; count < int(math.Ceil(math.Abs(axis.delta)/100)); count++ {
+					if err = d.button(button, true); err != nil {
+						break
+					}
+					if err = d.button(button, false); err != nil {
+						break
+					}
+				}
+				if err != nil {
+					break
+				}
+			}
+		}
+		if err != nil {
+			return unknown()
+		}
+	}
+	return nil
+}
+func (d *display) reset() error {
+	failed := false
+	for code := range d.keys {
+		if d.key(code, false) != nil {
+			failed = true
+		}
+	}
+	for button := range d.buttons {
+		if d.button(button, false) != nil {
+			failed = true
+		}
+	}
+	if failed {
+		return unknown()
+	}
+	return nil
+}
+func (d *display) chord(key string) error {
+	saved := 0
+	for _, m := range []struct {
+		bit  int
+		name string
+	}{{1, "alt_l"}, {2, "control_l"}, {4, "super_l"}, {8, "shift_l"}} {
+		if d.keys[d.keysyms[m.name]] {
+			saved |= m.bit
+		}
+	}
+	if err := d.modifiers(2); err != nil {
+		return err
+	}
+	code := d.keysyms[key]
+	if code == 0 {
+		return invalid()
+	}
+	err := d.key(code, true)
+	if err == nil {
+		err = d.key(code, false)
+	}
+	restored := d.modifiers(saved)
+	if err != nil {
+		return err
+	}
+	return restored
+}
