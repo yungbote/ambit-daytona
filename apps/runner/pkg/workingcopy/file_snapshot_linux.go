@@ -70,9 +70,6 @@ func (s *Service) validateCaptureSource(sandboxID string, binding CaptureBinding
 	if err := validateAuthority(binding.Authority); err != nil {
 		return err
 	}
-	if binding.Authority != s.admittedAuthority {
-		return invalidf("file snapshot authority is not the admitted current lineage")
-	}
 	if binding.Selector.SemanticZoneRef == userFilesSemanticZoneRef {
 		return invalidf("file snapshot cannot substitute for private working-tree capture")
 	}

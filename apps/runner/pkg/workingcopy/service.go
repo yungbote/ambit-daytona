@@ -69,16 +69,23 @@ type StoppedGenerationAuthority interface {
 	) (generationstop.Receipt, error)
 }
 
+// CaptureGenerationObserver proves the assigned physical source without a stop
+// or object-store effect. The existing generation authority implements it.
+type CaptureGenerationObserver interface {
+	ObserveProviderCurrent(context.Context, generationstop.ProviderGenerationObservationRequest) (generationstop.ProviderGenerationObservation, error)
+}
+
 type clock func() time.Time
 
 type Service struct {
-	containers        ContainerClient
-	objects           storage.PrivateObjectStreamStorageClient
-	stops             StoppedGenerationAuthority
-	admittedAuthority CaptureAuthority
-	now               clock
-	locks             keyedLocks
-	fileSnapshots     FileSnapshotReader
+	containers    ContainerClient
+	objects       storage.PrivateObjectStreamStorageClient
+	stops         StoppedGenerationAuthority
+	component     CaptureComponent
+	generations   CaptureGenerationObserver
+	now           clock
+	locks         keyedLocks
+	fileSnapshots FileSnapshotReader
 }
 
 type keyedLocks struct {
@@ -120,7 +127,8 @@ func NewService(
 	containers ContainerClient,
 	objects storage.PrivateObjectStorageClient,
 	stops StoppedGenerationAuthority,
-	admittedAuthority CaptureAuthority,
+	component CaptureComponent,
+	generations CaptureGenerationObserver,
 	fileSnapshots ...FileSnapshotReader,
 ) (*Service, error) {
 	if containers == nil {
@@ -136,16 +144,17 @@ func NewService(
 	if stops == nil {
 		return nil, fmt.Errorf("%w: stopped-generation authority is not configured", ErrUnavailable)
 	}
-	if err := validateAuthority(admittedAuthority); err != nil {
-		return nil, fmt.Errorf("%w: admitted capture authority is invalid: %v", ErrUnavailable, err)
+	if err := component.validate(); err != nil {
+		return nil, err
 	}
 	service := &Service{
-		containers:        containers,
-		objects:           streamObjects,
-		stops:             stops,
-		admittedAuthority: admittedAuthority,
-		now:               time.Now,
-		locks:             keyedLocks{items: make(map[string]*keyedLock)},
+		containers:  containers,
+		objects:     streamObjects,
+		stops:       stops,
+		component:   component,
+		generations: generations,
+		now:         time.Now,
+		locks:       keyedLocks{items: make(map[string]*keyedLock)},
 	}
 	if len(fileSnapshots) > 1 {
 		return nil, fmt.Errorf("%w: multiple file snapshot readers", ErrUnavailable)
@@ -211,6 +220,9 @@ func (s *Service) Capture(
 		return s.resumeCapture(ctx, zonePath, existing)
 	}
 
+	if err := s.requireCurrentComponent(binding.Authority); err != nil {
+		return CaptureReceipt{}, err
+	}
 	var generation generationstop.TerminalGeneration
 	if binding.FileSnapshot.Contract == "" {
 		stopReceipt, err := s.requireCurrentStop(ctx, binding)
@@ -271,6 +283,9 @@ func (s *Service) StoppedDirectoryRoster(
 ) (StoppedDirectoryRosterReceipt, error) {
 	zonePath, err := s.validateStoppedDirectoryRosterRequest(sandboxID, request)
 	if err != nil {
+		return StoppedDirectoryRosterReceipt{}, err
+	}
+	if err := s.requireCurrentComponent(request.Anchor.Authority); err != nil {
 		return StoppedDirectoryRosterReceipt{}, err
 	}
 
@@ -631,15 +646,6 @@ func (s *Service) resumeCapture(
 	zonePath string,
 	intent captureIntent,
 ) (CaptureReceipt, error) {
-	if intent.Binding.FileSnapshot.Contract == "" {
-		currentStop, err := s.requireCurrentStop(ctx, intent.Binding)
-		if err != nil {
-			return CaptureReceipt{}, err
-		}
-		if currentStop.TerminalGeneration != intent.Generation {
-			return CaptureReceipt{}, fmt.Errorf("%w: stopped generation differs from immutable capture intent", ErrConflict)
-		}
-	}
 	if err := s.ensureNotDeleting(ctx, intent); err != nil {
 		return CaptureReceipt{}, err
 	}
@@ -661,6 +667,18 @@ func (s *Service) resumeCapture(
 		return CaptureReceipt{}, err
 	}
 	if !stagedExists {
+		if err := s.requireCurrentComponent(intent.Binding.Authority); err != nil {
+			return CaptureReceipt{}, err
+		}
+		if intent.Binding.FileSnapshot.Contract == "" {
+			currentStop, err := s.requireCurrentStop(ctx, intent.Binding)
+			if err != nil {
+				return CaptureReceipt{}, err
+			}
+			if currentStop.TerminalGeneration != intent.Generation {
+				return CaptureReceipt{}, fmt.Errorf("%w: stopped generation differs from immutable capture intent", ErrConflict)
+			}
+		}
 		// The completed file must remain private until path and generation
 		// reproof finishes. Unlink immediately so cancellation, failure and
 		// process exit all release scratch custody without a durable pathname.
@@ -1363,18 +1381,24 @@ func (s *Service) requireGenerationStop(
 	if err == nil {
 		return receipt, nil
 	}
+	return generationstop.Receipt{}, captureGenerationError("stopped-generation authority", err)
+}
+
+func captureGenerationError(operation string, err error) error {
+	var classification error
 	switch {
 	case errors.Is(err, generationstop.ErrInvalidRequest):
-		return generationstop.Receipt{}, fmt.Errorf("%w: stopped-generation authority: %v", ErrInvalidRequest, err)
+		classification = ErrInvalidRequest
 	case errors.Is(err, generationstop.ErrOutcomeUnknown):
-		return generationstop.Receipt{}, fmt.Errorf("%w: stopped-generation authority: %v", ErrOutcomeUnknown, err)
+		classification = ErrOutcomeUnknown
 	case errors.Is(err, generationstop.ErrUnavailable):
-		return generationstop.Receipt{}, fmt.Errorf("%w: stopped-generation authority: %v", ErrUnavailable, err)
+		classification = ErrUnavailable
 	case errors.Is(err, generationstop.ErrConflict):
-		return generationstop.Receipt{}, fmt.Errorf("%w: stopped-generation authority: %v", ErrConflict, err)
+		classification = ErrConflict
 	default:
-		return generationstop.Receipt{}, fmt.Errorf("%w: stopped-generation authority: %v", ErrUnavailable, err)
+		classification = ErrUnavailable
 	}
+	return fmt.Errorf("%w: %s: %w", classification, operation, err)
 }
 
 func (s *Service) validateBinding(sandboxID string, binding CaptureBinding) (string, error) {
@@ -1405,9 +1429,6 @@ func (s *Service) validateGenerationBinding(sandboxID string, binding CaptureGen
 	}
 	if err := validateAuthority(binding.Authority); err != nil {
 		return err
-	}
-	if binding.Authority != s.admittedAuthority {
-		return invalidf("capture authority is not the admitted current lineage")
 	}
 	if err := generationstop.ValidateBinding(binding.Source, binding.Owner, binding.StopAuthority); err != nil {
 		return invalidf("stopped-generation binding is invalid: " + err.Error())

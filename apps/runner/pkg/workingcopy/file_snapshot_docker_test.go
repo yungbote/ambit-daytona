@@ -130,7 +130,7 @@ func TestFileSnapshotDockerBrowserAndCustody(t *testing.T) {
 	}
 	objects := newFakeObjectStore()
 	objects.directory = t.TempDir()
-	service, err := NewService(docker, objects, rejectSnapshotStopAuthority{}, binding.Authority, reader)
+	service, err := NewService(docker, objects, rejectSnapshotStopAuthority{}, testCaptureComponent(binding.Authority), nil, reader)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestFileSnapshotDockerBrowserAndCustody(t *testing.T) {
 	// Browser close is a file-independent process control, not sandbox stop.
 	run("exec", name, "agent-browser", "close")
 	run("exec", name, "sh", "-c", "printf later > /workspace/outputs/browser.png")
-	restarted, err := NewService(docker, objects, rejectSnapshotStopAuthority{}, binding.Authority, reader)
+	restarted, err := NewService(docker, objects, rejectSnapshotStopAuthority{}, testCaptureComponent(binding.Authority), nil, reader)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,5 +1,51 @@
 # Private working-tree capture
 
+## Component identity and retained custody
+
+The Runner measures its own `/proc/self/exe` bytes at startup. Its capture
+interface is the canonical capture-route projection of the generated Runner
+Swagger contract, including transitively referenced definitions. The projection
+excludes unrelated routes and deployment host/version metadata. It is emitted
+without a trailing newline by the source-owned qualification command:
+
+```sh
+go run ./apps/runner/cmd/capture-protocol > /absolute/capture-interface.json
+sha256sum /absolute/capture-interface.json
+```
+
+This command emits interface bytes only. Independently extract and hash
+`/usr/local/bin/daytona-runner` from the exact published native image to bind the
+implementation artifact. A workspace materializer is a different component.
+The former `AMBIT_WORKING_COPY_CAPTURE_LINEAGE_REF`,
+`AMBIT_WORKING_COPY_CAPTURE_PROTOCOL_DIGEST`, and
+`AMBIT_WORKING_COPY_CAPTURE_HELPER_DIGEST` settings no longer issue native
+authority. Retire those obsolete settings through the normal deployment owner.
+
+The backend runtime owns the caller's full-image qualification and lineage.
+The native service verifies its requested role, interface and executable pins
+against this Runner's measured component. Different correctly admitted image
+lineages can use the same component; no Runner-wide image-lineage allowlist is
+needed. Capability discovery uses the existing generation observer to reprove
+the actual physical source, owner and manifest after API organization/sandbox
+authorization. Source reads retain their existing independent generation checks.
+
+Historical capture bindings, object keys, receipts and tombstones remain v2 and
+unchanged. Complete capture and inventory replay, reads and cleanup validate
+their exact retained custody without requiring the old component to be current.
+Already captured, verified staged bytes can finish receipt publication. An
+incomplete intent that still needs a mutable-source read must match the current
+component and reprove its original generation; it is never silently rebound.
+Unknown publication or cleanup outcomes remain unknown until reconciled.
+
+Component measurement does not prove supply-policy compliance or the stronger
+backing-file identity guarantee. In particular, the existing live reader's
+upper-layer absence inference and metadata comparison still require independent
+backing-file identity qualification. This component change neither modifies
+that algorithm nor closes that release gate. A new image/target qualification
+must truthfully bind the measured native component and interface before new
+source effects can use it; source tests and capability echoes are not such a
+qualification. Keep existing immutable custody readable during that rollout.
+
 ## Live file capture
 
 The same capture API also accepts `fileSnapshot` with contract
@@ -85,8 +131,8 @@ real forced break. It never changes the host or namespace sysctl.
 ## Stopped working-tree capture
 
 `POST /sandboxes/:sandboxId/working-copy-captures/capabilities` discovers the
-assigned Runner's admitted capture authority without reading Docker, stopping
-a generation, or creating custody. The host API authorizes the sandbox, owner,
+assigned Runner's measured capture component and current physical generation
+without stopping it or creating custody. The host API authorizes the sandbox, owner,
 and workspace manifest fence before dispatch. An older API or Runner without
 the inventory capability leaves portable capture unavailable.
 

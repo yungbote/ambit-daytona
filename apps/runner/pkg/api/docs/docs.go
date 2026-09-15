@@ -1347,7 +1347,7 @@ const docTemplate = `{
         },
         "/sandboxes/{sandboxId}/working-copy-captures/capabilities": {
             "post": {
-                "description": "Read-only discovery of the inventory interface implemented by the assigned Runner, bound to operator-configured capture lineage. Capability discovery does not independently attest the Runner binary or image digest.",
+                "description": "Read-only discovery checked against the Runner's measured capture component and physical source generation. Measurement does not replace image publication or conformance qualification.",
                 "consumes": [
                     "application/json"
                 ],

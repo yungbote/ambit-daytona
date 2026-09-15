@@ -11,17 +11,15 @@ import (
 )
 
 // Capabilities reports the surface actually implemented by this Runner under
-// its admitted capture lineage. The API authorizes the sandbox source, owner,
-// and fence before dispatch. Discovery takes no Docker, stop, or storage effect.
+// its current measured component. The API authorizes the sandbox before
+// dispatch; the assigned Runner independently reproves the physical owner and
+// manifest through its existing generation observer. No stop or storage effect.
 func (s *Service) Capabilities(ctx context.Context, sandboxID string, request CaptureCapabilitiesRequest) (CaptureCapabilities, error) {
 	if err := ctx.Err(); err != nil {
 		return CaptureCapabilities{}, err
 	}
-	if err := validateAuthority(request.Authority); err != nil {
+	if err := s.requireCurrentComponent(request.Authority); err != nil {
 		return CaptureCapabilities{}, err
-	}
-	if request.Authority != s.admittedAuthority {
-		return CaptureCapabilities{}, fmt.Errorf("%w: capture capability authority is not the admitted current lineage", ErrConflict)
 	}
 	if err := generationstop.ValidateSource(request.Source); err != nil {
 		return CaptureCapabilities{}, invalidf("capture capability source is invalid: " + err.Error())
@@ -35,8 +33,21 @@ func (s *Service) Capabilities(ctx context.Context, sandboxID string, request Ca
 		!boundedRef(request.Fence.WorkspaceExecutionManifestRef, 2048) {
 		return CaptureCapabilities{}, invalidf("capture capability source or fence is not admitted")
 	}
+	if s.generations == nil {
+		return CaptureCapabilities{}, fmt.Errorf("%w: capture generation observer is unavailable", ErrUnavailable)
+	}
+	if _, err := s.generations.ObserveProviderCurrent(ctx, generationstop.ProviderGenerationObservationRequest{
+		Source: request.Source,
+		Owner: generationstop.ProviderOwner{
+			TenantID: request.Owner.TenantID, UserID: request.Owner.UserID, WorkspaceID: request.Owner.WorkspaceID,
+			RunID: request.Owner.RunID, GrantID: request.Owner.GrantID,
+		},
+		Fence: request.Fence,
+	}); err != nil {
+		return CaptureCapabilities{}, captureGenerationError("capture physical source", err)
+	}
 	capabilities := CaptureCapabilities{
-		Authority: s.admittedAuthority,
+		Authority: request.Authority,
 		StoppedWorkingTreeInventory: WorkingTreeInventoryCapability{
 			Contract: workingTreeInventoryContract, SemanticZoneRef: userFilesSemanticZoneRef,
 			MaximumDepth: MaximumWorkingTreeDepth, MaximumFileBytes: MaximumWorkingTreeAggregateBytes, MaximumAggregateBytes: MaximumWorkingTreeAggregateBytes,

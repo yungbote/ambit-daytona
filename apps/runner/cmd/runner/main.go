@@ -18,6 +18,7 @@ import (
 	"github.com/daytonaio/runner/internal"
 	"github.com/daytonaio/runner/internal/metrics"
 	"github.com/daytonaio/runner/pkg/api"
+	"github.com/daytonaio/runner/pkg/api/docs"
 	"github.com/daytonaio/runner/pkg/cache"
 	"github.com/daytonaio/runner/pkg/daemon"
 	"github.com/daytonaio/runner/pkg/docker"
@@ -309,11 +310,11 @@ func run() int {
 				generationStops = nil
 			}
 		}
-		captureAuthority, authorityErr := workingcopy.NewCaptureAuthority(
-			cfg.WorkingCopyCaptureLineageRef,
-			cfg.WorkingCopyCaptureProtocolDigest,
-			cfg.WorkingCopyCaptureHelperDigest,
-		)
+		captureProtocol, authorityErr := docs.CaptureProtocol()
+		var captureComponent workingcopy.CaptureComponent
+		if authorityErr == nil {
+			captureComponent, authorityErr = workingcopy.MeasureCaptureComponent(captureProtocol)
+		}
 		if authorityErr != nil {
 			logger.Warn("Working-copy capture is unavailable", "error", authorityErr)
 		} else {
@@ -324,11 +325,20 @@ func run() int {
 				fileSnapshots = append(fileSnapshots, workingcopy.NewNativeFileSnapshotReader(generationAdapter, generationAdapter))
 			}
 			var captureErr error
+			var captureStops workingcopy.StoppedGenerationAuthority
+			if generationStops != nil {
+				captureStops = generationStops
+			}
+			var captureObserver workingcopy.CaptureGenerationObserver
+			if generationObserver != nil {
+				captureObserver = generationObserver
+			}
 			workingCopyCaptures, captureErr = workingcopy.NewService(
 				cli,
 				privateObjects,
-				generationStops,
-				captureAuthority,
+				captureStops,
+				captureComponent,
+				captureObserver,
 				fileSnapshots...,
 			)
 			if captureErr != nil {
