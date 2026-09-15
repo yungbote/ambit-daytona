@@ -16,12 +16,15 @@ import (
 	"net/http"
 	"regexp"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/sys/unix"
 )
 
 const browserControlLimit = 64 << 10
+const browserCopyTextLimit = 1 << 20
+const browserCopyResponseLimit = 6*browserCopyTextLimit + 4096
 
 var browserControllerID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
@@ -97,8 +100,12 @@ func (s *SessionController) ControlBrowserView(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"code": "browser_control_outcome_unknown"})
 		return
 	}
-	line, err := bufio.NewReader(io.LimitReader(connection, browserControlLimit+1)).ReadBytes('\n')
-	if err != nil || len(line) > browserControlLimit {
+	responseLimit := browserControlLimit
+	if request.Op == "copy" {
+		responseLimit = browserCopyResponseLimit
+	}
+	line, err := bufio.NewReader(io.LimitReader(connection, int64(responseLimit+1))).ReadBytes('\n')
+	if err != nil || len(line) > responseLimit {
 		c.JSON(http.StatusBadGateway, gin.H{"code": "browser_control_outcome_unknown"})
 		return
 	}
@@ -114,7 +121,7 @@ func (s *SessionController) ControlBrowserView(c *gin.Context) {
 	if !response.Success {
 		code := response.Code
 		switch code {
-		case "browser_control_invalid", "browser_control_conflict", "browser_control_expired", "browser_control_stale", "browser_control_sequence_gap", "browser_control_outcome_unknown", "browser_controlled_by_user":
+		case "browser_control_invalid", "browser_control_conflict", "browser_control_expired", "browser_control_stale", "browser_control_sequence_gap", "browser_control_outcome_unknown", "browser_controlled_by_user", "browser_control_copy_too_large":
 		default:
 			code = "browser_control_unavailable"
 		}
@@ -148,6 +155,23 @@ func (s *SessionController) ControlBrowserView(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"code": "browser_control_outcome_unknown"})
 		return
 	}
+	if request.Op == "copy" {
+		var copy struct {
+			Clipboard struct {
+				Text     string `json:"text"`
+				Bytes    int    `json:"bytes"`
+				Complete bool   `json:"complete"`
+			} `json:"clipboard"`
+		}
+		if data.Status != "copied" || json.Unmarshal(response.Data, &copy) != nil || !copy.Clipboard.Complete ||
+			!utf8.ValidString(copy.Clipboard.Text) || len(copy.Clipboard.Text) > browserCopyTextLimit || copy.Clipboard.Bytes != len(copy.Clipboard.Text) {
+			c.JSON(http.StatusBadGateway, gin.H{"code": "browser_control_unavailable"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"controllerId": data.ControllerID, "expiresAt": data.ExpiresAt,
+			"lastSequence": data.LastSequence, "status": data.Status, "clipboard": copy.Clipboard})
+		return
+	}
 	switch data.Status {
 	case "controlled", "released", "applied", "duplicate":
 		c.JSON(http.StatusOK, data)
@@ -166,7 +190,7 @@ func validBrowserControlRequest(request browserControlRequest) bool {
 	switch request.Op {
 	case "acquire", "renew":
 		return request.ExpiresAt > 0 && request.Sequence == 0 && len(request.Events) == 0
-	case "release":
+	case "release", "copy":
 		return request.ExpiresAt == 0 && request.Sequence == 0 && len(request.Events) == 0
 	case "input":
 		return request.ExpiresAt == 0 && request.Sequence > 0 && request.Sequence <= 9_007_199_254_740_991 && len(request.Events) > 0 && len(request.Events) <= 64
