@@ -56,6 +56,7 @@ type browserView struct {
 	pid       int
 	born      string
 	port      uint16
+	listener  string
 }
 
 // browserViewAt uses the driver's Unix peer identity and kernel listening-socket
@@ -118,7 +119,7 @@ func (s *SessionController) browserViewAt(ctx context.Context, sessionID, name, 
 	// A stream can be disabled and reopened without replacing the driver.
 	// Its listening socket, not only the PID, identifies that visual instance.
 	hash := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%d\x00%s\x00%s", sessionID, name, identity.PID, identity.StartTime, listener)))
-	return browserView{ID: hex.EncodeToString(hash[:]), Name: name, SessionID: sessionID, pid: identity.PID, born: identity.StartTime, port: port}, nil
+	return browserView{ID: hex.EncodeToString(hash[:]), Name: name, SessionID: sessionID, pid: identity.PID, born: identity.StartTime, port: port, listener: listener}, nil
 }
 
 // browserStreamPort reads the loopback port the driver advertises beside its

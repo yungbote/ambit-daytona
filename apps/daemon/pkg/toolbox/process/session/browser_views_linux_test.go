@@ -50,6 +50,10 @@ func runBrowserFixture(args []string) bool {
 			if err != nil {
 				return
 			}
+			if mode == "control" {
+				go serveBrowserControlFixture(connection)
+				continue
+			}
 			// Discovery reads only the peer credential. The driver's command
 			// channel is never spoken to.
 			_ = connection.Close()
