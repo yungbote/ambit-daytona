@@ -99,9 +99,16 @@ func TestRealBrowserViewExplicitCloseAndReopen(t *testing.T) {
 	}
 	frame := func(records chan string) map[string]any {
 		t.Helper()
+		locationObserved := false
 		for {
 			record := nextRecord(t, records, 15*time.Second)
+			if record["type"] == "url" && record["url"] == page.URL+"/" {
+				locationObserved = true
+			}
 			if record["type"] == "frame" {
+				if !locationObserved {
+					t.Fatal("current page location was not seeded before the first frame; no navigation occurs after attachment")
+				}
 				pixels, err := base64.StdEncoding.DecodeString(record["data"].(string))
 				if err != nil || len(pixels) < 100 {
 					t.Fatalf("invalid real browser pixels: %v", err)
