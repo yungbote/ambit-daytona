@@ -6,9 +6,12 @@
 package session
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image/jpeg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -102,6 +105,11 @@ func TestRealBrowserControlThroughOwnedSession(t *testing.T) {
 		}
 	}
 
+	initialTabs := next(func(record map[string]any) bool { return record["type"] == "tabs" })
+	if initialTabs["complete"] != true {
+		t.Fatal("initial real browser roster was partial")
+	}
+	firstTab := initialTabs["tabs"].([]any)[0].(map[string]any)["id"].(string)
 	frame := next(func(record map[string]any) bool { return record["type"] == "frame" })
 	generation, ok := frame["pageGeneration"].(string)
 	if !ok || generation == "" {
@@ -197,6 +205,96 @@ func TestRealBrowserControlThroughOwnedSession(t *testing.T) {
 	if result := control(map[string]any{"op": "input", "controllerId": browserFixtureController, "sequence": 6, "events": click}, http.StatusConflict); result["code"] != "browser_control_sequence_gap" {
 		t.Fatalf("input gap was not refused: %v", result)
 	}
+	tabSequence := 3
+	tabInput := func(events []map[string]any) {
+		t.Helper()
+		tabSequence++
+		control(map[string]any{"op": "input", "controllerId": browserFixtureController, "sequence": tabSequence, "events": events}, http.StatusOK)
+	}
+	roster := func(count int, active string) map[string]any {
+		return next(func(record map[string]any) bool {
+			if record["type"] != "tabs" || record["complete"] != true {
+				return false
+			}
+			tabs, ok := record["tabs"].([]any)
+			if !ok || len(tabs) != count {
+				return false
+			}
+			return active == "" || tabs[0].(map[string]any)["id"] == active
+		})
+	}
+	tabInput([]map[string]any{
+		{"type": "tab", "action": "new"},
+		{"type": "navigation", "action": "navigate", "url": page.URL + "/second-tab"},
+	})
+	opened := roster(2, "")
+	secondTab := opened["tabs"].([]any)[0].(map[string]any)["id"].(string)
+	if secondTab == firstTab {
+		t.Fatal("new tab did not receive its own stable identity")
+	}
+	// A navigation acknowledgement starts loading; coordinates follow the
+	// actual newly painted page, just as the dock's geometry barrier does.
+	next(func(record map[string]any) bool {
+		if record["type"] != "frame" || record["pageGeneration"] == reset["pageGeneration"] {
+			return false
+		}
+		metadata := record["metadata"].(map[string]any)
+		if metadata["deviceWidth"] != float64(640) || metadata["deviceHeight"] != float64(480) {
+			return false
+		}
+		encoded, ok := record["data"].(string)
+		if !ok {
+			return false
+		}
+		pixels, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			return false
+		}
+		image, err := jpeg.Decode(bytes.NewReader(pixels))
+		if err != nil {
+			return false
+		}
+		for y := 0; y < 300 && y < image.Bounds().Dy(); y += 8 {
+			for x := 0; x < 256 && x < image.Bounds().Dx(); x += 8 {
+				r, g, b, _ := image.At(x, y).RGBA()
+				if r < 55000 || g < 55000 || b < 55000 {
+					return true
+				}
+			}
+		}
+		return false
+	})
+	tabInput([]map[string]any{
+		{"type": "input_mouse", "eventType": "mousePressed", "x": 30, "y": 90, "button": "left", "buttons": 1, "clickCount": 1},
+		{"type": "input_mouse", "eventType": "mouseReleased", "x": 30, "y": 90, "button": "left", "buttons": 0, "clickCount": 1},
+		{"type": "input_keyboard", "eventType": "insertText", "text": "Second tab text"},
+	})
+	tabInput(selection)
+	secondCopy := control(map[string]any{"op": "copy", "controllerId": browserFixtureController}, http.StatusOK)
+	if secondCopy["clipboard"].(map[string]any)["text"] != "Second tab text" {
+		t.Fatalf("new tab copy did not match dispatched text: %v", secondCopy)
+	}
+	tabInput([]map[string]any{{"type": "tab", "action": "select", "tabId": firstTab}, {"type": "tab", "action": "close", "tabId": secondTab}})
+	roster(1, firstTab)
+	refusal := control(map[string]any{"op": "input", "controllerId": browserFixtureController, "sequence": tabSequence + 1, "events": []any{map[string]any{"type": "tab", "action": "close", "tabId": firstTab}}}, http.StatusConflict)
+	if refusal["code"] != "browser_control_invalid" {
+		t.Fatalf("last-tab refusal lost its known no-effect result: %v", refusal)
+	}
+	tabInput([]map[string]any{{"type": "tab", "action": "new"}})
+	reopened := roster(2, "")
+	thirdTab := reopened["tabs"].([]any)[0].(map[string]any)["id"].(string)
+	if thirdTab == secondTab || thirdTab == firstTab {
+		t.Fatal("closed tab identity was reused")
+	}
+	tabInput([]map[string]any{{"type": "tab", "action": "select", "tabId": firstTab}, {"type": "tab", "action": "close", "tabId": thirdTab}})
+	roster(1, firstTab)
+	next(func(record map[string]any) bool {
+		if record["type"] != "frame" {
+			return false
+		}
+		metadata := record["metadata"].(map[string]any)
+		return metadata["deviceWidth"] == float64(640) && metadata["deviceHeight"] == float64(480)
+	})
 	control(map[string]any{"op": "release", "controllerId": browserFixtureController}, http.StatusOK)
 	result := cli(true, "eval", `JSON.stringify({count:window.clickCount,value:document.querySelector('input').value,width:innerWidth,height:innerHeight,scale:devicePixelRatio})`)
 	data, ok := result["data"].(map[string]any)

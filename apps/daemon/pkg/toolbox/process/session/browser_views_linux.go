@@ -422,7 +422,8 @@ func browserViewMessage(message []byte) ([]byte, uint64, browserRecordKind) {
 	if json.Unmarshal(message, &envelope) != nil {
 		return nil, 0, browserRecordDropped
 	}
-	// One record is one line. A driver that terminates its own records must not
+	// Each output record occupies one line. A native tab snapshot also emits a
+	// roster beside the compatible URL record. Driver terminators must not
 	// put a blank line into a viewer's NDJSON stream.
 	body := bytes.TrimSpace(message)
 	switch envelope.Type {
@@ -439,43 +440,10 @@ func browserViewMessage(message []byte) ([]byte, uint64, browserRecordKind) {
 		}
 		return nil, 0, browserRecordDropped
 	case "tabs":
-		// A newly attached viewer receives the driver's current tab snapshot,
-		// not a navigation event. Project only the active location into our
-		// existing visual contract so reconnects do not wait for another click.
-		var snapshot struct {
-			Tabs []struct {
-				Active       bool   `json:"active"`
-				URL          string `json:"url"`
-				Title        string `json:"title"`
-				CanGoBack    *bool  `json:"canGoBack"`
-				CanGoForward *bool  `json:"canGoForward"`
-			} `json:"tabs"`
+		if records, valid := browserTabRecords(message); valid {
+			return records, 0, browserRecordVisual
 		}
-		if json.Unmarshal(message, &snapshot) != nil {
-			return nil, 0, browserRecordDropped
-		}
-		active := -1
-		for index, tab := range snapshot.Tabs {
-			if !tab.Active {
-				continue
-			}
-			if active != -1 || tab.URL == "" {
-				return nil, 0, browserRecordDropped
-			}
-			active = index
-		}
-		if active == -1 {
-			return nil, 0, browserRecordDropped
-		}
-		tab := snapshot.Tabs[active]
-		location, _ := json.Marshal(struct {
-			Type         string `json:"type"`
-			URL          string `json:"url"`
-			Title        string `json:"title,omitempty"`
-			CanGoBack    *bool  `json:"canGoBack,omitempty"`
-			CanGoForward *bool  `json:"canGoForward,omitempty"`
-		}{Type: "url", URL: tab.URL, Title: tab.Title, CanGoBack: tab.CanGoBack, CanGoForward: tab.CanGoForward})
-		return location, 0, browserRecordVisual
+		return nil, 0, browserRecordDropped
 	case "error":
 		return nil, 0, browserRecordFailed
 	case "finished":
