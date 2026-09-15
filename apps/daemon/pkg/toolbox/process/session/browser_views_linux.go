@@ -50,12 +50,15 @@ var (
 )
 
 type browserView struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	SessionID string `json:"sessionId"`
-	pid       int
-	born      string
-	port      uint16
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	SessionID  string `json:"sessionId"`
+	Namespace  string `json:"namespace,omitempty"`
+	pid        int
+	born       string
+	port       uint16
+	listener   string
+	socketPath string
 }
 
 // browserViewAt uses the driver's Unix peer identity and kernel listening-socket
@@ -118,7 +121,7 @@ func (s *SessionController) browserViewAt(ctx context.Context, sessionID, name, 
 	// A stream can be disabled and reopened without replacing the driver.
 	// Its listening socket, not only the PID, identifies that visual instance.
 	hash := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%d\x00%s\x00%s", sessionID, name, identity.PID, identity.StartTime, listener)))
-	return browserView{ID: hex.EncodeToString(hash[:]), Name: name, SessionID: sessionID, pid: identity.PID, born: identity.StartTime, port: port}, nil
+	return browserView{ID: hex.EncodeToString(hash[:]), Name: name, SessionID: sessionID, pid: identity.PID, born: identity.StartTime, port: port, listener: listener, socketPath: socketPath}, nil
 }
 
 // browserStreamPort reads the loopback port the driver advertises beside its
@@ -199,25 +202,55 @@ func (s *SessionController) browserViews(ctx context.Context, sessionID string) 
 	if err != nil {
 		return nil, err
 	}
-	for _, entry := range entries {
+	type socketDirectory struct {
+		path, namespace string
+		entries         []os.DirEntry
+	}
+	directories := []socketDirectory{{path: s.browserSocketDir, entries: entries}}
+	// The driver supports legacy flat sessions and isolated namespaces. Follow
+	// that explicit layout instead of recursively walking arbitrary workspace
+	// files or guessing ownership from directory names.
+	namespaces, namespaceError := os.ReadDir(filepath.Join(s.browserSocketDir, "namespaces"))
+	if namespaceError != nil && !os.IsNotExist(namespaceError) {
+		s.logger.DebugContext(ctx, "browser namespaces are not observable", "error", namespaceError)
+	}
+	for _, namespace := range namespaces {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		name, socket := strings.CutSuffix(entry.Name(), ".sock")
-		if !socket || entry.Type()&os.ModeSocket == 0 {
+		if !namespace.IsDir() {
 			continue
 		}
-		view, err := s.browserViewAt(ctx, sessionID, name, filepath.Join(s.browserSocketDir, entry.Name()))
+		runDirectory := filepath.Join(s.browserSocketDir, "namespaces", namespace.Name(), "run")
+		children, err := os.ReadDir(runDirectory)
 		if err != nil {
-			// A view is announced only on complete proof of custody. Anything
-			// less means this one socket has no observable browser behind it
-			// right now; it is never a statement about the sockets beside it,
-			// so one retired, idle or half-written entry cannot mask the
-			// workspace's other browsers.
-			s.logger.DebugContext(ctx, "browser socket has no observable view", "name", name, "error", err)
+			// An incomplete or retired namespace cannot hide a valid peer.
 			continue
 		}
-		views = append(views, view)
+		directories = append(directories, socketDirectory{path: runDirectory, namespace: namespace.Name(), entries: children})
+	}
+	for _, directory := range directories {
+		for _, entry := range directory.entries {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			name, socket := strings.CutSuffix(entry.Name(), ".sock")
+			if !socket || entry.Type()&os.ModeSocket == 0 {
+				continue
+			}
+			view, err := s.browserViewAt(ctx, sessionID, name, filepath.Join(directory.path, entry.Name()))
+			if err != nil {
+				// A view is announced only on complete proof of custody. Anything
+				// less means this one socket has no observable browser behind it
+				// right now; it is never a statement about the sockets beside it,
+				// so one retired, idle or half-written entry cannot mask the
+				// workspace's other browsers.
+				s.logger.DebugContext(ctx, "browser socket has no observable view", "name", name, "error", err)
+				continue
+			}
+			view.Namespace = directory.namespace
+			views = append(views, view)
+		}
 	}
 	return views, nil
 }
@@ -400,6 +433,11 @@ func browserViewMessage(message []byte) ([]byte, uint64, browserRecordKind) {
 		return body, envelope.Seq, browserRecordVisual
 	case "status", "url":
 		return body, 0, browserRecordVisual
+	case "pointer", "activity":
+		if projected, valid := browserActivity(message); valid {
+			return projected, 0, browserRecordVisual
+		}
+		return nil, 0, browserRecordDropped
 	case "tabs":
 		// A newly attached viewer receives the driver's current tab snapshot,
 		// not a navigation event. Project only the active location into our

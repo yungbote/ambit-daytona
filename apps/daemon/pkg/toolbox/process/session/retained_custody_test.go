@@ -61,6 +61,7 @@ func newSessionEngine(t *testing.T, configDir string, configure func(*SessionCon
 	sessions.DELETE("/:sessionId", controller.DeleteSession)
 	sessions.POST("/:sessionId/exec", controller.SessionExecuteCommand)
 	sessions.GET("/:sessionId/browser-views/:viewId/stream", controller.StreamBrowserView)
+	sessions.POST("/:sessionId/browser-views/:viewId/control", controller.ControlBrowserView)
 	return engine, service
 }
 
