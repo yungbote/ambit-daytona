@@ -10,7 +10,9 @@ An agent's browser runs inside a session, under the same native process custody 
 
 ## Records
 
-Three record types are relayed verbatim from the driver: `frame` (with a `seq` of at least 1), `status` and `url`. Every other upstream record is dropped, because the driver's command, result and console channels carry task input and a viewer is not a party to the task. A driver `error` record is dropped for the same reason, and the daemon replaces it with its own fact.
+Frames (with a positive `seq`), status and URL records retain the native visual envelope. The active tab's initial snapshot is projected to one URL/title record, so reconnecting does not require another navigation. Other tabs and internal target identifiers are excluded. Pointer and activity records are projected to finite visual fields: page generation, source, timestamp, pointer coordinates/buttons/modifiers or activity kind (`typing` or `scrolling`). Typed text, key names, selectors, controller identities and extra properties are excluded. The driver emits activity only after browser acknowledgement. A pointer reset changes the coordinate generation after navigation or resizing. Consumers match activity to the decoded frame's `pageGeneration`.
+
+Command, result and console channels are dropped because they carry task input. A driver error is replaced by the relay's own bounded failure record.
 
 Two records are the daemon's own vocabulary and carry no upstream text at all:
 
@@ -39,9 +41,13 @@ The stream re-observes custody every second. When the owner's kernel start time 
 
 A view identity includes the listening socket's kernel identity as well as the session, name, PID and process start time. Disabling and reopening a stream in the same process therefore creates a new view even when it reuses the same port. A finished viewer cannot latch onto the replacement as though it were the old instance.
 
-## What this is not
+## Host-authorized control
 
-This is not a browser control channel, a CDP proxy, or a second process registry. It adds no scheduler, no session store and no retained state: frames exist only while a viewer is reading them. Session lifetime, cancellation and cleanup remain exactly the session custody contract in `session-process-custody.md`; deleting the session is still the only bound on the browser it started.
+`POST /process/session/{sessionId}/browser-views/{viewId}/control` addresses the same observed native browser instance. The Product backend owns authenticated user consent and current Run authority. The relay verifies native session/process ownership, connects only to that instance's command socket, and sends the driver's internal `ambit_browser_control` command. The visual stream continues to accept acknowledgements only.
+
+The request uses `op` (`inspect`, `acquire`, `renew`, `release`, `input`), with the existing controller ID, bounded lease, sequence and events fields. The driver validates all events before dispatch and acknowledges a batch only after CDP replies. An input batch can include a `viewport` event with integer CSS width and height from 1 through 32768, followed by pointer/keyboard events; the driver preserves device scale and mobile emulation. Input is never automatically replayed. The relay's request deadline remains ten seconds. Acquisition waits at most two seconds for an active agent operation and at most five seconds for earlier stream input; a busy acquisition reports `browser_control_unavailable` without creating custody. Ordinary agent commands retain `browser_controlled_by_user` while a human lease is active.
+
+No controller ID or input payload is added to the view list or stream. Session lifetime and cleanup remain owned by the existing session service; this adapter adds no process registry or scheduler.
 
 ## Release ordering
 
@@ -51,4 +57,4 @@ The workspace-level list route is what the backend provider targets, so this dae
 
 Local, under both the pinned and the current Go toolchain, with the race detector: session and toolbox session packages green. The browser relay is proven against a real driver stand-in — a separate process, started inside a real session with no wait, owning a real Unix socket, a real loopback listener and a real port file, re-executed from the test binary so `/proc/<pid>/exe` is a real distinct executable. Those tests cover discovery while a command is in flight, the listing disclosing no port, path or PID, a second live session being refused the view, a session whose shell was killed not masking the workspace's browser, five acknowledgement-paced frames each produced with exactly the earlier frames acknowledged, driver command/result/console/error channels never reaching the viewer, `finished` after an unclean shell exit, and `unavailable` after a driver failure.
 
-Not covered here: the real `agent-browser` driver in the composed workspace image (the published real-browser evidence predates this discovery path and exercised the superseded command-socket probe), and any end-to-end run through the backend and the product. Neither is claimed.
+The opt-in real-browser tests also exercise a sandboxed Chromium process inside a native session: seeded location, stream reopen, explicit browser close, actual agent input activity, controller takeover, resize followed by input in one batch, preserved device scale, deduplicated sequences, human text readback, and returned control. Set `AMBIT_TEST_BROWSER_EXECUTABLE`, `AMBIT_TEST_CHROME_EXECUTABLE`, and `AMBIT_TEST_BROWSER_CONTROL=1` when running the session package. These tests do not claim acceptance through the Product backend/frontend or a published workspace image.

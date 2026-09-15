@@ -11,6 +11,7 @@ import (
 
 func TestBrowserActivityProjectsOnlyVisualInput(t *testing.T) {
 	for _, input := range []string{
+		`{"type":"activity","pageGeneration":"page-2","source":"agent","kind":"scrolling","timestamp":13,"x":999,"text":"private-input"}`,
 		`{"type":"pointer","pageGeneration":"page-2","source":"agent","eventType":"press","x":20,"y":30,"buttons":1,"modifiers":0,"timestamp":12,"text":"private-input"}`,
 		`{"type":"activity","pageGeneration":"page-2","source":"human","kind":"typing","timestamp":13,"key":"private-input","code":"private-input","text":"private-input"}`,
 		`{"type":"pointer","pageGeneration":"page-3","eventType":"reset","timestamp":14,"source":"private-input"}`,

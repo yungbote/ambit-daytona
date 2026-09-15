@@ -51,7 +51,7 @@ func browserActivity(message []byte) ([]byte, bool) {
 			projected["x"], projected["y"] = *value.X, *value.Y
 			projected["buttons"], projected["modifiers"] = *value.Buttons, *value.Modifiers
 		case "activity":
-			if value.Kind != "typing" {
+			if value.Kind != "typing" && value.Kind != "scrolling" {
 				return nil, false
 			}
 			projected["kind"] = value.Kind
