@@ -100,7 +100,7 @@ func (d *display) validateEvent(event inputEvent, width, height int) error {
 	case "input_keyboard":
 		switch event.EventType {
 		case "insertText", "char":
-			if event.Text == "" || !utf8.ValidString(event.Text) {
+			if event.Text == "" || len(event.Text) > maximumClipboard || !utf8.ValidString(event.Text) {
 				return invalid()
 			}
 		case "keyDown", "rawKeyDown", "keyUp":
@@ -208,7 +208,7 @@ func (d *display) input(events []inputEvent) error {
 			}
 			continue
 		}
-		if err := d.fake(xproto.MotionNotify, 0, int(math.Round(event.X)), int(math.Round(event.Y))); err != nil {
+		if err := d.fake(xproto.MotionNotify, 0, int(event.X), int(event.Y)); err != nil {
 			return unknown()
 		}
 		switch event.EventType {
@@ -220,12 +220,14 @@ func (d *display) input(events []inputEvent) error {
 			for _, axis := range []struct {
 				delta              float64
 				negative, positive byte
-			}{{event.DeltaY, 4, 5}, {event.DeltaX, 6, 7}} {
+				retained           *float64
+			}{{event.DeltaY, 4, 5, &d.wheelY}, {event.DeltaX, 6, 7, &d.wheelX}} {
+				steps := wheelSteps(axis.delta, axis.retained)
 				button := axis.positive
-				if axis.delta < 0 {
+				if steps < 0 {
 					button = axis.negative
 				}
-				for count := 0; count < int(math.Ceil(math.Abs(axis.delta)/100)); count++ {
+				for count := 0; count < int(math.Abs(float64(steps))); count++ {
 					if err = d.button(button, true); err != nil {
 						break
 					}
@@ -244,7 +246,14 @@ func (d *display) input(events []inputEvent) error {
 	}
 	return nil
 }
+func wheelSteps(delta float64, retained *float64) int {
+	*retained += delta
+	steps := int(*retained / 100)
+	*retained -= float64(steps) * 100
+	return steps
+}
 func (d *display) reset() error {
+	d.wheelX, d.wheelY = 0, 0
 	failed := false
 	for code := range d.keys {
 		if d.key(code, false) != nil {

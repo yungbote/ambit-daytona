@@ -4,12 +4,13 @@ package main
 
 import (
 	"errors"
-	"github.com/robotn/xgb"
-	"github.com/robotn/xgb/xfixes"
-	"github.com/robotn/xgb/xproto"
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/robotn/xgb"
+	"github.com/robotn/xgb/xfixes"
+	"github.com/robotn/xgb/xproto"
 )
 
 const selectionChunk = 60 * 1024
@@ -112,14 +113,6 @@ func (c *clipboard) own(value []byte) (<-chan struct{}, error) {
 	}
 	return served, nil
 }
-func (c *clipboard) servedLocked() {
-	if c.served != nil {
-		select {
-		case c.served <- struct{}{}:
-		default:
-		}
-	}
-}
 func (c *clipboard) serve(request xproto.SelectionRequestEvent) {
 	d := c.display
 	property := request.Property
@@ -158,16 +151,9 @@ func (c *clipboard) serve(request xproto.SelectionRequestEvent) {
 			break
 		}
 		if len(c.value) > selectionChunk {
-			if len(c.outgoing) >= 8 {
-				err = errors.New("selection busy")
-				break
-			}
 			data := make([]byte, 4)
 			xgb.Put32(data, uint32(len(c.value)))
-			err = xproto.ChangeWindowAttributesChecked(d.conn, request.Requestor, xproto.CwEventMask, []uint32{xproto.EventMaskPropertyChange}).Check()
-			if err == nil {
-				err = xproto.ChangePropertyChecked(d.conn, xproto.PropModeReplace, request.Requestor, property, d.atoms["INCR"], 32, 1, data).Check()
-			}
+			err = xproto.ChangePropertyChecked(d.conn, xproto.PropModeReplace, request.Requestor, property, d.atoms["INCR"], 32, 1, data).Check()
 			if err == nil {
 				c.outgoing[key] = &selectionTransfer{data: append([]byte(nil), c.value...), target: d.atoms["UTF8_STRING"], deadline: now.Add(selectionDeadline), served: c.served}
 			}

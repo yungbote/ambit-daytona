@@ -104,3 +104,49 @@ func FuzzRequestNeverPanics(f *testing.F) {
 		_, _ = decodeRequest(raw)
 	})
 }
+
+func TestOnePasteUsesClipboardBoundWithoutWideningOrdinaryBatches(t *testing.T) {
+	cases := []struct {
+		name    string
+		events  []inputEvent
+		allowed bool
+	}{
+		{"worst JSON escaping", []inputEvent{{Type: "input_keyboard", EventType: "insertText", Text: strings.Repeat("\x01", maximumClipboard)}}, true},
+		{"Unicode", []inputEvent{{Type: "input_keyboard", EventType: "insertText", Text: strings.Repeat("界😀", 100000)}}, true},
+		{"one byte beyond clipboard", []inputEvent{{Type: "input_keyboard", EventType: "insertText", Text: strings.Repeat("a", maximumClipboard+1)}}, false},
+		{"two large paste events", []inputEvent{{Type: "input_keyboard", EventType: "insertText", Text: strings.Repeat("a", maximumRequest)}, {Type: "input_keyboard", EventType: "insertText", Text: strings.Repeat("b", maximumRequest)}}, false},
+		{"ordinary key payload", []inputEvent{{Type: "input_keyboard", EventType: "keyDown", Text: strings.Repeat("a", maximumRequest)}}, false},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			raw, err := json.Marshal(request{ID: 1, Op: "input", Events: test.events})
+			if err != nil {
+				t.Fatal(err)
+			}
+			parsed, err := decodeRequest(raw)
+			if (err == nil) != test.allowed {
+				t.Fatalf("admission=%v expected=%v", err == nil, test.allowed)
+			}
+			if test.allowed && parsed.Events[0].Text != test.events[0].Text {
+				t.Fatal("clipboard bytes changed")
+			}
+		})
+	}
+}
+
+func TestFractionalWheelDistanceIsRetainedWithoutAmplification(t *testing.T) {
+	remainder := 0.0
+	total := 0
+	for range 100 {
+		total += wheelSteps(1, &remainder)
+	}
+	if total != 1 || remainder != 0 {
+		t.Fatalf("small gestures amplified: %d/%f", total, remainder)
+	}
+	if wheelSteps(40, &remainder) != 0 || wheelSteps(-40, &remainder) != 0 || remainder != 0 {
+		t.Fatal("opposing fractional movement did not cancel")
+	}
+	if wheelSteps(-250, &remainder) != -2 || remainder != -50 {
+		t.Fatal("negative wheel direction was not retained")
+	}
+}
