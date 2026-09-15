@@ -10,13 +10,15 @@ import (
 	"testing"
 )
 
-func TestCaptureCapabilitiesRequireCurrentLineageWithoutProviderEffects(t *testing.T) {
+func TestCaptureCapabilitiesRequireCurrentComponentAndPhysicalSource(t *testing.T) {
 	service, containers, objects, tree := workingTreeFixture(t)
 	binding := tree.Generation
 	request := CaptureCapabilitiesRequest{
 		Authority: binding.Authority, Source: binding.Source, Owner: binding.Owner,
 		Fence: binding.StopAuthority.Fence,
 	}
+	observer := captureTestObserver(request)
+	service.generations = observer
 	response, err := service.Capabilities(context.Background(), binding.Source.ProviderResourceID, request)
 	if err != nil || response.Authority != binding.Authority ||
 		response.StoppedWorkingTreeInventory.Contract != workingTreeInventoryContract ||
@@ -30,10 +32,14 @@ func TestCaptureCapabilitiesRequireCurrentLineageWithoutProviderEffects(t *testi
 		t.Fatalf("deployed capture capability differs: %#v %v", response, err)
 	}
 	for name, mutate := range map[string]func(*CaptureCapabilitiesRequest){
-		"sandbox": func(r *CaptureCapabilitiesRequest) { r.Source.ProviderResourceID = "other-sandbox" },
-		"runtime": func(r *CaptureCapabilitiesRequest) { r.Source.ExpectedRuntimeKind = "base_profile" },
-		"owner":   func(r *CaptureCapabilitiesRequest) { r.Owner.TenantID = "" },
-		"fence":   func(r *CaptureCapabilitiesRequest) { r.Fence.WorkspaceExecutionManifestRef = "" },
+		"sandbox":             func(r *CaptureCapabilitiesRequest) { r.Source.ProviderResourceID = "other-sandbox" },
+		"runtime":             func(r *CaptureCapabilitiesRequest) { r.Source.ExpectedRuntimeKind = "base_profile" },
+		"owner":               func(r *CaptureCapabilitiesRequest) { r.Owner.TenantID = "" },
+		"fence":               func(r *CaptureCapabilitiesRequest) { r.Fence.WorkspaceExecutionManifestRef = "" },
+		"foreign-valid-owner": func(r *CaptureCapabilitiesRequest) { r.Owner.TenantID = "00000000-0000-4000-8000-000000000099" },
+		"different-manifest": func(r *CaptureCapabilitiesRequest) {
+			r.Fence.WorkspaceExecutionManifestRef = "workspace-execution-manifest:other"
+		},
 		"helper": func(r *CaptureCapabilitiesRequest) {
 			r.Authority.Helper.Digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 			r.Authority.Helper.Ref = "runtime-component-artifact:" + r.Authority.Helper.Digest
@@ -47,6 +53,16 @@ func TestCaptureCapabilitiesRequireCurrentLineageWithoutProviderEffects(t *testi
 			}
 		})
 	}
+	observer.err = errors.New("provider temporarily unavailable")
+	if _, err := service.Capabilities(context.Background(), binding.Source.ProviderResourceID, request); !errors.Is(err, observer.err) {
+		t.Fatal("failed physical observation was replaced with availability")
+	}
+	observer.err = nil
+	service.generations = nil
+	if _, err := service.Capabilities(context.Background(), binding.Source.ProviderResourceID, request); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("missing physical observer advertised capability")
+	}
+	service.generations = observer
 	encoded, err := json.Marshal(request)
 	if err != nil {
 		t.Fatal(err)

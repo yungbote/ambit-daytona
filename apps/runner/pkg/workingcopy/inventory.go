@@ -150,6 +150,9 @@ func (s *Service) PrepareWorkingTreeInventory(ctx context.Context, sandboxID str
 	if receipt, exists, err := s.readInventoryIndex(ctx, request); err != nil || exists {
 		return receipt, err
 	}
+	if err := s.requireCurrentComponent(request.Generation.Authority); err != nil {
+		return WorkingTreeInventoryReceipt{}, err
+	}
 	if _, err := s.requireGenerationStop(ctx, request.Generation); err != nil {
 		return WorkingTreeInventoryReceipt{}, err
 	}

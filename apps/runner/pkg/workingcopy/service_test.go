@@ -416,18 +416,18 @@ func TestCaptureRejectsNonCanonicalBindingAndWrongSource(t *testing.T) {
 	}
 }
 
-func TestCaptureRejectsSelfConsistentAuthorityOutsideAdmittedLineage(t *testing.T) {
+func TestCaptureRejectsSelfConsistentAuthorityOutsideCurrentComponent(t *testing.T) {
 	t.Parallel()
 	admitted := validBinding()
 	requested := admitted
-	requested.Authority.LineageRef = "ambit.core-document-lineage:v5:sha256:" + strings.Repeat("9", 64)
-	requested.Authority.AuthorityRef = captureAuthorityRef(requested.Authority)
+	requested.Authority.Helper.Digest = "sha256:" + strings.Repeat("9", 64)
+	requested.Authority.Helper.Ref = "runtime-component-artifact:" + requested.Authority.Helper.Digest
 	containers := newFakeContainer([]byte("must not be read"))
 	objects := newFakeObjectStore()
 	service := mustService(t, containers, objects, admitted.Authority)
 
 	_, err := service.Capture(context.Background(), requested.Source.ProviderResourceID, requested)
-	if !errors.Is(err, ErrInvalidRequest) || !strings.Contains(err.Error(), "admitted current lineage") {
+	if !errors.Is(err, ErrUnavailable) || !strings.Contains(err.Error(), "not implemented") {
 		t.Fatalf("self-consistent but unadmitted authority was not rejected: %v", err)
 	}
 	if containers.inspectCalls != 0 || containers.statCalls != 0 || containers.copyCalls != 0 || len(objects.objects) != 0 {
@@ -463,7 +463,7 @@ func TestCaptureRequiresExactStoppedGenerationBeforeAnyArchiveRead(t *testing.T)
 	}
 }
 
-func TestCaptureReplayFreshlyReprovesStopReceiptWhileDurableObservationRemainsReadable(t *testing.T) {
+func TestCaptureCompleteReplayReadsDurableBytesAfterSourceRestarts(t *testing.T) {
 	t.Parallel()
 	binding := validBinding()
 	containers := newFakeContainer([]byte("immutable after capture"))
@@ -474,11 +474,11 @@ func TestCaptureReplayFreshlyReprovesStopReceiptWhileDurableObservationRemainsRe
 	}
 	copyCalls := containers.copyCalls
 	containers.state = &containertypes.State{Status: containertypes.StateRunning, Running: true, Pid: 42}
-	if _, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding); !errors.Is(err, ErrConflict) {
-		t.Fatalf("complete replay trusted historical stop authority: %v", err)
+	if replayed, err := service.Capture(context.Background(), binding.Source.ProviderResourceID, binding); err != nil || replayed != receipt {
+		t.Fatalf("complete replay lost immutable bytes: %v", err)
 	}
 	if containers.copyCalls != copyCalls {
-		t.Fatal("failed fresh stop reproof reached another archive read")
+		t.Fatal("complete replay reached another archive read")
 	}
 	observation, err := service.Observe(context.Background(), binding.Source.ProviderResourceID, binding)
 	if err != nil || observation.Status != "complete" || observation.Receipt == nil || *observation.Receipt != receipt {
@@ -670,8 +670,8 @@ func TestLostCreateResponsesReconcileWithoutReplacingDurableObjects(t *testing.T
 			if err != nil || replayed != receipt {
 				t.Fatalf("exact replay diverged after lost response: %#v, %v", replayed, err)
 			}
-			if containers.copyCalls != 1 || containers.inspectCalls != inspectCalls+1 {
-				t.Fatalf("completed replay did not perform exactly one fresh stop reproof: copies=%d inspect=%d->%d", containers.copyCalls, inspectCalls, containers.inspectCalls)
+			if containers.copyCalls != 1 || containers.inspectCalls != inspectCalls {
+				t.Fatalf("completed replay touched the mutable source: copies=%d inspect=%d->%d", containers.copyCalls, inspectCalls, containers.inspectCalls)
 			}
 		})
 	}
@@ -1121,8 +1121,8 @@ func TestCrossServiceCaptureAndDeleteConvergeThroughDurableAuthority(t *testing.
 	if err != nil || replayed != receipt {
 		t.Fatalf("second service did not converge on the exact receipt: %#v, %v", replayed, err)
 	}
-	if containers.copyCalls != 1 || containers.inspectCalls != inspectCalls+1 {
-		t.Fatalf("cross-service replay did not perform exactly one fresh stop reproof: copies=%d inspect=%d->%d", containers.copyCalls, inspectCalls, containers.inspectCalls)
+	if containers.copyCalls != 1 || containers.inspectCalls != inspectCalls {
+		t.Fatalf("cross-service replay touched the mutable source: copies=%d inspect=%d->%d", containers.copyCalls, inspectCalls, containers.inspectCalls)
 	}
 
 	deleted, err := second.Delete(context.Background(), binding.Source.ProviderResourceID, receipt.CaptureIdentity)
@@ -1469,7 +1469,7 @@ func TestCaptureRequiresExistingStreamingStorageCapability(t *testing.T) {
 	baseOnly := struct {
 		storage.PrivateObjectStorageClient
 	}{newFakeObjectStore()}
-	_, err := NewService(containers, baseOnly, &fakeStoppedGenerationAuthority{container: containers}, binding.Authority)
+	_, err := NewService(containers, baseOnly, &fakeStoppedGenerationAuthority{container: containers}, testCaptureComponent(binding.Authority), nil)
 	if !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("buffer-only storage was admitted: %v", err)
 	}
@@ -2364,7 +2364,8 @@ func mustService(
 		containers,
 		objects,
 		&fakeStoppedGenerationAuthority{container: containers},
-		authority,
+		testCaptureComponent(authority),
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("new service: %v", err)

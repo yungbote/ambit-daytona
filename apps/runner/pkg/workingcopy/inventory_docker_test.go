@@ -85,7 +85,7 @@ os.symlink('../package-00000-' + 'dependency-' * 8 + '.js', p/'node_modules/.bin
 	}
 	objects := newFakeObjectStore()
 	objects.directory = t.TempDir()
-	service, err := NewService(containers, objects, dockerTestStoppedAuthority{client}, binding.Authority)
+	service, err := NewService(containers, objects, dockerTestStoppedAuthority{client}, testCaptureComponent(binding.Authority), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ os.symlink('../package-00000-' + 'dependency-' * 8 + '.js', p/'node_modules/.bin
 	present = false
 	// Restart the service and remove the source before replay and restore. All
 	// subsequent operations must depend only on the inventory's object custody.
-	service, err = NewService(containers, objects, dockerTestStoppedAuthority{client}, binding.Authority)
+	service, err = NewService(containers, objects, dockerTestStoppedAuthority{client}, testCaptureComponent(binding.Authority), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
