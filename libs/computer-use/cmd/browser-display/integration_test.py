@@ -3,6 +3,9 @@
 
 # Real isolated Xvfb and Chromium proof; no model, account or external website.
 import base64
+import ctypes
+import io
+from PIL import Image
 import hashlib
 import json
 import os
@@ -76,15 +79,30 @@ with tempfile.TemporaryDirectory(prefix='browser-helper-proof-') as temp:
         info = call('info')
         receipts['initial'] = info
         window = next((w['id'] for w in info['windows'] if w['windowType'] == 'normal' and w['mapped']))
+        cli('eval', "document.body.style.background='rgb(35,87,153)'")
         receipts['resize'] = []
         for width, height in [(1920, 1440), (780, 1688), (2880, 1800), (1600, 2400)]:
             start = time.monotonic()
             info = call('resize', width=width, height=height, windowId=window)
             assert (info['width'], info['height']) == (width, height)
-            time.sleep(0.15)
+            immediate = call('capture')
+            raster = Image.open(io.BytesIO(base64.b64decode(immediate['data']))).convert('RGB')
+            pixel = raster.getpixel((width-30, height-30))
+            # EWMH acknowledges the native window repaint. Nested webpage
+            # composition is the driver's page-frame boundary, not this
+            # helper's promise of arbitrary page readiness.
+            chrome_pixel = raster.getpixel((width-30, 30))
+            assert max(chrome_pixel)>40, {'size':[width,height], 'chromePixel':chrome_pixel}
+            receipts.setdefault('immediatePagePixels', []).append({'width':width, 'height':height, 'pixel':pixel})
+            (OUT/f'first-{width}x{height}.jpeg').write_bytes(base64.b64decode(immediate['data']))
             state = cli('eval', '({width:innerWidth,height:innerHeight,dpr:devicePixelRatio,screenWidth:screen.width,screenHeight:screen.height})')['result']
             assert state['width'] == width / 2 and state['dpr'] == 2, state
             receipts['resize'].append(dict(info=info, page=state, ms=round((time.monotonic() - start) * 1000)))
+        if os.environ.get('AMBIT_DISPLAY_TEST_PAINT_ONLY') == '1':
+            call('close')
+            helper.wait(5)
+            receipts['helperExit'] = helper.returncode
+            raise SystemExit(0)
         info = call('resize', width=1560, height=1200, windowId=window)
         time.sleep(0.2)
         start = time.monotonic()
@@ -124,6 +142,17 @@ with tempfile.TemporaryDirectory(prefix='browser-helper-proof-') as temp:
         receipts['rightModifierCopyAndRestore'] = True
         large = 'quoted " \x01\x02\n界😀 ' * 10000
         cli('eval', "document.querySelector('#t').value=" + json.dumps('quoted " \x01\x02\n界😀 ') + ".repeat(10000);document.querySelector('#t').select()")
+        os.environ['XAUTHORITY'] = str(auth)
+        x11 = ctypes.CDLL('libX11.so.6')
+        x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+        x11.XOpenDisplay.restype = ctypes.c_void_p
+        x11.XQueryKeymap.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+        xconn = x11.XOpenDisplay(display.encode())
+        physical_keys = ctypes.create_string_buffer(32)
+        x11.XQueryKeymap(xconn, physical_keys)
+        x11.XCloseDisplay(xconn)
+        receipts['heldBeforeCopy'] = [i for i in range(256) if physical_keys.raw[i//8] & (1 << (i%8))]
         receipts['copyReadiness'] = cli('eval', "({focus:document.hasFocus(), active:document.activeElement.id, width:innerWidth, start:document.activeElement.selectionStart, end:document.activeElement.selectionEnd})")['result']
         start = time.monotonic()
         copy = call('copy')
