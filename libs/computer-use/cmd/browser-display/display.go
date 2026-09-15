@@ -10,6 +10,7 @@ import (
 	"github.com/robotn/xgb/xfixes"
 	"github.com/robotn/xgb/xproto"
 	"github.com/robotn/xgb/xtest"
+	"github.com/robotn/xgbutil"
 )
 
 type display struct {
@@ -21,6 +22,7 @@ type display struct {
 	keys        map[byte]bool
 	buttons     map[byte]bool
 	keysyms     map[string]byte
+	keyboard    *xgbutil.XUtil
 	modes       map[string]randr.Mode
 	wheelX      float64
 	wheelY      float64

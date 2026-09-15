@@ -9,6 +9,7 @@ import (
 
 	"github.com/robotn/xgb/xproto"
 	"github.com/robotn/xgb/xtest"
+	"github.com/robotn/xgbutil"
 	"github.com/robotn/xgbutil/keybind"
 )
 
@@ -35,19 +36,33 @@ func (d *display) loadKeys() error {
 	if err != nil {
 		return err
 	}
-	d.keysyms = map[string]byte{}
-	for index, sym := range reply.Keysyms {
-		if sym == 0 {
-			continue
-		}
-		name := strings.ToLower(keybind.KeysymToStr(sym))
-		if name != "" {
-			if _, present := d.keysyms[name]; !present {
-				d.keysyms[name] = byte(int(setup.MinKeycode) + index/int(reply.KeysymsPerKeycode))
-			}
-		}
+	keyboard, err := xgbutil.NewConnXgb(d.conn)
+	if err != nil {
+		return err
 	}
+	keybind.KeyMapSet(keyboard, reply)
+	d.keyboard = keyboard
+	d.keysyms = map[string]byte{}
 	return nil
+}
+
+// Forward names are canonical. The library's reverse map deliberately chooses
+// an arbitrary alias, so using it for input could lose F11 to L1 or period to '.'.
+func (d *display) nativeKey(name string) byte {
+	cacheName := strings.ToLower(name)
+	if code := d.keysyms[cacheName]; code != 0 {
+		return code
+	}
+	if d.keyboard == nil {
+		return 0
+	}
+	codes := keybind.StrToKeycodes(d.keyboard, name)
+	if len(codes) == 0 {
+		return 0
+	}
+	code := byte(codes[0])
+	d.keysyms[cacheName] = code
+	return code
 }
 
 var physicalNames = map[string]string{
@@ -76,7 +91,7 @@ func (d *display) keycode(event inputEvent) byte {
 			name = "space"
 		}
 	}
-	return d.keysyms[strings.ToLower(name)]
+	return d.nativeKey(name)
 }
 func (d *display) validateEvent(event inputEvent, width, height int) error {
 	if event.Modifiers < 0 || event.Modifiers > 15 {
@@ -167,14 +182,14 @@ var modifierGroups = []struct {
 	bit         int
 	left, right string
 }{
-	{1, "alt_l", "alt_r"}, {2, "control_l", "control_r"}, {4, "super_l", "super_r"}, {8, "shift_l", "shift_r"},
+	{1, "Alt_L", "Alt_R"}, {2, "Control_L", "Control_R"}, {4, "Super_L", "Super_R"}, {8, "Shift_L", "Shift_R"},
 }
 
 func (d *display) modifierCodes() []byte {
 	codes := make([]byte, 0, 8)
 	for _, group := range modifierGroups {
 		for _, name := range []string{group.left, group.right} {
-			if code := d.keysyms[name]; code != 0 {
+			if code := d.nativeKey(name); code != 0 {
 				codes = append(codes, code)
 			}
 		}
@@ -191,7 +206,7 @@ func (d *display) isModifier(code byte) bool {
 }
 func (d *display) modifiers(mask int) error {
 	for _, group := range modifierGroups {
-		left, right := d.keysyms[group.left], d.keysyms[group.right]
+		left, right := d.nativeKey(group.left), d.nativeKey(group.right)
 		if left == 0 {
 			return unavailable()
 		}
@@ -325,7 +340,7 @@ func (d *display) reset() error {
 	return nil
 }
 func (d *display) chord(key string) error {
-	code := d.keysyms[key]
+	code := d.nativeKey(key)
 	if code == 0 {
 		return invalid()
 	}
