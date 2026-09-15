@@ -8,7 +8,7 @@ The browser is an ordinary workspace process. Use `agent-browser open`, `snapsho
 
 ### Browser display modes
 
-Headless browsing remains the default and supports the live screencast. Headed Chrome can use the locked Xvfb display server when the workspace has no display. The existing native driver starts and owns that private display together with Chrome; the launcher does not rewrite browser flags or start a separate display service. The image installs the display dependency at build time and records its actual package-owned executable and `Xvfb -help` entrypoint in the existing inventory. No display package is installed during a Run.
+Headless browsing remains the default and supports the live screencast. Headed Chrome can use the locked Xvfb display server when the workspace has no display. The existing native driver starts and owns that private display together with Chrome; the launcher does not rewrite browser flags or start a separate display service. The image installs the display dependency at build time and records its actual package-owned executable and `Xvfb -help` entrypoint in the existing inventory. The shipped `xvfb-run` wrapper also has its required `xauth` dependency; see [Debian’s wrapper contract](https://manpages.debian.org/trixie/xvfb/xvfb-run.1.en.html). No display package is installed during a Run.
 
 ### The bound on a browser left open
 

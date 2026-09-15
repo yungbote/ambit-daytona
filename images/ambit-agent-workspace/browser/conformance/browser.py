@@ -270,6 +270,19 @@ def main():
         wait_until(lambda: not (sockets / f"{ordinary}.sock").exists())
         evidence["lifecycleProcesses"]["afterOrdinaryClose"] = wait_for_fixture_baseline(baseline)
         evidence["checks"].append("ordinary-start-retains-page-mode-and-cleans-up")
+        # The same package exposes xvfb-run for other normal sandbox tools.
+        # Its required xauth dependency must make a real display usable too.
+        wrapped = subprocess.run([
+            "xvfb-run", "--auto-servernum", "python3", "-c",
+            "import ctypes; x=ctypes.CDLL('libX11.so.6'); "
+            "x.XOpenDisplay.argtypes=[ctypes.c_char_p]; x.XOpenDisplay.restype=ctypes.c_void_p; "
+            "d=x.XOpenDisplay(None); assert d; "
+            "x.XCloseDisplay.argtypes=[ctypes.c_void_p]; x.XCloseDisplay(d); print('display-ready')",
+        ], text=True, capture_output=True, timeout=15)
+        assert wrapped.returncode == 0, wrapped.stderr + wrapped.stdout
+        assert wrapped.stdout.strip() == "display-ready"
+        wait_for_fixture_baseline(baseline)
+        evidence["checks"].append("packaged-display-wrapper-connects-and-cleans-up")
         evidence["status"] = "passed"
         (root / "result.json").write_text(json.dumps(evidence, indent=2) + "\n")
         print(json.dumps(evidence))
