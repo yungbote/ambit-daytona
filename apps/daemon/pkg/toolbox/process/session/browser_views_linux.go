@@ -33,7 +33,7 @@ import (
 const (
 	// A frame carries one screencast image. The read limit is the relay's whole
 	// per-viewer buffer: ack pacing keeps exactly one frame in flight.
-	browserFrameLimit = 12 << 20
+	browserFrameLimit = 32 << 20
 	// One write to a viewer, and one acknowledgement to the driver, are bounded
 	// so a stalled peer cannot pin this relay or its upstream connection.
 	browserViewerWriteTimeout = 30 * time.Second
@@ -269,6 +269,11 @@ func (s *SessionController) ListBrowserViews(c *gin.Context) {
 // the driver; application clients cannot send browser input or CDP commands,
 // and the driver's endpoint is never disclosed.
 func (s *SessionController) StreamBrowserView(c *gin.Context) {
+	presentation, valid := parseBrowserPresentation(c.Request)
+	if !valid {
+		c.JSON(http.StatusBadRequest, gin.H{"code": "browser_view_invalid"})
+		return
+	}
 	sessionID := c.Param("sessionId")
 	views, err := s.browserViews(c.Request.Context(), sessionID)
 	if err != nil {
@@ -287,7 +292,12 @@ func (s *SessionController) StreamBrowserView(c *gin.Context) {
 		return
 	}
 	address := fmt.Sprintf("ws://127.0.0.1:%d/?pacing=ack&maxFps=10", selected.port)
-	upstream, _, err := (&websocket.Dialer{HandshakeTimeout: 5 * time.Second}).DialContext(c.Request.Context(), address, nil)
+	var headers http.Header
+	if presentation != nil {
+		address += fmt.Sprintf("&width=%d&height=%d", presentation.Width, presentation.Height)
+		headers = http.Header{"X-Ambit-Browser-Viewer": []string{presentation.Viewer}}
+	}
+	upstream, _, err := (&websocket.Dialer{HandshakeTimeout: 5 * time.Second}).DialContext(c.Request.Context(), address, headers)
 	if err != nil {
 		c.Status(http.StatusBadGateway)
 		return
@@ -416,8 +426,9 @@ const (
 
 func browserViewMessage(message []byte) ([]byte, uint64, browserRecordKind) {
 	var envelope struct {
-		Type string `json:"type"`
-		Seq  uint64 `json:"seq"`
+		Type    string          `json:"type"`
+		Seq     uint64          `json:"seq"`
+		Surface json.RawMessage `json:"surface"`
 	}
 	if json.Unmarshal(message, &envelope) != nil {
 		return nil, 0, browserRecordDropped
@@ -430,9 +441,31 @@ func browserViewMessage(message []byte) ([]byte, uint64, browserRecordKind) {
 		if envelope.Seq == 0 {
 			return nil, 0, browserRecordDropped
 		}
+		if envelope.Surface != nil {
+			var frame struct {
+				Type     string         `json:"type"`
+				Seq      uint64         `json:"seq"`
+				Encoding string         `json:"encoding"`
+				Data     string         `json:"data"`
+				Surface  browserSurface `json:"surface"`
+			}
+			if json.Unmarshal(message, &frame) != nil || !frame.Surface.valid() || frame.Encoding != "jpeg" || frame.Data == "" {
+				return nil, 0, browserRecordFailed
+			}
+			projected, err := json.Marshal(frame)
+			if err != nil {
+				return nil, 0, browserRecordFailed
+			}
+			return projected, frame.Seq, browserRecordVisual
+		}
 		return body, envelope.Seq, browserRecordVisual
 	case "status", "url":
 		return body, 0, browserRecordVisual
+	case "presentation":
+		if projected, valid := browserPresentationMessage(message); valid {
+			return projected, 0, browserRecordVisual
+		}
+		return nil, 0, browserRecordDropped
 	case "pointer", "activity":
 		if projected, valid := browserActivity(message); valid {
 			return projected, 0, browserRecordVisual

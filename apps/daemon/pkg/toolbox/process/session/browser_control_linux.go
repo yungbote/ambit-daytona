@@ -14,7 +14,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"regexp"
 	"time"
 	"unicode/utf8"
 
@@ -25,15 +24,15 @@ import (
 const browserControlLimit = 64 << 10
 const browserCopyTextLimit = 1 << 20
 const browserCopyResponseLimit = 6*browserCopyTextLimit + 4096
-
-var browserControllerID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+const browserPasteRequestLimit = 6*browserCopyTextLimit + 8192
 
 type browserControlRequest struct {
-	Op           string            `json:"op"`
-	ControllerID string            `json:"controllerId,omitempty"`
-	ExpiresAt    int64             `json:"expiresAt,omitempty"`
-	Sequence     uint64            `json:"sequence,omitempty"`
-	Events       []json.RawMessage `json:"events,omitempty"`
+	Op                        string            `json:"op"`
+	ControllerID              string            `json:"controllerId,omitempty"`
+	ExpiresAt                 int64             `json:"expiresAt,omitempty"`
+	Sequence                  uint64            `json:"sequence,omitempty"`
+	Events                    []json.RawMessage `json:"events,omitempty"`
+	ExpectedSurfaceGeneration string            `json:"expectedSurfaceGeneration,omitempty"`
 }
 
 // ControlBrowserView addresses the same proved native instance as the visual
@@ -41,7 +40,7 @@ type browserControlRequest struct {
 // command serialization, lease expiry and input acknowledgements. Neither the
 // driver's socket nor arbitrary CDP commands are exposed to the browser client.
 func (s *SessionController) ControlBrowserView(c *gin.Context) {
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, browserControlLimit)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, browserPasteRequestLimit)
 	decoder := json.NewDecoder(c.Request.Body)
 	decoder.DisallowUnknownFields()
 	var request browserControlRequest
@@ -92,7 +91,7 @@ func (s *SessionController) ControlBrowserView(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": "browser_control_invalid"})
 		return
 	}
-	if command.Len() > browserControlLimit {
+	if command.Len() > browserControlRequestLimit(request) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": "browser_control_invalid"})
 		return
 	}
@@ -121,7 +120,7 @@ func (s *SessionController) ControlBrowserView(c *gin.Context) {
 	if !response.Success {
 		code := response.Code
 		switch code {
-		case "browser_control_invalid", "browser_control_conflict", "browser_control_expired", "browser_control_stale", "browser_control_sequence_gap", "browser_control_outcome_unknown", "browser_controlled_by_user", "browser_control_copy_too_large":
+		case "browser_control_invalid", "browser_control_conflict", "browser_control_expired", "browser_control_stale", "browser_control_sequence_gap", "browser_control_outcome_unknown", "browser_controlled_by_user", "browser_control_copy_too_large", "browser_control_surface_stale":
 		default:
 			code = "browser_control_unavailable"
 		}
@@ -134,10 +133,11 @@ func (s *SessionController) ControlBrowserView(c *gin.Context) {
 	}
 	if request.Op == "inspect" {
 		var inspection struct {
-			Supported  bool `json:"supported"`
-			Controlled bool `json:"controlled"`
+			Supported  bool            `json:"supported"`
+			Controlled bool            `json:"controlled"`
+			Surface    *browserSurface `json:"surface,omitempty"`
 		}
-		if json.Unmarshal(response.Data, &inspection) != nil || !inspection.Supported {
+		if json.Unmarshal(response.Data, &inspection) != nil || !inspection.Supported || (inspection.Surface != nil && !inspection.Surface.valid()) {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"code": "browser_control_unavailable"})
 			return
 		}
@@ -146,12 +146,13 @@ func (s *SessionController) ControlBrowserView(c *gin.Context) {
 	}
 	// Do not forward upstream error strings, request data or unrelated metadata.
 	var data struct {
-		ControllerID string `json:"controllerId"`
-		ExpiresAt    int64  `json:"expiresAt"`
-		LastSequence uint64 `json:"lastSequence"`
-		Status       string `json:"status"`
+		ControllerID string          `json:"controllerId"`
+		ExpiresAt    int64           `json:"expiresAt"`
+		LastSequence uint64          `json:"lastSequence"`
+		Status       string          `json:"status"`
+		Surface      *browserSurface `json:"surface,omitempty"`
 	}
-	if json.Unmarshal(response.Data, &data) != nil || data.ControllerID != request.ControllerID || data.LastSequence > 9_007_199_254_740_991 {
+	if json.Unmarshal(response.Data, &data) != nil || data.ControllerID != request.ControllerID || data.LastSequence > 9_007_199_254_740_991 || (data.Surface != nil && !data.Surface.valid()) {
 		c.JSON(http.StatusBadGateway, gin.H{"code": "browser_control_outcome_unknown"})
 		return
 	}
@@ -168,8 +169,12 @@ func (s *SessionController) ControlBrowserView(c *gin.Context) {
 			c.JSON(http.StatusBadGateway, gin.H{"code": "browser_control_unavailable"})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"controllerId": data.ControllerID, "expiresAt": data.ExpiresAt,
-			"lastSequence": data.LastSequence, "status": data.Status, "clipboard": copy.Clipboard})
+		result := gin.H{"controllerId": data.ControllerID, "expiresAt": data.ExpiresAt,
+			"lastSequence": data.LastSequence, "status": data.Status, "clipboard": copy.Clipboard}
+		if data.Surface != nil {
+			result["surface"] = data.Surface
+		}
+		c.JSON(http.StatusOK, result)
 		return
 	}
 	switch data.Status {
@@ -180,11 +185,33 @@ func (s *SessionController) ControlBrowserView(c *gin.Context) {
 	}
 }
 
+func browserControlRequestLimit(request browserControlRequest) int {
+	if request.Op != "input" || len(request.Events) != 1 || request.ExpectedSurfaceGeneration == "" {
+		return browserControlLimit
+	}
+	var event struct {
+		Type      string `json:"type"`
+		EventType string `json:"eventType"`
+		Text      string `json:"text"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(request.Events[0]))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&event) != nil || decoder.Decode(new(any)) != io.EOF ||
+		event.Type != "input_keyboard" || event.EventType != "insertText" ||
+		len(event.Text) == 0 || len(event.Text) > browserCopyTextLimit || !utf8.ValidString(event.Text) {
+		return browserControlLimit
+	}
+	return browserPasteRequestLimit
+}
+
 func validBrowserControlRequest(request browserControlRequest) bool {
+	if request.ExpectedSurfaceGeneration != "" && (request.Op != "input" || !validBrowserUUID(request.ExpectedSurfaceGeneration)) {
+		return false
+	}
 	if request.Op == "inspect" {
 		return request.ControllerID == "" && request.ExpiresAt == 0 && request.Sequence == 0 && len(request.Events) == 0
 	}
-	if !browserControllerID.MatchString(request.ControllerID) {
+	if !validBrowserUUID(request.ControllerID) {
 		return false
 	}
 	switch request.Op {

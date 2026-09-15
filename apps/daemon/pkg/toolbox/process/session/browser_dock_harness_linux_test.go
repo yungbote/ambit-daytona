@@ -61,13 +61,26 @@ func TestBrowserDockHarness(t *testing.T) {
 		}
 	}
 	environment = append(environment, "AGENT_BROWSER_SOCKET_DIR="+scratch, "AGENT_BROWSER_EXECUTABLE_PATH="+chrome, "NO_COLOR=1")
-	command := []string{"env", "AGENT_BROWSER_SOCKET_DIR=" + quote(scratch), "AGENT_BROWSER_EXECUTABLE_PATH=" + quote(chrome), quote(driver), "--config", quote(config), "--session", "primary", "daemon"}
+	command := []string{"env", "AGENT_BROWSER_SOCKET_DIR=" + quote(scratch), "AGENT_BROWSER_EXECUTABLE_PATH=" + quote(chrome)}
+	windowMode := os.Getenv("AGENT_BROWSER_WINDOW_STREAM") == "1"
+	if windowMode {
+		helper := os.Getenv("AGENT_BROWSER_DISPLAY_HELPER")
+		environment = append(environment, "DISPLAY=", "AGENT_BROWSER_WINDOW_STREAM=1", "AGENT_BROWSER_DISPLAY_HELPER="+helper)
+		command = append(command, "DISPLAY=", "AGENT_BROWSER_WINDOW_STREAM=1", "AGENT_BROWSER_DISPLAY_HELPER="+quote(helper))
+	}
+	command = append(command, quote(driver), "--config", quote(config), "--session", "primary", "daemon")
 	if status, body := call(t, engine, http.MethodPost, "/process/session/"+session+"/exec", SessionExecuteRequest{Command: strings.Join(command, " "), RunAsync: true}); status != http.StatusAccepted {
 		t.Fatalf("driver start: %d %s", status, body)
 	}
 	awaitPath(t, filepath.Join(scratch, "primary.sock"))
 	args := []string{"--config", config, "--session", "primary", "--json"}
-	for _, action := range [][]string{{"open", "data:text/html,<title>Native browser dock</title><h1>Browser ready</h1><input aria-label=Message>"}, {"set", "viewport", "960", "720"}} {
+	actions := [][]string{{"open", "data:text/html,<title>Native browser dock</title><h1>Browser ready</h1><input aria-label=Message>"}}
+	width, height := 1280, 720
+	if !windowMode {
+		actions = append(actions, []string{"set", "viewport", "960", "720"})
+		width = 960
+	}
+	for _, action := range actions {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		cmd := exec.CommandContext(ctx, driver, append(append([]string{}, args...), action...)...)
 		cmd.Env = environment
@@ -83,7 +96,7 @@ func TestBrowserDockHarness(t *testing.T) {
 	metadata := map[string]any{"baseUrl": server.URL, "sessionId": session, "viewId": id, "pid": os.Getpid(),
 		"streamPath":  "/process/session/" + session + "/browser-views/" + id + "/stream",
 		"controlPath": "/process/session/" + session + "/browser-views/" + id + "/control",
-		"driver":      driver, "config": config, "socketDir": scratch, "chrome": chrome, "viewport": map[string]int{"width": 960, "height": 720},
+		"driver":      driver, "config": config, "socketDir": scratch, "chrome": chrome, "viewport": map[string]int{"width": width, "height": height},
 		"maxFps": 10, "pacing": "ack", "auth": "task-local fixture only"}
 	body, _ := json.MarshalIndent(metadata, "", "  ")
 	if err := os.WriteFile(output, body, 0600); err != nil {
@@ -94,6 +107,6 @@ func TestBrowserDockHarness(t *testing.T) {
 	defer cancel()
 	select {
 	case <-ctx.Done():
-	case <-time.After(20 * time.Minute):
+	case <-time.After(60 * time.Minute):
 	}
 }
