@@ -41,3 +41,10 @@ python3 cmd/browser-display/integration_test.py
 ```
 
 It verifies actual display/window/page dimensions and DPR across desktop and portrait sizes, native cursor capture, exact 6000-line paste and copy, UTF-8/control-character INCR transfers, the 1 MiB clipboard boundary, password suppression, real omnibox input, and cleanup. Exact-image and Product/production journeys remain separate acceptance requirements.
+
+Window resize uses the browser's advertised `_NET_WM_SYNC_REQUEST` counter and an XSync alarm before acknowledging the native repaint. The pinned xgb package lacks a generated SYNC binding, so the helper implements only the required standard messages on its existing authenticated connection. It adds no dependency or second event loop. The protocol is documented in [EWMH section 6.2](https://specifications.freedesktop.org/wm/latest-single/)
+and the system X11 `syncproto.h` definitions.
+
+The counter proves top-level window resize painting. It does not claim that nested webpage composition, page loading or animation has finished. The driver owns page-frame feedback when publishing the first frame at a new geometry; ordinary streaming remains immediate. The helper test records first-page pixels separately and tests that native browser chrome has painted. Set `AMBIT_DISPLAY_TEST_PAINT_ONLY=1` to run that component boundary independently of clipboard scenarios.
+
+Paint request values advance above both the observed counter and the helper's last-issued value, including timeouts. The shared framebuffer has one latest exact request/acknowledgment, retained only in this helper process. Every later geometry change resolves that pending paint first; a definitively destroyed window retires it without fabricating an acknowledgment. An unchanged-size retry re-awaits its outstanding value; it cannot manufacture a paint receipt from the server geometry. An unchanged initial attachment with no outstanding helper resize is explicitly a geometry read, not an XSync repaint assertion. Set `AMBIT_DISPLAY_TEST_PAINT_TIMEOUT=1` with the paint-only test to exercise a stopped/resumed test browser and late acknowledgment without replaying resize effects.

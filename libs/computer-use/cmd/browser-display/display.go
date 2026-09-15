@@ -13,17 +13,21 @@ import (
 )
 
 type display struct {
-	conn      *xgb.Conn
-	screen    *xproto.ScreenInfo
-	chromePID uint32
-	atoms     map[string]xproto.Atom
-	clipboard *clipboard
-	keys      map[byte]bool
-	buttons   map[byte]bool
-	keysyms   map[string]byte
-	modes     map[string]randr.Mode
-	wheelX    float64
-	wheelY    float64
+	conn        *xgb.Conn
+	screen      *xproto.ScreenInfo
+	chromePID   uint32
+	atoms       map[string]xproto.Atom
+	clipboard   *clipboard
+	keys        map[byte]bool
+	buttons     map[byte]bool
+	keysyms     map[string]byte
+	modes       map[string]randr.Mode
+	wheelX      float64
+	wheelY      float64
+	syncOpcode  byte
+	paintEvents chan paintAlarm
+	paintSerial uint64
+	paintLatest *paintRequest
 }
 type windowInfo struct {
 	ID               uint32 `json:"id"`
@@ -64,12 +68,15 @@ func openDisplay(pid int) (*display, error) {
 		return nil, err
 	}
 	d := &display{conn: c, screen: xproto.Setup(c).DefaultScreen(c), chromePID: uint32(pid), atoms: map[string]xproto.Atom{}, keys: map[byte]bool{}, buttons: map[byte]bool{}, modes: map[string]randr.Mode{}}
-	for _, name := range []string{"_NET_WM_PID", "_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_NORMAL", "_NET_WM_WINDOW_TYPE_DIALOG", "CLIPBOARD", "UTF8_STRING", "TARGETS", "TEXT", "INCR", "AMB_BROWSER_SELECTION"} {
+	for _, name := range []string{"_NET_WM_PID", "WM_PROTOCOLS", "_NET_WM_SYNC_REQUEST", "_NET_WM_SYNC_REQUEST_COUNTER", "_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_NORMAL", "_NET_WM_WINDOW_TYPE_DIALOG", "CLIPBOARD", "UTF8_STRING", "TARGETS", "TEXT", "INCR", "AMB_BROWSER_SELECTION"} {
 		a, err := xproto.InternAtom(c, false, uint16(len(name)), name).Reply()
 		if err != nil {
 			return nil, err
 		}
 		d.atoms[name] = a.Atom
+	}
+	if err := d.initPaint(); err != nil {
+		return nil, err
 	}
 	if err := d.loadKeys(); err != nil {
 		return nil, err
@@ -178,6 +185,9 @@ func (d *display) resize(width, height int, windowID uint32) (displayInfo, error
 			return displayInfo{}, invalid()
 		}
 	}
+	if err := d.finishPendingPaint(); err != nil {
+		return displayInfo{}, err
+	}
 	oldW, oldH, err := d.size()
 	if err != nil {
 		return displayInfo{}, err
@@ -244,7 +254,7 @@ func (d *display) resize(width, height int, windowID uint32) (displayInfo, error
 }
 func (d *display) resizeWindow(width, height int, windowID uint32) (displayInfo, error) {
 	if windowID != 0 {
-		if err := xproto.ConfigureWindowChecked(d.conn, xproto.Window(windowID), xproto.ConfigWindowX|xproto.ConfigWindowY|xproto.ConfigWindowWidth|xproto.ConfigWindowHeight, []uint32{0, 0, uint32(width), uint32(height)}).Check(); err != nil {
+		if err := d.paintAfterResize(xproto.Window(windowID), width, height); err != nil {
 			return displayInfo{}, unknown()
 		}
 	}

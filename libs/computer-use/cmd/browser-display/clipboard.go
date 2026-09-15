@@ -51,11 +51,12 @@ func (d *display) startClipboard() error {
 		return err
 	}
 	d.clipboard = &clipboard{display: d, window: id, notice: make(chan xgb.Event, 16), changes: make(chan xfixes.SelectionNotifyEvent, 1), done: make(chan struct{}), outgoing: map[selectionKey]*selectionTransfer{}}
-	go d.clipboard.events()
+	go d.events()
 	return nil
 }
 func (c *clipboard) close() { _ = xproto.DestroyWindowChecked(c.display.conn, c.window).Check() }
-func (c *clipboard) events() {
+func (d *display) events() {
+	c := d.clipboard
 	defer close(c.done)
 	for {
 		event, err := c.display.conn.WaitForEvent()
@@ -63,6 +64,11 @@ func (c *clipboard) events() {
 			return
 		}
 		switch value := event.(type) {
+		case paintAlarm:
+			select {
+			case d.paintEvents <- value:
+			default:
+			}
 		case xfixes.SelectionNotifyEvent:
 			if value.Selection == c.display.atoms["CLIPBOARD"] {
 				// Selection ownership is a current observation, not a backlog.
