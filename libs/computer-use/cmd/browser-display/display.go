@@ -26,6 +26,8 @@ type display struct {
 	wheelY      float64
 	syncOpcode  byte
 	paintEvents chan paintAlarm
+	paintSerial uint64
+	paintLatest *paintRequest
 }
 type windowInfo struct {
 	ID               uint32 `json:"id"`
@@ -182,6 +184,9 @@ func (d *display) resize(width, height int, windowID uint32) (displayInfo, error
 		if !owned {
 			return displayInfo{}, invalid()
 		}
+	}
+	if err := d.finishPendingPaint(); err != nil {
+		return displayInfo{}, err
 	}
 	oldW, oldH, err := d.size()
 	if err != nil {

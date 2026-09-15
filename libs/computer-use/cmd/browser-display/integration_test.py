@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import selectors
+import signal
 import struct
 import subprocess
 import tempfile
@@ -98,6 +99,17 @@ with tempfile.TemporaryDirectory(prefix='browser-helper-proof-') as temp:
             state = cli('eval', '({width:innerWidth,height:innerHeight,dpr:devicePixelRatio,screenWidth:screen.width,screenHeight:screen.height})')['result']
             assert state['width'] == width / 2 and state['dpr'] == 2, state
             receipts['resize'].append(dict(info=info, page=state, ms=round((time.monotonic() - start) * 1000)))
+        if os.environ.get('AMBIT_DISPLAY_TEST_PAINT_TIMEOUT') == '1':
+            os.kill(chrome, signal.SIGSTOP)
+            try:
+                first_pending = call('resize', width=1560, height=1200, windowId=window, expect_failure='display_outcome_unknown')
+                same_pending = call('resize', width=1560, height=1200, windowId=window, expect_failure='display_outcome_unknown')
+                newer_pending = call('resize', width=1580, height=1240, windowId=window, expect_failure='display_outcome_unknown')
+            finally:
+                os.kill(chrome, signal.SIGCONT)
+            recovered = call('resize', width=1580, height=1240, windowId=window)
+            assert recovered['width'] == 1580 and recovered['height'] == 1240
+            receipts['paintRecovery'] = {'first':first_pending['operationPerformed'], 'sameSize':same_pending['operationPerformed'], 'newer':newer_pending['operationPerformed'], 'recovered':True}
         if os.environ.get('AMBIT_DISPLAY_TEST_PAINT_ONLY') == '1':
             call('close')
             helper.wait(5)
