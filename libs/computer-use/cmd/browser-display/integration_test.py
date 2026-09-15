@@ -116,8 +116,15 @@ with tempfile.TemporaryDirectory(prefix='browser-helper-proof-') as temp:
         copy = call('copy')
         assert copy['text'] == text
         receipts['copy'] = {'bytes': copy['bytes'], 'sha256': hashlib.sha256(copy['text'].encode()).hexdigest(), 'ms': round((time.monotonic() - start) * 1000)}
+        call('input', events=[dict(type='input_keyboard', eventType='keyDown', key='Shift', code='ShiftRight', modifiers=8)])
+        shifted_copy = call('copy')
+        assert shifted_copy['text'] == text
+        call('input', events=[dict(type='input_keyboard', eventType='keyDown', key='A', code='KeyA', modifiers=8), dict(type='input_keyboard', eventType='keyUp', key='A', code='KeyA', modifiers=8), dict(type='input_keyboard', eventType='keyUp', key='Shift', code='ShiftRight', modifiers=0)])
+        assert cli('eval', "document.querySelector('#t').value")['result'] == 'A'
+        receipts['rightModifierCopyAndRestore'] = True
         large = 'quoted " \x01\x02\n界😀 ' * 10000
         cli('eval', "document.querySelector('#t').value=" + json.dumps('quoted " \x01\x02\n界😀 ') + ".repeat(10000);document.querySelector('#t').select()")
+        receipts['copyReadiness'] = cli('eval', "({focus:document.hasFocus(), active:document.activeElement.id, width:innerWidth, start:document.activeElement.selectionStart, end:document.activeElement.selectionEnd})")['result']
         start = time.monotonic()
         copy = call('copy')
         assert copy['text'] == large, {'actualBytes': copy['bytes'], 'expectedBytes': len(large.encode()), 'actualLength': len(copy['text']), 'expectedLength': len(large), 'firstDifference': next(((i, ord(a), ord(b)) for i, (a, b) in enumerate(zip(copy['text'], large)) if a != b), None)}

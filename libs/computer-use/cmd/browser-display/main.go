@@ -106,7 +106,7 @@ func main() {
 		os.Exit(2)
 	}
 	auth, err := os.Stat(os.Getenv("XAUTHORITY"))
-	if err != nil || !auth.Mode().IsRegular() || auth.Mode().Perm()&0077 != 0 {
+	if err != nil || !auth.Mode().IsRegular() || auth.Mode().Perm()&0077 != 0 || !explicitAuthority(os.Getenv("XAUTHORITY"), os.Getenv("DISPLAY")) {
 		fmt.Fprintln(os.Stderr, "The private display authority is unavailable.")
 		os.Exit(2)
 	}

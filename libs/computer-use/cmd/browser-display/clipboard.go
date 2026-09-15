@@ -318,16 +318,28 @@ func (d *display) copy() (any, error) {
 		case <-timer.C:
 			return map[string]any{"text": "", "bytes": 0, "complete": true}, nil
 		case <-d.clipboard.done:
-			return nil, unknown()
+			return nil, copyReadFailure(unavailable())
 		case event := <-d.clipboard.changes:
 			if int16(event.Sequence-baseline.Sequence) <= 0 || event.Owner == 0 || event.Owner == d.clipboard.window {
 				continue
 			}
 			text, err := d.clipboard.read()
 			if err != nil {
-				return nil, err
+				return nil, copyReadFailure(err)
 			}
 			return map[string]any{"text": text, "bytes": len(text), "complete": true}, nil
 		}
 	}
+}
+
+// Copy's checked native key events already crossed the effect frontier. A
+// missing result cannot be represented as a pre-effect refusal.
+func copyReadFailure(err error) error {
+	var typed *failure
+	if errors.As(err, &typed) {
+		retained := *typed
+		retained.OperationPerformed = true
+		return &retained
+	}
+	return &failure{"display_unavailable", "The browser received Copy, but its clipboard could not be read.", true}
 }
