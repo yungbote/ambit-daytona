@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/json"
 	"image"
+	"io"
 	"strings"
 	"testing"
 
@@ -103,4 +104,99 @@ func FuzzRequestNeverPanics(f *testing.F) {
 		}
 		_, _ = decodeRequest(raw)
 	})
+}
+
+func TestOnePasteUsesClipboardBoundWithoutWideningOrdinaryBatches(t *testing.T) {
+	cases := []struct {
+		name    string
+		events  []inputEvent
+		allowed bool
+	}{
+		{"worst JSON escaping", []inputEvent{{Type: "input_keyboard", EventType: "insertText", Text: strings.Repeat("\x01", maximumClipboard)}}, true},
+		{"Unicode", []inputEvent{{Type: "input_keyboard", EventType: "insertText", Text: strings.Repeat("界😀", 100000)}}, true},
+		{"one byte beyond clipboard", []inputEvent{{Type: "input_keyboard", EventType: "insertText", Text: strings.Repeat("a", maximumClipboard+1)}}, false},
+		{"two large paste events", []inputEvent{{Type: "input_keyboard", EventType: "insertText", Text: strings.Repeat("a", maximumRequest)}, {Type: "input_keyboard", EventType: "insertText", Text: strings.Repeat("b", maximumRequest)}}, false},
+		{"ordinary key payload", []inputEvent{{Type: "input_keyboard", EventType: "keyDown", Text: strings.Repeat("a", maximumRequest)}}, false},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			raw, err := json.Marshal(request{ID: 1, Op: "input", Events: test.events})
+			if err != nil {
+				t.Fatal(err)
+			}
+			parsed, err := decodeRequest(raw)
+			if (err == nil) != test.allowed {
+				t.Fatalf("admission=%v expected=%v", err == nil, test.allowed)
+			}
+			if test.allowed && parsed.Events[0].Text != test.events[0].Text {
+				t.Fatal("clipboard bytes changed")
+			}
+		})
+	}
+}
+
+func TestFractionalWheelDistanceIsRetainedWithoutAmplification(t *testing.T) {
+	remainder := 0.0
+	total := 0
+	for range 100 {
+		total += wheelSteps(1, &remainder)
+	}
+	if total != 1 || remainder != 0 {
+		t.Fatalf("small gestures amplified: %d/%f", total, remainder)
+	}
+	if wheelSteps(40, &remainder) != 0 || wheelSteps(-40, &remainder) != 0 || remainder != 0 {
+		t.Fatal("opposing fractional movement did not cancel")
+	}
+	if wheelSteps(-250, &remainder) != -2 || remainder != -50 {
+		t.Fatal("negative wheel direction was not retained")
+	}
+}
+
+func TestCopyResultFailureRetainsTheDeliveredNativeInput(t *testing.T) {
+	for _, err := range []error{unavailable(), copyTooLarge(), io.ErrUnexpectedEOF} {
+		result := copyReadFailure(err).(*failure)
+		if result.OperationPerformed != true {
+			t.Fatal("delivered Copy became a pre-effect refusal")
+		}
+		if result.Message == io.ErrUnexpectedEOF.Error() {
+			t.Fatal("raw provider diagnostic leaked")
+		}
+	}
+	original := unavailable().(*failure)
+	_ = copyReadFailure(original)
+	if original.OperationPerformed != false {
+		t.Fatal("unrelated pre-effect error was mutated")
+	}
+}
+
+func TestExplicitXAuthorityRejectsLibraryFallbackCases(t *testing.T) {
+	record := func(family uint16, fields ...string) []byte {
+		data := []byte{byte(family >> 8), byte(family)}
+		for _, field := range fields {
+			data = append(data, byte(len(field)>>8), byte(len(field)))
+			data = append(data, field...)
+		}
+		return data
+	}
+	cookie := strings.Repeat("x", 16)
+	for _, test := range []struct {
+		name    string
+		data    []byte
+		allowed bool
+	}{
+		{"owned wildcard", record(65535, "", "", "MIT-MAGIC-COOKIE-1", cookie), true},
+		{"local display and screen", record(256, "host", "42", "MIT-MAGIC-COOKIE-1", cookie), true},
+		{"wrong display", record(256, "host", "43", "MIT-MAGIC-COOKIE-1", cookie), false},
+		{"wrong local host", record(256, "other", "42", "MIT-MAGIC-COOKIE-1", cookie), false},
+		{"unsupported auth", record(65535, "", "", "OTHER", cookie), false},
+		{"missing cookie", record(65535, "", "", "MIT-MAGIC-COOKIE-1", ""), false},
+		{"library field overflow", record(65535, strings.Repeat("x", 257), "", "MIT-MAGIC-COOKIE-1", cookie), false},
+		{"malformed", []byte{255, 255, 0, 10}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := matchingAuthority(test.data, ":42.0", "host"); got != test.allowed {
+				t.Fatalf("explicit authority=%v", got)
+			}
+		})
+	}
 }

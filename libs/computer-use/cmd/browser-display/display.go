@@ -13,15 +13,19 @@ import (
 )
 
 type display struct {
-	conn      *xgb.Conn
-	screen    *xproto.ScreenInfo
-	chromePID uint32
-	atoms     map[string]xproto.Atom
-	clipboard *clipboard
-	keys      map[byte]bool
-	buttons   map[byte]bool
-	keysyms   map[string]byte
-	modes     map[string]randr.Mode
+	conn        *xgb.Conn
+	screen      *xproto.ScreenInfo
+	chromePID   uint32
+	atoms       map[string]xproto.Atom
+	clipboard   *clipboard
+	keys        map[byte]bool
+	buttons     map[byte]bool
+	keysyms     map[string]byte
+	modes       map[string]randr.Mode
+	wheelX      float64
+	wheelY      float64
+	syncOpcode  byte
+	paintEvents chan paintAlarm
 }
 type windowInfo struct {
 	ID               uint32 `json:"id"`
@@ -62,12 +66,15 @@ func openDisplay(pid int) (*display, error) {
 		return nil, err
 	}
 	d := &display{conn: c, screen: xproto.Setup(c).DefaultScreen(c), chromePID: uint32(pid), atoms: map[string]xproto.Atom{}, keys: map[byte]bool{}, buttons: map[byte]bool{}, modes: map[string]randr.Mode{}}
-	for _, name := range []string{"_NET_WM_PID", "_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_NORMAL", "_NET_WM_WINDOW_TYPE_DIALOG", "CLIPBOARD", "UTF8_STRING", "TARGETS", "TEXT", "INCR", "AMB_BROWSER_SELECTION"} {
+	for _, name := range []string{"_NET_WM_PID", "WM_PROTOCOLS", "_NET_WM_SYNC_REQUEST", "_NET_WM_SYNC_REQUEST_COUNTER", "_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_NORMAL", "_NET_WM_WINDOW_TYPE_DIALOG", "CLIPBOARD", "UTF8_STRING", "TARGETS", "TEXT", "INCR", "AMB_BROWSER_SELECTION"} {
 		a, err := xproto.InternAtom(c, false, uint16(len(name)), name).Reply()
 		if err != nil {
 			return nil, err
 		}
 		d.atoms[name] = a.Atom
+	}
+	if err := d.initPaint(); err != nil {
+		return nil, err
 	}
 	if err := d.loadKeys(); err != nil {
 		return nil, err
@@ -216,18 +223,13 @@ func (d *display) resize(width, height int, windowID uint32) (displayInfo, error
 	// Disable the old scanout before shrinking; grow first when needed. Each
 	// request is checked. Any failure after scanout mutation is an unknown
 	// outcome, never a reason to replay input against guessed dimensions.
-	changed := false
 	if width < oldW || height < oldH {
 		r, e := randr.SetCrtcConfig(d.conn, crtc, 0, 0, 0, 0, 0, randr.RotationRotate0, nil).Reply()
 		if e != nil || r.Status != 0 {
 			return displayInfo{}, unknown()
 		}
-		changed = true
 	}
-	if err := randr.SetScreenSizeChecked(d.conn, d.screen.Root, uint16(width), uint16(height), uint32(width*254/960), uint32(height*254/960)).Check(); err != nil {
-		if changed {
-			return displayInfo{}, unknown()
-		}
+	if err := randr.SetScreenSizeChecked(d.conn, d.screen.Root, uint16(width), uint16(height), uint32(max(1, width*254/960)), uint32(max(1, height*254/960))).Check(); err != nil {
 		return displayInfo{}, unknown()
 	}
 	r, err := randr.SetCrtcConfig(d.conn, crtc, 0, 0, 0, 0, mode, randr.RotationRotate0, []randr.Output{output}).Reply()
@@ -247,7 +249,7 @@ func (d *display) resize(width, height int, windowID uint32) (displayInfo, error
 }
 func (d *display) resizeWindow(width, height int, windowID uint32) (displayInfo, error) {
 	if windowID != 0 {
-		if err := xproto.ConfigureWindowChecked(d.conn, xproto.Window(windowID), xproto.ConfigWindowX|xproto.ConfigWindowY|xproto.ConfigWindowWidth|xproto.ConfigWindowHeight, []uint32{0, 0, uint32(width), uint32(height)}).Check(); err != nil {
+		if err := d.paintAfterResize(xproto.Window(windowID), width, height); err != nil {
 			return displayInfo{}, unknown()
 		}
 	}

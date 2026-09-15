@@ -100,7 +100,7 @@ func (d *display) validateEvent(event inputEvent, width, height int) error {
 	case "input_keyboard":
 		switch event.EventType {
 		case "insertText", "char":
-			if event.Text == "" || !utf8.ValidString(event.Text) {
+			if event.Text == "" || len(event.Text) > maximumClipboard || !utf8.ValidString(event.Text) {
 				return invalid()
 			}
 		case "keyDown", "rawKeyDown", "keyUp":
@@ -137,13 +137,13 @@ func (d *display) key(code byte, down bool) error {
 	typ := byte(xproto.KeyRelease)
 	if down {
 		typ = xproto.KeyPress
+		// A lost acknowledgment cannot erase custody of a possibly held key.
+		d.keys[code] = true
 	}
 	if err := d.fake(typ, code, 0, 0); err != nil {
 		return unknown()
 	}
-	if down {
-		d.keys[code] = true
-	} else {
+	if !down {
 		delete(d.keys, code)
 	}
 	return nil
@@ -152,34 +152,77 @@ func (d *display) button(button byte, down bool) error {
 	typ := byte(xproto.ButtonRelease)
 	if down {
 		typ = xproto.ButtonPress
+		d.buttons[button] = true
 	}
 	if err := d.fake(typ, button, 0, 0); err != nil {
 		return unknown()
 	}
-	if down {
-		d.buttons[button] = true
-	} else {
+	if !down {
 		delete(d.buttons, button)
 	}
 	return nil
 }
+
+var modifierGroups = []struct {
+	bit         int
+	left, right string
+}{
+	{1, "alt_l", "alt_r"}, {2, "control_l", "control_r"}, {4, "super_l", "super_r"}, {8, "shift_l", "shift_r"},
+}
+
+func (d *display) modifierCodes() []byte {
+	codes := make([]byte, 0, 8)
+	for _, group := range modifierGroups {
+		for _, name := range []string{group.left, group.right} {
+			if code := d.keysyms[name]; code != 0 {
+				codes = append(codes, code)
+			}
+		}
+	}
+	return codes
+}
+func (d *display) isModifier(code byte) bool {
+	for _, candidate := range d.modifierCodes() {
+		if candidate == code {
+			return true
+		}
+	}
+	return false
+}
 func (d *display) modifiers(mask int) error {
-	for _, modifier := range []struct {
-		bit  int
-		name string
-	}{{1, "Alt_L"}, {2, "Control_L"}, {4, "Super_L"}, {8, "Shift_L"}} {
-		code := d.keysyms[strings.ToLower(modifier.name)]
-		if code == 0 {
+	for _, group := range modifierGroups {
+		left, right := d.keysyms[group.left], d.keysyms[group.right]
+		if left == 0 {
 			return unavailable()
 		}
-		desired := mask&modifier.bit != 0
-		if d.keys[code] != desired {
-			if err := d.key(code, desired); err != nil {
-				return err
+		if mask&group.bit != 0 {
+			if !d.keys[left] && !d.keys[right] {
+				if err := d.key(left, true); err != nil {
+					return err
+				}
+			}
+		} else {
+			for _, code := range []byte{left, right} {
+				if code != 0 && d.keys[code] {
+					if err := d.key(code, false); err != nil {
+						return err
+					}
+				}
 			}
 		}
 	}
 	return nil
+}
+func (d *display) restoreModifiers(saved map[byte]bool) error {
+	var first error
+	for _, code := range d.modifierCodes() {
+		if d.keys[code] != saved[code] {
+			if err := d.key(code, saved[code]); err != nil && first == nil {
+				first = err
+			}
+		}
+	}
+	return first
 }
 func (d *display) input(events []inputEvent) error {
 	width, height, err := d.size()
@@ -199,6 +242,17 @@ func (d *display) input(events []inputEvent) error {
 			}
 			continue
 		}
+		if event.Type == "input_keyboard" && d.isModifier(d.keycode(event)) {
+			// Keep the actual side the user pressed. Adding a synthetic left
+			// modifier first would create a second held key for a right key.
+			if err := d.key(d.keycode(event), event.EventType != "keyUp"); err != nil {
+				return err
+			}
+			if err := d.modifiers(event.Modifiers); err != nil {
+				return unknown()
+			}
+			continue
+		}
 		if err := d.modifiers(event.Modifiers); err != nil {
 			return unknown()
 		}
@@ -208,7 +262,7 @@ func (d *display) input(events []inputEvent) error {
 			}
 			continue
 		}
-		if err := d.fake(xproto.MotionNotify, 0, int(math.Round(event.X)), int(math.Round(event.Y))); err != nil {
+		if err := d.fake(xproto.MotionNotify, 0, int(event.X), int(event.Y)); err != nil {
 			return unknown()
 		}
 		switch event.EventType {
@@ -220,12 +274,14 @@ func (d *display) input(events []inputEvent) error {
 			for _, axis := range []struct {
 				delta              float64
 				negative, positive byte
-			}{{event.DeltaY, 4, 5}, {event.DeltaX, 6, 7}} {
+				retained           *float64
+			}{{event.DeltaY, 4, 5, &d.wheelY}, {event.DeltaX, 6, 7, &d.wheelX}} {
+				steps := wheelSteps(axis.delta, axis.retained)
 				button := axis.positive
-				if axis.delta < 0 {
+				if steps < 0 {
 					button = axis.negative
 				}
-				for count := 0; count < int(math.Ceil(math.Abs(axis.delta)/100)); count++ {
+				for count := 0; count < int(math.Abs(float64(steps))); count++ {
 					if err = d.button(button, true); err != nil {
 						break
 					}
@@ -244,7 +300,14 @@ func (d *display) input(events []inputEvent) error {
 	}
 	return nil
 }
+func wheelSteps(delta float64, retained *float64) int {
+	*retained += delta
+	steps := int(*retained / 100)
+	*retained -= float64(steps) * 100
+	return steps
+}
 func (d *display) reset() error {
+	d.wheelX, d.wheelY = 0, 0
 	failed := false
 	for code := range d.keys {
 		if d.key(code, false) != nil {
@@ -262,29 +325,27 @@ func (d *display) reset() error {
 	return nil
 }
 func (d *display) chord(key string) error {
-	saved := 0
-	for _, m := range []struct {
-		bit  int
-		name string
-	}{{1, "alt_l"}, {2, "control_l"}, {4, "super_l"}, {8, "shift_l"}} {
-		if d.keys[d.keysyms[m.name]] {
-			saved |= m.bit
-		}
-	}
-	if err := d.modifiers(2); err != nil {
-		return err
-	}
 	code := d.keysyms[key]
 	if code == 0 {
 		return invalid()
 	}
-	err := d.key(code, true)
-	if err == nil {
-		err = d.key(code, false)
+	saved := map[byte]bool{}
+	for _, modifier := range d.modifierCodes() {
+		saved[modifier] = d.keys[modifier]
 	}
-	restored := d.modifiers(saved)
-	if err != nil {
+	if err := d.modifiers(2); err != nil {
+		_ = d.restoreModifiers(saved)
 		return err
+	}
+	primary := d.key(code, true)
+	// Even a lost press acknowledgment leaves possible held input to release.
+	released := d.key(code, false)
+	restored := d.restoreModifiers(saved)
+	if primary != nil {
+		return primary
+	}
+	if released != nil {
+		return released
 	}
 	return restored
 }

@@ -17,12 +17,14 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"unicode/utf8"
 )
 
 const maximumRequest = 65536
 const maximumPixels = 4096 * 4096
 const maximumDimension = 4096
 const maximumClipboard = 1024 * 1024
+const maximumPasteRequest = maximumClipboard*6 + 8192
 
 type request struct {
 	ID       uint64       `json:"id"`
@@ -56,7 +58,7 @@ type response struct {
 
 func decodeRequest(line []byte) (request, error) {
 	var value request
-	if len(line) > maximumRequest {
+	if len(line) > maximumPasteRequest || !utf8.Valid(line) {
 		return value, invalid()
 	}
 	d := json.NewDecoder(bytes.NewReader(line))
@@ -84,7 +86,13 @@ func decodeRequest(line []byte) (request, error) {
 	default:
 		return value, invalid()
 	}
+	if len(line) > maximumRequest && !singleClipboardPaste(value) {
+		return value, invalid()
+	}
 	return value, nil
+}
+func singleClipboardPaste(value request) bool {
+	return value.Op == "input" && len(value.Events) == 1 && value.Events[0].Type == "input_keyboard" && value.Events[0].EventType == "insertText" && len(value.Events[0].Text) > 0 && len(value.Events[0].Text) <= maximumClipboard
 }
 func validSize(width, height int) bool {
 	return width > 0 && height > 0 && width <= maximumDimension && height <= maximumDimension && width*height <= maximumPixels
@@ -98,7 +106,7 @@ func main() {
 		os.Exit(2)
 	}
 	auth, err := os.Stat(os.Getenv("XAUTHORITY"))
-	if err != nil || !auth.Mode().IsRegular() || auth.Mode().Perm()&0077 != 0 {
+	if err != nil || !auth.Mode().IsRegular() || auth.Mode().Perm()&0077 != 0 || !explicitAuthority(os.Getenv("XAUTHORITY"), os.Getenv("DISPLAY")) {
 		fmt.Fprintln(os.Stderr, "The private display authority is unavailable.")
 		os.Exit(2)
 	}
@@ -109,7 +117,7 @@ func main() {
 	}
 	defer display.close()
 	scanner := bufio.NewScanner(os.Stdin)
-	scanner.Buffer(make([]byte, 4096), maximumRequest+1)
+	scanner.Buffer(make([]byte, 4096), maximumPasteRequest+1)
 	writer := bufio.NewWriter(os.Stdout)
 	for scanner.Scan() {
 		req, err := decodeRequest(scanner.Bytes())

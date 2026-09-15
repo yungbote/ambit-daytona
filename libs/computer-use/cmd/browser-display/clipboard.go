@@ -4,12 +4,13 @@ package main
 
 import (
 	"errors"
-	"github.com/robotn/xgb"
-	"github.com/robotn/xgb/xfixes"
-	"github.com/robotn/xgb/xproto"
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/robotn/xgb"
+	"github.com/robotn/xgb/xfixes"
+	"github.com/robotn/xgb/xproto"
 )
 
 const selectionChunk = 60 * 1024
@@ -50,11 +51,12 @@ func (d *display) startClipboard() error {
 		return err
 	}
 	d.clipboard = &clipboard{display: d, window: id, notice: make(chan xgb.Event, 16), changes: make(chan xfixes.SelectionNotifyEvent, 1), done: make(chan struct{}), outgoing: map[selectionKey]*selectionTransfer{}}
-	go d.clipboard.events()
+	go d.events()
 	return nil
 }
 func (c *clipboard) close() { _ = xproto.DestroyWindowChecked(c.display.conn, c.window).Check() }
-func (c *clipboard) events() {
+func (d *display) events() {
+	c := d.clipboard
 	defer close(c.done)
 	for {
 		event, err := c.display.conn.WaitForEvent()
@@ -62,6 +64,11 @@ func (c *clipboard) events() {
 			return
 		}
 		switch value := event.(type) {
+		case paintAlarm:
+			select {
+			case d.paintEvents <- value:
+			default:
+			}
 		case xfixes.SelectionNotifyEvent:
 			if value.Selection == c.display.atoms["CLIPBOARD"] {
 				// Selection ownership is a current observation, not a backlog.
@@ -112,14 +119,6 @@ func (c *clipboard) own(value []byte) (<-chan struct{}, error) {
 	}
 	return served, nil
 }
-func (c *clipboard) servedLocked() {
-	if c.served != nil {
-		select {
-		case c.served <- struct{}{}:
-		default:
-		}
-	}
-}
 func (c *clipboard) serve(request xproto.SelectionRequestEvent) {
 	d := c.display
 	property := request.Property
@@ -158,16 +157,9 @@ func (c *clipboard) serve(request xproto.SelectionRequestEvent) {
 			break
 		}
 		if len(c.value) > selectionChunk {
-			if len(c.outgoing) >= 8 {
-				err = errors.New("selection busy")
-				break
-			}
 			data := make([]byte, 4)
 			xgb.Put32(data, uint32(len(c.value)))
-			err = xproto.ChangeWindowAttributesChecked(d.conn, request.Requestor, xproto.CwEventMask, []uint32{xproto.EventMaskPropertyChange}).Check()
-			if err == nil {
-				err = xproto.ChangePropertyChecked(d.conn, xproto.PropModeReplace, request.Requestor, property, d.atoms["INCR"], 32, 1, data).Check()
-			}
+			err = xproto.ChangePropertyChecked(d.conn, xproto.PropModeReplace, request.Requestor, property, d.atoms["INCR"], 32, 1, data).Check()
 			if err == nil {
 				c.outgoing[key] = &selectionTransfer{data: append([]byte(nil), c.value...), target: d.atoms["UTF8_STRING"], deadline: now.Add(selectionDeadline), served: c.served}
 			}
@@ -332,16 +324,28 @@ func (d *display) copy() (any, error) {
 		case <-timer.C:
 			return map[string]any{"text": "", "bytes": 0, "complete": true}, nil
 		case <-d.clipboard.done:
-			return nil, unknown()
+			return nil, copyReadFailure(unavailable())
 		case event := <-d.clipboard.changes:
 			if int16(event.Sequence-baseline.Sequence) <= 0 || event.Owner == 0 || event.Owner == d.clipboard.window {
 				continue
 			}
 			text, err := d.clipboard.read()
 			if err != nil {
-				return nil, err
+				return nil, copyReadFailure(err)
 			}
 			return map[string]any{"text": text, "bytes": len(text), "complete": true}, nil
 		}
 	}
+}
+
+// Copy's checked native key events already crossed the effect frontier. A
+// missing result cannot be represented as a pre-effect refusal.
+func copyReadFailure(err error) error {
+	var typed *failure
+	if errors.As(err, &typed) {
+		retained := *typed
+		retained.OperationPerformed = true
+		return &retained
+	}
+	return &failure{"display_unavailable", "The browser received Copy, but its clipboard could not be read.", true}
 }
