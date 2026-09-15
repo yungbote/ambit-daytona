@@ -151,7 +151,7 @@ def collect_node(programs, libraries, node, lock_root):
     add_libraries(libraries, shutil.which("node"), node_root, installed)
 
 
-def collect_debian(programs, packages):
+def collect_debian(programs, packages, help_argv=None):
     # Package ownership provides command versions without guessing from names
     # or promoting every package file to an executable capability.
     for package, version in packages.items():
@@ -169,7 +169,10 @@ def collect_debian(programs, packages):
                 str(path.parent) in ("/bin", "/usr/bin", "/usr/sbin", "/sbin")
                 and path.is_file()
             ):
-                add_program(programs, path.name, version, path)
+                add_program(
+                    programs, path.name, version, path,
+                    help_argv=(help_argv or {}).get(path.name),
+                )
 
 
 def collect_executables(component_locks=()):
@@ -223,7 +226,10 @@ def collect_executables(component_locks=()):
             collect_python(programs, libraries, component["python"], path.parent)
         if "node" in component:
             collect_node(programs, libraries, component["node"], path.parent)
-        collect_debian(programs, component.get("debianPackages", {}))
+        collect_debian(
+            programs, component.get("debianPackages", {}),
+            {entry["name"]: entry["helpArgv"] for entry in component.get("executables", [])},
+        )
         for executable in component.get("executables", []):
             add_program(
                 programs, executable["name"], executable["version"],

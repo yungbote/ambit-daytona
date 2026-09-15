@@ -42,6 +42,7 @@ WORKDIR /workspace
 # baked in. Remove it here and prove /workspace is left exactly as the parent's
 # `io.ambit.workspace-contract` states: writable by the runtime user, empty.
 RUN test -w /workspace \
+ && Xvfb -help >/dev/null 2>&1 \
  && AGENT_BROWSER_DOWNLOAD_PATH=/tmp/browser-version-check/downloads \
     AGENT_BROWSER_SCREENSHOT_DIR=/tmp/browser-version-check/screenshots \
     agent-browser --version \

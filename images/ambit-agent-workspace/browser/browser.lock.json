@@ -36,12 +36,23 @@
     "libatspi2.0-0t64": "2.56.2-1+deb13u1",
     "libnss3-tools": "2:3.110-1+deb13u4",
     "libxcomposite1": "1:0.4.6-1",
-    "libxdamage1": "1:1.1.6-1+b2"
+    "libxdamage1": "1:1.1.6-1+b2",
+    "xvfb": "2:21.1.16-1.3+deb13u3"
   },
   "inheritedMaterializer": {
     "path": "/opt/ambit/runtime-pack/core-document/bin/ambit-atomic-materialize",
     "sha256": "d6d8bd4248570e7f66fe7e545e8117e558a1d6c1ce1e149a55a36c7f17c7748d",
     "bytes": 2666622,
     "sourceBuildProvenance": "not-established; retained as exact existing workspace image input"
-  }
+  },
+  "executables": [
+    {
+      "name": "Xvfb",
+      "version": "2:21.1.16-1.3+deb13u3",
+      "helpArgv": [
+        "Xvfb",
+        "-help"
+      ]
+    }
+  ]
 }

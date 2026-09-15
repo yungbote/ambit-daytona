@@ -246,6 +246,32 @@ class InventoryTests(unittest.TestCase):
         })
         self.assertNotIn("[", programs)
 
+    def test_component_help_metadata_preserves_debian_package_version_ownership(self):
+        component = {
+            "debianPackages": {"fixture-utils": "1.0"},
+            "executables": [{"name": "printf", "version": "1.0", "helpArgv": ["printf", "-h"]}],
+        }
+        path = self.component(self.root / "component", component)
+        original_which = inventory.shutil.which
+        for declared_version in ("1.0", "2.0"):
+            component["executables"][0]["version"] = declared_version
+            path.write_text(json.dumps(component))
+            with patch.object(
+                inventory.subprocess, "check_output",
+                side_effect=["1.0", "/usr/bin/printf\n"],
+            ), patch.object(
+                inventory.shutil, "which",
+                side_effect=lambda name: "/usr/bin/printf" if name == "printf" else original_which(name),
+            ):
+                if declared_version != "1.0":
+                    with self.assertRaisesRegex(ValueError, "Conflicting locked command owners"):
+                        inventory.collect_executables([path])
+                else:
+                    programs = {entry["name"]: entry for entry in inventory.collect_executables([path])["executables"]}
+                    self.assertEqual(programs["printf"], {
+                        "name": "printf", "version": "1.0", "helpArgv": ["printf", "-h"],
+                    })
+
 
 if __name__ == "__main__":
     unittest.main()

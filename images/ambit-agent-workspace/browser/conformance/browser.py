@@ -109,13 +109,39 @@ def renderer_sandbox_evidence(daemon_pid):
     return {"daemonPidNamespaceLevels": parent_levels, "daemonSeccompFilters": parent_filters, "renderers": evidence}
 
 
+def display_mode_evidence(headed):
+    browsers = []
+    displays = []
+    for pid, started in live_processes().items():
+        try:
+            arguments = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        executable = os.fsdecode(arguments[0]) if arguments else ""
+        if Path(executable).name == "Xvfb":
+            displays.append({"pid": pid, "started": started})
+        if executable == "/opt/ambit/browser/chrome/chrome" and not any(
+            argument.startswith(b"--type=") for argument in arguments
+        ):
+            headless = any(argument.startswith(b"--headless") for argument in arguments)
+            assert headless != headed, "Chrome launched in the wrong display mode"
+            browsers.append({"pid": pid, "started": started, "headless": headless})
+    assert len(browsers) == 1, "Expected one actual Chrome browser process"
+    assert len(displays) == (1 if headed else 0), "Unexpected private display ownership"
+    return {"headed": headed, "browser": browsers[0], "privateDisplays": displays}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--public-url', help='Optional read-only HTTPS navigation witness')
+    parser.add_argument('--headed', action='store_true', help='Exercise the installed private display on displayless Linux')
     options = parser.parse_args()
     if options.public_url and not options.public_url.startswith('https://'):
         parser.error('--public-url must use HTTPS')
     assert os.geteuid() != 0, "Conformance must run as the workspace user"
+    if options.headed:
+        assert not os.environ.get("DISPLAY"), "Headed conformance must prove automatic private display startup"
+        assert not os.environ.get("AGENT_BROWSER_NO_XVFB"), "Private display startup must not be disabled"
     baseline = live_processes()
     assert set(baseline) == {1, os.getpid()}, (
         "Conformance requires a dedicated PID namespace containing only init "
@@ -124,6 +150,8 @@ def main():
     root = Path("/workspace/work/browser/conformance")
     root.mkdir(parents=True, exist_ok=True)
     session = f"probe-{os.getpid()}"
+    display_flags = ["--headed"] if options.headed else []
+    daemon_command = ["agent-browser", "--session", session, *display_flags, "daemon"]
     sockets = Path("/workspace/.ambit/browser/sockets")
     # Read-only server fixture. No external form submissions, accounts or effects.
     fixture = root / "site"
@@ -149,7 +177,7 @@ def main():
         assert not (sockets / f"{session}.sock").exists()
         wait_for_fixture_baseline(baseline)
         evidence["checks"].append("client-does-not-create-unowned-daemon")
-        process = subprocess.Popen(["agent-browser", "--session", session, "daemon"], stdout=log, stderr=log, start_new_session=True)
+        process = subprocess.Popen(daemon_command, stdout=log, stderr=log, start_new_session=True)
         socket = sockets / f"{session}.sock"
         wait_until(lambda: socket.exists() or process.poll() is not None)
         assert process.poll() is None, (root / "daemon.log").read_text()
@@ -164,6 +192,8 @@ def main():
         assert counter.get("text") == "1", counter
         assert int((sockets / f"{session}.pid").read_text()) == daemon_pid
         evidence["checks"].append("foreground-session-reused-across-commands")
+        evidence["displayMode"] = display_mode_evidence(options.headed)
+        evidence["checks"].append("actual-browser-display-mode")
         evidence["rendererSandbox"] = renderer_sandbox_evidence(process.pid)
         evidence["checks"].append("renderer-nested-namespace-and-additional-seccomp")
         screenshot = root / "interaction.png"
@@ -200,7 +230,7 @@ def main():
         wait_until(lambda: not socket.exists())
         evidence["lifecycleProcesses"]["afterClose"] = wait_for_fixture_baseline(baseline)
         evidence["checks"].append("close-observed-on-original-process")
-        process = subprocess.Popen(["agent-browser", "--session", session, "daemon"], stdout=log, stderr=log, start_new_session=True)
+        process = subprocess.Popen(daemon_command, stdout=log, stderr=log, start_new_session=True)
         wait_until(lambda: socket.exists() or process.poll() is not None)
         assert process.poll() is None
         invoke(session, "open", url)
@@ -213,6 +243,33 @@ def main():
         wait_until(lambda: not socket.exists())
         evidence["lifecycleProcesses"]["afterCancellation"] = wait_for_fixture_baseline(baseline)
         evidence["checks"].append("foreground-daemon-accepts-cancellation")
+        # The ordinary run_program path starts the daemon implicitly. Prove
+        # that its next plain command retains the same page and display mode.
+        ordinary = session + "-ordinary"
+        started = subprocess.run(
+            ["agent-browser", "--session", ordinary, *display_flags, "--json", "open", url],
+            text=True, capture_output=True, timeout=45,
+        )
+        assert started.returncode == 0, started.stderr + started.stdout
+        assert json.loads(started.stdout)["success"]
+        ordinary_pid = int((sockets / f"{ordinary}.pid").read_text())
+        assert invoke(ordinary, "get", "title")["title"] == "Workspace browser conformance"
+        invoke(ordinary, "find", "role", "button", "click", "--name", "Increment")
+        assert invoke(ordinary, "get", "text", "#count")["text"] == "1"
+        assert int((sockets / f"{ordinary}.pid").read_text()) == ordinary_pid
+        evidence["ordinaryDisplayMode"] = display_mode_evidence(options.headed)
+        ordinary_screenshot = root / "ordinary-interaction.png"
+        invoke(ordinary, "screenshot", str(ordinary_screenshot))
+        ordinary_pixels = ordinary_screenshot.read_bytes()
+        assert ordinary_pixels[:8] == b"\x89PNG\r\n\x1a\n"
+        evidence["ordinaryScreenshot"] = {
+            "path": str(ordinary_screenshot),
+            "sha256": hashlib.sha256(ordinary_pixels).hexdigest(),
+        }
+        invoke(ordinary, "close")
+        wait_until(lambda: not (sockets / f"{ordinary}.sock").exists())
+        evidence["lifecycleProcesses"]["afterOrdinaryClose"] = wait_for_fixture_baseline(baseline)
+        evidence["checks"].append("ordinary-start-retains-page-mode-and-cleans-up")
         evidence["status"] = "passed"
         (root / "result.json").write_text(json.dumps(evidence, indent=2) + "\n")
         print(json.dumps(evidence))
