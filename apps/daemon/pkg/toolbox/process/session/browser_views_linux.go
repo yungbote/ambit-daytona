@@ -400,6 +400,40 @@ func browserViewMessage(message []byte) ([]byte, uint64, browserRecordKind) {
 		return body, envelope.Seq, browserRecordVisual
 	case "status", "url":
 		return body, 0, browserRecordVisual
+	case "tabs":
+		// A newly attached viewer receives the driver's current tab snapshot,
+		// not a navigation event. Project only the active location into our
+		// existing visual contract so reconnects do not wait for another click.
+		var snapshot struct {
+			Tabs []struct {
+				Active bool   `json:"active"`
+				URL    string `json:"url"`
+				Title  string `json:"title"`
+			} `json:"tabs"`
+		}
+		if json.Unmarshal(message, &snapshot) != nil {
+			return nil, 0, browserRecordDropped
+		}
+		active := -1
+		for index, tab := range snapshot.Tabs {
+			if !tab.Active {
+				continue
+			}
+			if active != -1 || tab.URL == "" {
+				return nil, 0, browserRecordDropped
+			}
+			active = index
+		}
+		if active == -1 {
+			return nil, 0, browserRecordDropped
+		}
+		tab := snapshot.Tabs[active]
+		location, _ := json.Marshal(struct {
+			Type  string `json:"type"`
+			URL   string `json:"url"`
+			Title string `json:"title,omitempty"`
+		}{Type: "url", URL: tab.URL, Title: tab.Title})
+		return location, 0, browserRecordVisual
 	case "error":
 		return nil, 0, browserRecordFailed
 	case "finished":
