@@ -5,6 +5,7 @@ package main
 import (
 	"math"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/robotn/xgb/xproto"
@@ -43,6 +44,8 @@ func (d *display) loadKeys() error {
 	keybind.KeyMapSet(keyboard, reply)
 	d.keyboard = keyboard
 	d.keysyms = map[string]byte{}
+	d.textKeys = textKeyMap(byte(setup.MinKeycode), reply)
+	d.heldCodes = map[string]byte{}
 	return nil
 }
 
@@ -63,6 +66,134 @@ func (d *display) nativeKey(name string) byte {
 	code := byte(codes[0])
 	d.keysyms[cacheName] = code
 	return code
+}
+
+// Printable browser text names the intended symbol, whereas Code names the
+// physical key on the user's keyboard. Resolve the native level from the actual
+// private-display keymap; forwarding Code alone loses CapsLock and shifted text.
+type textKey struct {
+	code  byte
+	shift bool
+	caps  bool
+}
+
+func keysymRune(sym xproto.Keysym) rune {
+	if sym >= 0x20 && sym <= 0xff {
+		return rune(sym)
+	}
+	if sym >= 0x01000100 && sym <= 0x0110ffff {
+		return rune(sym & 0xffffff)
+	}
+	return 0
+}
+func textKeyMap(min byte, mapping *xproto.GetKeyboardMappingReply) map[rune][]textKey {
+	result := map[rune][]textKey{}
+	per := int(mapping.KeysymsPerKeycode)
+	if per == 0 {
+		return result
+	}
+	for offset := 0; offset+per <= len(mapping.Keysyms); offset += per {
+		lower := keysymRune(mapping.Keysyms[offset])
+		upper := rune(0)
+		if per > 1 {
+			upper = keysymRune(mapping.Keysyms[offset+1])
+		}
+		if upper == 0 {
+			upper = unicode.ToUpper(lower)
+		}
+		caps := lower != upper && unicode.IsLetter(lower) && unicode.ToUpper(lower) == upper
+		for level, symbol := range []rune{lower, upper} {
+			if symbol != 0 && unicode.IsPrint(symbol) {
+				result[symbol] = append(result[symbol], textKey{byte(int(min) + offset/per), level == 1, caps})
+			}
+		}
+	}
+	return result
+}
+func printableText(event inputEvent) rune {
+	// Native shortcuts retain their physical key and actual modifier contract.
+	if event.Modifiers&7 != 0 {
+		return 0
+	}
+	text := event.Text
+	if text == "" {
+		text = event.Key
+	}
+	if !utf8.ValidString(text) || utf8.RuneCountInString(text) != 1 {
+		return 0
+	}
+	symbol, _ := utf8.DecodeRuneInString(text)
+	if !unicode.IsPrint(symbol) {
+		return 0
+	}
+	return symbol
+}
+func (d *display) textKey(event inputEvent) (textKey, bool) {
+	candidates := d.textKeys[printableText(event)]
+	preferred := d.keycode(event)
+	for _, candidate := range candidates {
+		if candidate.code == preferred {
+			return candidate, true
+		}
+	}
+	if len(candidates) > 0 {
+		return candidates[0], true
+	}
+	return textKey{}, false
+}
+func keyIdentity(event inputEvent) string {
+	if event.Code != "" && event.Code != "Unidentified" {
+		return event.Code
+	}
+	return event.Key
+}
+func (d *display) keyboardInput(event inputEvent) error {
+	code, mask := d.keycode(event), event.Modifiers
+	identity := keyIdentity(event)
+	down := event.EventType != "keyUp"
+	if down {
+		if selected, ok := d.textKey(event); ok {
+			code = selected.code
+			shift := selected.shift
+			if selected.caps {
+				pointer, err := xproto.QueryPointer(d.conn, d.screen.Root).Reply()
+				if err != nil {
+					return unknown()
+				}
+				if pointer.Mask&xproto.ModMaskLock != 0 {
+					shift = !shift
+				}
+			}
+			mask &= ^8
+			if shift {
+				mask |= 8
+			}
+		}
+	} else if held := d.heldCodes[identity]; held != 0 {
+		// The user's layout/key text may differ by keyUp. Release exactly the
+		// native key we pressed, including a press whose acknowledgment was lost.
+		code = held
+	}
+	if err := d.modifiers(mask); err != nil {
+		return unknown()
+	}
+	if down {
+		d.heldCodes[identity] = code
+	}
+	if err := d.key(code, down); err != nil {
+		return err
+	}
+	if !down {
+		delete(d.heldCodes, identity)
+	}
+	// Synthetic text-level modifiers must not remain held for subsequent mouse
+	// input or native clipboard chords. Keep the user's actual modifier mask.
+	if mask != event.Modifiers {
+		if err := d.modifiers(event.Modifiers); err != nil {
+			return unknown()
+		}
+	}
+	return nil
 }
 
 var physicalNames = map[string]string{
@@ -119,7 +250,10 @@ func (d *display) validateEvent(event inputEvent, width, height int) error {
 				return invalid()
 			}
 		case "keyDown", "rawKeyDown", "keyUp":
-			if d.keycode(event) == 0 {
+			_, printable := d.textKey(event)
+			physical := d.keycode(event)
+			textOnly := (event.Code == "" || event.Code == "Unidentified") && printable
+			if (physical == 0 && !textOnly) || (event.EventType != "keyUp" && printableText(event) != 0 && !printable) {
 				return invalid()
 			}
 		default:
@@ -268,14 +402,14 @@ func (d *display) input(events []inputEvent) error {
 			}
 			continue
 		}
-		if err := d.modifiers(event.Modifiers); err != nil {
-			return unknown()
-		}
 		if event.Type == "input_keyboard" {
-			if err := d.key(d.keycode(event), event.EventType != "keyUp"); err != nil {
+			if err := d.keyboardInput(event); err != nil {
 				return err
 			}
 			continue
+		}
+		if err := d.modifiers(event.Modifiers); err != nil {
+			return unknown()
 		}
 		if err := d.fake(xproto.MotionNotify, 0, int(event.X), int(event.Y)); err != nil {
 			return unknown()
@@ -332,6 +466,11 @@ func (d *display) reset() error {
 	for button := range d.buttons {
 		if d.button(button, false) != nil {
 			failed = true
+		}
+	}
+	for identity, code := range d.heldCodes {
+		if !d.keys[code] {
+			delete(d.heldCodes, identity)
 		}
 	}
 	if failed {
