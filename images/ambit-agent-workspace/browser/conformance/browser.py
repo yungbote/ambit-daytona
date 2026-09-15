@@ -131,6 +131,39 @@ def display_mode_evidence(headed):
     return {"headed": headed, "browser": browsers[0], "privateDisplays": displays}
 
 
+def capture_live_frame(session, destination):
+    status = invoke(session, "stream", "status")
+    assert status["enabled"] and status["connected"], status
+    port = status["port"]
+    assert isinstance(port, int) and 0 < port < 65536
+    # Node's built-in WebSocket keeps this check inside the existing runtime;
+    # the observer sends no browser input and requires no extra dependency.
+    observer = """
+const fs = require('node:fs');
+const ws = new WebSocket(process.argv[1]);
+let captured = false;
+const timeout = setTimeout(() => process.exit(1), 15000);
+ws.addEventListener('error', () => process.exit(1));
+ws.addEventListener('message', event => {
+  const message = JSON.parse(event.data);
+  if (captured || message.type !== 'frame') return;
+  const bytes = Buffer.from(message.data, 'base64');
+  if (bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes.length < 100) process.exit(1);
+  fs.writeFileSync(process.argv[2], bytes);
+  captured = true;
+  clearTimeout(timeout);
+  ws.close();
+});
+"""
+    result = subprocess.run(
+        ["node", "-e", observer, f"ws://127.0.0.1:{port}", str(destination)],
+        capture_output=True, text=True, timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    frame = destination.read_bytes()
+    return {"path": str(destination), "bytes": len(frame), "sha256": hashlib.sha256(frame).hexdigest()}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--public-url', help='Optional read-only HTTPS navigation witness')
@@ -204,6 +237,8 @@ def main():
         assert width >= 320 and height >= 240
         evidence["screenshot"] = {"path": str(screenshot), "width": width, "height": height, "sha256": hashlib.sha256(pixels).hexdigest()}
         evidence["checks"].append("actual-native-browser-screenshot")
+        evidence["liveFrame"] = capture_live_frame(session, root / "live-frame.jpg")
+        evidence["checks"].append("actual-native-browser-live-frame")
         download = root / "receipt.txt"
         invoke(session, "download", "a[download]", str(download))
         assert download.read_bytes() == receipt
