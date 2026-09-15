@@ -4,6 +4,7 @@ package session
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -638,6 +639,12 @@ func TestBrowserViewProjectsOnlyTheCurrentTabLocation(t *testing.T) {
 			t.Fatalf("ambiguous tab snapshot was forwarded: %s", invalid)
 		}
 	}
+	observed := []byte(`{"type":"tabs","tabs":[{"active":true,"url":"https://example.test/","canGoBack":true,"canGoForward":false,"history":["private"]}]}`)
+	body, _, kind = browserViewMessage(observed)
+	if kind != browserRecordVisual || !bytes.Contains(body, []byte(`"canGoBack":true`)) || !bytes.Contains(body, []byte(`"canGoForward":false`)) || bytes.Contains(body, []byte("private")) {
+		t.Fatalf("history availability projection: %s", body)
+	}
+
 }
 
 func TestBrowserReconnectSeedsLocationWithoutNavigation(t *testing.T) {

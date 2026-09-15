@@ -444,9 +444,11 @@ func browserViewMessage(message []byte) ([]byte, uint64, browserRecordKind) {
 		// existing visual contract so reconnects do not wait for another click.
 		var snapshot struct {
 			Tabs []struct {
-				Active bool   `json:"active"`
-				URL    string `json:"url"`
-				Title  string `json:"title"`
+				Active       bool   `json:"active"`
+				URL          string `json:"url"`
+				Title        string `json:"title"`
+				CanGoBack    *bool  `json:"canGoBack"`
+				CanGoForward *bool  `json:"canGoForward"`
 			} `json:"tabs"`
 		}
 		if json.Unmarshal(message, &snapshot) != nil {
@@ -467,10 +469,12 @@ func browserViewMessage(message []byte) ([]byte, uint64, browserRecordKind) {
 		}
 		tab := snapshot.Tabs[active]
 		location, _ := json.Marshal(struct {
-			Type  string `json:"type"`
-			URL   string `json:"url"`
-			Title string `json:"title,omitempty"`
-		}{Type: "url", URL: tab.URL, Title: tab.Title})
+			Type         string `json:"type"`
+			URL          string `json:"url"`
+			Title        string `json:"title,omitempty"`
+			CanGoBack    *bool  `json:"canGoBack,omitempty"`
+			CanGoForward *bool  `json:"canGoForward,omitempty"`
+		}{Type: "url", URL: tab.URL, Title: tab.Title, CanGoBack: tab.CanGoBack, CanGoForward: tab.CanGoForward})
 		return location, 0, browserRecordVisual
 	case "error":
 		return nil, 0, browserRecordFailed

@@ -163,6 +163,9 @@ func TestRealBrowserControlThroughOwnedSession(t *testing.T) {
 		t.Fatal("viewport resize retained old coordinate identity")
 	}
 	next(func(record map[string]any) bool {
+		if record["type"] == "pointer" && record["eventType"] == "reset" {
+			reset = record
+		}
 		if record["type"] != "frame" || record["pageGeneration"] != reset["pageGeneration"] {
 			return false
 		}
@@ -178,7 +181,20 @@ func TestRealBrowserControlThroughOwnedSession(t *testing.T) {
 		{"type": "input_keyboard", "eventType": "insertText", "text": "Native browser control ✓"},
 	}
 	control(map[string]any{"op": "input", "controllerId": browserFixtureController, "sequence": 2, "events": text}, http.StatusOK)
-	if result := control(map[string]any{"op": "input", "controllerId": browserFixtureController, "sequence": 4, "events": click}, http.StatusConflict); result["code"] != "browser_control_sequence_gap" {
+	selection := []map[string]any{
+		{"type": "input_keyboard", "eventType": "keyDown", "key": "a", "code": "KeyA", "windowsVirtualKeyCode": 65, "modifiers": 2},
+		{"type": "input_keyboard", "eventType": "keyUp", "key": "a", "code": "KeyA", "windowsVirtualKeyCode": 65, "modifiers": 2},
+	}
+	control(map[string]any{"op": "input", "controllerId": browserFixtureController, "sequence": 3, "events": selection}, http.StatusOK)
+	copied := control(map[string]any{"op": "copy", "controllerId": browserFixtureController}, http.StatusOK)
+	clipboard, ok := copied["clipboard"].(map[string]any)
+	if !ok || clipboard["text"] != "Native browser control ✓" || clipboard["bytes"] != float64(len("Native browser control ✓")) || clipboard["complete"] != true || copied["lastSequence"] != float64(3) {
+		t.Fatalf("copy did not preserve the exact selected text and sequence: %v", copied)
+	}
+	if result := control(map[string]any{"op": "copy", "controllerId": "aaaabbbb-cccc-4ddd-8eee-ffff00002222"}, http.StatusConflict); result["code"] != "browser_control_stale" {
+		t.Fatalf("foreign copy returned %v", result)
+	}
+	if result := control(map[string]any{"op": "input", "controllerId": browserFixtureController, "sequence": 6, "events": click}, http.StatusConflict); result["code"] != "browser_control_sequence_gap" {
 		t.Fatalf("input gap was not refused: %v", result)
 	}
 	control(map[string]any{"op": "release", "controllerId": browserFixtureController}, http.StatusOK)
@@ -201,5 +217,38 @@ func TestRealBrowserControlThroughOwnedSession(t *testing.T) {
 	if evidence := os.Getenv("AMBIT_BROWSER_CONTROL_EVIDENCE_DIR"); evidence != "" {
 		cli(true, "screenshot", filepath.Join(evidence, "native-control-result.png"))
 	}
+	const navigationOwner = "aaaabbbb-cccc-4ddd-8eee-ffff00002222"
+	control(map[string]any{"op": "acquire", "controllerId": navigationOwner, "expiresAt": time.Now().Add(25 * time.Second).UnixMilli()}, http.StatusOK)
+	sequence := 0
+	navigate := func(action, url, expected string) map[string]any {
+		t.Helper()
+		sequence++
+		event := map[string]any{"type": "navigation", "action": action}
+		if url != "" {
+			event["url"] = url
+		}
+		control(map[string]any{"op": "input", "controllerId": navigationOwner, "sequence": sequence, "events": []any{event}}, http.StatusOK)
+		return next(func(record map[string]any) bool { return record["type"] == "url" && record["url"] == expected })
+	}
+	location := navigate("navigate", page.URL+"/second", page.URL+"/second")
+	if location["canGoBack"] != true || location["canGoForward"] != false {
+		t.Fatalf("navigation history state: %v", location)
+	}
+	location = navigate("back", "", page.URL+"/")
+	if location["canGoForward"] != true {
+		t.Fatalf("back lost forward history: %v", location)
+	}
+	navigate("forward", "", page.URL+"/second")
+	navigate("reload", "", page.URL+"/second")
+	control(map[string]any{"op": "release", "controllerId": navigationOwner}, http.StatusOK)
+	cli(true, "eval", "document.querySelector('input').value='<'.repeat(100000);document.querySelector('input').focus();document.querySelector('input').select()")
+	const largeCopyOwner = "aaaabbbb-cccc-4ddd-8eee-ffff00003333"
+	control(map[string]any{"op": "acquire", "controllerId": largeCopyOwner, "expiresAt": time.Now().Add(25 * time.Second).UnixMilli()}, http.StatusOK)
+	large := control(map[string]any{"op": "copy", "controllerId": largeCopyOwner}, http.StatusOK)
+	copiedText := large["clipboard"].(map[string]any)
+	if copiedText["text"] != strings.Repeat("<", 100000) || copiedText["bytes"] != float64(100000) || copiedText["complete"] != true {
+		t.Fatal("copy truncated or changed text across the large JSON response")
+	}
+	control(map[string]any{"op": "release", "controllerId": largeCopyOwner}, http.StatusOK)
 	cli(true, "close")
 }

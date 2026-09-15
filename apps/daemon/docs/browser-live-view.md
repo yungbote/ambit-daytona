@@ -1,6 +1,6 @@
 # Browser live view
 
-An agent's browser runs inside a session, under the same native process custody as everything else that session starts. This is the read-only relay that lets an authorized viewer watch that exact browser, and nothing else.
+A browser runs inside a native session, under the same process custody as everything else that session starts. An authorized viewer can watch that exact browser and explicitly take control through Product. Product can retain the existing native session for its conversation after an originating Run finishes; the relay continues to prove the same native owner.
 
 ## Routes
 
@@ -58,3 +58,11 @@ The workspace-level list route is what the backend provider targets, so this dae
 Local, under both the pinned and the current Go toolchain, with the race detector: session and toolbox session packages green. The browser relay is proven against a real driver stand-in — a separate process, started inside a real session with no wait, owning a real Unix socket, a real loopback listener and a real port file, re-executed from the test binary so `/proc/<pid>/exe` is a real distinct executable. Those tests cover discovery while a command is in flight, the listing disclosing no port, path or PID, a second live session being refused the view, a session whose shell was killed not masking the workspace's browser, five acknowledgement-paced frames each produced with exactly the earlier frames acknowledged, driver command/result/console/error channels never reaching the viewer, `finished` after an unclean shell exit, and `unavailable` after a driver failure.
 
 The opt-in real-browser tests also exercise a sandboxed Chromium process inside a native session: seeded location, stream reopen, explicit browser close, actual agent input activity, controller takeover, resize followed by input in one batch, preserved device scale, deduplicated sequences, human text readback, and returned control. Set `AMBIT_TEST_BROWSER_EXECUTABLE`, `AMBIT_TEST_CHROME_EXECUTABLE`, and `AMBIT_TEST_BROWSER_CONTROL=1` when running the session package. These tests do not claim acceptance through the Product backend/frontend or a published workspace image.
+
+## Navigation and explicit copy
+
+Navigation uses an ordinary controller input event: `{ "type": "navigation", "action": "navigate", "url": "https://example.test/" }`, or actions `back`, `forward`, and `reload` without a URL. Native URL normalization and network policy remain in force. The acknowledgment means the browser accepted the navigation; page loading continues on the visual stream. Current URL records and initial attachment include native `canGoBack` / `canGoForward` booleans when available.
+
+The explicit `copy` control operation accepts the current `controllerId` and returns `status: "copied"` with `clipboard: { text, bytes, complete: true }`, retaining lease metadata and the last input sequence. It reads only the browser's selected page/input/frame text, without accessing a system clipboard or changing clipboard permissions. Text is exact UTF-8 up to 1 MiB; an oversized selection returns `browser_control_copy_too_large`. Copy response framing allows 6 MiB plus 4 KiB for JSON escaping; ordinary input stays at 64 KiB. Empty selections, including masked password inputs, do not replace the user's local clipboard.
+
+The opt-in `TestRealBrowserMcpHelperRetainsNativeSessionCustody` adds the bundled real MCP SDK helper to the existing native supervisor, with synchronous execution and closed stdin. It proves that the first helper returns while its detached browser remains owned by that native session, later helper sessions reuse its exact page, and explicit close settles the original supervisor. Set `AMBIT_TEST_BROWSER_MCP_BUNDLE` to the compiled backend helper; logical Product Run completion and conversation Resource transfer are qualified by Product tests separately.
