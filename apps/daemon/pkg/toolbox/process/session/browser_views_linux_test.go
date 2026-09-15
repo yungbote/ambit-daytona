@@ -416,8 +416,15 @@ func TestBrowserDiscoveryFollowsProcessCustodyWhileCommandsRun(t *testing.T) {
 
 	id, body := workspace.only(t, "browser-owner", "primary")
 	port := strings.TrimSpace(string(awaitFile(t, filepath.Join(workspace.socketDir, "primary.stream"))))
+	var outward []map[string]any
+	if json.Unmarshal([]byte(body), &outward) != nil || len(outward) != 1 || len(outward[0]) != 3 || outward[0]["id"] != id || outward[0]["name"] != "primary" || outward[0]["sessionId"] != "browser-owner" {
+		t.Fatalf("browser view listing did not preserve its public fields: %s", body)
+	}
 	for _, disclosed := range []string{port, workspace.socketDir, strconv.Itoa(driver)} {
-		if strings.Contains(body, disclosed) {
+		// A short PID can occur by chance inside the opaque SHA-256 view ID.
+		// Check complete public values, not substrings of that identity.
+		encoded, _ := json.Marshal(disclosed)
+		if strings.Contains(body, string(encoded)) {
 			t.Fatalf("browser view listing disclosed %q: %s", disclosed, body)
 		}
 	}
