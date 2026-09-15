@@ -200,3 +200,19 @@ func TestExplicitXAuthorityRejectsLibraryFallbackCases(t *testing.T) {
 		})
 	}
 }
+
+func TestPaintSerialCannotReuseAnUnacknowledgedRequest(t *testing.T) {
+	serial, err := nextPaintSerial(10, 4)
+	if err != nil || serial != 11 {
+		t.Fatal("stale observation reused a pending serial")
+	}
+	serial, err = nextPaintSerial(serial, 20)
+	if err != nil || serial != 21 {
+		t.Fatal("current native counter was not respected")
+	}
+	for _, value := range []uint64{1<<63 - 1, ^uint64(0)} {
+		if _, err := nextPaintSerial(value, 0); err == nil {
+			t.Fatal("counter overflow admitted")
+		}
+	}
+}

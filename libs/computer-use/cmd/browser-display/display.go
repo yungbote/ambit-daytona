@@ -10,6 +10,7 @@ import (
 	"github.com/robotn/xgb/xfixes"
 	"github.com/robotn/xgb/xproto"
 	"github.com/robotn/xgb/xtest"
+	"github.com/robotn/xgbutil"
 )
 
 type display struct {
@@ -21,11 +22,14 @@ type display struct {
 	keys        map[byte]bool
 	buttons     map[byte]bool
 	keysyms     map[string]byte
+	keyboard    *xgbutil.XUtil
 	modes       map[string]randr.Mode
 	wheelX      float64
 	wheelY      float64
 	syncOpcode  byte
 	paintEvents chan paintAlarm
+	paintSerial uint64
+	paintLatest *paintRequest
 }
 type windowInfo struct {
 	ID               uint32 `json:"id"`
@@ -182,6 +186,9 @@ func (d *display) resize(width, height int, windowID uint32) (displayInfo, error
 		if !owned {
 			return displayInfo{}, invalid()
 		}
+	}
+	if err := d.finishPendingPaint(); err != nil {
+		return displayInfo{}, err
 	}
 	oldW, oldH, err := d.size()
 	if err != nil {
