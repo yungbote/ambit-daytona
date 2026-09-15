@@ -7,9 +7,13 @@ package session
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -26,6 +30,10 @@ func serveBrowserControlFixture(connection net.Conn) {
 	line, err := bufio.NewReader(connection).ReadBytes('\n')
 	if err != nil {
 		return // ordinary view discovery only reads the peer credential
+	}
+	if len(line) > browserControlLimit {
+		_ = json.NewEncoder(connection).Encode(map[string]any{"success": false, "code": "browser_control_invalid"})
+		return
 	}
 	var command struct {
 		Action string `json:"action"`
@@ -112,5 +120,78 @@ func TestBrowserControlRejectsMalformedInputBeforeDiscovery(t *testing.T) {
 		if status, _ := call(t, workspace.engine, http.MethodPost, "/process/session/absent/browser-views/absent/control", body); status != http.StatusBadRequest {
 			t.Fatalf("malformed control request reached discovery: %d", status)
 		}
+	}
+}
+
+func TestBrowserNamespaceControl(t *testing.T) {
+	workspace := newBrowserWorkspace(t)
+	for _, owner := range []string{"legacy", "first", "second"} {
+		workspace.open(t, owner)
+		directory := workspace.socketDir
+		if owner != "legacy" {
+			directory = filepath.Join(directory, "namespaces", owner, "run")
+			if err := os.MkdirAll(directory, 0700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		workspace.runDriverAt(t, owner, "primary", "control", directory)
+	}
+	if err := os.MkdirAll(filepath.Join(workspace.socketDir, "namespaces", "partial"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	views, _ := workspace.views(t)
+	if len(views) != 3 {
+		t.Fatalf("namespaced and legacy views should coexist: %v", views)
+	}
+	ids := map[string]bool{}
+	for _, view := range views {
+		owner := view["sessionId"].(string)
+		id := view["id"].(string)
+		if ids[id] {
+			t.Fatal("separate namespace peers shared a view identity")
+		}
+		ids[id] = true
+		if owner == "legacy" {
+			if _, present := view["namespace"]; present {
+				t.Fatal("legacy view gained a namespace")
+			}
+		} else if view["namespace"] != owner {
+			t.Fatalf("wrong observed namespace: %v", view)
+		}
+		if status, body := call(t, workspace.engine, http.MethodPost, "/process/session/"+owner+"/browser-views/"+id+"/control", map[string]any{"op": "inspect"}); status != http.StatusOK {
+			t.Fatalf("namespace control did not reach its exact peer: %d %s", status, body)
+		}
+		if owner != "legacy" {
+			if status, _ := call(t, workspace.engine, http.MethodPost, "/process/session/legacy/browser-views/"+id+"/control", map[string]any{"op": "inspect"}); status != http.StatusNotFound {
+				t.Fatalf("legacy session controlled another namespace: %d", status)
+			}
+		}
+	}
+}
+
+func TestBrowserControlPreservesBoundedMarkupBytes(t *testing.T) {
+	workspace := newBrowserWorkspace(t)
+	workspace.open(t, "browser-owner")
+	workspace.runDriver(t, "browser-owner", "primary", "control")
+	id, _ := workspace.only(t, "browser-owner", "primary")
+	events := make([]map[string]any, 10)
+	for index := range events {
+		events[index] = map[string]any{"type": "input_keyboard", "eventType": "insertText", "text": strings.Repeat("<>&\u2028", 500)}
+	}
+	var body bytes.Buffer
+	encoder := json.NewEncoder(&body)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(map[string]any{"op": "input", "controllerId": browserFixtureController, "sequence": 1, "events": events}); err != nil {
+		t.Fatal(err)
+	}
+	if body.Len() >= browserControlLimit {
+		t.Fatal("the fixture itself exceeds the input contract")
+	}
+	request := httptest.NewRequest(http.MethodPost, "/process/session/browser-owner/browser-views/"+id+"/control", &body)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	workspace.engine.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("bounded pasted markup grew past the native wire limit: %d %s", response.Code, response.Body.String())
 	}
 }

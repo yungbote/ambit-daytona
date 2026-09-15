@@ -196,19 +196,23 @@ func (w *browserWorkspace) open(t *testing.T, sessionID string) int {
 // program start an agent uses — and returns once its socket and advertised
 // port exist. The command stays running for the rest of the test.
 func (w *browserWorkspace) runDriver(t *testing.T, sessionID, name, mode string) int {
+	return w.runDriverAt(t, sessionID, name, mode, w.socketDir)
+}
+
+func (w *browserWorkspace) runDriverAt(t *testing.T, sessionID, name, mode, directory string) int {
 	t.Helper()
 	code, body := call(t, w.engine, http.MethodPost, "/process/session/"+sessionID+"/exec",
-		SessionExecuteRequest{Command: browserFixtureCommand(t, w.socketDir, name, mode), RunAsync: true})
+		SessionExecuteRequest{Command: browserFixtureCommand(t, directory, name, mode), RunAsync: true})
 	if code != http.StatusAccepted {
 		t.Fatalf("zero-wait driver start = %d %s, want 202", code, body)
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(awaitFile(t, filepath.Join(w.socketDir, name+".pid")))))
+	pid, err := strconv.Atoi(strings.TrimSpace(string(awaitFile(t, filepath.Join(directory, name+".pid")))))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
-	awaitFile(t, filepath.Join(w.socketDir, name+".stream"))
-	awaitPath(t, filepath.Join(w.socketDir, name+".sock"))
+	awaitFile(t, filepath.Join(directory, name+".stream"))
+	awaitPath(t, filepath.Join(directory, name+".sock"))
 	return pid
 }
 

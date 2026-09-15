@@ -14,7 +14,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"path/filepath"
 	"regexp"
 	"time"
 
@@ -63,7 +62,7 @@ func (s *SessionController) ControlBrowserView(c *gin.Context) {
 		c.Status(http.StatusNotFound)
 		return
 	}
-	connection, err := (&net.Dialer{Timeout: browserDialTimeout}).DialContext(c.Request.Context(), "unix", filepath.Join(s.browserSocketDir, selected.Name+".sock"))
+	connection, err := (&net.Dialer{Timeout: browserDialTimeout}).DialContext(c.Request.Context(), "unix", selected.socketPath)
 	if err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"code": "browser_control_unavailable"})
 		return
@@ -78,12 +77,23 @@ func (s *SessionController) ControlBrowserView(c *gin.Context) {
 		return
 	}
 	_ = connection.SetDeadline(time.Now().Add(10 * time.Second))
-	command, _ := json.Marshal(struct {
+	var command bytes.Buffer
+	commandEncoder := json.NewEncoder(&command)
+	// This is a JSON socket, not HTML. Preserve the already-bounded raw event
+	// strings so pasted markup is not expanded sixfold by HTML escaping.
+	commandEncoder.SetEscapeHTML(false)
+	if err := commandEncoder.Encode(struct {
 		Action string `json:"action"`
 		browserControlRequest
-	}{Action: "ambit_browser_control", browserControlRequest: request})
-	command = append(command, '\n')
-	if _, err := io.Copy(connection, bytes.NewReader(command)); err != nil {
+	}{Action: "ambit_browser_control", browserControlRequest: request}); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": "browser_control_invalid"})
+		return
+	}
+	if command.Len() > browserControlLimit {
+		c.JSON(http.StatusBadRequest, gin.H{"code": "browser_control_invalid"})
+		return
+	}
+	if _, err := io.Copy(connection, &command); err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"code": "browser_control_outcome_unknown"})
 		return
 	}
