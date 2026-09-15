@@ -122,6 +122,17 @@ with tempfile.TemporaryDirectory(prefix='browser-helper-proof-') as temp:
         receipts['capture'] = {k: v for k, v in frame.items() if k != 'data'}
         receipts['capture']['ms'] = round((time.monotonic() - start) * 1000)
         (OUT / 'full-window.jpeg').write_bytes(base64.b64decode(frame['data']))
+        cli('eval', "document.querySelector('#t').value='';document.querySelector('#t').focus()")
+        keys = [('.', 'Period', 0), ('-', 'Minus', 0), ('_', 'Minus', 8), ('+', 'Equal', 8), ('@', 'Digit2', 8), ('?', 'Slash', 8), ('\\', 'Backslash', 0), ("'", 'Quote', 0), ('[', 'BracketLeft', 0), (']', 'BracketRight', 0)]
+        for key, code, modifiers in keys:
+            call('input', events=[dict(type='input_keyboard', eventType='keyDown', key=key, code=code, modifiers=modifiers), dict(type='input_keyboard', eventType='keyUp', key=key, code=code, modifiers=modifiers)])
+        call('reset')
+        assert cli('eval', "document.querySelector('#t').value")['result'] == ''.join(key for key, _, _ in keys)
+        receipts['nativePunctuation'] = True
+        call('input', events=[dict(type='input_keyboard', eventType='keyDown', key='F11', code='F11'), dict(type='input_keyboard', eventType='keyUp', key='F11', code='F11')])
+        receipts['nativeF11Delivered'] = True
+        call('input', events=[dict(type='input_keyboard', eventType='keyDown', key='F11', code='F11'), dict(type='input_keyboard', eventType='keyUp', key='F11', code='F11')])
+        cli('eval', "document.querySelector('#t').value=''")
         cli('eval', "document.querySelector('#t').focus()")
         text = 'North NJ — café 建設 😀\n' * 1200
         assert len(json.dumps(dict(id=1, op='input', events=[dict(type='input_keyboard', eventType='insertText', text=text)]), ensure_ascii=False).encode()) < 65536
