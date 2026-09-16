@@ -377,6 +377,68 @@ const docTemplate = `{
                 }
             }
         },
+        "/sandboxes/{sandboxId}/generation/observe-current": {
+            "post": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sandbox"
+                ],
+                "summary": "Observe current generation with provider-observable owner authority",
+                "operationId": "ObserveCurrentSandboxGeneration",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Sandbox ID",
+                        "name": "sandboxId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Exact provider source, owner and fence",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/generationstop.ProviderGenerationObservationRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/generationstop.ProviderGenerationObservation"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/sandboxes/{sandboxId}/is-recoverable": {
             "post": {
                 "description": "Check if the sandbox's error reason indicates a recoverable error",
@@ -695,7 +757,7 @@ const docTemplate = `{
         },
         "/sandboxes/{sandboxId}/secrets": {
             "post": {
-                "description": "Pushes the sandbox's desired secret env (env var name -> placeholder) so newly spawned processes in a running sandbox see it. A sandbox without secret-proxy wiring picks the change up on its next start instead.",
+                "description": "Pushes the sandbox's desired secret env (env var name -\u003e placeholder) so newly spawned processes in a running sandbox see it. A sandbox without secret-proxy wiring picks the change up on its next start instead.",
                 "produces": [
                     "application/json"
                 ],
@@ -824,6 +886,148 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/sandboxes/{sandboxId}/specialist-renders": {
+            "post": {
+                "produces": [
+                    "application/vnd.ambit.runtime-provider-specialist-render+jsonl"
+                ],
+                "tags": [
+                    "sandbox"
+                ],
+                "summary": "Execute one provider-owned specialist render stream",
+                "operationId": "ExecuteSpecialistRender",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Sandbox ID",
+                        "name": "sandboxId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Exact canonical provider JSONL stream",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Exact provider response stream",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "422": {
+                        "description": "Validated failed render stream",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "504": {
+                        "description": "Gateway Timeout",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/sandboxes/{sandboxId}/specialist-renders/observe": {
+            "post": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sandbox"
+                ],
+                "summary": "Observe durable specialist-render operation state",
+                "operationId": "ObserveSpecialistRender",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Sandbox ID",
+                        "name": "sandboxId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Exact operation authority",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/specialistrender.ObserveRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/specialistrender.Observation"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1656,6 +1860,266 @@ const docTemplate = `{
                         }
                     }
                 }
+            }
+        },
+        "/sandboxes/{sandboxId}/working-copy-captures/sandbox-files": {
+            "post": {
+                "description": "Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sandbox"
+                ],
+                "summary": "Capture an immutable native sandbox file once",
+                "operationId": "CaptureSandboxFile",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Sandbox ID",
+                        "name": "sandboxId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Native file capture operation",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/workingcopy.SandboxFileRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/workingcopy.SandboxFileReceipt"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ]
+            }
+        },
+        "/sandboxes/{sandboxId}/working-copy-captures/sandbox-files/delete": {
+            "post": {
+                "description": "Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sandbox"
+                ],
+                "summary": "Retire a native file operation and release its private bytes",
+                "operationId": "DeleteSandboxFile",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Sandbox ID",
+                        "name": "sandboxId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Native file capture operation",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/workingcopy.SandboxFileDeleteRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/workingcopy.SandboxFileDeleteReceipt"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ]
+            }
+        },
+        "/sandboxes/{sandboxId}/working-copy-captures/sandbox-files/observe": {
+            "post": {
+                "description": "Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sandbox"
+                ],
+                "summary": "Observe a native sandbox file operation without source effects",
+                "operationId": "ObserveSandboxFile",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Sandbox ID",
+                        "name": "sandboxId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Native file capture operation",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/workingcopy.SandboxFileObserveRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/workingcopy.SandboxFileObservation"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ]
+            }
+        },
+        "/sandboxes/{sandboxId}/working-copy-captures/sandbox-files/read": {
+            "post": {
+                "description": "Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sandbox"
+                ],
+                "summary": "Read a bounded immutable native file capture",
+                "operationId": "ReadSandboxFile",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Sandbox ID",
+                        "name": "sandboxId",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Native file capture operation",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/workingcopy.SandboxFileReadRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/workingcopy.SandboxFileReadResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "Bearer": []
+                    }
+                ]
             }
         },
         "/sandboxes/{sandboxId}/working-copy-captures/stopped-directory-roster": {
@@ -3247,6 +3711,76 @@ const docTemplate = `{
                 }
             }
         },
+        "generationstop.ProviderGenerationObservation": {
+            "type": "object",
+            "required": [
+                "fence",
+                "generation",
+                "observedAt",
+                "owner",
+                "source",
+                "state"
+            ],
+            "properties": {
+                "fence": {
+                    "$ref": "#/definitions/generationstop.Fence"
+                },
+                "generation": {
+                    "$ref": "#/definitions/generationstop.ExpectedGeneration"
+                },
+                "observedAt": {
+                    "type": "string"
+                },
+                "owner": {
+                    "$ref": "#/definitions/generationstop.ProviderOwner"
+                },
+                "source": {
+                    "$ref": "#/definitions/generationstop.Source"
+                },
+                "state": {
+                    "type": "string"
+                }
+            }
+        },
+        "generationstop.ProviderGenerationObservationRequest": {
+            "type": "object",
+            "required": [
+                "fence",
+                "owner",
+                "source"
+            ],
+            "properties": {
+                "fence": {
+                    "$ref": "#/definitions/generationstop.Fence"
+                },
+                "owner": {
+                    "$ref": "#/definitions/generationstop.ProviderOwner"
+                },
+                "source": {
+                    "$ref": "#/definitions/generationstop.Source"
+                }
+            }
+        },
+        "generationstop.ProviderOwner": {
+            "type": "object",
+            "properties": {
+                "grantId": {
+                    "type": "string"
+                },
+                "runId": {
+                    "type": "string"
+                },
+                "tenantId": {
+                    "type": "string"
+                },
+                "userId": {
+                    "type": "string"
+                },
+                "workspaceId": {
+                    "type": "string"
+                }
+            }
+        },
         "generationstop.Purpose": {
             "type": "object",
             "required": [
@@ -3433,6 +3967,472 @@ const docTemplate = `{
                 }
             }
         },
+        "specialistrender.ImagePin": {
+            "type": "object",
+            "required": [
+                "configDigest",
+                "packId",
+                "packRef",
+                "ref"
+            ],
+            "properties": {
+                "configDigest": {
+                    "type": "string"
+                },
+                "packId": {
+                    "type": "string"
+                },
+                "packRef": {
+                    "type": "string"
+                },
+                "ref": {
+                    "type": "string"
+                }
+            }
+        },
+        "specialistrender.LaunchObservation": {
+            "type": "object",
+            "required": [
+                "capDrop",
+                "command",
+                "containerId",
+                "containerName",
+                "effectiveCapabilities",
+                "environmentDigest",
+                "executableDigest",
+                "executablePath",
+                "hostPid",
+                "imageId",
+                "memoryBytes",
+                "mountNamespace",
+                "nanoCpus",
+                "networkMode",
+                "noNewPrivileges",
+                "observedAt",
+                "parentGeneration",
+                "parentMountNamespace",
+                "parentProcessNamespace",
+                "pidsLimit",
+                "processCount",
+                "processIdentity",
+                "processNamespace",
+                "readonlyRootfs",
+                "roleRef",
+                "runtime",
+                "runtimeStatusDigest",
+                "seccompKernelMode",
+                "seccompMode",
+                "tmpfs",
+                "user"
+            ],
+            "properties": {
+                "capDrop": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "command": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "containerId": {
+                    "type": "string"
+                },
+                "containerName": {
+                    "type": "string"
+                },
+                "effectiveCapabilities": {
+                    "type": "string"
+                },
+                "environmentDigest": {
+                    "type": "string"
+                },
+                "executableDigest": {
+                    "type": "string"
+                },
+                "executablePath": {
+                    "type": "string"
+                },
+                "hostPid": {
+                    "type": "integer"
+                },
+                "imageId": {
+                    "type": "string"
+                },
+                "memoryBytes": {
+                    "type": "integer"
+                },
+                "mountCount": {
+                    "type": "integer"
+                },
+                "mountNamespace": {
+                    "type": "string"
+                },
+                "nanoCpus": {
+                    "type": "integer"
+                },
+                "networkMode": {
+                    "type": "string"
+                },
+                "noNewPrivileges": {
+                    "type": "boolean"
+                },
+                "observedAt": {
+                    "type": "string"
+                },
+                "parentGeneration": {
+                    "$ref": "#/definitions/generationstop.ExpectedGeneration"
+                },
+                "parentMountNamespace": {
+                    "type": "string"
+                },
+                "parentProcessNamespace": {
+                    "type": "string"
+                },
+                "pidsLimit": {
+                    "type": "integer"
+                },
+                "processCount": {
+                    "type": "integer"
+                },
+                "processIdentity": {
+                    "$ref": "#/definitions/specialistrender.ProcessIdentity"
+                },
+                "processNamespace": {
+                    "type": "string"
+                },
+                "readonlyRootfs": {
+                    "type": "boolean"
+                },
+                "roleRef": {
+                    "type": "string"
+                },
+                "runtime": {
+                    "type": "string"
+                },
+                "runtimeStatusDigest": {
+                    "type": "string"
+                },
+                "seccompDigest": {
+                    "type": "string"
+                },
+                "seccompKernelMode": {
+                    "type": "integer"
+                },
+                "seccompMode": {
+                    "type": "string"
+                },
+                "shmSize": {
+                    "type": "integer"
+                },
+                "tmpfs": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "user": {
+                    "type": "string"
+                }
+            }
+        },
+        "specialistrender.Observation": {
+            "type": "object",
+            "required": [
+                "schema",
+                "status"
+            ],
+            "properties": {
+                "receipt": {
+                    "$ref": "#/definitions/specialistrender.Receipt"
+                },
+                "schema": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "specialistrender.ObserveRequest": {
+            "type": "object",
+            "required": [
+                "fence",
+                "operationId",
+                "owner",
+                "requestFingerprint",
+                "schema",
+                "source"
+            ],
+            "properties": {
+                "fence": {
+                    "$ref": "#/definitions/generationstop.Fence"
+                },
+                "operationId": {
+                    "type": "string"
+                },
+                "owner": {
+                    "$ref": "#/definitions/generationstop.ProviderOwner"
+                },
+                "requestFingerprint": {
+                    "type": "string"
+                },
+                "schema": {
+                    "type": "string"
+                },
+                "source": {
+                    "$ref": "#/definitions/generationstop.Source"
+                }
+            }
+        },
+        "specialistrender.OutputFile": {
+            "type": "object",
+            "required": [
+                "byteLength",
+                "mediaType",
+                "ordinal",
+                "path",
+                "role",
+                "sha256"
+            ],
+            "properties": {
+                "byteLength": {
+                    "type": "integer"
+                },
+                "mediaType": {
+                    "type": "string"
+                },
+                "ordinal": {
+                    "type": "integer"
+                },
+                "path": {
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string"
+                },
+                "sha256": {
+                    "type": "string"
+                }
+            }
+        },
+        "specialistrender.Pin": {
+            "type": "object",
+            "required": [
+                "digest",
+                "ref"
+            ],
+            "properties": {
+                "digest": {
+                    "type": "string"
+                },
+                "ref": {
+                    "type": "string"
+                }
+            }
+        },
+        "specialistrender.ProcessIdentity": {
+            "type": "object",
+            "required": [
+                "pid",
+                "startTicks"
+            ],
+            "properties": {
+                "pid": {
+                    "type": "integer"
+                },
+                "startTicks": {
+                    "type": "string"
+                }
+            }
+        },
+        "specialistrender.QuiescenceReceipt": {
+            "type": "object",
+            "required": [
+                "containerAbsent",
+                "containerId",
+                "observedAt",
+                "schema"
+            ],
+            "properties": {
+                "containerAbsent": {
+                    "type": "boolean"
+                },
+                "containerId": {
+                    "type": "string"
+                },
+                "observedAt": {
+                    "type": "string"
+                },
+                "schema": {
+                    "type": "string"
+                }
+            }
+        },
+        "specialistrender.Receipt": {
+            "type": "object",
+            "required": [
+                "completedAt",
+                "files",
+                "helperExitCode",
+                "launch",
+                "nonce",
+                "outcome",
+                "quiescence",
+                "readyDigest",
+                "receiptDigest",
+                "request",
+                "schema",
+                "startedAt",
+                "terminalDigest",
+                "terminalKind",
+                "terminalOutcome",
+                "totalOutputBytes"
+            ],
+            "properties": {
+                "completedAt": {
+                    "type": "string"
+                },
+                "files": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/specialistrender.OutputFile"
+                    }
+                },
+                "helperExitCode": {
+                    "type": "integer"
+                },
+                "launch": {
+                    "$ref": "#/definitions/specialistrender.LaunchObservation"
+                },
+                "nonce": {
+                    "type": "string"
+                },
+                "outcome": {
+                    "type": "string"
+                },
+                "quiescence": {
+                    "$ref": "#/definitions/specialistrender.QuiescenceReceipt"
+                },
+                "readyDigest": {
+                    "type": "string"
+                },
+                "receiptDigest": {
+                    "type": "string"
+                },
+                "request": {
+                    "$ref": "#/definitions/specialistrender.Request"
+                },
+                "schema": {
+                    "type": "string"
+                },
+                "startedAt": {
+                    "type": "string"
+                },
+                "terminalDigest": {
+                    "type": "string"
+                },
+                "terminalKind": {
+                    "type": "string"
+                },
+                "terminalOutcome": {
+                    "type": "string"
+                },
+                "totalOutputBytes": {
+                    "type": "integer"
+                }
+            }
+        },
+        "specialistrender.Request": {
+            "type": "object",
+            "required": [
+                "artifactRenderJobRef",
+                "composition",
+                "executable",
+                "executor",
+                "expectedParentGeneration",
+                "fence",
+                "image",
+                "interface",
+                "operationId",
+                "owner",
+                "providerPolicy",
+                "requestBytes",
+                "requestChunkCount",
+                "requestFingerprint",
+                "requestSha256",
+                "schema",
+                "source",
+                "sourceBytes",
+                "sourceChunkCount",
+                "sourceSha256"
+            ],
+            "properties": {
+                "artifactRenderJobRef": {
+                    "type": "string"
+                },
+                "composition": {
+                    "$ref": "#/definitions/specialistrender.Pin"
+                },
+                "executable": {
+                    "type": "string"
+                },
+                "executor": {
+                    "$ref": "#/definitions/specialistrender.Pin"
+                },
+                "expectedParentGeneration": {
+                    "$ref": "#/definitions/generationstop.ExpectedGeneration"
+                },
+                "fence": {
+                    "$ref": "#/definitions/generationstop.Fence"
+                },
+                "image": {
+                    "$ref": "#/definitions/specialistrender.ImagePin"
+                },
+                "interface": {
+                    "$ref": "#/definitions/specialistrender.Pin"
+                },
+                "operationId": {
+                    "type": "string"
+                },
+                "owner": {
+                    "$ref": "#/definitions/generationstop.ProviderOwner"
+                },
+                "providerPolicy": {
+                    "$ref": "#/definitions/specialistrender.Pin"
+                },
+                "requestBytes": {
+                    "type": "integer"
+                },
+                "requestChunkCount": {
+                    "type": "integer"
+                },
+                "requestFingerprint": {
+                    "type": "string"
+                },
+                "requestSha256": {
+                    "type": "string"
+                },
+                "schema": {
+                    "type": "string"
+                },
+                "source": {
+                    "$ref": "#/definitions/generationstop.Source"
+                },
+                "sourceBytes": {
+                    "type": "integer"
+                },
+                "sourceChunkCount": {
+                    "type": "integer"
+                },
+                "sourceSha256": {
+                    "type": "string"
+                }
+            }
+        },
         "workingcopy.CaptureAuthority": {
             "type": "object",
             "required": [
@@ -3550,6 +4550,25 @@ const docTemplate = `{
                 },
                 "source": {
                     "$ref": "#/definitions/workingcopy.SourceAddress"
+                }
+            }
+        },
+        "workingcopy.CaptureComponent": {
+            "type": "object",
+            "required": [
+                "helper",
+                "protocol",
+                "roleRef"
+            ],
+            "properties": {
+                "helper": {
+                    "$ref": "#/definitions/workingcopy.CaptureAuthorityArtifact"
+                },
+                "protocol": {
+                    "$ref": "#/definitions/workingcopy.CaptureAuthorityArtifact"
+                },
+                "roleRef": {
+                    "type": "string"
                 }
             }
         },
@@ -3955,6 +4974,239 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "zoneRelativePath": {
+                    "type": "string"
+                }
+            }
+        },
+        "workingcopy.FileSnapshotCapability": {
+            "type": "object",
+            "required": [
+                "contract",
+                "maximumBytes"
+            ],
+            "properties": {
+                "contract": {
+                    "type": "string"
+                },
+                "maximumBytes": {
+                    "type": "integer"
+                }
+            }
+        },
+        "workingcopy.FileSnapshotSource": {
+            "type": "object",
+            "required": [
+                "contract",
+                "fence",
+                "generation"
+            ],
+            "properties": {
+                "contract": {
+                    "type": "string"
+                },
+                "fence": {
+                    "$ref": "#/definitions/generationstop.Fence"
+                },
+                "generation": {
+                    "$ref": "#/definitions/generationstop.ExpectedGeneration"
+                }
+            }
+        },
+        "workingcopy.SandboxFileDeleteReceipt": {
+            "type": "object",
+            "required": [
+                "captureId",
+                "outcome"
+            ],
+            "properties": {
+                "captureId": {
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "outcome": {
+                    "type": "string",
+                    "enum": [
+                        "deleted",
+                        "already_absent"
+                    ]
+                }
+            }
+        },
+        "workingcopy.SandboxFileDeleteRequest": {
+            "type": "object",
+            "properties": {
+                "operationId": {
+                    "type": "string"
+                },
+                "organizationId": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                },
+                "receipt": {
+                    "$ref": "#/definitions/workingcopy.SandboxFileReceipt"
+                }
+            }
+        },
+        "workingcopy.SandboxFileObservation": {
+            "type": "object",
+            "required": [
+                "status"
+            ],
+            "properties": {
+                "receipt": {
+                    "$ref": "#/definitions/workingcopy.SandboxFileReceipt"
+                },
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "absent",
+                        "pending",
+                        "complete",
+                        "retired"
+                    ]
+                }
+            }
+        },
+        "workingcopy.SandboxFileObserveRequest": {
+            "type": "object",
+            "required": [
+                "operationId",
+                "organizationId"
+            ],
+            "properties": {
+                "operationId": {
+                    "type": "string"
+                },
+                "organizationId": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                }
+            }
+        },
+        "workingcopy.SandboxFileReadRequest": {
+            "type": "object",
+            "required": [
+                "maximumBytes",
+                "offset",
+                "receipt"
+            ],
+            "properties": {
+                "maximumBytes": {
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "receipt": {
+                    "$ref": "#/definitions/workingcopy.SandboxFileReceipt"
+                }
+            }
+        },
+        "workingcopy.SandboxFileReadResponse": {
+            "type": "object",
+            "required": [
+                "byteLength",
+                "bytesBase64",
+                "captureId",
+                "eof",
+                "offset",
+                "sha256",
+                "totalByteLength"
+            ],
+            "properties": {
+                "byteLength": {
+                    "type": "integer"
+                },
+                "bytesBase64": {
+                    "type": "string"
+                },
+                "captureId": {
+                    "type": "string"
+                },
+                "eof": {
+                    "type": "boolean"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "sha256": {
+                    "type": "string"
+                },
+                "totalByteLength": {
+                    "type": "integer"
+                }
+            }
+        },
+        "workingcopy.SandboxFileReceipt": {
+            "type": "object",
+            "required": [
+                "captureId",
+                "capturedAt",
+                "component",
+                "contract",
+                "generation",
+                "operationId",
+                "organizationId",
+                "path",
+                "sandboxId",
+                "sha256",
+                "totalByteLength"
+            ],
+            "properties": {
+                "captureId": {
+                    "type": "string"
+                },
+                "capturedAt": {
+                    "type": "string"
+                },
+                "component": {
+                    "$ref": "#/definitions/workingcopy.CaptureComponent"
+                },
+                "contract": {
+                    "type": "string"
+                },
+                "generation": {
+                    "$ref": "#/definitions/generationstop.ExpectedGeneration"
+                },
+                "operationId": {
+                    "type": "string"
+                },
+                "organizationId": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                },
+                "sandboxId": {
+                    "type": "string"
+                },
+                "sha256": {
+                    "type": "string"
+                },
+                "totalByteLength": {
+                    "type": "integer"
+                }
+            }
+        },
+        "workingcopy.SandboxFileRequest": {
+            "type": "object",
+            "required": [
+                "operationId",
+                "organizationId",
+                "path"
+            ],
+            "properties": {
+                "operationId": {
+                    "type": "string"
+                },
+                "organizationId": {
+                    "type": "string"
+                },
+                "path": {
                     "type": "string"
                 }
             }
@@ -4450,40 +5702,6 @@ const docTemplate = `{
                 },
                 "maximumPageEntries": {
                     "type": "integer"
-                }
-            }
-        },
-        "workingcopy.FileSnapshotCapability": {
-            "type": "object",
-            "required": [
-                "contract",
-                "maximumBytes"
-            ],
-            "properties": {
-                "contract": {
-                    "type": "string"
-                },
-                "maximumBytes": {
-                    "type": "integer"
-                }
-            }
-        },
-        "workingcopy.FileSnapshotSource": {
-            "type": "object",
-            "required": [
-                "contract",
-                "fence",
-                "generation"
-            ],
-            "properties": {
-                "contract": {
-                    "type": "string"
-                },
-                "fence": {
-                    "$ref": "#/definitions/generationstop.Fence"
-                },
-                "generation": {
-                    "$ref": "#/definitions/generationstop.ExpectedGeneration"
                 }
             }
         }

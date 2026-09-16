@@ -3,6 +3,16 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import {
+  SandboxFileCaptureRunnerRequest,
+  SandboxFileCaptureRunnerObserveRequest,
+  SandboxFileCaptureReceiptDto,
+  SandboxFileCaptureObservationDto,
+  SandboxFileCaptureReadRequestDto,
+  SandboxFileCaptureReadResponseDto,
+  SandboxFileCaptureRunnerDeleteRequest,
+  SandboxFileCaptureDeleteReceiptDto,
+} from '../dto/sandbox-file-capture.dto'
 import { Injectable, Logger } from '@nestjs/common'
 import { Runner } from '../entities/runner.entity'
 import { ModuleRef } from '@nestjs/core'
@@ -222,6 +232,27 @@ export interface RunnerAdapter {
     disk?: number,
     registry?: DockerRegistry,
   ): Promise<void>
+
+  captureSandboxFile(
+    sandboxId: string,
+    request: SandboxFileCaptureRunnerRequest,
+    signal?: AbortSignal,
+  ): Promise<SandboxFileCaptureReceiptDto>
+  observeSandboxFile(
+    sandboxId: string,
+    request: SandboxFileCaptureRunnerObserveRequest,
+    signal?: AbortSignal,
+  ): Promise<SandboxFileCaptureObservationDto>
+  readSandboxFile(
+    sandboxId: string,
+    request: SandboxFileCaptureReadRequestDto,
+    signal?: AbortSignal,
+  ): Promise<SandboxFileCaptureReadResponseDto>
+  deleteSandboxFile(
+    sandboxId: string,
+    request: SandboxFileCaptureRunnerDeleteRequest,
+    signal?: AbortSignal,
+  ): Promise<SandboxFileCaptureDeleteReceiptDto>
 
   workingCopyCaptureCapabilities(
     sandboxId: string,

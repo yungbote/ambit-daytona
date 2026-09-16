@@ -1,5 +1,71 @@
 # Private working-tree capture
 
+## Native sandbox file ownership
+
+The same capture owner also supports ordinary provider-owned file operations at
+`POST /sandbox/:sandboxIdOrName/working-copy-captures/sandbox-files`. The public
+request is `{ "operationId": "stable-key", "path": "/workspace/outputs/file" }`.
+The current API-key/JWT organization authentication, sandbox access guard and
+`WRITE_SANDBOXES` permission apply to creation, observation, reads and retirement.
+The API resolves the actual sandbox and assigned Runner; the Runner independently
+checks its provider-owned organization/container-kind labels and exact generation.
+The caller supplies no Product Run, grant, manifest or qualification claim.
+
+The operation key is 1–128 ASCII characters, matching
+`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`. Retain it across retries. The first durable
+intent fixes the selected generation and actual measured native component. The
+same key with a different path conflicts. A completed or staged capture can be
+replayed after a restart or component release; unfinished source work cannot
+silently select another generation.
+
+The receipt contract is `daytona.sandbox-file-capture/v1`. It includes actual
+organization/sandbox/generation/component, path, operation key, opaque capture
+identity, immutable byte count, `sha256:<hex>` digest and capture time. Related
+operations under the same path are:
+
+- `/observe`, with the original operationId and optional path assertion: absent,
+  pending, complete or retired. Only complete includes a receipt. Observation
+  performs no source work and can recover a receipt after the original browser
+  listing or mutable file disappears; a supplied path must match the intent.
+- `/read`, with `{receipt, offset, maximumBytes}`: an exact immutable range, up to
+  4 MiB, returned as canonical base64 with its digest/length/EOF identity.
+- `/delete`, with `{receipt}` or the original `{operationId,path}`: retire the
+  operation and release private bytes. The latter also cancels pending work or
+  retires a key before source admission. A durable retirement prevents a late
+  create from reusing it. `captureId` is null only when no source was selected;
+  this does not fabricate a receipt. Cleanup is idempotent and retryable.
+
+Native capture uses the same private object store, conditional publication,
+anonymous scratch, byte verification and descriptor-based FICLONE reader. Its
+separately scoped keys contain no raw owner or operation identifiers. Product
+wire bodies and existing stored Product bytes retain their original encoding;
+Product endpoints reject the native binding variant rather than downgrading a
+failed Run/grant check. Native operation retirement adds a tagged record in the
+same custody owner, not a database, queue or new storage service.
+
+The native file scope is deliberately the existing `/workspace/work` and
+`/workspace/outputs` roots, with canonical descendants, one regular file, no
+symlinks/magic links/descendant mounts or hardlink aliases, and a 1 GiB accepted
+byte limit. It requires a running source and supported O_TMPFILE/FICLONE storage.
+There is no mutable-copy or stopped-source fallback. Ordinary SDK filesystem
+downloads remain mutable; they are not renamed as immutable captures. Native
+file capture does not certify earlier browser-origin claims for a mutable path.
+
+This API authorizes provider-native filesystem work. Ambit Resource/tenant
+authorization and canonical Artifact publication remain the Product caller's
+responsibility; provider credentials must never reach a browser. Source sandbox
+ownership must still resolve at read/cleanup time. Artifact ingress should finish
+before deleting the sandbox. Generic arbitrary filesystem roots would require an
+explicit provider export permission or kernel-enforced sandbox-user read
+authority; the host reader must not infer those rights from file mode bits.
+
+Native capture records a measured component, not a certification. Adding these
+routes changes the generated capture-interface digest and rebuilding changes the
+executable digest. Existing Product admission still requires the release owner's
+current qualified component before fresh Product source reads. Historical
+immutable captures remain readable. Native target qualification and integrated
+browser/Artifact acceptance must be measured separately.
+
 ## Component identity and retained custody
 
 The Runner measures its own `/proc/self/exe` bytes at startup. Its capture

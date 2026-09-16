@@ -3,6 +3,16 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import {
+  SandboxFileCaptureRequestDto,
+  SandboxFileCaptureObserveRequestDto,
+  SandboxFileCaptureReceiptDto,
+  SandboxFileCaptureObservationDto,
+  SandboxFileCaptureReadRequestDto,
+  SandboxFileCaptureReadResponseDto,
+  SandboxFileCaptureDeleteRequestDto,
+  SandboxFileCaptureDeleteReceiptDto,
+} from '../dto/sandbox-file-capture.dto'
 import { Body, Controller, HttpCode, Param, Post, Req, Res, UseGuards } from '@nestjs/common'
 import { ApiBearerAuth, ApiHeader, ApiOAuth2, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger'
 import { IncomingMessage, ServerResponse } from 'node:http'
@@ -53,6 +63,102 @@ import { WorkingCopyCaptureService } from '../services/working-copy-capture.serv
 @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_SANDBOXES])
 export class WorkingCopyCaptureController {
   constructor(private readonly captures: WorkingCopyCaptureService) {}
+
+  @Post('sandbox-files')
+  @HttpCode(200)
+  @ApiOperation({ operationId: 'captureSandboxFile', summary: 'Capture an immutable sandbox file' })
+  @ApiResponse({ status: 200, type: SandboxFileCaptureReceiptDto })
+  @Audit({
+    action: AuditAction.CREATE,
+    targetType: AuditTarget.SANDBOX,
+    targetIdFromRequest: (request) => request.params.sandboxIdOrName,
+  })
+  captureSandboxFile(
+    @IsOrganizationAuthContext() auth: OrganizationAuthContext,
+    @Param('sandboxIdOrName') sandboxIdOrName: string,
+    @Body() request: SandboxFileCaptureRequestDto,
+    @Req() incoming: IncomingMessage,
+    @Res({ passthrough: true }) outgoing: ServerResponse<IncomingMessage>,
+  ): Promise<SandboxFileCaptureReceiptDto> {
+    return this.captures.captureSandboxFile(
+      auth.organizationId,
+      sandboxIdOrName,
+      request,
+      responseSignal(incoming, outgoing),
+    )
+  }
+
+  @Post('sandbox-files/observe')
+  @HttpCode(200)
+  @ApiOperation({ operationId: 'observeSandboxFile', summary: 'Observe a sandbox file capture' })
+  @ApiResponse({ status: 200, type: SandboxFileCaptureObservationDto })
+  @Audit({
+    action: AuditAction.READ,
+    targetType: AuditTarget.SANDBOX,
+    targetIdFromRequest: (request) => request.params.sandboxIdOrName,
+  })
+  observeSandboxFile(
+    @IsOrganizationAuthContext() auth: OrganizationAuthContext,
+    @Param('sandboxIdOrName') sandboxIdOrName: string,
+    @Body() request: SandboxFileCaptureObserveRequestDto,
+    @Req() incoming: IncomingMessage,
+    @Res({ passthrough: true }) outgoing: ServerResponse<IncomingMessage>,
+  ): Promise<SandboxFileCaptureObservationDto> {
+    return this.captures.observeSandboxFile(
+      auth.organizationId,
+      sandboxIdOrName,
+      request,
+      responseSignal(incoming, outgoing),
+    )
+  }
+
+  @Post('sandbox-files/read')
+  @HttpCode(200)
+  @ApiOperation({ operationId: 'readSandboxFile', summary: 'Read immutable captured bytes' })
+  @ApiResponse({ status: 200, type: SandboxFileCaptureReadResponseDto })
+  @Audit({
+    action: AuditAction.READ,
+    targetType: AuditTarget.SANDBOX,
+    targetIdFromRequest: (request) => request.params.sandboxIdOrName,
+  })
+  readSandboxFile(
+    @IsOrganizationAuthContext() auth: OrganizationAuthContext,
+    @Param('sandboxIdOrName') sandboxIdOrName: string,
+    @Body() request: SandboxFileCaptureReadRequestDto,
+    @Req() incoming: IncomingMessage,
+    @Res({ passthrough: true }) outgoing: ServerResponse<IncomingMessage>,
+  ): Promise<SandboxFileCaptureReadResponseDto> {
+    return this.captures.readSandboxFile(
+      auth.organizationId,
+      sandboxIdOrName,
+      request,
+      responseSignal(incoming, outgoing),
+    )
+  }
+
+  @Post('sandbox-files/delete')
+  @HttpCode(200)
+  @ApiOperation({ operationId: 'deleteSandboxFile', summary: 'Retire a sandbox file capture' })
+  @ApiResponse({ status: 200, type: SandboxFileCaptureDeleteReceiptDto })
+  @Audit({
+    action: AuditAction.DELETE,
+    targetType: AuditTarget.SANDBOX,
+    targetIdFromRequest: (request) => request.params.sandboxIdOrName,
+  })
+  deleteSandboxFile(
+    @IsOrganizationAuthContext() auth: OrganizationAuthContext,
+    @Param('sandboxIdOrName') sandboxIdOrName: string,
+    @Body() request: SandboxFileCaptureDeleteRequestDto,
+    @Req() incoming: IncomingMessage,
+    @Res({ passthrough: true }) outgoing: ServerResponse<IncomingMessage>,
+  ): Promise<SandboxFileCaptureDeleteReceiptDto> {
+    return this.captures.deleteSandboxFile(
+      auth.organizationId,
+      sandboxIdOrName,
+      request,
+      responseSignal(incoming, outgoing),
+    )
+  }
 
   @Post('capabilities')
   @HttpCode(200)

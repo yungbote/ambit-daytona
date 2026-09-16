@@ -19,11 +19,16 @@ func TestCaptureProtocolUsesExactGeneratedSurface(t *testing.T) {
 	if _, exists := paths["/sandboxes/{sandboxId}/working-copy-captures/capabilities"]; !exists {
 		t.Fatal("capture discovery is missing")
 	}
+	for _, suffix := range []string{"", "/observe", "/read", "/delete"} {
+		if _, exists := paths["/sandboxes/{sandboxId}/working-copy-captures/sandbox-files"+suffix]; !exists {
+			t.Fatalf("native sandbox capture operation %q is missing", suffix)
+		}
+	}
 	if _, exists := paths["/info"]; exists {
 		t.Fatal("unrelated Runner API changed capture identity")
 	}
 	definitions := protocol["definitions"].(map[string]any)
-	for _, name := range []string{"workingcopy.CaptureAuthority", "workingcopy.CaptureBinding", "workingcopy.WorkingTreeInventoryReceipt", "generationstop.ExpectedGeneration"} {
+	for _, name := range []string{"workingcopy.CaptureAuthority", "workingcopy.CaptureBinding", "workingcopy.WorkingTreeInventoryReceipt", "generationstop.ExpectedGeneration", "workingcopy.SandboxFileReceipt", "workingcopy.CaptureComponent"} {
 		if _, exists := definitions[name]; !exists {
 			t.Fatalf("missing transitive definition %s", name)
 		}

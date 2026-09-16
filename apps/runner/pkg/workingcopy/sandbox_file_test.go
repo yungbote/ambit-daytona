@@ -128,7 +128,7 @@ func TestNativeFileCaptureReplayRangesAndRetirement(t *testing.T) {
 	if _, err = s.CaptureSandboxFile(ctx, nativeSandboxID, request); !errors.Is(err, ErrConflict) {
 		t.Fatalf("retired operation restarted: %v", err)
 	}
-	observed, err := s.ObserveSandboxFile(ctx, nativeSandboxID, request)
+	observed, err := s.ObserveSandboxFile(ctx, nativeSandboxID, SandboxFileObserveRequest{OrganizationID: request.OrganizationID, OperationID: request.OperationID})
 	if err != nil || observed.Status != "retired" {
 		t.Fatalf("retirement observation: %#v %v", observed, err)
 	}
@@ -161,6 +161,26 @@ func TestNativeFileCaptureFreezesPendingGenerationAndRecoversStagedBytes(t *test
 				t.Fatalf("generation selected %d times", physical.inspectCalls)
 			}
 		})
+	}
+}
+
+func TestNativeFileObservationRecoversWithoutTheMutablePath(t *testing.T) {
+	s, _, physical, request := nativeFixture(t)
+	receipt, err := s.CaptureSandboxFile(context.Background(), nativeSandboxID, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	physical.failure = errors.New("original file removed")
+	physical.observation.Generation.RestartCount++
+	lookup := SandboxFileObserveRequest{OrganizationID: request.OrganizationID, OperationID: request.OperationID}
+	observed, err := s.ObserveSandboxFile(context.Background(), nativeSandboxID, lookup)
+	if err != nil || observed.Status != "complete" || observed.Receipt == nil || *observed.Receipt != receipt || physical.inspectCalls != 1 || physical.captureCalls != 1 {
+		t.Fatalf("retained lookup depended on a mutable source: %#v %v", observed, err)
+	}
+	otherPath := "/workspace/outputs/different.txt"
+	lookup.Path = &otherPath
+	if _, err := s.ObserveSandboxFile(context.Background(), nativeSandboxID, lookup); !errors.Is(err, ErrConflict) {
+		t.Fatalf("supplied wrong original path accepted: %v", err)
 	}
 }
 
@@ -259,5 +279,55 @@ func TestNativeCaptureLeavesLegacyProductBytesUnchanged(t *testing.T) {
 		if strings.HasSuffix(key, "/deletion.json") && strings.Contains(string(object.data), "sandboxFile") {
 			t.Fatal("native field changed legacy deletion bytes")
 		}
+	}
+}
+
+type nativePhysicalInspector struct {
+	observation generationstop.SandboxGenerationObservation
+}
+
+func (i *nativePhysicalInspector) InspectGeneration(context.Context, string) (generationstop.CurrentGenerationObservation, error) {
+	return generationstop.CurrentGenerationObservation{}, errors.New("native observation must not require Product labels")
+}
+
+func (i *nativePhysicalInspector) InspectSandboxGeneration(context.Context, string) (generationstop.SandboxGenerationObservation, error) {
+	return i.observation, nil
+}
+
+func TestNativeSnapshotReaderReprovesOwnerAndRunningGeneration(t *testing.T) {
+	s, _, fixture, request := nativeFixture(t)
+	selector, err := sandboxFileSelector(request.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := CaptureBinding{Selector: selector, SandboxFile: SandboxFileSource{Contract: SandboxFileCaptureContract,
+		OrganizationID: request.OrganizationID, SandboxID: nativeSandboxID, OperationID: request.OperationID,
+		Generation: fixture.observation.Generation.ExpectedGeneration, Component: s.component}}
+	for name, change := range map[string]func(*generationstop.SandboxGenerationObservation){
+		"owner":      func(o *generationstop.SandboxGenerationObservation) { o.OrganizationID = nativeSandboxID },
+		"sandbox":    func(o *generationstop.SandboxGenerationObservation) { o.SandboxID = request.OrganizationID },
+		"generation": func(o *generationstop.SandboxGenerationObservation) { o.Generation.RestartCount++ },
+		"stopped": func(o *generationstop.SandboxGenerationObservation) {
+			o.State.Running = false
+			o.State.PID = 0
+			o.State.Status = "exited"
+		},
+		"paused":     func(o *generationstop.SandboxGenerationObservation) { o.State.Paused = true },
+		"restarting": func(o *generationstop.SandboxGenerationObservation) { o.State.Restarting = true },
+		"terminal": func(o *generationstop.SandboxGenerationObservation) {
+			o.Generation.ExecutionFinishedAt = "2026-09-16T12:00:00.000Z"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			inspector := &nativePhysicalInspector{observation: fixture.observation}
+			reader := NewNativeFileSnapshotReader(inspector)
+			if _, err := reader.ObserveGeneration(context.Background(), binding); err != nil {
+				t.Fatal(err)
+			}
+			change(&inspector.observation)
+			if _, err := reader.ObserveGeneration(context.Background(), binding); !errors.Is(err, ErrConflict) {
+				t.Fatalf("changed native source admitted: %v", err)
+			}
+		})
 	}
 }

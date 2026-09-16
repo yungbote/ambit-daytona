@@ -92,7 +92,8 @@ definitions:
       registry:
         $ref: '#/definitions/RegistryDTO'
       sandboxClass:
-        description: Optional for backward compatibility, but when provided, indicates the class of sandbox to create.
+        description: Optional for backward compatibility, but when provided, indicates
+          the class of sandbox to create.
         type: string
       secretsToken:
         description: |-
@@ -213,7 +214,8 @@ definitions:
           type: string
         type: object
       errorReason:
-        description: At least one of ErrorReason or BackupErrorReason must yield a recovery type; both are optional.
+        description: At least one of ErrorReason or BackupErrorReason must yield a
+          recovery type; both are optional.
         type: string
       fromVolumeId:
         type: string
@@ -562,6 +564,54 @@ definitions:
       - workingCopyId
       - workspaceId
     type: object
+  generationstop.ProviderGenerationObservation:
+    properties:
+      fence:
+        $ref: '#/definitions/generationstop.Fence'
+      generation:
+        $ref: '#/definitions/generationstop.ExpectedGeneration'
+      observedAt:
+        type: string
+      owner:
+        $ref: '#/definitions/generationstop.ProviderOwner'
+      source:
+        $ref: '#/definitions/generationstop.Source'
+      state:
+        type: string
+    required:
+      - fence
+      - generation
+      - observedAt
+      - owner
+      - source
+      - state
+    type: object
+  generationstop.ProviderGenerationObservationRequest:
+    properties:
+      fence:
+        $ref: '#/definitions/generationstop.Fence'
+      owner:
+        $ref: '#/definitions/generationstop.ProviderOwner'
+      source:
+        $ref: '#/definitions/generationstop.Source'
+    required:
+      - fence
+      - owner
+      - source
+    type: object
+  generationstop.ProviderOwner:
+    properties:
+      grantId:
+        type: string
+      runId:
+        type: string
+      tenantId:
+        type: string
+      userId:
+        type: string
+      workspaceId:
+        type: string
+    type: object
   generationstop.Purpose:
     properties:
       kind:
@@ -692,6 +742,341 @@ definitions:
       - oomKilled
       - restartCount
     type: object
+  specialistrender.ImagePin:
+    properties:
+      configDigest:
+        type: string
+      packId:
+        type: string
+      packRef:
+        type: string
+      ref:
+        type: string
+    required:
+      - configDigest
+      - packId
+      - packRef
+      - ref
+    type: object
+  specialistrender.LaunchObservation:
+    properties:
+      capDrop:
+        items:
+          type: string
+        type: array
+      command:
+        items:
+          type: string
+        type: array
+      containerId:
+        type: string
+      containerName:
+        type: string
+      effectiveCapabilities:
+        type: string
+      environmentDigest:
+        type: string
+      executableDigest:
+        type: string
+      executablePath:
+        type: string
+      hostPid:
+        type: integer
+      imageId:
+        type: string
+      memoryBytes:
+        type: integer
+      mountCount:
+        type: integer
+      mountNamespace:
+        type: string
+      nanoCpus:
+        type: integer
+      networkMode:
+        type: string
+      noNewPrivileges:
+        type: boolean
+      observedAt:
+        type: string
+      parentGeneration:
+        $ref: '#/definitions/generationstop.ExpectedGeneration'
+      parentMountNamespace:
+        type: string
+      parentProcessNamespace:
+        type: string
+      pidsLimit:
+        type: integer
+      processCount:
+        type: integer
+      processIdentity:
+        $ref: '#/definitions/specialistrender.ProcessIdentity'
+      processNamespace:
+        type: string
+      readonlyRootfs:
+        type: boolean
+      roleRef:
+        type: string
+      runtime:
+        type: string
+      runtimeStatusDigest:
+        type: string
+      seccompDigest:
+        type: string
+      seccompKernelMode:
+        type: integer
+      seccompMode:
+        type: string
+      shmSize:
+        type: integer
+      tmpfs:
+        additionalProperties:
+          type: string
+        type: object
+      user:
+        type: string
+    required:
+      - capDrop
+      - command
+      - containerId
+      - containerName
+      - effectiveCapabilities
+      - environmentDigest
+      - executableDigest
+      - executablePath
+      - hostPid
+      - imageId
+      - memoryBytes
+      - mountNamespace
+      - nanoCpus
+      - networkMode
+      - noNewPrivileges
+      - observedAt
+      - parentGeneration
+      - parentMountNamespace
+      - parentProcessNamespace
+      - pidsLimit
+      - processCount
+      - processIdentity
+      - processNamespace
+      - readonlyRootfs
+      - roleRef
+      - runtime
+      - runtimeStatusDigest
+      - seccompKernelMode
+      - seccompMode
+      - tmpfs
+      - user
+    type: object
+  specialistrender.Observation:
+    properties:
+      receipt:
+        $ref: '#/definitions/specialistrender.Receipt'
+      schema:
+        type: string
+      status:
+        type: string
+    required:
+      - schema
+      - status
+    type: object
+  specialistrender.ObserveRequest:
+    properties:
+      fence:
+        $ref: '#/definitions/generationstop.Fence'
+      operationId:
+        type: string
+      owner:
+        $ref: '#/definitions/generationstop.ProviderOwner'
+      requestFingerprint:
+        type: string
+      schema:
+        type: string
+      source:
+        $ref: '#/definitions/generationstop.Source'
+    required:
+      - fence
+      - operationId
+      - owner
+      - requestFingerprint
+      - schema
+      - source
+    type: object
+  specialistrender.OutputFile:
+    properties:
+      byteLength:
+        type: integer
+      mediaType:
+        type: string
+      ordinal:
+        type: integer
+      path:
+        type: string
+      role:
+        type: string
+      sha256:
+        type: string
+    required:
+      - byteLength
+      - mediaType
+      - ordinal
+      - path
+      - role
+      - sha256
+    type: object
+  specialistrender.Pin:
+    properties:
+      digest:
+        type: string
+      ref:
+        type: string
+    required:
+      - digest
+      - ref
+    type: object
+  specialistrender.ProcessIdentity:
+    properties:
+      pid:
+        type: integer
+      startTicks:
+        type: string
+    required:
+      - pid
+      - startTicks
+    type: object
+  specialistrender.QuiescenceReceipt:
+    properties:
+      containerAbsent:
+        type: boolean
+      containerId:
+        type: string
+      observedAt:
+        type: string
+      schema:
+        type: string
+    required:
+      - containerAbsent
+      - containerId
+      - observedAt
+      - schema
+    type: object
+  specialistrender.Receipt:
+    properties:
+      completedAt:
+        type: string
+      files:
+        items:
+          $ref: '#/definitions/specialistrender.OutputFile'
+        type: array
+      helperExitCode:
+        type: integer
+      launch:
+        $ref: '#/definitions/specialistrender.LaunchObservation'
+      nonce:
+        type: string
+      outcome:
+        type: string
+      quiescence:
+        $ref: '#/definitions/specialistrender.QuiescenceReceipt'
+      readyDigest:
+        type: string
+      receiptDigest:
+        type: string
+      request:
+        $ref: '#/definitions/specialistrender.Request'
+      schema:
+        type: string
+      startedAt:
+        type: string
+      terminalDigest:
+        type: string
+      terminalKind:
+        type: string
+      terminalOutcome:
+        type: string
+      totalOutputBytes:
+        type: integer
+    required:
+      - completedAt
+      - files
+      - helperExitCode
+      - launch
+      - nonce
+      - outcome
+      - quiescence
+      - readyDigest
+      - receiptDigest
+      - request
+      - schema
+      - startedAt
+      - terminalDigest
+      - terminalKind
+      - terminalOutcome
+      - totalOutputBytes
+    type: object
+  specialistrender.Request:
+    properties:
+      artifactRenderJobRef:
+        type: string
+      composition:
+        $ref: '#/definitions/specialistrender.Pin'
+      executable:
+        type: string
+      executor:
+        $ref: '#/definitions/specialistrender.Pin'
+      expectedParentGeneration:
+        $ref: '#/definitions/generationstop.ExpectedGeneration'
+      fence:
+        $ref: '#/definitions/generationstop.Fence'
+      image:
+        $ref: '#/definitions/specialistrender.ImagePin'
+      interface:
+        $ref: '#/definitions/specialistrender.Pin'
+      operationId:
+        type: string
+      owner:
+        $ref: '#/definitions/generationstop.ProviderOwner'
+      providerPolicy:
+        $ref: '#/definitions/specialistrender.Pin'
+      requestBytes:
+        type: integer
+      requestChunkCount:
+        type: integer
+      requestFingerprint:
+        type: string
+      requestSha256:
+        type: string
+      schema:
+        type: string
+      source:
+        $ref: '#/definitions/generationstop.Source'
+      sourceBytes:
+        type: integer
+      sourceChunkCount:
+        type: integer
+      sourceSha256:
+        type: string
+    required:
+      - artifactRenderJobRef
+      - composition
+      - executable
+      - executor
+      - expectedParentGeneration
+      - fence
+      - image
+      - interface
+      - operationId
+      - owner
+      - providerPolicy
+      - requestBytes
+      - requestChunkCount
+      - requestFingerprint
+      - requestSha256
+      - schema
+      - source
+      - sourceBytes
+      - sourceChunkCount
+      - sourceSha256
+    type: object
   workingcopy.CaptureAuthority:
     properties:
       authorityRef:
@@ -740,12 +1125,12 @@ definitions:
       stopAuthority:
         $ref: '#/definitions/generationstop.StopAuthority'
     required:
-    - authority
-    - owner
-    - providerName
-    - requestFingerprint
-    - selector
-    - source
+      - authority
+      - owner
+      - providerName
+      - requestFingerprint
+      - selector
+      - source
     type: object
   workingcopy.CaptureCapabilities:
     properties:
@@ -756,8 +1141,8 @@ definitions:
       stoppedWorkingTreeInventory:
         $ref: '#/definitions/workingcopy.WorkingTreeInventoryCapability'
     required:
-    - authority
-    - stoppedWorkingTreeInventory
+      - authority
+      - stoppedWorkingTreeInventory
     type: object
   workingcopy.CaptureCapabilitiesRequest:
     properties:
@@ -774,6 +1159,19 @@ definitions:
       - fence
       - owner
       - source
+    type: object
+  workingcopy.CaptureComponent:
+    properties:
+      helper:
+        $ref: '#/definitions/workingcopy.CaptureAuthorityArtifact'
+      protocol:
+        $ref: '#/definitions/workingcopy.CaptureAuthorityArtifact'
+      roleRef:
+        type: string
+    required:
+      - helper
+      - protocol
+      - roleRef
     type: object
   workingcopy.CaptureDeleteReceipt:
     properties:
@@ -798,14 +1196,14 @@ definitions:
       stopAuthority:
         $ref: '#/definitions/generationstop.StopAuthority'
     required:
-    - authority
-    - outcome
-    - owner
-    - providerName
-    - providerResourceId
-    - requestFingerprint
-    - selector
-    - source
+      - authority
+      - outcome
+      - owner
+      - providerName
+      - providerResourceId
+      - requestFingerprint
+      - selector
+      - source
     type: object
   workingcopy.CaptureExistsResponse:
     properties:
@@ -834,14 +1232,14 @@ definitions:
       stopAuthority:
         $ref: '#/definitions/generationstop.StopAuthority'
     required:
-    - authority
-    - owner
-    - providerName
-    - providerResourceId
-    - requestFingerprint
-    - selector
-    - source
-    - status
+      - authority
+      - owner
+      - providerName
+      - providerResourceId
+      - requestFingerprint
+      - selector
+      - source
+      - status
     type: object
   workingcopy.CaptureGenerationBinding:
     properties:
@@ -886,13 +1284,13 @@ definitions:
       stopAuthority:
         $ref: '#/definitions/generationstop.StopAuthority'
     required:
-    - authority
-    - owner
-    - providerName
-    - providerResourceId
-    - requestFingerprint
-    - selector
-    - source
+      - authority
+      - owner
+      - providerName
+      - providerResourceId
+      - requestFingerprint
+      - selector
+      - source
     type: object
   workingcopy.CaptureObservation:
     properties:
@@ -958,17 +1356,17 @@ definitions:
       stopAuthority:
         $ref: '#/definitions/generationstop.StopAuthority'
     required:
-    - authority
-    - expectedProviderSha256Digest
-    - expectedTotalByteLength
-    - maximumBytes
-    - offset
-    - owner
-    - providerName
-    - providerResourceId
-    - requestFingerprint
-    - selector
-    - source
+      - authority
+      - expectedProviderSha256Digest
+      - expectedTotalByteLength
+      - maximumBytes
+      - offset
+      - owner
+      - providerName
+      - providerResourceId
+      - requestFingerprint
+      - selector
+      - source
     type: object
   workingcopy.CaptureReadResponse:
     properties:
@@ -1003,16 +1401,16 @@ definitions:
       totalByteLength:
         type: integer
     required:
-    - authority
-    - offset
-    - owner
-    - providerName
-    - providerResourceId
-    - providerSha256Digest
-    - requestFingerprint
-    - selector
-    - source
-    - totalByteLength
+      - authority
+      - offset
+      - owner
+      - providerName
+      - providerResourceId
+      - providerSha256Digest
+      - requestFingerprint
+      - selector
+      - source
+      - totalByteLength
     type: object
   workingcopy.CaptureReceipt:
     properties:
@@ -1041,16 +1439,16 @@ definitions:
       totalByteLength:
         type: integer
     required:
-    - authority
-    - capturedAt
-    - owner
-    - providerName
-    - providerResourceId
-    - providerSha256Digest
-    - requestFingerprint
-    - selector
-    - source
-    - totalByteLength
+      - authority
+      - capturedAt
+      - owner
+      - providerName
+      - providerResourceId
+      - providerSha256Digest
+      - requestFingerprint
+      - selector
+      - source
+      - totalByteLength
     type: object
   workingcopy.CaptureSelector:
     properties:
@@ -1061,6 +1459,168 @@ definitions:
     required:
       - semanticZoneRef
       - zoneRelativePath
+    type: object
+  workingcopy.FileSnapshotCapability:
+    properties:
+      contract:
+        type: string
+      maximumBytes:
+        type: integer
+    required:
+      - contract
+      - maximumBytes
+    type: object
+  workingcopy.FileSnapshotSource:
+    properties:
+      contract:
+        type: string
+      fence:
+        $ref: '#/definitions/generationstop.Fence'
+      generation:
+        $ref: '#/definitions/generationstop.ExpectedGeneration'
+    required:
+      - contract
+      - fence
+      - generation
+    type: object
+  workingcopy.SandboxFileDeleteReceipt:
+    properties:
+      captureId:
+        type: string
+        x-nullable: true
+      outcome:
+        enum:
+          - deleted
+          - already_absent
+        type: string
+    required:
+      - captureId
+      - outcome
+    type: object
+  workingcopy.SandboxFileDeleteRequest:
+    properties:
+      operationId:
+        type: string
+      organizationId:
+        type: string
+      path:
+        type: string
+      receipt:
+        $ref: '#/definitions/workingcopy.SandboxFileReceipt'
+    type: object
+  workingcopy.SandboxFileObservation:
+    properties:
+      receipt:
+        $ref: '#/definitions/workingcopy.SandboxFileReceipt'
+      status:
+        enum:
+          - absent
+          - pending
+          - complete
+          - retired
+        type: string
+    required:
+      - status
+    type: object
+  workingcopy.SandboxFileObserveRequest:
+    properties:
+      operationId:
+        type: string
+      organizationId:
+        type: string
+      path:
+        type: string
+    required:
+      - operationId
+      - organizationId
+    type: object
+  workingcopy.SandboxFileReadRequest:
+    properties:
+      maximumBytes:
+        type: integer
+      offset:
+        type: integer
+      receipt:
+        $ref: '#/definitions/workingcopy.SandboxFileReceipt'
+    required:
+      - maximumBytes
+      - offset
+      - receipt
+    type: object
+  workingcopy.SandboxFileReadResponse:
+    properties:
+      byteLength:
+        type: integer
+      bytesBase64:
+        type: string
+      captureId:
+        type: string
+      eof:
+        type: boolean
+      offset:
+        type: integer
+      sha256:
+        type: string
+      totalByteLength:
+        type: integer
+    required:
+      - byteLength
+      - bytesBase64
+      - captureId
+      - eof
+      - offset
+      - sha256
+      - totalByteLength
+    type: object
+  workingcopy.SandboxFileReceipt:
+    properties:
+      captureId:
+        type: string
+      capturedAt:
+        type: string
+      component:
+        $ref: '#/definitions/workingcopy.CaptureComponent'
+      contract:
+        type: string
+      generation:
+        $ref: '#/definitions/generationstop.ExpectedGeneration'
+      operationId:
+        type: string
+      organizationId:
+        type: string
+      path:
+        type: string
+      sandboxId:
+        type: string
+      sha256:
+        type: string
+      totalByteLength:
+        type: integer
+    required:
+      - captureId
+      - capturedAt
+      - component
+      - contract
+      - generation
+      - operationId
+      - organizationId
+      - path
+      - sandboxId
+      - sha256
+      - totalByteLength
+    type: object
+  workingcopy.SandboxFileRequest:
+    properties:
+      operationId:
+        type: string
+      organizationId:
+        type: string
+      path:
+        type: string
+    required:
+      - operationId
+      - organizationId
+      - path
     type: object
   workingcopy.SourceAddress:
     properties:
@@ -1412,29 +1972,6 @@ definitions:
       - maximumPageBytes
       - maximumPageEntries
     type: object
-  workingcopy.FileSnapshotCapability:
-    properties:
-      contract:
-        type: string
-      maximumBytes:
-        type: integer
-    required:
-    - contract
-    - maximumBytes
-    type: object
-  workingcopy.FileSnapshotSource:
-    properties:
-      contract:
-        type: string
-      fence:
-        $ref: '#/definitions/generationstop.Fence'
-      generation:
-        $ref: '#/definitions/generationstop.ExpectedGeneration'
-    required:
-    - contract
-    - fence
-    - generation
-    type: object
 info:
   contact: {}
   description: Daytona Runner API
@@ -1682,6 +2219,47 @@ paths:
       summary: Observe one exact provider-owned container generation
       tags:
         - sandbox
+  /sandboxes/{sandboxId}/generation/observe-current:
+    post:
+      operationId: ObserveCurrentSandboxGeneration
+      parameters:
+        - description: Sandbox ID
+          in: path
+          name: sandboxId
+          required: true
+          type: string
+        - description: Exact provider source, owner and fence
+          in: body
+          name: body
+          required: true
+          schema:
+            $ref: '#/definitions/generationstop.ProviderGenerationObservationRequest'
+      produces:
+        - application/json
+      responses:
+        '200':
+          description: OK
+          schema:
+            $ref: '#/definitions/generationstop.ProviderGenerationObservation'
+        '400':
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '401':
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '409':
+          description: Conflict
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '503':
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+      summary: Observe current generation with provider-observable owner authority
+      tags:
+        - sandbox
   /sandboxes/{sandboxId}/is-recoverable:
     post:
       consumes:
@@ -1895,9 +2473,9 @@ paths:
         - sandbox
   /sandboxes/{sandboxId}/secrets:
     post:
-      description: >-
-        Pushes the sandbox's desired secret env (env var name -> placeholder) so newly spawned processes in a running
-        sandbox see it. A sandbox without secret-proxy wiring picks the change up on its next start instead.
+      description: Pushes the sandbox's desired secret env (env var name -> placeholder)
+        so newly spawned processes in a running sandbox see it. A sandbox without
+        secret-proxy wiring picks the change up on its next start instead.
       operationId: UpdateSandboxSecrets
       parameters:
         - description: Sandbox ID
@@ -1943,9 +2521,8 @@ paths:
         - sandbox
   /sandboxes/{sandboxId}/snapshot-from-sandbox:
     post:
-      description: >-
-        Commit the sandbox container filesystem and push the image to the supplied registry under the canonical
-        daytona-{hash}:daytona tag.
+      description: Commit the sandbox container filesystem and push the image to the
+        supplied registry under the canonical daytona-{hash}:daytona tag.
       operationId: SnapshotFromSandbox
       parameters:
         - description: Sandbox ID
@@ -1987,6 +2564,100 @@ paths:
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Snapshot a running sandbox
+      tags:
+        - sandbox
+  /sandboxes/{sandboxId}/specialist-renders:
+    post:
+      operationId: ExecuteSpecialistRender
+      parameters:
+        - description: Sandbox ID
+          in: path
+          name: sandboxId
+          required: true
+          type: string
+        - description: Exact canonical provider JSONL stream
+          in: body
+          name: body
+          required: true
+          schema:
+            type: string
+      produces:
+        - application/vnd.ambit.runtime-provider-specialist-render+jsonl
+      responses:
+        '200':
+          description: Exact provider response stream
+          schema:
+            type: string
+        '400':
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '404':
+          description: Not Found
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '409':
+          description: Conflict
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '422':
+          description: Validated failed render stream
+          schema:
+            type: string
+        '502':
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '503':
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '504':
+          description: Gateway Timeout
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+      summary: Execute one provider-owned specialist render stream
+      tags:
+        - sandbox
+  /sandboxes/{sandboxId}/specialist-renders/observe:
+    post:
+      operationId: ObserveSpecialistRender
+      parameters:
+        - description: Sandbox ID
+          in: path
+          name: sandboxId
+          required: true
+          type: string
+        - description: Exact operation authority
+          in: body
+          name: body
+          required: true
+          schema:
+            $ref: '#/definitions/specialistrender.ObserveRequest'
+      produces:
+        - application/json
+      responses:
+        '200':
+          description: OK
+          schema:
+            $ref: '#/definitions/specialistrender.Observation'
+        '400':
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '404':
+          description: Not Found
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '409':
+          description: Conflict
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '503':
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+      summary: Observe durable specialist-render operation state
       tags:
         - sandbox
   /sandboxes/{sandboxId}/start:
@@ -2292,7 +2963,8 @@ paths:
         - toolbox
   /sandboxes/{sandboxId}/working-copy-captures:
     post:
-      description: Persist one host-admitted regular file using its exact file-snapshot or stopped-generation authority.
+      description: Persist one host-admitted regular file using its exact file-snapshot
+        or stopped-generation authority.
       operationId: CaptureWorkingCopy
       parameters:
         - description: Sandbox ID
@@ -2336,9 +3008,9 @@ paths:
     post:
       consumes:
         - application/json
-      description: >-
-        Read-only discovery checked against the Runner's measured capture component and physical source generation.
-        Measurement does not replace image publication or conformance qualification.
+      description: Read-only discovery checked against the Runner's measured capture
+        component and physical source generation. Measurement does not replace image
+        publication or conformance qualification.
       operationId: WorkingCopyCaptureCapabilities
       parameters:
         - description: Sandbox ID
@@ -2540,11 +3212,191 @@ paths:
       summary: Read an exact immutable working-copy capture
       tags:
         - sandbox
+  /sandboxes/{sandboxId}/working-copy-captures/sandbox-files:
+    post:
+      consumes:
+        - application/json
+      description: Provider organization authority is supplied by the authenticated
+        API, not a Product Run. File capture admits only work/outputs regular files
+        and requires native descriptor cloning. Component measurement is not runtime
+        qualification.
+      operationId: CaptureSandboxFile
+      parameters:
+        - description: Sandbox ID
+          in: path
+          name: sandboxId
+          required: true
+          type: string
+        - description: Native file capture operation
+          in: body
+          name: request
+          required: true
+          schema:
+            $ref: '#/definitions/workingcopy.SandboxFileRequest'
+      produces:
+        - application/json
+      responses:
+        '200':
+          description: OK
+          schema:
+            $ref: '#/definitions/workingcopy.SandboxFileReceipt'
+        '400':
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '409':
+          description: Conflict
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '503':
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+      security:
+        - Bearer: []
+      summary: Capture an immutable native sandbox file once
+      tags:
+        - sandbox
+  /sandboxes/{sandboxId}/working-copy-captures/sandbox-files/delete:
+    post:
+      consumes:
+        - application/json
+      description: Provider organization authority is supplied by the authenticated
+        API, not a Product Run. File capture admits only work/outputs regular files
+        and requires native descriptor cloning. Component measurement is not runtime
+        qualification.
+      operationId: DeleteSandboxFile
+      parameters:
+        - description: Sandbox ID
+          in: path
+          name: sandboxId
+          required: true
+          type: string
+        - description: Native file capture operation
+          in: body
+          name: request
+          required: true
+          schema:
+            $ref: '#/definitions/workingcopy.SandboxFileDeleteRequest'
+      produces:
+        - application/json
+      responses:
+        '200':
+          description: OK
+          schema:
+            $ref: '#/definitions/workingcopy.SandboxFileDeleteReceipt'
+        '400':
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '409':
+          description: Conflict
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '503':
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+      security:
+        - Bearer: []
+      summary: Retire a native file operation and release its private bytes
+      tags:
+        - sandbox
+  /sandboxes/{sandboxId}/working-copy-captures/sandbox-files/observe:
+    post:
+      consumes:
+        - application/json
+      description: Provider organization authority is supplied by the authenticated
+        API, not a Product Run. File capture admits only work/outputs regular files
+        and requires native descriptor cloning. Component measurement is not runtime
+        qualification.
+      operationId: ObserveSandboxFile
+      parameters:
+        - description: Sandbox ID
+          in: path
+          name: sandboxId
+          required: true
+          type: string
+        - description: Native file capture operation
+          in: body
+          name: request
+          required: true
+          schema:
+            $ref: '#/definitions/workingcopy.SandboxFileObserveRequest'
+      produces:
+        - application/json
+      responses:
+        '200':
+          description: OK
+          schema:
+            $ref: '#/definitions/workingcopy.SandboxFileObservation'
+        '400':
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '409':
+          description: Conflict
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '503':
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+      security:
+        - Bearer: []
+      summary: Observe a native sandbox file operation without source effects
+      tags:
+        - sandbox
+  /sandboxes/{sandboxId}/working-copy-captures/sandbox-files/read:
+    post:
+      consumes:
+        - application/json
+      description: Provider organization authority is supplied by the authenticated
+        API, not a Product Run. File capture admits only work/outputs regular files
+        and requires native descriptor cloning. Component measurement is not runtime
+        qualification.
+      operationId: ReadSandboxFile
+      parameters:
+        - description: Sandbox ID
+          in: path
+          name: sandboxId
+          required: true
+          type: string
+        - description: Native file capture operation
+          in: body
+          name: request
+          required: true
+          schema:
+            $ref: '#/definitions/workingcopy.SandboxFileReadRequest'
+      produces:
+        - application/json
+      responses:
+        '200':
+          description: OK
+          schema:
+            $ref: '#/definitions/workingcopy.SandboxFileReadResponse'
+        '400':
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '409':
+          description: Conflict
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '503':
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+      security:
+        - Bearer: []
+      summary: Read a bounded immutable native file capture
+      tags:
+        - sandbox
   /sandboxes/{sandboxId}/working-copy-captures/stopped-directory-roster:
     post:
-      description: >-
-        Stream and validate a content-digested regular-file/directory roster through Docker host authority; archive link
-        entries, special files, escapes, and bound overflows fail closed. Accepted regular-file entries are independent
+      description: Stream and validate a content-digested regular-file/directory roster
+        through Docker host authority; archive link entries, special files, escapes,
+        and bound overflows fail closed. Accepted regular-file entries are independent
         exact bytes; inode/link identity is not preserved.
       operationId: StoppedWorkingCopyDirectoryRoster
       parameters:
@@ -2751,9 +3603,8 @@ paths:
         - sandbox
   /snapshots/build:
     post:
-      description: >-
-        Build a snapshot from a Dockerfile and context hashes. The operation runs asynchronously and returns 202
-        immediately.
+      description: Build a snapshot from a Dockerfile and context hashes. The operation
+        runs asynchronously and returns 202 immediately.
       operationId: BuildSnapshot
       parameters:
         - description: Build snapshot request
@@ -2832,9 +3683,9 @@ paths:
         - snapshots
   /snapshots/info:
     get:
-      description: >-
-        Get information about a specified snapshot including size and entrypoint. Returns 422 if the last pull/build
-        operation failed, with the error reason in the message.
+      description: Get information about a specified snapshot including size and entrypoint.
+        Returns 422 if the last pull/build operation failed, with the error reason
+        in the message.
       operationId: GetSnapshotInfo
       parameters:
         - description: Snapshot name and tag
@@ -2949,9 +3800,8 @@ paths:
         - snapshots
   /snapshots/pull:
     post:
-      description: >-
-        Pull a snapshot from a registry and optionally push to another registry. The operation runs asynchronously and
-        returns 202 immediately.
+      description: Pull a snapshot from a registry and optionally push to another
+        registry. The operation runs asynchronously and returns 202 immediately.
       operationId: PullSnapshot
       parameters:
         - description: Pull snapshot

@@ -36,6 +36,10 @@ import type { GenerationstopGenerationObservationRequest } from '../models';
 // @ts-ignore
 import type { GenerationstopObservation } from '../models';
 // @ts-ignore
+import type { GenerationstopProviderGenerationObservation } from '../models';
+// @ts-ignore
+import type { GenerationstopProviderGenerationObservationRequest } from '../models';
+// @ts-ignore
 import type { GenerationstopReceipt } from '../models';
 // @ts-ignore
 import type { GenerationstopStopRequest } from '../models';
@@ -51,6 +55,10 @@ import type { ResizeSandboxDTO } from '../models';
 import type { SandboxInfoResponse } from '../models';
 // @ts-ignore
 import type { SnapshotInfoResponse } from '../models';
+// @ts-ignore
+import type { SpecialistrenderObservation } from '../models';
+// @ts-ignore
+import type { SpecialistrenderObserveRequest } from '../models';
 // @ts-ignore
 import type { StartSandboxResponse } from '../models';
 // @ts-ignore
@@ -80,6 +88,22 @@ import type { WorkingcopyCaptureReadResponse } from '../models';
 // @ts-ignore
 import type { WorkingcopyCaptureReceipt } from '../models';
 // @ts-ignore
+import type { WorkingcopySandboxFileDeleteReceipt } from '../models';
+// @ts-ignore
+import type { WorkingcopySandboxFileDeleteRequest } from '../models';
+// @ts-ignore
+import type { WorkingcopySandboxFileObservation } from '../models';
+// @ts-ignore
+import type { WorkingcopySandboxFileObserveRequest } from '../models';
+// @ts-ignore
+import type { WorkingcopySandboxFileReadRequest } from '../models';
+// @ts-ignore
+import type { WorkingcopySandboxFileReadResponse } from '../models';
+// @ts-ignore
+import type { WorkingcopySandboxFileReceipt } from '../models';
+// @ts-ignore
+import type { WorkingcopySandboxFileRequest } from '../models';
+// @ts-ignore
 import type { WorkingcopyStoppedDirectoryRosterReceipt } from '../models';
 // @ts-ignore
 import type { WorkingcopyStoppedDirectoryRosterRequest } from '../models';
@@ -102,6 +126,48 @@ import type { WorkingcopyWorkingTreeInventoryRequest } from '../models';
  */
 export const SandboxApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
+        /**
+         * Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification.
+         * @summary Capture an immutable native sandbox file once
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopySandboxFileRequest} request Native file capture operation
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        captureSandboxFile: async (sandboxId: string, request: WorkingcopySandboxFileRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxId' is not null or undefined
+            assertParamExists('captureSandboxFile', 'sandboxId', sandboxId)
+            // verify required parameter 'request' is not null or undefined
+            assertParamExists('captureSandboxFile', 'request', request)
+            const localVarPath = `/sandboxes/{sandboxId}/working-copy-captures/sandbox-files`
+                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication Bearer required
+            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(request, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
         /**
          * Persist one host-admitted regular file using its exact file-snapshot or stopped-generation authority.
          * @summary Capture one immutable workspace file
@@ -218,6 +284,48 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
             localVarRequestOptions.data = serializeDataIfNeeded(sandbox, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification.
+         * @summary Retire a native file operation and release its private bytes
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopySandboxFileDeleteRequest} request Native file capture operation
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        deleteSandboxFile: async (sandboxId: string, request: WorkingcopySandboxFileDeleteRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxId' is not null or undefined
+            assertParamExists('deleteSandboxFile', 'sandboxId', sandboxId)
+            // verify required parameter 'request' is not null or undefined
+            assertParamExists('deleteSandboxFile', 'request', request)
+            const localVarPath = `/sandboxes/{sandboxId}/working-copy-captures/sandbox-files/delete`
+                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication Bearer required
+            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(request, localVarRequestOptions, configuration)
 
             return {
                 url: toPathString(localVarUrlObj),
@@ -346,6 +454,48 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
+         *
+         * @summary Execute one provider-owned specialist render stream
+         * @param {string} sandboxId Sandbox ID
+         * @param {string} body Exact canonical provider JSONL stream
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        executeSpecialistRender: async (sandboxId: string, body: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxId' is not null or undefined
+            assertParamExists('executeSpecialistRender', 'sandboxId', sandboxId)
+            // verify required parameter 'body' is not null or undefined
+            assertParamExists('executeSpecialistRender', 'body', body)
+            const localVarPath = `/sandboxes/{sandboxId}/specialist-renders`
+                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication Bearer required
+            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/vnd.ambit.runtime-provider-specialist-render+jsonl';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(body, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
          * Get sandbox network settings
          * @summary Get sandbox network settings
          * @param {string} sandboxId Sandbox ID
@@ -463,6 +613,90 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
         },
         /**
          *
+         * @summary Observe current generation with provider-observable owner authority
+         * @param {string} sandboxId Sandbox ID
+         * @param {GenerationstopProviderGenerationObservationRequest} body Exact provider source, owner and fence
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        observeCurrentSandboxGeneration: async (sandboxId: string, body: GenerationstopProviderGenerationObservationRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxId' is not null or undefined
+            assertParamExists('observeCurrentSandboxGeneration', 'sandboxId', sandboxId)
+            // verify required parameter 'body' is not null or undefined
+            assertParamExists('observeCurrentSandboxGeneration', 'body', body)
+            const localVarPath = `/sandboxes/{sandboxId}/generation/observe-current`
+                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication Bearer required
+            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(body, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification.
+         * @summary Observe a native sandbox file operation without source effects
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopySandboxFileObserveRequest} request Native file capture operation
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        observeSandboxFile: async (sandboxId: string, request: WorkingcopySandboxFileObserveRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxId' is not null or undefined
+            assertParamExists('observeSandboxFile', 'sandboxId', sandboxId)
+            // verify required parameter 'request' is not null or undefined
+            assertParamExists('observeSandboxFile', 'request', request)
+            const localVarPath = `/sandboxes/{sandboxId}/working-copy-captures/sandbox-files/observe`
+                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication Bearer required
+            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(request, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         *
          * @summary Observe one exact provider-owned container generation
          * @param {string} sandboxId Sandbox ID
          * @param {GenerationstopGenerationObservationRequest} body Exact source, owner and fence
@@ -547,6 +781,48 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
         },
         /**
          *
+         * @summary Observe durable specialist-render operation state
+         * @param {string} sandboxId Sandbox ID
+         * @param {SpecialistrenderObserveRequest} body Exact operation authority
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        observeSpecialistRender: async (sandboxId: string, body: SpecialistrenderObserveRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxId' is not null or undefined
+            assertParamExists('observeSpecialistRender', 'sandboxId', sandboxId)
+            // verify required parameter 'body' is not null or undefined
+            assertParamExists('observeSpecialistRender', 'body', body)
+            const localVarPath = `/sandboxes/{sandboxId}/specialist-renders/observe`
+                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication Bearer required
+            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(body, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         *
          * @summary Observe an exact working-copy capture
          * @param {string} sandboxId Sandbox ID
          * @param {WorkingcopyCaptureBinding} body Exact capture binding
@@ -601,6 +877,48 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             // verify required parameter 'request' is not null or undefined
             assertParamExists('prepareWorkingTreeInventory', 'request', request)
             const localVarPath = `/sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree-inventories`
+                .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'POST', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication Bearer required
+            await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(request, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification.
+         * @summary Read a bounded immutable native file capture
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopySandboxFileReadRequest} request Native file capture operation
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        readSandboxFile: async (sandboxId: string, request: WorkingcopySandboxFileReadRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'sandboxId' is not null or undefined
+            assertParamExists('readSandboxFile', 'sandboxId', sandboxId)
+            // verify required parameter 'request' is not null or undefined
+            assertParamExists('readSandboxFile', 'request', request)
+            const localVarPath = `/sandboxes/{sandboxId}/working-copy-captures/sandbox-files/read`
                 .replace(`{${"sandboxId"}}`, encodeURIComponent(String(sandboxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
@@ -1140,7 +1458,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Read-only discovery of the inventory interface implemented by the assigned Runner, bound to operator-configured capture lineage. Capability discovery does not independently attest the Runner binary or image digest.
+         * Read-only discovery checked against the Runner\'s measured capture component and physical source generation. Measurement does not replace image publication or conformance qualification.
          * @summary Discover the assigned Runner capture surface before stopping a generation
          * @param {string} sandboxId Sandbox ID
          * @param {WorkingcopyCaptureCapabilitiesRequest} request Current capture authority
@@ -1233,6 +1551,20 @@ export const SandboxApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = SandboxApiAxiosParamCreator(configuration)
     return {
         /**
+         * Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification.
+         * @summary Capture an immutable native sandbox file once
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopySandboxFileRequest} request Native file capture operation
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async captureSandboxFile(sandboxId: string, request: WorkingcopySandboxFileRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingcopySandboxFileReceipt>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.captureSandboxFile(sandboxId, request, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.captureSandboxFile']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
          * Persist one host-admitted regular file using its exact file-snapshot or stopped-generation authority.
          * @summary Capture one immutable workspace file
          * @param {string} sandboxId Sandbox ID
@@ -1271,6 +1603,20 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.createBackup(sandboxId, sandbox, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['SandboxApi.createBackup']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification.
+         * @summary Retire a native file operation and release its private bytes
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopySandboxFileDeleteRequest} request Native file capture operation
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async deleteSandboxFile(sandboxId: string, request: WorkingcopySandboxFileDeleteRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingcopySandboxFileDeleteReceipt>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.deleteSandboxFile(sandboxId, request, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.deleteSandboxFile']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -1315,6 +1661,20 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
+         *
+         * @summary Execute one provider-owned specialist render stream
+         * @param {string} sandboxId Sandbox ID
+         * @param {string} body Exact canonical provider JSONL stream
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async executeSpecialistRender(sandboxId: string, body: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<string>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.executeSpecialistRender(sandboxId, body, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.executeSpecialistRender']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
          * Get sandbox network settings
          * @summary Get sandbox network settings
          * @param {string} sandboxId Sandbox ID
@@ -1356,6 +1716,34 @@ export const SandboxApiFp = function(configuration?: Configuration) {
         },
         /**
          *
+         * @summary Observe current generation with provider-observable owner authority
+         * @param {string} sandboxId Sandbox ID
+         * @param {GenerationstopProviderGenerationObservationRequest} body Exact provider source, owner and fence
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async observeCurrentSandboxGeneration(sandboxId: string, body: GenerationstopProviderGenerationObservationRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<GenerationstopProviderGenerationObservation>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.observeCurrentSandboxGeneration(sandboxId, body, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.observeCurrentSandboxGeneration']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification.
+         * @summary Observe a native sandbox file operation without source effects
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopySandboxFileObserveRequest} request Native file capture operation
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async observeSandboxFile(sandboxId: string, request: WorkingcopySandboxFileObserveRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingcopySandboxFileObservation>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.observeSandboxFile(sandboxId, request, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.observeSandboxFile']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         *
          * @summary Observe one exact provider-owned container generation
          * @param {string} sandboxId Sandbox ID
          * @param {GenerationstopGenerationObservationRequest} body Exact source, owner and fence
@@ -1384,6 +1772,20 @@ export const SandboxApiFp = function(configuration?: Configuration) {
         },
         /**
          *
+         * @summary Observe durable specialist-render operation state
+         * @param {string} sandboxId Sandbox ID
+         * @param {SpecialistrenderObserveRequest} body Exact operation authority
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async observeSpecialistRender(sandboxId: string, body: SpecialistrenderObserveRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<SpecialistrenderObservation>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.observeSpecialistRender(sandboxId, body, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.observeSpecialistRender']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         *
          * @summary Observe an exact working-copy capture
          * @param {string} sandboxId Sandbox ID
          * @param {WorkingcopyCaptureBinding} body Exact capture binding
@@ -1408,6 +1810,20 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.prepareWorkingTreeInventory(sandboxId, request, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['SandboxApi.prepareWorkingTreeInventory']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification.
+         * @summary Read a bounded immutable native file capture
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopySandboxFileReadRequest} request Native file capture operation
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async readSandboxFile(sandboxId: string, request: WorkingcopySandboxFileReadRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<WorkingcopySandboxFileReadResponse>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.readSandboxFile(sandboxId, request, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['SandboxApi.readSandboxFile']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -1581,7 +1997,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Read-only discovery of the inventory interface implemented by the assigned Runner, bound to operator-configured capture lineage. Capability discovery does not independently attest the Runner binary or image digest.
+         * Read-only discovery checked against the Runner\'s measured capture component and physical source generation. Measurement does not replace image publication or conformance qualification.
          * @summary Discover the assigned Runner capture surface before stopping a generation
          * @param {string} sandboxId Sandbox ID
          * @param {WorkingcopyCaptureCapabilitiesRequest} request Current capture authority
@@ -1618,6 +2034,17 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
     const localVarFp = SandboxApiFp(configuration)
     return {
         /**
+         * Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification.
+         * @summary Capture an immutable native sandbox file once
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopySandboxFileRequest} request Native file capture operation
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        captureSandboxFile(sandboxId: string, request: WorkingcopySandboxFileRequest, options?: RawAxiosRequestConfig): AxiosPromise<WorkingcopySandboxFileReceipt> {
+            return localVarFp.captureSandboxFile(sandboxId, request, options).then((request) => request(axios, basePath));
+        },
+        /**
          * Persist one host-admitted regular file using its exact file-snapshot or stopped-generation authority.
          * @summary Capture one immutable workspace file
          * @param {string} sandboxId Sandbox ID
@@ -1648,6 +2075,17 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
          */
         createBackup(sandboxId: string, sandbox: CreateBackupDTO, options?: RawAxiosRequestConfig): AxiosPromise<string> {
             return localVarFp.createBackup(sandboxId, sandbox, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification.
+         * @summary Retire a native file operation and release its private bytes
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopySandboxFileDeleteRequest} request Native file capture operation
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        deleteSandboxFile(sandboxId: string, request: WorkingcopySandboxFileDeleteRequest, options?: RawAxiosRequestConfig): AxiosPromise<WorkingcopySandboxFileDeleteReceipt> {
+            return localVarFp.deleteSandboxFile(sandboxId, request, options).then((request) => request(axios, basePath));
         },
         /**
          *
@@ -1682,6 +2120,17 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.destroy(sandboxId, options).then((request) => request(axios, basePath));
         },
         /**
+         *
+         * @summary Execute one provider-owned specialist render stream
+         * @param {string} sandboxId Sandbox ID
+         * @param {string} body Exact canonical provider JSONL stream
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        executeSpecialistRender(sandboxId: string, body: string, options?: RawAxiosRequestConfig): AxiosPromise<string> {
+            return localVarFp.executeSpecialistRender(sandboxId, body, options).then((request) => request(axios, basePath));
+        },
+        /**
          * Get sandbox network settings
          * @summary Get sandbox network settings
          * @param {string} sandboxId Sandbox ID
@@ -1714,6 +2163,28 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
         },
         /**
          *
+         * @summary Observe current generation with provider-observable owner authority
+         * @param {string} sandboxId Sandbox ID
+         * @param {GenerationstopProviderGenerationObservationRequest} body Exact provider source, owner and fence
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        observeCurrentSandboxGeneration(sandboxId: string, body: GenerationstopProviderGenerationObservationRequest, options?: RawAxiosRequestConfig): AxiosPromise<GenerationstopProviderGenerationObservation> {
+            return localVarFp.observeCurrentSandboxGeneration(sandboxId, body, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification.
+         * @summary Observe a native sandbox file operation without source effects
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopySandboxFileObserveRequest} request Native file capture operation
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        observeSandboxFile(sandboxId: string, request: WorkingcopySandboxFileObserveRequest, options?: RawAxiosRequestConfig): AxiosPromise<WorkingcopySandboxFileObservation> {
+            return localVarFp.observeSandboxFile(sandboxId, request, options).then((request) => request(axios, basePath));
+        },
+        /**
+         *
          * @summary Observe one exact provider-owned container generation
          * @param {string} sandboxId Sandbox ID
          * @param {GenerationstopGenerationObservationRequest} body Exact source, owner and fence
@@ -1736,6 +2207,17 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
         },
         /**
          *
+         * @summary Observe durable specialist-render operation state
+         * @param {string} sandboxId Sandbox ID
+         * @param {SpecialistrenderObserveRequest} body Exact operation authority
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        observeSpecialistRender(sandboxId: string, body: SpecialistrenderObserveRequest, options?: RawAxiosRequestConfig): AxiosPromise<SpecialistrenderObservation> {
+            return localVarFp.observeSpecialistRender(sandboxId, body, options).then((request) => request(axios, basePath));
+        },
+        /**
+         *
          * @summary Observe an exact working-copy capture
          * @param {string} sandboxId Sandbox ID
          * @param {WorkingcopyCaptureBinding} body Exact capture binding
@@ -1755,6 +2237,17 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
          */
         prepareWorkingTreeInventory(sandboxId: string, request: WorkingcopyWorkingTreeInventoryRequest, options?: RawAxiosRequestConfig): AxiosPromise<WorkingcopyWorkingTreeInventoryReceipt> {
             return localVarFp.prepareWorkingTreeInventory(sandboxId, request, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification.
+         * @summary Read a bounded immutable native file capture
+         * @param {string} sandboxId Sandbox ID
+         * @param {WorkingcopySandboxFileReadRequest} request Native file capture operation
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        readSandboxFile(sandboxId: string, request: WorkingcopySandboxFileReadRequest, options?: RawAxiosRequestConfig): AxiosPromise<WorkingcopySandboxFileReadResponse> {
+            return localVarFp.readSandboxFile(sandboxId, request, options).then((request) => request(axios, basePath));
         },
         /**
          *
@@ -1891,7 +2384,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.updateSandboxSecrets(sandboxId, sandbox, options).then((request) => request(axios, basePath));
         },
         /**
-         * Read-only discovery of the inventory interface implemented by the assigned Runner, bound to operator-configured capture lineage. Capability discovery does not independently attest the Runner binary or image digest.
+         * Read-only discovery checked against the Runner\'s measured capture component and physical source generation. Measurement does not replace image publication or conformance qualification.
          * @summary Discover the assigned Runner capture surface before stopping a generation
          * @param {string} sandboxId Sandbox ID
          * @param {WorkingcopyCaptureCapabilitiesRequest} request Current capture authority
@@ -1919,6 +2412,18 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
  * SandboxApi - object-oriented interface
  */
 export class SandboxApi extends BaseAPI {
+    /**
+     * Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification.
+     * @summary Capture an immutable native sandbox file once
+     * @param {string} sandboxId Sandbox ID
+     * @param {WorkingcopySandboxFileRequest} request Native file capture operation
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public captureSandboxFile(sandboxId: string, request: WorkingcopySandboxFileRequest, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).captureSandboxFile(sandboxId, request, options).then((request) => request(this.axios, this.basePath));
+    }
+
     /**
      * Persist one host-admitted regular file using its exact file-snapshot or stopped-generation authority.
      * @summary Capture one immutable workspace file
@@ -1952,6 +2457,18 @@ export class SandboxApi extends BaseAPI {
      */
     public createBackup(sandboxId: string, sandbox: CreateBackupDTO, options?: RawAxiosRequestConfig) {
         return SandboxApiFp(this.configuration).createBackup(sandboxId, sandbox, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification.
+     * @summary Retire a native file operation and release its private bytes
+     * @param {string} sandboxId Sandbox ID
+     * @param {WorkingcopySandboxFileDeleteRequest} request Native file capture operation
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public deleteSandboxFile(sandboxId: string, request: WorkingcopySandboxFileDeleteRequest, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).deleteSandboxFile(sandboxId, request, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -1990,6 +2507,18 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
+     *
+     * @summary Execute one provider-owned specialist render stream
+     * @param {string} sandboxId Sandbox ID
+     * @param {string} body Exact canonical provider JSONL stream
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public executeSpecialistRender(sandboxId: string, body: string, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).executeSpecialistRender(sandboxId, body, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
      * Get sandbox network settings
      * @summary Get sandbox network settings
      * @param {string} sandboxId Sandbox ID
@@ -2025,6 +2554,30 @@ export class SandboxApi extends BaseAPI {
 
     /**
      *
+     * @summary Observe current generation with provider-observable owner authority
+     * @param {string} sandboxId Sandbox ID
+     * @param {GenerationstopProviderGenerationObservationRequest} body Exact provider source, owner and fence
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public observeCurrentSandboxGeneration(sandboxId: string, body: GenerationstopProviderGenerationObservationRequest, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).observeCurrentSandboxGeneration(sandboxId, body, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification.
+     * @summary Observe a native sandbox file operation without source effects
+     * @param {string} sandboxId Sandbox ID
+     * @param {WorkingcopySandboxFileObserveRequest} request Native file capture operation
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public observeSandboxFile(sandboxId: string, request: WorkingcopySandboxFileObserveRequest, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).observeSandboxFile(sandboxId, request, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     *
      * @summary Observe one exact provider-owned container generation
      * @param {string} sandboxId Sandbox ID
      * @param {GenerationstopGenerationObservationRequest} body Exact source, owner and fence
@@ -2049,6 +2602,18 @@ export class SandboxApi extends BaseAPI {
 
     /**
      *
+     * @summary Observe durable specialist-render operation state
+     * @param {string} sandboxId Sandbox ID
+     * @param {SpecialistrenderObserveRequest} body Exact operation authority
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public observeSpecialistRender(sandboxId: string, body: SpecialistrenderObserveRequest, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).observeSpecialistRender(sandboxId, body, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     *
      * @summary Observe an exact working-copy capture
      * @param {string} sandboxId Sandbox ID
      * @param {WorkingcopyCaptureBinding} body Exact capture binding
@@ -2069,6 +2634,18 @@ export class SandboxApi extends BaseAPI {
      */
     public prepareWorkingTreeInventory(sandboxId: string, request: WorkingcopyWorkingTreeInventoryRequest, options?: RawAxiosRequestConfig) {
         return SandboxApiFp(this.configuration).prepareWorkingTreeInventory(sandboxId, request, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification.
+     * @summary Read a bounded immutable native file capture
+     * @param {string} sandboxId Sandbox ID
+     * @param {WorkingcopySandboxFileReadRequest} request Native file capture operation
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public readSandboxFile(sandboxId: string, request: WorkingcopySandboxFileReadRequest, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).readSandboxFile(sandboxId, request, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -2218,7 +2795,7 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     * Read-only discovery of the inventory interface implemented by the assigned Runner, bound to operator-configured capture lineage. Capability discovery does not independently attest the Runner binary or image digest.
+     * Read-only discovery checked against the Runner\'s measured capture component and physical source generation. Measurement does not replace image publication or conformance qualification.
      * @summary Discover the assigned Runner capture surface before stopping a generation
      * @param {string} sandboxId Sandbox ID
      * @param {WorkingcopyCaptureCapabilitiesRequest} request Current capture authority

@@ -15,6 +15,12 @@ type SandboxFileRequest struct {
 	Path           string `json:"path" validate:"required"`
 }
 
+type SandboxFileObserveRequest struct {
+	OrganizationID string  `json:"organizationId" validate:"required"`
+	OperationID    string  `json:"operationId" validate:"required"`
+	Path           *string `json:"path,omitempty"`
+}
+
 // SandboxFileSource freezes native authority and implementation once, in the
 // same private intent that owns capture publication and recovery.
 type SandboxFileSource struct {

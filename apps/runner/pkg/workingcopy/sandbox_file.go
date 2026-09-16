@@ -74,16 +74,27 @@ func (s *Service) CaptureSandboxFile(ctx context.Context, sandboxID string, requ
 	return sandboxFileReceipt(receipt), nil
 }
 
-func (s *Service) ObserveSandboxFile(ctx context.Context, sandboxID string, request SandboxFileRequest) (SandboxFileObservation, error) {
-	if _, err := validateSandboxFileRequest(sandboxID, request); err != nil {
+func (s *Service) ObserveSandboxFile(ctx context.Context, sandboxID string, request SandboxFileObserveRequest) (SandboxFileObservation, error) {
+	if err := validateSandboxFileOperation(sandboxID, request.OrganizationID, request.OperationID); err != nil {
 		return SandboxFileObservation{}, err
+	}
+	if request.Path != nil {
+		if _, err := sandboxFileSelector(*request.Path); err != nil {
+			return SandboxFileObservation{}, err
+		}
 	}
 	root := sandboxFileObjectRoot(request.OrganizationID, sandboxID, request.OperationID)
 	release := s.locks.acquire(root)
 	defer release()
-	if retired, err := s.sandboxFileRetired(ctx, root, sandboxID, request); err != nil {
+	if deletion, retired, err := s.readDeletion(ctx, root); err != nil {
 		return SandboxFileObservation{}, err
 	} else if retired {
+		if request.Path != nil {
+			expected := SandboxFileRequest{OrganizationID: request.OrganizationID, OperationID: request.OperationID, Path: *request.Path}
+			if err := requireSandboxFileRetirement(deletion, sandboxID, expected); err != nil {
+				return SandboxFileObservation{}, err
+			}
+		}
 		return SandboxFileObservation{Status: "retired"}, nil
 	}
 	intent, exists, err := s.readIntent(ctx, root)
@@ -93,7 +104,12 @@ func (s *Service) ObserveSandboxFile(ctx context.Context, sandboxID string, requ
 	if !exists {
 		return SandboxFileObservation{Status: "absent"}, nil
 	}
-	if err := requireSandboxFileRequest(intent.Binding, sandboxID, request); err != nil {
+	zone, _ := semanticZoneRoot(intent.Binding.Selector.SemanticZoneRef)
+	path := zone + "/" + intent.Binding.Selector.ZoneRelativePath
+	if request.Path != nil {
+		path = *request.Path
+	}
+	if err := requireSandboxFileRequest(intent.Binding, sandboxID, SandboxFileRequest{OrganizationID: request.OrganizationID, OperationID: request.OperationID, Path: path}); err != nil {
 		return SandboxFileObservation{}, err
 	}
 	observed, err := s.observeLocked(ctx, intent.Binding, nil)
@@ -267,10 +283,17 @@ func (s *Service) requireBindingComponent(binding CaptureBinding) error {
 }
 
 func validateSandboxFileRequest(sandboxID string, request SandboxFileRequest) (CaptureSelector, error) {
-	if !canonicalNativeID(request.OrganizationID) || !canonicalNativeID(sandboxID) || !canonicalOperationID(request.OperationID) {
-		return CaptureSelector{}, invalidf("native sandbox capture owner or operation is invalid")
+	if err := validateSandboxFileOperation(sandboxID, request.OrganizationID, request.OperationID); err != nil {
+		return CaptureSelector{}, err
 	}
 	return sandboxFileSelector(request.Path)
+}
+
+func validateSandboxFileOperation(sandboxID, organizationID, operationID string) error {
+	if !canonicalNativeID(organizationID) || !canonicalNativeID(sandboxID) || !canonicalOperationID(operationID) {
+		return invalidf("native sandbox capture owner or operation is invalid")
+	}
+	return nil
 }
 
 func canonicalNativeID(value string) bool {
