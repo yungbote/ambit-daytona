@@ -13,6 +13,7 @@ import struct
 import subprocess
 import threading
 import time
+from PIL import Image
 
 
 class QuietHandler(SimpleHTTPRequestHandler):
@@ -109,7 +110,7 @@ def renderer_sandbox_evidence(daemon_pid):
     return {"daemonPidNamespaceLevels": parent_levels, "daemonSeccompFilters": parent_filters, "renderers": evidence}
 
 
-def display_mode_evidence(headed):
+def native_display_evidence():
     browsers = []
     displays = []
     for pid, started in live_processes().items():
@@ -124,11 +125,11 @@ def display_mode_evidence(headed):
             argument.startswith(b"--type=") for argument in arguments
         ):
             headless = any(argument.startswith(b"--headless") for argument in arguments)
-            assert headless != headed, "Chrome launched in the wrong display mode"
+            assert not headless, "The workspace browser must expose its actual headed window"
             browsers.append({"pid": pid, "started": started, "headless": headless})
     assert len(browsers) == 1, "Expected one actual Chrome browser process"
-    assert len(displays) == (1 if headed else 0), "Unexpected private display ownership"
-    return {"headed": headed, "browser": browsers[0], "privateDisplays": displays}
+    assert len(displays) == 1, "Expected one browser-owned private display"
+    return {"headed": True, "browser": browsers[0], "privateDisplays": displays}
 
 
 def capture_live_frame(session, destination):
@@ -149,7 +150,13 @@ ws.addEventListener('message', event => {
   if (captured || message.type !== 'frame') return;
   const bytes = Buffer.from(message.data, 'base64');
   if (bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes.length < 100) process.exit(1);
+  const surface = message.surface;
+  if (!surface || surface.kind !== 'browser-window' || surface.coordinateSpace !== 'display-pixels' ||
+      surface.originX !== 0 || surface.originY !== 0 || surface.deviceScaleFactor !== 2 ||
+      surface.cursorIncluded !== true || !Number.isInteger(surface.width) || !Number.isInteger(surface.height) ||
+      surface.width < 1 || surface.width > 4096 || surface.height < 1 || surface.height > 4096) process.exit(2);
   fs.writeFileSync(process.argv[2], bytes);
+  fs.writeFileSync(process.argv[2] + '.surface.json', JSON.stringify(surface));
   captured = true;
   clearTimeout(timeout);
   ws.close();
@@ -161,7 +168,11 @@ ws.addEventListener('message', event => {
     )
     assert result.returncode == 0, result.stderr
     frame = destination.read_bytes()
-    return {"path": str(destination), "bytes": len(frame), "sha256": hashlib.sha256(frame).hexdigest()}
+    surface = json.loads(Path(str(destination) + ".surface.json").read_text())
+    with Image.open(destination) as image:
+        assert image.format == "JPEG"
+        assert image.size == (surface["width"], surface["height"]), "Frame pixels differ from native geometry"
+    return {"path": str(destination), "bytes": len(frame), "sha256": hashlib.sha256(frame).hexdigest(), "surface": surface}
 
 
 def main():
@@ -225,7 +236,7 @@ def main():
         assert counter.get("text") == "1", counter
         assert int((sockets / f"{session}.pid").read_text()) == daemon_pid
         evidence["checks"].append("foreground-session-reused-across-commands")
-        evidence["displayMode"] = display_mode_evidence(options.headed)
+        evidence["displayMode"] = native_display_evidence()
         evidence["checks"].append("actual-browser-display-mode")
         evidence["rendererSandbox"] = renderer_sandbox_evidence(process.pid)
         evidence["checks"].append("renderer-nested-namespace-and-additional-seccomp")
@@ -292,7 +303,7 @@ def main():
         invoke(ordinary, "find", "role", "button", "click", "--name", "Increment")
         assert invoke(ordinary, "get", "text", "#count")["text"] == "1"
         assert int((sockets / f"{ordinary}.pid").read_text()) == ordinary_pid
-        evidence["ordinaryDisplayMode"] = display_mode_evidence(options.headed)
+        evidence["ordinaryDisplayMode"] = native_display_evidence()
         ordinary_screenshot = root / "ordinary-interaction.png"
         invoke(ordinary, "screenshot", str(ordinary_screenshot))
         ordinary_pixels = ordinary_screenshot.read_bytes()
