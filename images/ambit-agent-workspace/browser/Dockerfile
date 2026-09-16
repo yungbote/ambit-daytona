@@ -16,6 +16,7 @@ RUN test "$(go version)" = "go version go1.25.11 linux/amd64" \
  && cp "$module_dir/COPYING" /out/licenses/browser-display-xgbutil-COPYING \
  && cp /usr/local/go/LICENSE /out/licenses/browser-display-Go-LICENSE
 COPY --from=browser_display_source LICENSE /out/licenses/browser-display-LICENSE
+RUN chmod 0444 /out/licenses/browser-display-LICENSE
 
 FROM ${BASE_IMAGE} AS driver
 ARG BASE_IMAGE
