@@ -1,0 +1,72 @@
+# Copyright 2026 Ambit
+# SPDX-License-Identifier: AGPL-3.0
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: daytona-api
+  namespace: daytona-system
+  annotations:
+    ambit.sh/source-revision: DAYTONA_API_SOURCE_REVISION_REQUIRED
+spec:
+  template:
+    metadata:
+      annotations:
+        ambit.sh/source-url: https://github.com/yungbote/ambit-daytona
+        ambit.sh/source-revision: DAYTONA_API_SOURCE_REVISION_REQUIRED
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: daytona-proxy
+  namespace: daytona-system
+  annotations:
+    ambit.sh/source-revision: DAYTONA_PROXY_SOURCE_REVISION_REQUIRED
+spec:
+  template:
+    metadata:
+      annotations:
+        ambit.sh/source-url: https://github.com/yungbote/ambit-daytona
+        ambit.sh/source-revision: DAYTONA_PROXY_SOURCE_REVISION_REQUIRED
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: daytona-runner
+  namespace: daytona-runners
+  annotations:
+    ambit.sh/source-revision: DAYTONA_RUNNER_SOURCE_REVISION_REQUIRED
+spec:
+  template:
+    metadata:
+      annotations:
+        ambit.sh/source-url: https://github.com/yungbote/ambit-daytona
+        ambit.sh/source-revision: DAYTONA_RUNNER_SOURCE_REVISION_REQUIRED
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: daytona-ssh-gateway
+  namespace: daytona-system
+  annotations:
+    ambit.sh/source-revision: DAYTONA_SSH_GATEWAY_SOURCE_REVISION_REQUIRED
+spec:
+  template:
+    metadata:
+      annotations:
+        ambit.sh/source-url: https://github.com/yungbote/ambit-daytona
+        ambit.sh/source-revision: DAYTONA_SSH_GATEWAY_SOURCE_REVISION_REQUIRED
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: daytona-migrate
+  namespace: daytona-system
+  annotations:
+    ambit.sh/source-revision: DAYTONA_API_SOURCE_REVISION_REQUIRED
+spec:
+  template:
+    metadata:
+      annotations:
+        ambit.sh/source-url: https://github.com/yungbote/ambit-daytona
+        ambit.sh/source-revision: DAYTONA_API_SOURCE_REVISION_REQUIRED

@@ -31,6 +31,7 @@ resources:
   - gateway-backend-policies.yaml
 
 patches:
+  - path: component-provenance-patch.yaml
   - path: configmaps-patch.yaml
   - path: workload-identity-patches.yaml
   - path: api-runtime-patch.yaml

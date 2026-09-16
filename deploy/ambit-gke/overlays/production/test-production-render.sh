@@ -14,7 +14,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for command_name in git grep helm kubectl sed sort; do
+for command_name in git grep helm kubectl python3 sed sort; do
   command -v "$command_name" >/dev/null || {
     echo "required production-render test command is unavailable: $command_name" >&2
     exit 1
@@ -27,8 +27,11 @@ harbor_post_render="$work_dir/harbor-post.yaml"
 
 kubectl kustomize --load-restrictor LoadRestrictionsNone "$script_dir" > "$raw_render"
 
-[[ "$(grep -Fc 'ambit.sh/source-revision: SOURCE_REVISION_REQUIRED' "$raw_render")" -eq 5 ]]
-[[ "$(grep -Fc 'ambit.sh/source-url: https://github.com/yungbote/ambit-daytona' "$raw_render")" -eq 5 ]]
+[[ "$(grep -Fc 'ambit.sh/source-revision: DAYTONA_API_SOURCE_REVISION_REQUIRED' "$raw_render")" -eq 4 ]]
+for component in PROXY RUNNER SSH_GATEWAY; do
+  [[ "$(grep -Fc "ambit.sh/source-revision: DAYTONA_${component}_SOURCE_REVISION_REQUIRED" "$raw_render")" -eq 2 ]]
+done
+[[ "$(grep -Fc 'ambit.sh/source-url: https://github.com/yungbote/ambit-daytona' "$raw_render")" -eq 10 ]]
 [[ "$(grep -Fc 'ambit.sh/source-revision: 9e49d5e7a648f00e26f2246f4dc28e6b07f8c84a' "$raw_render")" -eq 1 ]]
 if grep -En 'REQUIRED_|build-required|source-build-required|9cfc0e9a2987b55489052e8b0479f6b33ed83d5a' "$raw_render" >&2; then
   echo 'raw production render contains a stale or unresolved non-provenance input' >&2
@@ -104,5 +107,7 @@ if [[ "${1:-}" == '--live' ]]; then
   "$script_dir/render-production.sh" > "$admitted_render"
   ! grep -Eq 'REQUIRED_|build-required|source-build-required|SOURCE_REVISION_REQUIRED' "$admitted_render"
 fi
+
+python3 "$script_dir/test-component-provenance.py"
 
 echo 'Daytona production render tests passed'
