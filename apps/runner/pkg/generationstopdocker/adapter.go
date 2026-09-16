@@ -9,7 +9,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -57,24 +56,6 @@ func (adapter *Adapter) InspectGeneration(
 		return generationstop.CurrentGenerationObservation{}, err
 	}
 	return observation(providerResourceID, inspect)
-}
-
-// InspectUpperLayer reports the directory the storage driver mounts as the
-// container root filesystem's writable upper layer. A driver that exposes
-// none reports ErrUnavailable so readers needing that inode fail closed.
-func (adapter *Adapter) InspectUpperLayer(ctx context.Context, providerResourceID string) (string, error) {
-	inspect, err := adapter.api.ContainerInspect(ctx, providerResourceID)
-	if err != nil {
-		if errdefs.IsNotFound(err) {
-			return "", generationstop.ErrNotFound
-		}
-		return "", err
-	}
-	upper := inspect.GraphDriver.Data["UpperDir"]
-	if upper == "" || !filepath.IsAbs(upper) || filepath.Clean(upper) != upper {
-		return "", fmt.Errorf("%w: storage driver %q exposes no upper layer directory", generationstop.ErrUnavailable, inspect.GraphDriver.Name)
-	}
-	return upper, nil
 }
 
 func (adapter *Adapter) StopGeneration(

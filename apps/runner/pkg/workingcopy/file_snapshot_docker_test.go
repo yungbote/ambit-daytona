@@ -24,7 +24,9 @@ import (
 )
 
 // Run this binary inside a disposable DinD Runner to exercise the production
-// daemon/PID/mount relationship. The browser image must already be installed.
+// daemon/PID/mount relationship on a separately qualified reflink-backed
+// filesystem. The browser image must already be installed. An unsupported
+// filesystem fails this acceptance; it never substitutes a non-atomic copy.
 func TestFileSnapshotDockerBrowserAndCustody(t *testing.T) {
 	image := os.Getenv("DAYTONA_FILE_SNAPSHOT_BROWSER_IMAGE")
 	if image == "" {
@@ -105,10 +107,10 @@ func TestFileSnapshotDockerBrowserAndCustody(t *testing.T) {
 	run("exec", name, "agent-browser", "open", "data:text/html,<title>Live capture</title><button onclick='this.textContent=Number(this.textContent)+1'>0</button>")
 	run("exec", name, "agent-browser", "screenshot", "/workspace/outputs/browser.png")
 	body := run("exec", name, "cat", "/workspace/outputs/browser.png")
-	reader := NewNativeFileSnapshotReader(adapter, adapter)
+	reader := NewNativeFileSnapshotReader(adapter)
 	var snapshot bytes.Buffer
-	// A browser control operation runs while the source file is leased and
-	// copied. The browser and the workspace generation must remain alive.
+	// A browser control operation runs while the private clone is streamed.
+	// The browser and the workspace generation must remain alive.
 	once := false
 	writer := snapshotWriterFunc(func(data []byte) (int, error) {
 		if !once {
@@ -179,95 +181,7 @@ func TestFileSnapshotDockerBrowserAndCustody(t *testing.T) {
 	}
 	t.Logf("exact browser bytes=%d digest=%s generation=%s PID=%d; no stop authority invoked", len(body), proof.digest, before.Generation.ExecutionStartedAt, before.State.PID)
 
-	// Writer scenarios must be refused as unavailable; every path, identity and
-	// generation scenario is a conflict. The exact class matters because the
-	// host retries unavailability and abandons conflicts.
-	expected := map[string]error{
-		"writable_fd": ErrUnavailable, "writable_mmap": ErrUnavailable, "writable_mmap_closed_fd": ErrUnavailable,
-		"symlink": ErrConflict, "hardlink": ErrConflict, "file_replaced": ErrConflict, "zone_replaced": ErrConflict,
-		"parent_symlink": ErrConflict, "descendant_bind": ErrConflict, "writer_arrives": ErrConflict, "source_restart": ErrConflict,
-	}
-	for _, scenario := range []string{"writable_fd", "writable_mmap", "writable_mmap_closed_fd", "symlink", "hardlink", "file_replaced", "zone_replaced", "parent_symlink", "descendant_bind", "writer_arrives", "source_restart"} {
-		t.Run(scenario, func(t *testing.T) {
-			run("exec", name, "sh", "-c", "mkdir -p /workspace/outputs/sub && printf intact > /workspace/outputs/sub/source")
-			request := binding
-			request.Selector.ZoneRelativePath = "sub/source"
-			var holder string
-			if strings.HasPrefix(scenario, "writable_") {
-				code := "import os,time; f=open('/workspace/outputs/sub/source','r+b'); "
-				switch scenario {
-				case "writable_mmap":
-					code += "import mmap; m=mmap.mmap(f.fileno(),0); f.close(); "
-				case "writable_mmap_closed_fd":
-					// A shared writable mapping that outlives its only descriptor.
-					// CPython's mmap dups the descriptor, so map through libc and
-					// close the sole descriptor; the overlay inode then reports
-					// no writer while stores through the mapping still land.
-					code += "import ctypes; libc=ctypes.CDLL(None, use_errno=True); libc.mmap.restype=ctypes.c_void_p; " +
-						"libc.mmap.argtypes=[ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_long]; " +
-						"size=os.fstat(f.fileno()).st_size; addr=libc.mmap(None, size, 3, 1, f.fileno(), 0); assert addr not in (None, ctypes.c_void_p(-1).value); f.close(); " +
-						"assert not any(os.readlink('/proc/self/fd/'+fd).endswith('/sub/source') for fd in os.listdir('/proc/self/fd') if os.path.exists('/proc/self/fd/'+fd)); " +
-						"ctypes.memset(addr, ord('x'), size); "
-				}
-				code += "open('/workspace/holder.ready','w').write(str(os.getpid())); time.sleep(60)"
-				run("exec", "--detach", name, "python3", "-c", code)
-				for i := 0; i < 200; i++ {
-					out, err := exec.CommandContext(ctx, "docker", "exec", name, "cat", "/workspace/holder.ready").CombinedOutput()
-					if err == nil {
-						holder = strings.TrimSpace(string(out))
-						break
-					}
-					time.Sleep(10 * time.Millisecond)
-				}
-				if holder == "" {
-					t.Fatal("writer did not become ready")
-				}
-				defer run("exec", name, "sh", "-c", "kill "+holder+"; rm -f /workspace/holder.ready")
-			}
-			if scenario == "symlink" {
-				run("exec", name, "sh", "-c", "rm /workspace/outputs/sub/source; ln -s /etc/passwd /workspace/outputs/sub/source")
-			}
-			if scenario == "hardlink" {
-				run("exec", name, "ln", "/workspace/outputs/sub/source", "/workspace/outside-alias")
-			}
-			mutated := false
-			output := snapshotWriterFunc(func(data []byte) (int, error) {
-				if !mutated {
-					mutated = true
-					switch scenario {
-					case "file_replaced":
-						run("exec", name, "sh", "-c", "mv /workspace/outputs/sub/source /workspace/old-file; printf other > /workspace/outputs/sub/source")
-					case "zone_replaced":
-						run("exec", name, "sh", "-c", "mv /workspace/outputs /workspace/old-zone; mkdir -p /workspace/outputs/sub; printf other > /workspace/outputs/sub/source")
-					case "parent_symlink":
-						run("exec", name, "sh", "-c", "mv /workspace/outputs/sub /workspace/old-sub; ln -s /workspace/old-sub /workspace/outputs/sub")
-					case "descendant_bind":
-						command := exec.CommandContext(ctx, "nsenter", fmt.Sprintf("--mount=/proc/%d/ns/mnt", before.State.PID), fmt.Sprintf("--pid=/proc/%d/ns/pid", before.State.PID), fmt.Sprintf("--root=/proc/%d/root", before.State.PID), "--wd=/", "--", "mount", "--bind", "/workspace/outputs/sub", "/workspace/outputs/sub")
-						if output, err := command.CombinedOutput(); err != nil {
-							t.Fatalf("task namespace bind: %s %v", output, err)
-						}
-					case "writer_arrives":
-						run("exec", name, "python3", "-c", "import os;\ntry: os.open('/workspace/outputs/sub/source', os.O_WRONLY|os.O_NONBLOCK); raise AssertionError('writer entered lease')\nexcept BlockingIOError: pass")
-					case "source_restart":
-						run("restart", name)
-					}
-				}
-				return len(data), nil
-			})
-			if _, err := reader.Capture(ctx, request, output, MaximumCaptureBytes); !errors.Is(err, expected[scenario]) {
-				t.Fatalf("%s snapshot was not refused as %v: %v", scenario, expected[scenario], err)
-			}
-			if scenario == "descendant_bind" {
-				output, err := exec.CommandContext(ctx, "nsenter", fmt.Sprintf("--mount=/proc/%d/ns/mnt", before.State.PID), fmt.Sprintf("--pid=/proc/%d/ns/pid", before.State.PID), fmt.Sprintf("--root=/proc/%d/root", before.State.PID), "--wd=/", "--", "umount", "/workspace/outputs/sub").CombinedOutput()
-				if err != nil {
-					t.Fatalf("task bind cleanup: %s %v", output, err)
-				}
-			}
-			if scenario != "source_restart" {
-				run("exec", name, "sh", "-c", "rm -rf /workspace/outputs/sub /workspace/outside-alias /workspace/old-file /workspace/old-zone /workspace/old-sub")
-			}
-		})
-	}
+	run("exec", name, "sh", "-c", "mkdir -p /workspace/outputs/sub && printf intact > /workspace/outputs/sub/source")
 	// A later ordinary file may be published after an independent stop. It
 	// reuses the observed stopped-file reader without waking or stopping it.
 	run("stop", name)

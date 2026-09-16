@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -28,20 +27,12 @@ type FileSnapshotReader interface {
 	Capture(context.Context, CaptureBinding, io.Writer, int64) (capturedFile, error)
 }
 
-// UpperLayerResolver reports the directory the storage driver mounts as a
-// container root filesystem's writable upper layer. On overlayfs that layer
-// holds the inode every writer of a copied-up file actually references.
-type UpperLayerResolver interface {
-	InspectUpperLayer(ctx context.Context, providerResourceID string) (string, error)
-}
-
 type NativeFileSnapshotReader struct {
 	generations generationstop.GenerationInspector
-	upperLayers UpperLayerResolver
 }
 
-func NewNativeFileSnapshotReader(generations generationstop.GenerationInspector, upperLayers UpperLayerResolver) *NativeFileSnapshotReader {
-	return &NativeFileSnapshotReader{generations: generations, upperLayers: upperLayers}
+func NewNativeFileSnapshotReader(generations generationstop.GenerationInspector) *NativeFileSnapshotReader {
+	return &NativeFileSnapshotReader{generations: generations}
 }
 
 func (s *Service) validateCaptureSource(sandboxID string, binding CaptureBinding) error {
@@ -176,9 +167,7 @@ func (s *NativeFileSnapshotReader) Capture(ctx context.Context, binding CaptureB
 	if err := s.requireSamePID(ctx, binding, pid); err != nil {
 		return capturedFile{}, err
 	}
-	captured, err := copyLeasedFile(ctx, source, func() (*os.File, error) {
-		return s.openWriterBearingFile(ctx, binding, root, source, zone+"/"+binding.Selector.ZoneRelativePath)
-	}, output, maximumBytes)
+	captured, err := copyClonedFile(ctx, source, zoneFD, output, maximumBytes, unix.IoctlFileClone)
 	if err != nil {
 		return capturedFile{}, err
 	}
@@ -220,171 +209,72 @@ func (s *NativeFileSnapshotReader) Capture(ctx context.Context, binding CaptureB
 	return captured, nil
 }
 
-// openWriterBearingFile returns the file whose inode carries every write
-// reference to the selected file. On overlayfs the writable descriptions and
-// shared mappings of a copied-up file belong to the upper inode; the overlay
-// inode a lease would otherwise watch reports no writer once those descriptors
-// close, so a mapping that outlived its descriptor could keep storing while a
-// lease there was granted. The upper file is therefore opened directly under
-// the storage driver's upper layer with the same path restrictions. A file
-// that is not copied up, or that lives on an admitted non-overlay mount, has no
-// such hidden writer: every write must first open it through the selected path,
-// which breaks the lease held there. That argument needs the selected file's
-// lease to be held already, so the caller resolves the bearing file only
-// inside the exclusion window. The upper layer belongs to the container root
-// filesystem alone; an admitted zone mount that is itself a foreign overlayfs
-// has no known upper layer and is refused.
-func (s *NativeFileSnapshotReader) openWriterBearingFile(ctx context.Context, binding CaptureBinding, root int, selected *os.File, containerPath string) (*os.File, error) {
-	var filesystem unix.Statfs_t
-	if err := unix.Fstatfs(int(selected.Fd()), &filesystem); err != nil {
-		return nil, fmt.Errorf("%w: inspect file snapshot filesystem: %w", ErrUnavailable, err)
+// copyClonedFile obtains a kernel-owned point-in-time copy of the selected
+// descriptor. Both descriptors belong to the admitted zone's mount; OverlayFS
+// resolves its own backing files. No upper-layer pathname or metadata match
+// stands in for backing-file identity. Unsupported reflink or O_TMPFILE support
+// returns unavailable, without a stream-copy or workspace-pause fallback.
+//
+// clone is the single kernel operation, supplied explicitly so deterministic
+// tests can exercise publication and cleanup without claiming filesystem
+// qualification. Production always supplies unix.IoctlFileClone.
+func copyClonedFile(ctx context.Context, selected *os.File, zoneFD int, output io.Writer, maximumBytes int64, clone func(int, int) error) (capturedFile, error) {
+	if err := ctx.Err(); err != nil {
+		return capturedFile{}, fmt.Errorf("%w: file snapshot canceled: %w", ErrUnavailable, err)
 	}
-	if filesystem.Type != unix.OVERLAYFS_SUPER_MAGIC {
-		return selected, nil
+	if maximumBytes < 0 || maximumBytes > MaximumCaptureBytes {
+		return capturedFile{}, invalidf("file snapshot byte bound is invalid")
 	}
-	var rootMount, selectedMount unix.Statx_t
-	if unix.Statx(root, "", unix.AT_EMPTY_PATH, unix.STATX_MNT_ID, &rootMount) != nil ||
-		unix.Statx(int(selected.Fd()), "", unix.AT_EMPTY_PATH, unix.STATX_MNT_ID, &selectedMount) != nil ||
-		rootMount.Mask&unix.STATX_MNT_ID == 0 || selectedMount.Mask&unix.STATX_MNT_ID == 0 ||
-		rootMount.Mnt_id != selectedMount.Mnt_id {
-		return nil, fmt.Errorf("%w: file snapshot cannot exclude writers on an overlay mount other than the container root", ErrUnavailable)
+	var sourceStat unix.Stat_t
+	if err := unix.Fstat(int(selected.Fd()), &sourceStat); err != nil || sourceStat.Mode&unix.S_IFMT != unix.S_IFREG || sourceStat.Nlink != 1 {
+		return capturedFile{}, fmt.Errorf("%w: file snapshot requires one regular file without hardlink aliases", ErrConflict)
 	}
-	if s.upperLayers == nil {
-		return nil, fmt.Errorf("%w: file snapshot upper layer resolver is unavailable", ErrUnavailable)
-	}
-	upperDir, err := s.upperLayers.InspectUpperLayer(ctx, binding.Source.ProviderResourceID)
+	// O_TMPFILE never gives workspace processes a pathname to the snapshot.
+	// O_EXCL also forbids linking it later. The host alone retains its descriptor;
+	// closing it on every exit releases this temporary filesystem custody.
+	fd, err := unix.Openat(zoneFD, ".", unix.O_TMPFILE|unix.O_EXCL|unix.O_RDWR|unix.O_CLOEXEC, 0600)
 	if err != nil {
-		return nil, fmt.Errorf("%w: locate file snapshot upper layer: %w", ErrUnavailable, err)
+		return capturedFile{}, fmt.Errorf("%w: create private same-mount file snapshot: %w", ErrUnavailable, err)
 	}
-	upperRoot, err := unix.Open(upperDir, unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return nil, fmt.Errorf("%w: open file snapshot upper layer: %w", ErrUnavailable, err)
+	snapshot := os.NewFile(uintptr(fd), "working-copy-file-snapshot")
+	defer snapshot.Close()
+	if err := ctx.Err(); err != nil {
+		return capturedFile{}, fmt.Errorf("%w: file snapshot canceled: %w", ErrUnavailable, err)
 	}
-	defer unix.Close(upperRoot)
-	fd, err := unix.Openat2(upperRoot, strings.TrimPrefix(containerPath, "/"), &unix.OpenHow{
-		Flags:   unix.O_RDONLY | unix.O_NONBLOCK | unix.O_NOFOLLOW | unix.O_CLOEXEC,
-		Resolve: unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_XDEV,
-	})
-	if errors.Is(err, unix.ENOENT) {
-		// Not copied up: no writable description or mapping can exist yet.
-		return selected, nil
+	// FICLONE may block in the filesystem. Cancellation cannot interrupt every
+	// kernel wait; check again before releasing any bytes. No worker goroutine
+	// outlives this call or retains the temporary descriptor after it returns.
+	cloneErr := clone(fd, int(selected.Fd()))
+	capturedAt := time.Now().UTC().Truncate(time.Millisecond).Format("2006-01-02T15:04:05.000Z")
+	if err := ctx.Err(); err != nil {
+		return capturedFile{}, fmt.Errorf("%w: file snapshot canceled: %w", ErrUnavailable, err)
 	}
-	if err != nil {
-		return nil, fmt.Errorf("%w: resolve file snapshot upper file: %w", ErrConflict, err)
+	if cloneErr != nil {
+		return capturedFile{}, fmt.Errorf("%w: atomic file cloning is unavailable on the source filesystem: %w", ErrUnavailable, cloneErr)
 	}
-	return os.NewFile(uintptr(fd), "working-copy-upper"), nil
-}
-
-// A read lease excludes existing writable descriptions/mappings of its inode
-// and prevents new writable opens/truncation while held. It is not an
-// advisory file lock. A conflicting open marks the lease breaking before the
-// writer can proceed; F_GETLEASE then returns F_UNLCK, so even a forced
-// timeout discards the copy. The reader polls the lease at the proof boundary
-// and never delivers a process-wide asynchronous signal to the Runner.
-type readLease struct{ fd int }
-
-func acquireReadLease(fd int) (readLease, error) {
-	if _, err := unix.FcntlInt(uintptr(fd), unix.F_SETLEASE, unix.F_RDLCK); err != nil {
-		return readLease{}, fmt.Errorf("%w: file is being written or its filesystem cannot exclude writers: %w", ErrUnavailable, err)
+	var snapshotStat unix.Stat_t
+	if err := unix.Fstat(fd, &snapshotStat); err != nil || snapshotStat.Mode&unix.S_IFMT != unix.S_IFREG ||
+		snapshotStat.Nlink != 0 || snapshotStat.Mode&0077 != 0 {
+		return capturedFile{}, fmt.Errorf("%w: file snapshot lost private temporary custody", ErrConflict)
 	}
-	if _, err := unix.FcntlInt(uintptr(fd), unix.F_SETOWN, 0); err != nil {
-		unix.FcntlInt(uintptr(fd), unix.F_SETLEASE, unix.F_UNLCK)
-		return readLease{}, fmt.Errorf("%w: configure file snapshot lease: %w", ErrUnavailable, err)
+	// The source can change while being selected. Its earlier size is not the
+	// clone's size: bound and hash only the exact immutable copy obtained.
+	if snapshotStat.Size < 0 || snapshotStat.Size > maximumBytes {
+		return capturedFile{}, fmt.Errorf("%w: file snapshot exceeds its byte bound", ErrConflict)
 	}
-	return readLease{fd: fd}, nil
-}
-
-func (lease readLease) intact() bool {
-	kind, err := unix.FcntlInt(uintptr(lease.fd), unix.F_GETLEASE, 0)
-	return err == nil && kind == unix.F_RDLCK
-}
-
-func (lease readLease) release() {
-	unix.FcntlInt(uintptr(lease.fd), unix.F_SETLEASE, unix.F_UNLCK)
-}
-
-// leasedFile is one regular file whose writers are excluded, with the exact
-// metadata observed after that exclusion took effect.
-type leasedFile struct {
-	file  *os.File
-	lease readLease
-	stat  unix.Stat_t
-}
-
-func leaseFile(file *os.File, maximumBytes int64) (leasedFile, error) {
-	fd := int(file.Fd())
-	var stat unix.Stat_t
-	if err := unix.Fstat(fd, &stat); err != nil || stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Nlink != 1 {
-		return leasedFile{}, fmt.Errorf("%w: file snapshot requires one regular file without hardlink aliases", ErrConflict)
-	}
-	if stat.Size < 0 || stat.Size > maximumBytes {
-		return leasedFile{}, fmt.Errorf("%w: file snapshot exceeds its byte bound", ErrConflict)
-	}
-	lease, err := acquireReadLease(fd)
-	if err != nil {
-		return leasedFile{}, err
-	}
-	if err := unix.Fstat(fd, &stat); err != nil || stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Nlink != 1 || stat.Size < 0 || stat.Size > maximumBytes {
-		lease.release()
-		return leasedFile{}, fmt.Errorf("%w: file changed before writer exclusion", ErrConflict)
-	}
-	return leasedFile{file: file, lease: lease, stat: stat}, nil
-}
-
-// unchanged reports whether the lease is still held and the inode metadata
-// still equals what was observed after writer exclusion.
-func (leased leasedFile) unchanged() bool {
-	var after unix.Stat_t
-	if unix.Fstat(int(leased.file.Fd()), &after) != nil || !leased.lease.intact() {
-		return false
-	}
-	before := leased.stat
-	return before.Dev == after.Dev && before.Ino == after.Ino && before.Size == after.Size &&
-		before.Nlink == after.Nlink && before.Mtim == after.Mtim && before.Ctim == after.Ctim
-}
-
-// copyLeasedFile copies the selected file while both it and the file bearing
-// its write references are leased. The bearing file is resolved only after
-// the selected file's lease is held, so a copy-up racing that resolution must
-// open through the selected path and break the lease. The two are the same
-// file unless the selected path is a copied-up overlayfs file. Leases do not
-// stop a read-only open with O_TRUNC or a copy-up caused by a metadata
-// change; the metadata reproof after the copy rejects those. Never publish
-// bytes on a metadata-only or ordinary-stream fallback.
-func copyLeasedFile(ctx context.Context, selected *os.File, bearing func() (*os.File, error), output io.Writer, maximumBytes int64) (capturedFile, error) {
-	leased, err := leaseFile(selected, maximumBytes)
-	if err != nil {
-		return capturedFile{}, err
-	}
-	defer leased.lease.release()
-	writerBearing := leased
-	if bearingFile, err := bearing(); err != nil {
-		return capturedFile{}, err
-	} else if bearingFile != selected {
-		defer bearingFile.Close()
-		if writerBearing, err = leaseFile(bearingFile, maximumBytes); err != nil {
-			return capturedFile{}, err
-		}
-		defer writerBearing.lease.release()
-		// Overlayfs answers getattr for a copied-up file from its upper inode,
-		// so the upper file must describe exactly the selected file's bytes.
-		if selectedStat, upperStat := leased.stat, writerBearing.stat; selectedStat.Size != upperStat.Size ||
-			selectedStat.Mtim != upperStat.Mtim || selectedStat.Ctim != upperStat.Ctim {
-			return capturedFile{}, fmt.Errorf("%w: file snapshot upper layer does not describe the selected file", ErrConflict)
-		}
+	if _, err := snapshot.Seek(0, io.SeekStart); err != nil {
+		return capturedFile{}, fmt.Errorf("%w: rewind file snapshot: %w", ErrUnavailable, err)
 	}
 	digest := sha256.New()
-	bytes, err := io.CopyBuffer(io.MultiWriter(output, digest), io.LimitReader(captureContextReader{ctx: ctx, reader: selected}, leased.stat.Size+1), make([]byte, captureStreamBufferBytes))
+	bytes, err := io.CopyBuffer(io.MultiWriter(output, digest), io.LimitReader(captureContextReader{ctx: ctx, reader: snapshot}, snapshotStat.Size+1), make([]byte, captureStreamBufferBytes))
 	if err != nil {
 		return capturedFile{}, fmt.Errorf("%w: file snapshot copy interrupted: %w", ErrUnavailable, err)
 	}
-	selectedIntact := leased.unchanged()
-	bearingIntact := writerBearing.unchanged()
-	if ctx.Err() != nil {
-		return capturedFile{}, fmt.Errorf("%w: file snapshot canceled: %w", ErrUnavailable, ctx.Err())
+	if err := ctx.Err(); err != nil {
+		return capturedFile{}, fmt.Errorf("%w: file snapshot canceled: %w", ErrUnavailable, err)
 	}
-	if bytes != leased.stat.Size || !selectedIntact || !bearingIntact {
-		return capturedFile{}, fmt.Errorf("%w: file changed or writer exclusion was withdrawn during snapshot", ErrConflict)
+	if bytes != snapshotStat.Size {
+		return capturedFile{}, fmt.Errorf("%w: file snapshot byte length changed", ErrConflict)
 	}
-	return capturedFile{byteLength: bytes, digest: "sha256:" + hex.EncodeToString(digest.Sum(nil)), capturedAt: time.Now().UTC().Truncate(time.Millisecond).Format("2006-01-02T15:04:05.000Z")}, nil
+	return capturedFile{byteLength: bytes, digest: "sha256:" + hex.EncodeToString(digest.Sum(nil)), capturedAt: capturedAt}, nil
 }

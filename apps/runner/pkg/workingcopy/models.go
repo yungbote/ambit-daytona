@@ -53,7 +53,8 @@ type CaptureCapabilities struct {
 const FileSnapshotContract = "ambit.working-copy-file-snapshot/v1"
 
 // FileSnapshotSource selects bytes from one execution epoch without authorizing
-// its termination. The native reader must exclude writers while copying bytes.
+// its termination. The native reader must obtain a coherent immutable snapshot
+// before copying its bytes into durable custody.
 type FileSnapshotSource struct {
 	Contract   string                            `json:"contract" validate:"required"`
 	Fence      generationstop.Fence              `json:"fence" validate:"required"`

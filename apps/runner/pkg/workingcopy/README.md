@@ -37,14 +37,13 @@ incomplete intent that still needs a mutable-source read must match the current
 component and reprove its original generation; it is never silently rebound.
 Unknown publication or cleanup outcomes remain unknown until reconciled.
 
-Component measurement does not prove supply-policy compliance or the stronger
-backing-file identity guarantee. In particular, the existing live reader's
-upper-layer absence inference and metadata comparison still require independent
-backing-file identity qualification. This component change neither modifies
-that algorithm nor closes that release gate. A new image/target qualification
-must truthfully bind the measured native component and interface before new
-source effects can use it; source tests and capability echoes are not such a
-qualification. Keep existing immutable custody readable during that rollout.
+Component measurement does not prove supply-policy compliance or filesystem
+qualification. The live reader now relies on the kernel's descriptor-based
+atomic clone contract, which requires reflink-capable backing storage. A new
+image/target qualification must truthfully bind the measured native component,
+interface, kernel and storage target before new source effects can use it;
+source tests and capability echoes are not that qualification. Keep existing
+immutable custody readable during rollout.
 
 ## Live file capture
 
@@ -63,27 +62,30 @@ symlinks, magic links, additional mounts, nonregular files and hardlink aliases.
 Final path reproof starts at the container root again and compares the zone's
 mount identity and the selected file's inode.
 
-For a running source, Linux read leases exclude writable file descriptions
-and writable shared mappings while the file is copied into the existing
-private, immediately unlinked scratch. A lease watches one inode. On
-overlayfs the writers of a copied-up file hold its upper inode, and the
-overlay inode reports no writer once their descriptors close, so the reader
-also opens that file under the storage driver's upper layer, with the same
-path restrictions, and leases it too; an upper layer the driver does not
-expose, or a mismatch between the two inodes, refuses the capture. A file
-that is not copied up, or one on an admitted non-overlay mount, is leased
-directly: the upper layer is resolved only while that lease is held, so any
-write must first open it through the selected path, which breaks the lease.
-A zone mount that is itself a foreign overlayfs has no known upper layer and
-is refused. Leases do not stop a read-only open with O_TRUNC or a copy-up
-caused by a metadata change; the exact metadata reproof after the copy
-rejects those. The reader checks every lease and exact file metadata before
-accepting the copy, and rechecks the container generation. A pending or
-forced lease break, cancellation, source change, busy writer, or unsupported
-filesystem produces no completed content object or receipt.
-There is no ordinary-stream or whole-workspace-stop fallback. Writers can
-proceed after the leases are released; the browser and other processes keep
-running during capture.
+For a running source, the reader opens a private `O_TMPFILE | O_EXCL` descriptor
+on the same admitted semantic-zone mount and calls `FICLONE` with the selected
+source descriptor. The kernel resolves OverlayFS backing files and obtains an
+atomic copy-on-write snapshot. There is no upper-layer pathname lookup,
+metadata-based backing-inode inference, lease, pause or stop. Open writers do
+not make an otherwise supported clone unavailable. The anonymous destination
+has no workspace pathname and cannot be linked; the host closes it on every
+return. Source authority and final path/generation checks remain independent
+from the snapshot's byte custody.
+
+The clone's actual size is bounded before its bytes are copied and hashed into
+the existing private capture scratch. Changes to the live source after cloning
+do not change those bytes; source size/mtime comparisons are not used as a
+substitute for atomicity. Unsupported cloning, cross-filesystem resolution,
+unsupported anonymous temporary files, quota exhaustion, cancellation or copy
+failure produces no completed content object or receipt. There is no ordinary
+stream-copy fallback. The browser and other processes continue running.
+
+Cancellation is checked before allocating a snapshot, before and after the
+clone syscall, throughout streaming and before success. A kernel filesystem
+operation can remain blocked until the kernel returns; this implementation
+does not claim an interruptible or fixed-duration `FICLONE`. It does not launch
+an abandoned goroutine that could retain source or snapshot custody. Temporary
+descriptors close on all returned failures and on process exit.
 
 For a source whose bound generation has already exited, the existing bounded
 Docker archive reader proves that exact exited generation before and after
@@ -102,31 +104,36 @@ assigned Runner, then enable the backend's ordinary publication selection.
 Retained live-file capture intents require compatible readers through cleanup.
 The backend migration refuses removal while any such intent is retained.
 
-Native qualification uses the unchanged browser image in a disposable DinD
-Runner with the existing rootless seccomp profile, dropped capabilities and
-no-new-privileges. The test binary must run in the same PID and mount
-namespaces as that Runner's Docker daemon, exactly as the production Runner
-process does beside its own daemon; a remote Docker socket alone cannot supply
-the native source descriptor or the upper layer path. The observed
-configurations are Docker 28.5.2 with overlay2 on ext4, qualified with
-metacopy on (the DinD daemon) and observed in production with metacopy off;
-the reader is insensitive to that setting because bytes are read through the
-overlay descriptor and the upper lease serves exclusion only. The host unit
-test mounts its own overlayfs in a user namespace to exercise lower-only,
-copied-up, mismatched-upper and foreign-mount files. Other
-provider/kernel/filesystem targets require their own qualification and must
-report unsupported writer exclusion honestly.
+Native qualification requires the exact published image and Runner on a
+reflink-capable backing filesystem. The binary must run in the Runner's Docker
+PID and mount namespaces so `/proc/<pid>/root` addresses the actual source.
+Both the overlay mount and its underlying source/destination files must support
+the clone operation. An `extfs` Docker backing filesystem is not a qualified
+reflink target. OverlayFS support alone does not establish backing support.
+No storage migration or native positive qualification is supplied by this
+source change. Qualification also covers the existing rootless seccomp
+profile, dropped capabilities and no-new-privileges.
+
+The deterministic unit tests inject only the clone syscall result. They check
+exact descriptors, anonymous scratch cleanup, byte bounds, cancellation,
+copy errors and refusal without a mutable-source fallback; those results are
+not evidence of kernel clone atomicity. The opt-in native acceptance keeps a
+real browser responsive during capture, checks exact returned bytes and
+retained custody, and verifies the already-stopped source path. It must fail
+when its selected storage does not support cloning.
 
 ```sh
 DAYTONA_FILE_SNAPSHOT_BROWSER_IMAGE=<already-installed-browser-image> \
 DAYTONA_FILE_SNAPSHOT_EXPECTED_IMAGE_ID=sha256:<independently-verified-config-id> \
   ./workingcopy.test -test.run TestFileSnapshotDockerBrowserAndCustody -test.v
-DAYTONA_FILE_SNAPSHOT_FORCE_BREAK_TEST=1 \
-  ./workingcopy.test -test.run TestFileSnapshotKernelForcedLeaseBreakDiscardsCopy -test.v
 ```
 
-The second test reads the existing kernel lease-break timeout and waits for a
-real forced break. It never changes the host or namespace sysctl.
+The underlying contracts are Linux's
+[FICLONE interface](https://man7.org/linux/man-pages/man2/ioctl_ficlone.2.html),
+[OverlayFS descriptor remapping](https://github.com/torvalds/linux/blob/v6.12/fs/overlayfs/file.c),
+and [anonymous temporary files](https://github.com/torvalds/linux/blob/v6.12/fs/overlayfs/dir.c).
+These references explain the mechanism; the deployment's actual kernel and
+storage still need qualification.
 
 ## Stopped working-tree capture
 

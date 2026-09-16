@@ -322,7 +322,7 @@ func run() int {
 			// typed nil adapter would satisfy the reader's interfaces silently.
 			var fileSnapshots []workingcopy.FileSnapshotReader
 			if generationAdapter != nil {
-				fileSnapshots = append(fileSnapshots, workingcopy.NewNativeFileSnapshotReader(generationAdapter, generationAdapter))
+				fileSnapshots = append(fileSnapshots, workingcopy.NewNativeFileSnapshotReader(generationAdapter))
 			}
 			var captureErr error
 			var captureStops workingcopy.StoppedGenerationAuthority
