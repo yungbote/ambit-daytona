@@ -64,10 +64,14 @@ else
 fi
 # A matching source/receipt pair cannot conceal a changed installed package.
 # Historical parent rosters remain in lineage/parent-toolchains after updates.
-if diff -u "${LINEAGE}/installed-dpkg.lock" <(dpkg-query -W -f='${binary:Package}=${Version}\n' | LC_ALL=C sort); then
-  ok "live dpkg roster equals the image lineage receipt"
+if live_dpkg_roster="$(dpkg-query -W -f='${binary:Package}=${Version}\n' | LC_ALL=C sort)"; then
+  if diff -u "${LINEAGE}/installed-dpkg.lock" <(printf '%s\n' "$live_dpkg_roster"); then
+    ok "live dpkg roster equals the image lineage receipt"
+  else
+    fail "live dpkg roster drifted from the image lineage receipt"
+  fi
 else
-  fail "live dpkg roster drifted from the image lineage receipt"
+  fail "could not read the live dpkg roster"
 fi
 
 # --- runtime user and workspace contract ---------------------------------------
