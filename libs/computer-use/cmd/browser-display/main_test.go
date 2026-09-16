@@ -216,3 +216,31 @@ func TestPaintSerialCannotReuseAnUnacknowledgedRequest(t *testing.T) {
 		}
 	}
 }
+
+func TestPrintableTextResolvesActualNativeLevelWithoutChangingShortcutKeys(t *testing.T) {
+	mapping := &xproto.GetKeyboardMappingReply{KeysymsPerKeycode: 2, Keysyms: []xproto.Keysym{'a', 'A', '1', '!', 'z', 'Z', ' ', 0}}
+	d := &display{keysyms: map[string]byte{"a": 38, "1": 39, "z": 40, "space": 41}, textKeys: textKeyMap(38, mapping)}
+	for _, test := range []struct {
+		event       inputEvent
+		code        byte
+		shift, caps bool
+	}{
+		{inputEvent{Code: "KeyA", Key: "A", Text: "A"}, 38, true, true},
+		{inputEvent{Code: "Digit1", Key: "!", Text: "!"}, 39, true, false},
+		{inputEvent{Code: "KeyA", Key: "z", Text: "z"}, 40, false, true},
+		{inputEvent{Code: "Space", Key: " ", Text: " "}, 41, false, false},
+	} {
+		got, ok := d.textKey(test.event)
+		if !ok || got.code != test.code || got.shift != test.shift || got.caps != test.caps {
+			t.Fatalf("wrong text level: %+v", got)
+		}
+	}
+	for _, event := range []inputEvent{{Code: "KeyA", Key: "A", Text: "A", Modifiers: 2}, {Code: "KeyA", Key: "a", Modifiers: 4}, {Code: "KeyA", Key: "a", Modifiers: 1}, {Key: "Enter"}} {
+		if _, ok := d.textKey(event); ok {
+			t.Fatal("native shortcut became text input")
+		}
+	}
+	if d.validateEvent(inputEvent{Type: "input_keyboard", EventType: "keyDown", Code: "KeyA", Key: "界", Text: "界"}, 100, 100) == nil {
+		t.Fatal("unmapped text silently became a physical key")
+	}
+}

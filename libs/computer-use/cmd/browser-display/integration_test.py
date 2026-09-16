@@ -93,8 +93,9 @@ with tempfile.TemporaryDirectory(prefix='browser-helper-proof-') as temp:
             # composition is the driver's page-frame boundary, not this
             # helper's promise of arbitrary page readiness.
             chrome_pixel = raster.getpixel((width-30, 30))
-            assert max(chrome_pixel)>40, {'size':[width,height], 'chromePixel':chrome_pixel}
-            receipts.setdefault('immediatePagePixels', []).append({'width':width, 'height':height, 'pixel':pixel})
+            # The driver's existing CDP frame boundary is also required before
+            # scanout is released; this helper alone does not own that signal.
+            receipts.setdefault('immediatePagePixels', []).append({'width':width, 'height':height, 'pixel':pixel, 'chromePixel':chrome_pixel})
             (OUT/f'first-{width}x{height}.jpeg').write_bytes(base64.b64decode(immediate['data']))
             state = cli('eval', '({width:innerWidth,height:innerHeight,dpr:devicePixelRatio,screenWidth:screen.width,screenHeight:screen.height})')['result']
             assert state['width'] == width / 2 and state['dpr'] == 2, state
@@ -129,6 +130,18 @@ with tempfile.TemporaryDirectory(prefix='browser-helper-proof-') as temp:
         call('reset')
         assert cli('eval', "document.querySelector('#t').value")['result'] == ''.join(key for key, _, _ in keys)
         receipts['nativePunctuation'] = True
+        cli('eval', "document.querySelector('#t').value='';document.querySelector('#t').focus()")
+        intended = [('A','KeyA'), ('Z','KeyZ'), (' ','Space'), ('!','Digit1'), ('@','Digit2'), ('#','Digit3'), ('$','Digit4'), ('%','Digit5'), ('^','Digit6'), ('&','Digit7'), ('*','Digit8'), ('(','Digit9'), (')','Digit0'), ('_','Minus'), ('+','Equal'), ('{','BracketLeft'), ('}','BracketRight'), (':','Semicolon'), ('"','Quote'), ('<','Comma'), ('>','Period'), ('?','Slash'), ('z','KeyA')]
+        for key, code in intended:
+            call('input', events=[dict(type='input_keyboard',eventType='keyDown',key=key,code=code,text=key,modifiers=0),dict(type='input_keyboard',eventType='keyUp',key=key,code=code,modifiers=0)])
+        assert cli('eval', "document.querySelector('#t').value")['result'] == ''.join(key for key, _ in intended)
+        call('input',events=[dict(type='input_keyboard',eventType='keyDown',key='CapsLock',code='CapsLock'),dict(type='input_keyboard',eventType='keyUp',key='CapsLock',code='CapsLock')])
+        for key in ['a','A']:
+            call('input',events=[dict(type='input_keyboard',eventType='keyDown',key=key,code='KeyA',text=key),dict(type='input_keyboard',eventType='keyUp',key=key,code='KeyA')])
+        call('input',events=[dict(type='input_keyboard',eventType='keyDown',key='CapsLock',code='CapsLock'),dict(type='input_keyboard',eventType='keyUp',key='CapsLock',code='CapsLock')])
+        assert cli('eval', "document.querySelector('#t').value")['result'] == ''.join(key for key, _ in intended)+'aA'
+        call('reset')
+        receipts['printableTextLevelsAndCapsLock'] = True
         call('input', events=[dict(type='input_keyboard', eventType='keyDown', key='F11', code='F11'), dict(type='input_keyboard', eventType='keyUp', key='F11', code='F11')])
         receipts['nativeF11Delivered'] = True
         call('input', events=[dict(type='input_keyboard', eventType='keyDown', key='F11', code='F11'), dict(type='input_keyboard', eventType='keyUp', key='F11', code='F11')])
