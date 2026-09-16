@@ -62,6 +62,13 @@ if [ -r "${SOURCE_LOCKS}/installed-dpkg.lock" ]; then
 else
   echo "note: no source dpkg roster mounted; skipping roster equality"
 fi
+# A matching source/receipt pair cannot conceal a changed installed package.
+# Historical parent rosters remain in lineage/parent-toolchains after updates.
+if diff -u "${LINEAGE}/installed-dpkg.lock" <(dpkg-query -W -f='${binary:Package}=${Version}\n' | LC_ALL=C sort); then
+  ok "live dpkg roster equals the image lineage receipt"
+else
+  fail "live dpkg roster drifted from the image lineage receipt"
+fi
 
 # --- runtime user and workspace contract ---------------------------------------
 [ "$(whoami)" = "$(lock 'lock["base"]["invariants"]["user"]')" ] && ok "runtime user $(whoami)" || fail "runtime user is $(whoami)"

@@ -5,6 +5,7 @@ This runs only during image construction. Cargo's committed lock verifies its
 crate graph; source and Chrome archives are independently pinned by SHA-256.
 """
 
+import copy
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
@@ -18,6 +19,7 @@ import tempfile
 import zipfile
 
 MATERIALIZER_LINEAGE = Path("/opt/ambit/runtime-base/workspace/lineage/materializer")
+TOOLCHAIN_LINEAGE = MATERIALIZER_LINEAGE.parent
 MATERIALIZER_BUILDER = "docker.io/library/golang@sha256:40dfc169bd5ad8a8617e49c8ead7fe16c6873e79d6937539e9c2e5947b7984ef"
 
 
@@ -151,6 +153,76 @@ def install_debian_packages(lock, scratch):
             raise ValueError(f"Browser package version mismatch: {name}")
 
 
+def toolchain_update(lock, source, lineage=TOOLCHAIN_LINEAGE):
+    """An inherited build may change Debian pins, never unrelated toolchains."""
+    parent_bytes = (lineage / "toolchains.lock.json").read_bytes()
+    source_bytes = source.read_bytes()
+    for content, expected in (
+        (parent_bytes, lock["toolchains"]["parentLockSha256"]),
+        (source_bytes, lock["toolchains"]["sourceLockSha256"]),
+    ):
+        if hashlib.sha256(content).hexdigest() != expected:
+            raise ValueError("Workspace toolchain lock differs from its exact binding")
+    parent, target = json.loads(parent_bytes), json.loads(source_bytes)
+    before, after = copy.deepcopy(parent), copy.deepcopy(target)
+    old_packages = before["debian"].pop("packages")
+    new_packages = after["debian"].pop("packages")
+    if before != after or not old_packages.keys() <= new_packages.keys():
+        raise ValueError("Inherited workspace update may only add or upgrade Debian pins")
+    delta = {name: version for name, version in new_packages.items() if old_packages.get(name) != version}
+    packages = dict(lock["debianPackages"])
+    for name, version in delta.items():
+        if name in packages and packages[name] != version:
+            raise ValueError(f"Conflicting workspace and browser package pins: {name}")
+        packages[name] = version
+    return {**lock, "debianPackages": packages}, target
+
+
+def install_npm(lock, scratch, inputs=Path("/inputs")):
+    """Replace the inherited distribution as one verified, offline npm install."""
+    archive = verify_input(lock["npm"], inputs)
+    node = lock["node"]
+    prefix = Path(node["root"]).parent
+    npm_root = Path(node["root"]) / "node_modules/npm"
+    # The image owner replaces the active bundle, not a second PATH candidate.
+    for command in ("npm", "npx"):
+        executable = shutil.which(command)
+        if not executable or not Path(executable).resolve().is_relative_to(npm_root):
+            raise ValueError(f"Inherited {command} does not belong to the declared Node prefix")
+    subprocess.run([
+        "npm", "install", "--global", "--prefix", str(prefix), "--offline",
+        "--ignore-scripts", "--no-audit", "--no-fund", "--cache", str(scratch / "npm-cache"),
+        str(archive),
+    ], check=True)
+    descriptor = json.loads((npm_root / "package.json").read_text())
+    if descriptor["version"] != node["packages"]["npm"]:
+        raise ValueError("Installed npm distribution differs from the lock")
+    for command in ("npm", "npx"):
+        executable = shutil.which(command)
+        if not executable or Path(executable).resolve() != (npm_root / "bin" / f"{command}-cli.js").resolve():
+            raise ValueError(f"Installed {command} does not resolve to the replaced npm bundle")
+        observed = subprocess.check_output([command, "--version"], text=True).strip()
+        if observed != descriptor["version"]:
+            raise ValueError(f"Installed {command} version differs from the lock")
+
+
+def record_toolchain_update(source, target, lineage=TOOLCHAIN_LINEAGE):
+    for name, expected in target["debian"]["packages"].items():
+        observed = subprocess.check_output(["dpkg-query", "-W", "-f=${Version}", name], text=True)
+        if observed != expected:
+            raise ValueError(f"Workspace package version mismatch: {name}")
+    # Preserve the parent's observation with the parent's exact input lock.
+    historical = lineage / "parent-toolchains"
+    historical.mkdir()
+    for name in ("toolchains.lock.json", "installed-dpkg.lock"):
+        shutil.copy2(lineage / name, historical / name)
+    shutil.copyfile(source, lineage / "toolchains.lock.json")
+    observed = subprocess.check_output(["dpkg-query", "-W", "-f=${binary:Package}=${Version}\n"], text=True)
+    (lineage / "installed-dpkg.lock").write_text("\n".join(sorted(observed.splitlines())) + "\n")
+    for name in ("toolchains.lock.json", "installed-dpkg.lock"):
+        (lineage / name).chmod(0o444)
+
+
 def main():
     mode, lock_path, base_image = sys.argv[1:]
     lock = json.loads(Path(lock_path).read_text())
@@ -209,7 +281,11 @@ def main():
             if observed != f"agent-browser {source['version']}":
                 raise ValueError(f"Unexpected driver version: {observed}")
         elif mode == "chrome":
-            install_debian_packages(lock, scratch)
+            source_toolchains = Path("/source/toolchains.lock.json")
+            debian, target_toolchains = toolchain_update(lock, source_toolchains)
+            install_debian_packages(debian, scratch)
+            install_npm(lock, scratch)
+            record_toolchain_update(source_toolchains, target_toolchains)
             archive = verify_input(lock["chrome"])
             with zipfile.ZipFile(archive) as bundle:
                 bundle.extractall(scratch)

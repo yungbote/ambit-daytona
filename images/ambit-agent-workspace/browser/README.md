@@ -107,6 +107,35 @@ Four smaller corrections ship with them: command execution passes its typed erro
 
 No image was rebuilt from these commits. The daemon and launcher changes require a fresh image and the canary in `RUNNER-CANARY.md` before any of it is claimed in production.
 
+## Ordinary dependency maintenance
+
+The browser build updates inherited Debian dependencies through the same
+authenticated snapshot transaction that installs its display dependencies.
+`browser.lock.json` binds both the exact parent and current source
+`toolchains.lock.json` bytes. Reconciliation permits only added or changed
+Debian package pins; all other toolchain fields and every inherited pin remain
+present. The installer checks all resulting toolchain versions before copying
+the exact new source lock into active lineage. The previous lock and its dpkg
+receipt remain together under `lineage/parent-toolchains`.
+
+The npm archive is a complete upstream distribution installed offline at the
+existing Node prefix. Its component `node` declaration uses the same package
+inventory contract as the other Node environments. The installer checks both
+`npm` and `npx` entrypoints and versions; it does not override nested packages
+or add another runtime package path. The archive retains npm's bundled license
+and dependency notices. Include its exact `archiveName` in `browser_inputs`.
+
+After an actual candidate installation, export the resulting canonical
+`lineage/installed-dpkg.lock` into source `locks/installed-dpkg.lock` and freeze
+the source again before final qualification. That roster describes this
+complete browser composition, including the inherited file tools. A standalone
+toolchain image has a different composition and needs its own observed roster.
+Conformance compares the source lock, the stored receipt, and live dpkg output;
+neither a simulated dependency solution nor an unchanged parent receipt proves
+the final installed packages. Regenerate executable inventory and fresh image
+supply evidence after updates. Package updates do not themselves establish
+admission or remove scanner findings without an actual-image measurement.
+
 ## Acceptance still required before activation
 
 - Source build and all inherited workspace toolchain checks pass against the exact image.

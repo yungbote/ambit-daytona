@@ -251,5 +251,141 @@ class DebianInstallationTests(unittest.TestCase):
                 installer.install_debian_packages(self.lock, self.root)
 
 
+class WorkspaceUpdateTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.lineage = self.root / "lineage"
+        self.lineage.mkdir()
+        self.parent = {
+            "schema": "fixture", "debian": {"suite": "trixie", "packages": {"retained": "1", "updated": "1"}},
+            "python": {"version": "retained"}, "node": {"version": "retained"},
+        }
+        self.target = copy.deepcopy(self.parent)
+        self.target["debian"]["packages"].update({"updated": "2", "added": "3"})
+        self.source = self.root / "toolchains.lock.json"
+        self.lock = {"debianPackages": {"browser": "4"}, "toolchains": {}}
+        self.bind()
+        (self.lineage / "installed-dpkg.lock").write_text("parent observation\n")
+
+    def bind(self):
+        # Deliberately non-canonical whitespace proves publication copies exact bytes.
+        self.source.write_text(json.dumps(self.target, indent=4) + "\n")
+        (self.lineage / "toolchains.lock.json").write_text(json.dumps(self.parent))
+        self.lock["toolchains"] = {
+            "sourceLockSha256": hashlib.sha256(self.source.read_bytes()).hexdigest(),
+            "parentLockSha256": hashlib.sha256((self.lineage / "toolchains.lock.json").read_bytes()).hexdigest(),
+        }
+
+    def test_only_changed_and_added_pins_join_the_existing_apt_transaction(self):
+        combined, target = installer.toolchain_update(self.lock, self.source, self.lineage)
+        self.assertEqual(combined["debianPackages"], {"browser": "4", "updated": "2", "added": "3"})
+        self.assertEqual(target, self.target)
+        self.assertEqual(self.lock["debianPackages"], {"browser": "4"})
+
+    def test_each_exact_binding_must_match_before_the_update(self):
+        for key in ("sourceLockSha256", "parentLockSha256"):
+            with self.subTest(key=key):
+                self.bind()
+                self.lock["toolchains"][key] = "0" * 64
+                with self.assertRaisesRegex(ValueError, "exact binding"):
+                    installer.toolchain_update(self.lock, self.source, self.lineage)
+
+    def test_unrelated_changes_or_removed_pins_are_not_hidden_by_reconciliation(self):
+        for mutation in (
+            lambda x: x["python"].update(version="changed"),
+            lambda x: x["node"].update(version="changed"),
+            lambda x: x["debian"].update(suite="another"),
+            lambda x: x["debian"]["packages"].pop("retained"),
+        ):
+            with self.subTest(mutation=mutation):
+                original = copy.deepcopy(self.target)
+                mutation(self.target)
+                self.bind()
+                with self.assertRaisesRegex(ValueError, "only add or upgrade"):
+                    installer.toolchain_update(self.lock, self.source, self.lineage)
+                self.target = original
+
+    def test_conflicting_component_pin_is_refused(self):
+        self.lock["debianPackages"]["updated"] = "different"
+        with self.assertRaisesRegex(ValueError, "Conflicting"):
+            installer.toolchain_update(self.lock, self.source, self.lineage)
+
+    def test_final_receipt_preserves_parent_and_copies_exact_source_only_after_all_pins_pass(self):
+        prior = (self.lineage / "toolchains.lock.json").read_bytes()
+        def query(command, *, text):
+            if len(command) == 4:
+                return self.target["debian"]["packages"][command[-1]]
+            return "updated=2\nadded=3\nbrowser=4\nretained=1\n"
+        with patch.object(installer.subprocess, "check_output", side_effect=query):
+            installer.record_toolchain_update(self.source, self.target, self.lineage)
+        self.assertEqual((self.lineage / "toolchains.lock.json").read_bytes(), self.source.read_bytes())
+        self.assertEqual((self.lineage / "parent-toolchains/toolchains.lock.json").read_bytes(), prior)
+        self.assertEqual((self.lineage / "parent-toolchains/installed-dpkg.lock").read_text(), "parent observation\n")
+        self.assertEqual((self.lineage / "installed-dpkg.lock").read_text(), "added=3\nbrowser=4\nretained=1\nupdated=2\n")
+        self.assertEqual((self.lineage / "toolchains.lock.json").stat().st_mode & 0o777, 0o444)
+
+    def test_unchanged_pin_drift_does_not_replace_the_active_lock(self):
+        prior = (self.lineage / "toolchains.lock.json").read_bytes()
+        with patch.object(installer.subprocess, "check_output", return_value="changed"):
+            with self.assertRaisesRegex(ValueError, "Workspace package version mismatch: retained"):
+                installer.record_toolchain_update(self.source, self.target, self.lineage)
+        self.assertEqual((self.lineage / "toolchains.lock.json").read_bytes(), prior)
+        self.assertFalse((self.lineage / "parent-toolchains").exists())
+
+
+class NpmInstallationTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.prefix = self.root / "node"
+        self.package = self.prefix / "lib/node_modules/npm"
+        (self.package / "bin").mkdir(parents=True)
+        for name in ("npm", "npx"):
+            (self.package / f"bin/{name}-cli.js").write_text("fixture")
+        (self.package / "package.json").write_text(json.dumps({"version": "10.9.9"}))
+        archive = self.root / "npm.tgz"
+        archive.write_bytes(b"fixture archive")
+        self.lock = {
+            "npm": {"archiveName": archive.name, "sha256": hashlib.sha256(archive.read_bytes()).hexdigest()},
+            "node": {"root": str(self.prefix / "lib"), "packages": {"npm": "10.9.9"}},
+        }
+
+    def which(self, name):
+        return str(self.package / f"bin/{name}-cli.js")
+
+    def test_entire_bundle_replaces_existing_prefix_offline_without_scripts(self):
+        with patch.object(installer.shutil, "which", side_effect=self.which), patch.object(
+            installer.subprocess, "run"
+        ) as run, patch.object(installer.subprocess, "check_output", return_value="10.9.9\n"):
+            installer.install_npm(self.lock, self.root, self.root)
+        self.assertEqual(run.call_count, 1)
+        command = run.call_args.args[0]
+        self.assertEqual(command[:5], ["npm", "install", "--global", "--prefix", str(self.prefix)])
+        for option in ("--offline", "--ignore-scripts", "--no-audit", "--no-fund"):
+            self.assertIn(option, command)
+        self.assertEqual(command[-1], str(self.root / "npm.tgz"))
+
+    def test_archive_or_existing_path_mismatch_cannot_install(self):
+        for kind in ("archive", "path"):
+            with self.subTest(kind=kind), patch.object(installer.subprocess, "run") as run:
+                lock = copy.deepcopy(self.lock)
+                if kind == "archive":
+                    lock["npm"]["sha256"] = "0" * 64
+                with patch.object(installer.shutil, "which", return_value="/another/npm"):
+                    with self.assertRaises(ValueError):
+                        installer.install_npm(lock, self.root, self.root)
+                run.assert_not_called()
+
+    def test_installed_entrypoints_and_versions_must_match(self):
+        with patch.object(installer.shutil, "which", side_effect=self.which), patch.object(
+            installer.subprocess, "run"
+        ), patch.object(installer.subprocess, "check_output", return_value="old\n"):
+            with self.assertRaisesRegex(ValueError, "version differs"):
+                installer.install_npm(self.lock, self.root, self.root)
+
+
 if __name__ == "__main__":
     unittest.main()

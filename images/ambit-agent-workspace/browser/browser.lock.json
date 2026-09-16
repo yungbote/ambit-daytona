@@ -27,6 +27,16 @@
       "snapshot": "https://snapshot.debian.org/archive/debian-security/20260909T031704Z/",
       "suite": "trixie-security",
       "inReleaseSha256": "741dbb9dcd6363228a3c347281906d9ef628faae3f29d1f14ba7c7936f459090"
+    },
+    {
+      "snapshot": "https://snapshot.debian.org/archive/debian/20260916T202913Z/",
+      "suite": "trixie",
+      "inReleaseSha256": "0584fba32e13e0ab8285fb16c27adea1ec03a73669c18702821094fd6ca86675"
+    },
+    {
+      "snapshot": "https://snapshot.debian.org/archive/debian-security/20260916T184142Z/",
+      "suite": "trixie-security",
+      "inReleaseSha256": "f35b83eebbbbe5d2b3b2f450391cfc725b6c70e0b367597015878707c5c2c088"
     }
   ],
   "debianPackages": {
@@ -66,5 +76,20 @@
     "archiveName": "atomic-materializer-source.tar.gz",
     "sha256": "b7f2e3c1c0bf451727854ca62b0851609449de912fb8f65317a2f4e06cc28a24",
     "buildLockSha256": "4648877e3408f215960c99a1f5dd971cb08290202c59389cd4157f52133b87ec"
+  },
+  "toolchains": {
+    "parentLockSha256": "c61261b5fd7e53c7320b65cff05e04332f3992dbb361a30feb388d4b4b6e2e58",
+    "sourceLockSha256": "db1f8f54828efb8136e22964b75338646e00c13f93bc6da308034faa8780e194"
+  },
+  "npm": {
+    "url": "https://registry.npmjs.org/npm/-/npm-10.9.9.tgz",
+    "archiveName": "npm-10.9.9.tgz",
+    "sha256": "c80bd097147cce32e31010b791bab8c71a26a5e10668210ec9d2e7f4c7cea2a1"
+  },
+  "node": {
+    "root": "/usr/local/nvm/versions/node/v22.14.0/lib",
+    "packages": {
+      "npm": "10.9.9"
+    }
   }
 }
