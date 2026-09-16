@@ -61,6 +61,26 @@ import {
   assertStopAuthority as assertGenerationStopAuthority,
 } from '../dto/sandbox-generation-stop.contract'
 import { RunnerApiError } from '../errors/runner-api-error'
+import {
+  SandboxFileCaptureRequestDto,
+  SandboxFileCaptureObserveRequestDto,
+  SandboxFileCaptureReceiptDto,
+  SandboxFileCaptureObservationDto,
+  SandboxFileCaptureReadRequestDto,
+  SandboxFileCaptureReadResponseDto,
+  SandboxFileCaptureDeleteRequestDto,
+  SandboxFileCaptureDeleteReceiptDto,
+} from '../dto/sandbox-file-capture.dto'
+import {
+  assertSandboxFileRequest,
+  assertSandboxFileObserveRequest,
+  assertSandboxFileReceipt,
+  assertSandboxFileObservation,
+  assertSandboxFileReadRequest,
+  assertSandboxFileReadResponse,
+  assertSandboxFileDeleteRequest,
+  assertSandboxFileDeleteReceipt,
+} from '../dto/sandbox-file-capture.contract'
 import { SandboxExecutionAuthorityService } from './sandbox-execution-authority.service'
 
 const CAPTURE_ROLE_REF = 'ambit.runtime-component/working-copy-capture@2'
@@ -69,6 +89,96 @@ const CAPTURE_PROTOCOL_REF = 'ambit.runtime-interface/working-copy-capture@2'
 @Injectable()
 export class WorkingCopyCaptureService {
   constructor(private readonly executionAuthority: SandboxExecutionAuthorityService) {}
+
+  async captureSandboxFile(
+    organizationId: string,
+    sandboxIdOrName: string,
+    request: SandboxFileCaptureRequestDto,
+    signal?: AbortSignal,
+  ): Promise<SandboxFileCaptureReceiptDto> {
+    signal?.throwIfAborted()
+    nativeCaptureValidation(() => assertSandboxFileRequest(request), BadRequestException)
+    const { sandbox, adapter } = await this.executionAuthority.authorizeSandbox(organizationId, sandboxIdOrName)
+    try {
+      const receipt = await adapter.captureSandboxFile(sandbox.id, { ...request, organizationId }, signal)
+      mutationReceiptGuard(() =>
+        assertSandboxFileReceipt(receipt, { organizationId, sandboxId: sandbox.id, ...request }),
+      )
+      return receipt
+    } catch (error) {
+      throw translateRunnerCaptureError(error, true)
+    }
+  }
+
+  async observeSandboxFile(
+    organizationId: string,
+    sandboxIdOrName: string,
+    request: SandboxFileCaptureObserveRequestDto,
+    signal?: AbortSignal,
+  ): Promise<SandboxFileCaptureObservationDto> {
+    signal?.throwIfAborted()
+    nativeCaptureValidation(() => assertSandboxFileObserveRequest(request), BadRequestException)
+    const { sandbox, adapter } = await this.executionAuthority.authorizeSandbox(organizationId, sandboxIdOrName)
+    try {
+      const observed = await adapter.observeSandboxFile(sandbox.id, { ...request, organizationId }, signal)
+      nativeCaptureValidation(
+        () => assertSandboxFileObservation(observed, { organizationId, sandboxId: sandbox.id, ...request }),
+        ConflictException,
+      )
+      return observed
+    } catch (error) {
+      throw translateRunnerCaptureError(error, false)
+    }
+  }
+
+  async readSandboxFile(
+    organizationId: string,
+    sandboxIdOrName: string,
+    request: SandboxFileCaptureReadRequestDto,
+    signal?: AbortSignal,
+  ): Promise<SandboxFileCaptureReadResponseDto> {
+    signal?.throwIfAborted()
+    nativeCaptureValidation(() => assertSandboxFileReadRequest(request), BadRequestException)
+    const { sandbox, adapter } = await this.executionAuthority.authorizeSandbox(organizationId, sandboxIdOrName)
+    nativeCaptureValidation(
+      () => assertSandboxFileReceipt(request.receipt, { organizationId, sandboxId: sandbox.id }),
+      BadRequestException,
+    )
+    try {
+      const bytes = await adapter.readSandboxFile(sandbox.id, request, signal)
+      nativeCaptureValidation(() => assertSandboxFileReadResponse(bytes, request), ConflictException)
+      return bytes
+    } catch (error) {
+      throw translateRunnerCaptureError(error, false)
+    }
+  }
+
+  async deleteSandboxFile(
+    organizationId: string,
+    sandboxIdOrName: string,
+    request: SandboxFileCaptureDeleteRequestDto,
+    signal?: AbortSignal,
+  ): Promise<SandboxFileCaptureDeleteReceiptDto> {
+    signal?.throwIfAborted()
+    nativeCaptureValidation(() => assertSandboxFileDeleteRequest(request), BadRequestException)
+    const { sandbox, adapter } = await this.executionAuthority.authorizeSandbox(organizationId, sandboxIdOrName)
+    if (request.receipt)
+      nativeCaptureValidation(
+        () => assertSandboxFileReceipt(request.receipt, { organizationId, sandboxId: sandbox.id }),
+        BadRequestException,
+      )
+    try {
+      const receipt = await adapter.deleteSandboxFile(
+        sandbox.id,
+        request.receipt ? request : { ...request, organizationId },
+        signal,
+      )
+      mutationReceiptGuard(() => assertSandboxFileDeleteReceipt(receipt, request.receipt))
+      return receipt
+    } catch (error) {
+      throw translateRunnerCaptureError(error, true)
+    }
+  }
 
   async capabilities(
     organizationId: string,
@@ -1455,4 +1565,15 @@ function assertInventoryReceipt(
     bytePack: receipt.bytePack,
   })
   if (receipt.inventoryDigest !== digest) throw new ConflictException('Runner inventory digest changed.')
+}
+
+function nativeCaptureValidation(
+  check: () => void,
+  ErrorType: typeof BadRequestException | typeof ConflictException,
+): void {
+  try {
+    check()
+  } catch (error) {
+    throw new ErrorType(error instanceof Error ? error.message : 'Native file capture is invalid.')
+  }
 }

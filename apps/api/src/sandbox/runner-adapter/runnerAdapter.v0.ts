@@ -3,6 +3,16 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import {
+  SandboxFileCaptureRunnerRequest,
+  SandboxFileCaptureRunnerObserveRequest,
+  SandboxFileCaptureReceiptDto,
+  SandboxFileCaptureObservationDto,
+  SandboxFileCaptureReadRequestDto,
+  SandboxFileCaptureReadResponseDto,
+  SandboxFileCaptureRunnerDeleteRequest,
+  SandboxFileCaptureDeleteReceiptDto,
+} from '../dto/sandbox-file-capture.dto'
 import { Injectable, Logger } from '@nestjs/common'
 import {
   CreateSandboxSnapshotResult,
@@ -149,6 +159,54 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       metrics: response.data.metrics,
       appVersion: response.data.appVersion,
     }
+  }
+
+  async captureSandboxFile(
+    sandboxId: string,
+    request: SandboxFileCaptureRunnerRequest,
+    signal?: AbortSignal,
+  ): Promise<SandboxFileCaptureReceiptDto> {
+    const response = await this.sandboxApiClient.captureSandboxFile(sandboxId, request, {
+      signal,
+      maxContentLength: 262144,
+    })
+    return response.data as SandboxFileCaptureReceiptDto
+  }
+
+  async observeSandboxFile(
+    sandboxId: string,
+    request: SandboxFileCaptureRunnerObserveRequest,
+    signal?: AbortSignal,
+  ): Promise<SandboxFileCaptureObservationDto> {
+    const response = await this.sandboxApiClient.observeSandboxFile(sandboxId, request, {
+      signal,
+      maxContentLength: 262144,
+    })
+    return response.data as SandboxFileCaptureObservationDto
+  }
+
+  async readSandboxFile(
+    sandboxId: string,
+    request: SandboxFileCaptureReadRequestDto,
+    signal?: AbortSignal,
+  ): Promise<SandboxFileCaptureReadResponseDto> {
+    const response = await this.sandboxApiClient.readSandboxFile(sandboxId, request, {
+      signal,
+      maxContentLength: 6291456,
+    })
+    return response.data as SandboxFileCaptureReadResponseDto
+  }
+
+  async deleteSandboxFile(
+    sandboxId: string,
+    request: SandboxFileCaptureRunnerDeleteRequest,
+    signal?: AbortSignal,
+  ): Promise<SandboxFileCaptureDeleteReceiptDto> {
+    const response = await this.sandboxApiClient.deleteSandboxFile(sandboxId, request, {
+      signal,
+      maxContentLength: 262144,
+    })
+    return response.data as SandboxFileCaptureDeleteReceiptDto
   }
 
   async workingCopyCaptureCapabilities(

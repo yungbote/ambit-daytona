@@ -17,6 +17,7 @@ import (
 
 	"github.com/daytonaio/runner/pkg/generationstop"
 	"github.com/daytonaio/runner/pkg/specialistrender"
+	"github.com/daytonaio/runner/pkg/workingcopy"
 	"github.com/gin-gonic/gin"
 )
 
@@ -88,6 +89,22 @@ func TestCanonicalControlResponsesMatchCrossLanguageGoldens(t *testing.T) {
 				t.Fatal("test fixture did not distinguish Go struct order from canonical key order")
 			}
 		})
+	}
+}
+
+func TestNativeFileResponsesRetainCanonicalNullAndEmptyBytes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, value := range []any{
+		workingcopy.SandboxFileDeleteReceipt{Outcome: "already_absent"},
+		workingcopy.SandboxFileObservation{Status: "pending"},
+		workingcopy.SandboxFileReadResponse{CaptureID: "capture", SHA256: "digest", EOF: true, BytesBase64: ""},
+	} {
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		writeCanonicalJSONResponse(ctx, http.StatusOK, value)
+		if recorder.Code != http.StatusOK || !backendStrictCanonicalJSONAccepts(recorder.Body.Bytes()) {
+			t.Fatalf("native control response is not canonical: %s", recorder.Body.Bytes())
+		}
 	}
 }
 

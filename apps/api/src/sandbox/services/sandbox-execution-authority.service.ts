@@ -79,9 +79,6 @@ export class SandboxExecutionAuthorityService {
     ) {
       throw new ForbiddenException('Execution ownership or fence does not match the authorized sandbox.')
     }
-    if (sandbox.sandboxClass !== SandboxClass.CONTAINER) {
-      throw new ConflictException('Generation authority is admitted only for container sandboxes.')
-    }
     if (source.expectedRuntimeKind === 'full_image_runtime_pack') {
       if (
         labels.ambitRuntimeKind !== 'full_image_runtime_pack_provider_observation' ||
@@ -98,6 +95,23 @@ export class SandboxExecutionAuthorityService {
       }
     } else {
       throw new ConflictException('Generation runtime kind is retired or unrecognized.')
+    }
+    return this.resolveAssignedRunner(sandbox)
+  }
+
+  async authorizeSandbox(
+    organizationId: string,
+    sandboxIdOrName: string,
+  ): Promise<{ sandbox: Sandbox; runner: Runner; adapter: RunnerAdapter }> {
+    const sandbox = await this.sandboxes.findOneByIdOrName(sandboxIdOrName, organizationId)
+    return this.resolveAssignedRunner(sandbox)
+  }
+
+  private async resolveAssignedRunner(
+    sandbox: Sandbox,
+  ): Promise<{ sandbox: Sandbox; runner: Runner; adapter: RunnerAdapter }> {
+    if (sandbox.sandboxClass !== SandboxClass.CONTAINER) {
+      throw new ConflictException('Generation authority is admitted only for container sandboxes.')
     }
     if (!sandbox.runnerId) {
       throw new NotFoundException('The sandbox has no assigned runner.')

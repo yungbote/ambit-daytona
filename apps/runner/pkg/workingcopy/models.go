@@ -75,6 +75,21 @@ type CaptureBinding struct {
 	StopAuthority      generationstop.StopAuthority `json:"stopAuthority,omitzero"`
 	FileSnapshot       FileSnapshotSource           `json:"fileSnapshot,omitzero"`
 	Selector           CaptureSelector              `json:"selector" validate:"required"`
+	// SandboxFile is an internal alternative to Product source authority. It is
+	// never admitted by the legacy Product endpoints. Zero omission preserves
+	// existing stored Product bytes and their derived identities.
+	SandboxFile SandboxFileSource `json:"sandboxFile,omitzero" swaggerignore:"true"`
+}
+
+func (binding CaptureBinding) sandboxID() string {
+	if binding.SandboxFile != (SandboxFileSource{}) {
+		return binding.SandboxFile.SandboxID
+	}
+	return binding.Source.ProviderResourceID
+}
+
+func (binding CaptureBinding) isFileSnapshot() bool {
+	return binding.FileSnapshot.Contract != "" || binding.SandboxFile != (SandboxFileSource{})
 }
 
 // CaptureGenerationBinding admits a stopped generation independently from

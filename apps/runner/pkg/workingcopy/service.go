@@ -106,8 +106,9 @@ type captureIntent struct {
 }
 
 type captureDeletion struct {
-	Version  int             `json:"version"`
-	Identity CaptureIdentity `json:"identity"`
+	Version     int                   `json:"version"`
+	Identity    CaptureIdentity       `json:"identity,omitzero"`
+	SandboxFile sandboxFileRetirement `json:"sandboxFile,omitzero"`
 }
 
 type objectKeys struct {
@@ -186,6 +187,9 @@ func (s *Service) Capture(
 	sandboxID string,
 	binding CaptureBinding,
 ) (CaptureReceipt, error) {
+	if err := requireProductCapture(binding); err != nil {
+		return CaptureReceipt{}, err
+	}
 	zonePath, err := s.validateBinding(sandboxID, binding)
 	if err != nil {
 		return CaptureReceipt{}, err
@@ -194,6 +198,10 @@ func (s *Service) Capture(
 	bindingRoot := bindingObjectRoot(binding)
 	release := s.locks.acquire(bindingRoot)
 	defer release()
+	return s.captureLocked(ctx, zonePath, bindingRoot, binding)
+}
+
+func (s *Service) captureLocked(ctx context.Context, zonePath, bindingRoot string, binding CaptureBinding) (CaptureReceipt, error) {
 	if deletion, deleting, err := s.readDeletion(ctx, bindingRoot); err != nil {
 		return CaptureReceipt{}, err
 	} else if deleting {
@@ -220,11 +228,11 @@ func (s *Service) Capture(
 		return s.resumeCapture(ctx, zonePath, existing)
 	}
 
-	if err := s.requireCurrentComponent(binding.Authority); err != nil {
+	if err := s.requireBindingComponent(binding); err != nil {
 		return CaptureReceipt{}, err
 	}
 	var generation generationstop.TerminalGeneration
-	if binding.FileSnapshot.Contract == "" {
+	if !binding.isFileSnapshot() {
 		stopReceipt, err := s.requireCurrentStop(ctx, binding)
 		if err != nil {
 			return CaptureReceipt{}, err
@@ -263,7 +271,7 @@ func (s *Service) Capture(
 			}
 			return CaptureReceipt{}, fmt.Errorf("%w: persist capture intent: %v", ErrOutcomeUnknown, err)
 		}
-		if err := requireBinding(winner.Binding, binding); err != nil {
+		if err := requireBinding(winner.Binding, binding); err != nil && !sameSandboxFileRequest(winner.Binding, binding) {
 			return CaptureReceipt{}, err
 		}
 		return s.resumeCapture(ctx, zonePath, winner)
@@ -349,6 +357,9 @@ func (s *Service) Observe(
 	sandboxID string,
 	binding CaptureBinding,
 ) (CaptureObservation, error) {
+	if err := requireProductCapture(binding); err != nil {
+		return CaptureObservation{}, err
+	}
 	if _, err := s.validateBinding(sandboxID, binding); err != nil {
 		return CaptureObservation{}, err
 	}
@@ -440,6 +451,18 @@ func (s *Service) Read(
 	sandboxID string,
 	request CaptureReadRequest,
 ) (CaptureReadResponse, error) {
+	if err := requireProductCapture(request.CaptureBinding); err != nil {
+		return CaptureReadResponse{}, err
+	}
+	return s.readCapture(ctx, sandboxID, request, nil)
+}
+
+func (s *Service) readCapture(
+	ctx context.Context,
+	sandboxID string,
+	request CaptureReadRequest,
+	expected *CaptureReceipt,
+) (CaptureReadResponse, error) {
 	if _, err := s.validateBinding(sandboxID, request.CaptureBinding); err != nil {
 		return CaptureReadResponse{}, err
 	}
@@ -481,6 +504,9 @@ func (s *Service) Read(
 	if !complete {
 		return CaptureReadResponse{}, fmt.Errorf("%w: capture is partial", ErrConflict)
 	}
+	if expected != nil && *expected != receipt {
+		return CaptureReadResponse{}, fmt.Errorf("%w: native capture receipt differs from stored custody", ErrConflict)
+	}
 	if request.ExpectedTotalByteLength != receipt.TotalByteLength ||
 		request.ExpectedProviderSHA256Digest != receipt.ProviderSHA256Digest {
 		return CaptureReadResponse{}, fmt.Errorf("%w: capture receipt authority changed", ErrConflict)
@@ -521,6 +547,9 @@ func (s *Service) Delete(
 	sandboxID string,
 	identity CaptureIdentity,
 ) (CaptureDeleteReceipt, error) {
+	if err := requireProductCapture(identity.CaptureBinding); err != nil {
+		return CaptureDeleteReceipt{}, err
+	}
 	if _, err := s.validateBinding(sandboxID, identity.CaptureBinding); err != nil {
 		return CaptureDeleteReceipt{}, err
 	}
@@ -553,7 +582,7 @@ func (s *Service) Delete(
 			// identity from the exact binding and the current terminal generation
 			// before publishing the irreversible retirement tombstone.
 			var terminal generationstop.TerminalGeneration
-			if identity.FileSnapshot.Contract == "" {
+			if !identity.CaptureBinding.isFileSnapshot() {
 				stopReceipt, stopErr := s.requireCurrentStop(ctx, identity.CaptureBinding)
 				if stopErr != nil {
 					return CaptureDeleteReceipt{}, stopErr
@@ -617,6 +646,9 @@ func (s *Service) Exists(
 	sandboxID string,
 	identity CaptureIdentity,
 ) (CaptureExistsResponse, error) {
+	if err := requireProductCapture(identity.CaptureBinding); err != nil {
+		return CaptureExistsResponse{}, err
+	}
 	if _, err := s.validateBinding(sandboxID, identity.CaptureBinding); err != nil {
 		return CaptureExistsResponse{}, err
 	}
@@ -667,10 +699,10 @@ func (s *Service) resumeCapture(
 		return CaptureReceipt{}, err
 	}
 	if !stagedExists {
-		if err := s.requireCurrentComponent(intent.Binding.Authority); err != nil {
+		if err := s.requireBindingComponent(intent.Binding); err != nil {
 			return CaptureReceipt{}, err
 		}
-		if intent.Binding.FileSnapshot.Contract == "" {
+		if !intent.Binding.isFileSnapshot() {
 			currentStop, err := s.requireCurrentStop(ctx, intent.Binding)
 			if err != nil {
 				return CaptureReceipt{}, err
@@ -688,13 +720,16 @@ func (s *Service) resumeCapture(
 		}
 		defer content.Close()
 
-		if intent.Binding.FileSnapshot.Contract != "" {
+		if intent.Binding.isFileSnapshot() {
 			if s.fileSnapshots == nil {
 				return CaptureReceipt{}, fmt.Errorf("%w: native file snapshots are not configured", ErrUnavailable)
 			}
 			generation, observeErr := s.fileSnapshots.ObserveGeneration(ctx, intent.Binding)
 			if observeErr != nil {
 				return CaptureReceipt{}, observeErr
+			}
+			if intent.Binding.SandboxFile != (SandboxFileSource{}) && !generation.State.Running {
+				return CaptureReceipt{}, fmt.Errorf("%w: native source stopped before file capture", ErrConflict)
 			}
 			if generation.State.Running {
 				staged, err = s.fileSnapshots.Capture(ctx, intent.Binding, content, MaximumCaptureBytes)
@@ -850,7 +885,7 @@ func (s *Service) captureStableFile(
 // snapshot observes real terminal state; it never invents a stop operation or
 // dispatches one. Historical stopped captures retain their durable stop receipt.
 func (s *Service) requireCaptureStoppedGeneration(ctx context.Context, intent captureIntent) (generationstop.TerminalGeneration, error) {
-	if intent.Binding.FileSnapshot.Contract == "" {
+	if !intent.Binding.isFileSnapshot() {
 		receipt, err := s.requireCurrentStop(ctx, intent.Binding)
 		if err != nil {
 			return generationstop.TerminalGeneration{}, err
@@ -913,7 +948,7 @@ func (s *Service) validateStoppedDirectoryRosterRequest(
 	if err != nil {
 		return "", err
 	}
-	if request.Anchor.FileSnapshot.Contract != "" {
+	if request.Anchor.isFileSnapshot() {
 		return "", invalidf("directory roster requires a stopped-generation anchor")
 	}
 	if request.Anchor.Selector.SemanticZoneRef == userFilesSemanticZoneRef {
@@ -1142,16 +1177,16 @@ func (s *Service) readIntent(
 	if err := decodeCanonicalStoredJSON(data, &intent); err != nil || intent.Version != 1 {
 		return captureIntent{}, false, fmt.Errorf("%w: capture intent is not canonical", ErrConflict)
 	}
-	if _, err := s.validateBinding(intent.Binding.Source.ProviderResourceID, intent.Binding); err != nil {
+	if _, err := s.validateBinding(intent.Binding.sandboxID(), intent.Binding); err != nil || bindingObjectRoot(intent.Binding) != bindingRoot {
 		return captureIntent{}, false, fmt.Errorf("%w: stored capture binding is invalid", ErrConflict)
 	}
 	if err := validateProviderResourceID(intent.ProviderResourceID); err != nil ||
 		intent.ProviderResourceID != providerResourceID(intent.Binding, intent.Generation) ||
-		(intent.Binding.FileSnapshot.Contract == "" &&
+		(!intent.Binding.isFileSnapshot() &&
 			(intent.Generation.ContainerID == "" || intent.Generation.ContainerCreatedAt == "" ||
 				intent.Generation.ExecutionStartedAt == "" || intent.Generation.ExecutionFinishedAt == "" ||
 				intent.Generation.RestartCount < 0)) ||
-		(intent.Binding.FileSnapshot.Contract != "" && intent.Generation != (generationstop.TerminalGeneration{})) {
+		(intent.Binding.isFileSnapshot() && intent.Generation != (generationstop.TerminalGeneration{})) {
 		return captureIntent{}, false, fmt.Errorf("%w: capture intent identity is invalid", ErrConflict)
 	}
 	return intent, true, nil
@@ -1169,11 +1204,20 @@ func (s *Service) readDeletion(
 		return captureDeletion{}, false, objectReadError("read capture deletion", err)
 	}
 	var deletion captureDeletion
-	if err := decodeCanonicalStoredJSON(data, &deletion); err != nil || deletion.Version != 1 {
+	if err := decodeCanonicalStoredJSON(data, &deletion); err != nil {
 		return captureDeletion{}, false, fmt.Errorf("%w: capture deletion is not canonical", ErrConflict)
 	}
+	if deletion.Version == 2 {
+		if err := validateSandboxFileRetirement(deletion, bindingRoot); err != nil {
+			return captureDeletion{}, false, err
+		}
+		return deletion, true, nil
+	}
+	if deletion.Version != 1 || deletion.SandboxFile != (sandboxFileRetirement{}) {
+		return captureDeletion{}, false, fmt.Errorf("%w: capture deletion version is invalid", ErrConflict)
+	}
 	if _, err := s.validateBinding(
-		deletion.Identity.Source.ProviderResourceID,
+		deletion.Identity.CaptureBinding.sandboxID(),
 		deletion.Identity.CaptureBinding,
 	); err != nil {
 		return captureDeletion{}, false, fmt.Errorf("%w: stored deletion binding is invalid", ErrConflict)
@@ -1191,10 +1235,13 @@ func (s *Service) operationalObjectsPresent(
 	ctx context.Context,
 	identity CaptureIdentity,
 ) (bool, error) {
-	keys := keysForIdentity(identity)
+	return s.captureObjectsPresent(ctx, identity, false)
+}
+
+func (s *Service) captureObjectsPresent(ctx context.Context, identity CaptureIdentity, preserveIntent bool) (bool, error) {
 	present := false
 	var failures []error
-	for _, key := range []string{keys.receipt, keys.content, keys.intent} {
+	for _, key := range operationalCaptureKeys(identity, preserveIntent) {
 		exists, err := s.privateObjectExists(ctx, key)
 		present = present || exists
 		if err != nil {
@@ -1216,9 +1263,20 @@ func (s *Service) privateObjectExists(ctx context.Context, key string) (bool, er
 }
 
 func (s *Service) deleteOperationalObjects(ctx context.Context, identity CaptureIdentity) error {
+	return s.deleteCaptureObjects(ctx, identity, false)
+}
+
+func operationalCaptureKeys(identity CaptureIdentity, preserveIntent bool) []string {
 	keys := keysForIdentity(identity)
+	if preserveIntent {
+		return []string{keys.receipt, keys.content}
+	}
+	return []string{keys.receipt, keys.content, keys.intent}
+}
+
+func (s *Service) deleteCaptureObjects(ctx context.Context, identity CaptureIdentity, preserveIntent bool) error {
 	var failures []error
-	for _, key := range []string{keys.receipt, keys.content, keys.intent} {
+	for _, key := range operationalCaptureKeys(identity, preserveIntent) {
 		if err := s.deleteObjectReconciled(ctx, key); err != nil {
 			failures = append(failures, err)
 		}
@@ -1256,13 +1314,25 @@ func (s *Service) ensureNotDeleting(ctx context.Context, intent captureIntent) e
 		return nil
 	}
 	identity := identityFromIntent(intent)
-	if deletion.Identity != identity {
+	if deletion.Version == 2 {
+		if err := requireSandboxFileLookup(intent.Binding, deletion.SandboxFile.SandboxID, deletion.SandboxFile.Request); err != nil {
+			return err
+		}
+	} else if deletion.Identity != identity {
 		return fmt.Errorf("%w: deletion identity differs", ErrConflict)
 	}
-	if cleanupErr := s.deleteOperationalObjects(ctx, identity); cleanupErr != nil {
+	if cleanupErr := s.deleteCaptureObjects(ctx, identity, deletion.requiresIntentForCleanup()); cleanupErr != nil {
 		return errors.Join(fmt.Errorf("%w: capture has been retired", ErrConflict), cleanupErr)
 	}
 	return fmt.Errorf("%w: capture has been retired", ErrConflict)
+}
+
+// An operation can be retired before source admission. If a previously
+// in-flight creator later persists its intent, that intent is the only durable
+// locator for late content. Keep it alongside the immutable retirement rather
+// than losing cleanup authority after a failed or delayed content write.
+func (deletion captureDeletion) requiresIntentForCleanup() bool {
+	return deletion.Version == 2 && deletion.Identity == (CaptureIdentity{})
 }
 
 func (s *Service) readReceipt(
@@ -1578,6 +1648,9 @@ func captureArchiveError(ctx context.Context, message string, err error) error {
 }
 
 func bindingObjectRoot(binding CaptureBinding) string {
+	if binding.SandboxFile != (SandboxFileSource{}) {
+		return sandboxFileObjectRoot(binding.SandboxFile.OrganizationID, binding.SandboxFile.SandboxID, binding.SandboxFile.OperationID)
+	}
 	tenantDigest := hashHex("ambit-working-copy-capture-tenant/v2\n" + binding.Owner.TenantID)
 	bindingDigest := hashHex(strings.Join([]string{
 		"ambit-working-copy-capture-binding/v2",
@@ -1588,6 +1661,10 @@ func bindingObjectRoot(binding CaptureBinding) string {
 }
 
 func providerResourceID(binding CaptureBinding, generation generationstop.TerminalGeneration) string {
+	if binding.SandboxFile != (SandboxFileSource{}) {
+		data, _ := json.Marshal(binding)
+		return sandboxFileCaptureIDPrefix + hashHex(string(data))
+	}
 	bindingBytes, _ := json.Marshal(binding)
 	digest := hashHex(strings.Join([]string{
 		"ambit-working-copy-capture-generation/v2",
@@ -1618,6 +1695,9 @@ func keysForIntent(intent captureIntent) objectKeys {
 func keysForIdentity(identity CaptureIdentity) objectKeys {
 	root := bindingObjectRoot(identity.CaptureBinding)
 	generationDigest := strings.TrimPrefix(identity.ProviderResourceID, "daytona-working-copy-capture:v2:sha256:")
+	if identity.SandboxFile != (SandboxFileSource{}) {
+		generationDigest = strings.TrimPrefix(identity.ProviderResourceID, sandboxFileCaptureIDPrefix)
+	}
 	return objectKeys{
 		intent:   intentKey(root),
 		content:  root + "/" + generationDigest + "/content.bin",
@@ -1657,6 +1737,9 @@ func requireIdentity(intent captureIntent, expected CaptureIdentity) error {
 }
 
 func validateProviderResourceID(value string) error {
+	if strings.HasPrefix(value, sandboxFileCaptureIDPrefix) && len(value) == len(sandboxFileCaptureIDPrefix)+64 && isLowerHex(strings.TrimPrefix(value, sandboxFileCaptureIDPrefix)) {
+		return nil
+	}
 	const prefix = "daytona-working-copy-capture:v2:sha256:"
 	if !strings.HasPrefix(value, prefix) || len(value) != len(prefix)+64 || !isLowerHex(strings.TrimPrefix(value, prefix)) {
 		return invalidf("providerResourceId is invalid")

@@ -36,6 +36,9 @@ func NewNativeFileSnapshotReader(generations generationstop.GenerationInspector)
 }
 
 func (s *Service) validateCaptureSource(sandboxID string, binding CaptureBinding) error {
+	if binding.SandboxFile != (SandboxFileSource{}) {
+		return validateSandboxFileBinding(sandboxID, binding)
+	}
 	if binding.FileSnapshot == (FileSnapshotSource{}) {
 		return s.validateGenerationBinding(sandboxID, binding.generationBinding())
 	}
@@ -68,6 +71,16 @@ func (s *Service) validateCaptureSource(sandboxID string, binding CaptureBinding
 }
 
 func (s *NativeFileSnapshotReader) ObserveGeneration(ctx context.Context, binding CaptureBinding) (generationstop.CurrentGenerationObservation, error) {
+	if binding.SandboxFile != (SandboxFileSource{}) {
+		current, err := s.ObserveSandboxGeneration(ctx, binding.SandboxFile.SandboxID, binding.SandboxFile.OrganizationID)
+		if err != nil {
+			return generationstop.CurrentGenerationObservation{}, err
+		}
+		if current.Generation.ExpectedGeneration != binding.SandboxFile.Generation {
+			return generationstop.CurrentGenerationObservation{}, fmt.Errorf("%w: native file snapshot lost its exact source generation", ErrConflict)
+		}
+		return generationstop.CurrentGenerationObservation{Generation: current.Generation, State: current.State}, nil
+	}
 	if s == nil || s.generations == nil {
 		return generationstop.CurrentGenerationObservation{}, fmt.Errorf("%w: file snapshot generation inspector is unavailable", ErrUnavailable)
 	}
@@ -96,6 +109,30 @@ func (s *NativeFileSnapshotReader) ObserveGeneration(ctx context.Context, bindin
 		if err != nil || startErr != nil || finished.Before(started) {
 			return current, fmt.Errorf("%w: file snapshot source has invalid terminal facts", ErrConflict)
 		}
+	}
+	return current, nil
+}
+
+// ObserveSandboxGeneration is native provider authority. It does not reinterpret
+// Product labels or create a Product owner, fence, stop grant, or qualification.
+func (s *NativeFileSnapshotReader) ObserveSandboxGeneration(ctx context.Context, sandboxID, organizationID string) (generationstop.SandboxGenerationObservation, error) {
+	if s == nil {
+		return generationstop.SandboxGenerationObservation{}, fmt.Errorf("%w: native sandbox inspector is unavailable", ErrUnavailable)
+	}
+	inspector, ok := s.generations.(generationstop.SandboxGenerationInspector)
+	if !ok {
+		return generationstop.SandboxGenerationObservation{}, fmt.Errorf("%w: native sandbox inspector is unavailable", ErrUnavailable)
+	}
+	current, err := inspector.InspectSandboxGeneration(ctx, sandboxID)
+	if err != nil {
+		return current, fmt.Errorf("%w: inspect native sandbox generation: %w", ErrUnavailable, err)
+	}
+	state := current.State
+	if current.SandboxID != sandboxID || current.OrganizationID != organizationID ||
+		generationstop.ValidateExpectedGeneration(current.Generation.ExpectedGeneration) != nil ||
+		state.Status != "running" || !state.Running || state.PID <= 0 || state.Paused || state.Restarting || state.Dead ||
+		current.Generation.ExecutionFinishedAt != "" {
+		return current, fmt.Errorf("%w: native file snapshot requires its exact owned running sandbox", ErrConflict)
 	}
 	return current, nil
 }
