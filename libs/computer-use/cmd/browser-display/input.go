@@ -147,6 +147,14 @@ func keyIdentity(event inputEvent) string {
 	}
 	return event.Key
 }
+func (d *display) keyHeldByOther(identity string, code byte) bool {
+	for holder, held := range d.heldCodes {
+		if holder != identity && held == code {
+			return true
+		}
+	}
+	return false
+}
 func (d *display) keyboardInput(event inputEvent) error {
 	code, mask := d.keycode(event), event.Modifiers
 	identity := keyIdentity(event)
@@ -177,8 +185,10 @@ func (d *display) keyboardInput(event inputEvent) error {
 	if held := d.heldCodes[identity]; down && held != 0 && held != code {
 		// A repeat can change from text-level mapping to a physical shortcut.
 		// Settle the earlier exact press before replacing its identity.
-		if err := d.key(held, false); err != nil {
-			return err
+		if !d.keyHeldByOther(identity, held) {
+			if err := d.key(held, false); err != nil {
+				return err
+			}
 		}
 		delete(d.heldCodes, identity)
 	}
@@ -198,7 +208,10 @@ func (d *display) keyboardInput(event inputEvent) error {
 	if down {
 		d.heldCodes[identity] = code
 	}
-	primary := d.key(code, down)
+	var primary error
+	if down || !d.keyHeldByOther(identity, code) {
+		primary = d.key(code, down)
+	}
 	if primary == nil && !down {
 		delete(d.heldCodes, identity)
 	}
