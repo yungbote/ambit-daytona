@@ -25,7 +25,10 @@ var (
 // durable effects. Keys remain private to the caller and are never returned
 // through a public API.
 type PrivateObjectInfo struct {
-	Size          int64
+	Size int64
+	// ContentSHA256 is the provider checksum, or the verified digest of an
+	// identity-conditional empty-body read when an older upload omitted it.
+	// Missing checksums for nonempty objects are never inferred from metadata.
 	ContentSHA256 string
 	ETag          string
 	VersionID     string
