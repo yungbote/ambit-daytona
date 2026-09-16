@@ -201,6 +201,22 @@ func TestRealBrowserWindowGeometryInputAndHandoff(t *testing.T) {
 		t.Fatalf("old window generation was not refused: %v", stale)
 	}
 	input["expectedSurfaceGeneration"] = lease["surface"].(map[string]any)["generation"]
+	var keyboard []map[string]any
+	for _, letter := range "nativebatchkeyboardorderabc" {
+		key := string(letter)
+		code := "Key" + strings.ToUpper(key)
+		keyboard = append(keyboard,
+			map[string]any{"type": "input_keyboard", "eventType": "keyDown", "key": key, "text": key, "code": code},
+			map[string]any{"type": "input_keyboard", "eventType": "keyUp", "key": key, "code": code})
+	}
+	keyboard = append(keyboard,
+		map[string]any{"type": "input_keyboard", "eventType": "keyDown", "key": "a", "code": "KeyA", "modifiers": 2},
+		map[string]any{"type": "input_keyboard", "eventType": "keyUp", "key": "a", "code": "KeyA", "modifiers": 0})
+	started := time.Now()
+	control(map[string]any{"op": "input", "controllerId": browserFixtureController, "sequence": 1,
+		"expectedSurfaceGeneration": input["expectedSurfaceGeneration"], "events": keyboard}, http.StatusOK)
+	t.Logf("ordered native keyboard batch: %d events acknowledged in %s", len(keyboard), time.Since(started))
+	input["sequence"] = 2
 	control(input, http.StatusOK)
 	if duplicate := control(input, http.StatusOK); duplicate["status"] != "duplicate" {
 		t.Fatalf("input replay: %v", duplicate)
