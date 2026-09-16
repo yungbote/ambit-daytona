@@ -16,6 +16,8 @@ set -euo pipefail
 LINEAGE=/opt/ambit/runtime-base/workspace/lineage
 IMAGE_LOCK="${LINEAGE}/toolchains.lock.json"
 SOURCE_LOCKS="${SOURCE_LOCKS:-/source-locks}"
+SOURCE_TOOLCHAIN_LOCK="${SOURCE_TOOLCHAIN_LOCK-${SOURCE_LOCKS}/toolchains.lock.json}"
+SOURCE_DPKG_ROSTER="${SOURCE_DPKG_ROSTER-${SOURCE_LOCKS}/installed-dpkg.lock}"
 failures=0
 
 fail() { echo "FAIL: $*" >&2; failures=$((failures + 1)); }
@@ -41,26 +43,28 @@ PY_REQUIREMENTS_NAME="$(lock 'lock["python"]["requirements"]')"
 NODE_MANIFEST_NAME="$(lock 'lock["node"]["manifest"]')"
 NODE_LOCKFILE_NAME="$(lock 'lock["node"]["lockfile"]')"
 for name in toolchains.lock.json "$PY_REQUIREMENTS_NAME" "$NODE_MANIFEST_NAME" "$NODE_LOCKFILE_NAME"; do
+  source_file="${SOURCE_LOCKS}/${name}"
+  if [ "$name" = toolchains.lock.json ]; then source_file="$SOURCE_TOOLCHAIN_LOCK"; fi
   [ -r "${LINEAGE}/${name}" ] || { fail "image carries no lineage copy of ${name}"; continue; }
-  if [ -r "${SOURCE_LOCKS}/${name}" ]; then
-    if cmp -s "${SOURCE_LOCKS}/${name}" "${LINEAGE}/${name}"; then
-      ok "image lineage copy equals source locks/${name}"
+  if [ -r "$source_file" ]; then
+    if cmp -s "$source_file" "${LINEAGE}/${name}"; then
+      ok "image lineage copy equals source ${source_file}"
     else
-      fail "image lineage copy differs from source locks/${name}"
+      fail "image lineage copy differs from source ${source_file}"
     fi
   else
-    echo "note: no source locks/${name} mounted at ${SOURCE_LOCKS}; skipping source equality"
+    fail "source lock is not readable: ${source_file}"
   fi
 done
-if [ -r "${SOURCE_LOCKS}/installed-dpkg.lock" ]; then
-  if cmp -s "${SOURCE_LOCKS}/installed-dpkg.lock" "${LINEAGE}/installed-dpkg.lock"; then
-    ok "installed dpkg roster equals source locks/installed-dpkg.lock"
+if [ -r "$SOURCE_DPKG_ROSTER" ]; then
+  if cmp -s "$SOURCE_DPKG_ROSTER" "${LINEAGE}/installed-dpkg.lock"; then
+    ok "installed dpkg roster equals source ${SOURCE_DPKG_ROSTER}"
   else
-    fail "installed dpkg roster drifted from source locks/installed-dpkg.lock"
-    diff "${SOURCE_LOCKS}/installed-dpkg.lock" "${LINEAGE}/installed-dpkg.lock" >&2 || true
+    fail "installed dpkg roster drifted from source ${SOURCE_DPKG_ROSTER}"
+    diff "$SOURCE_DPKG_ROSTER" "${LINEAGE}/installed-dpkg.lock" >&2 || true
   fi
 else
-  echo "note: no source dpkg roster mounted; skipping roster equality"
+  fail "source dpkg roster is not readable: ${SOURCE_DPKG_ROSTER}"
 fi
 # A matching source/receipt pair cannot conceal a changed installed package.
 # Historical parent rosters remain in lineage/parent-toolchains after updates.

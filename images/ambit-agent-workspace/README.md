@@ -144,6 +144,13 @@ docker run --rm --network none \
   --entrypoint bash IMAGE /verify.sh
 ```
 
+These source locks and the recorded roster belong to this standalone
+composition. The [browser image](browser/README.md#ordinary-dependency-maintenance)
+retains its effective toolchain lock and observed roster under `browser/locks`
+and explicitly selects those files when using the same conformance script.
+Its shared Python and Node sidecars still come from this `locks` directory.
+All selected source files must be present and match the image's lineage.
+
 ## Refresh the lock
 
 1. Edit `locks/toolchains.lock.json`: new upstream version + checksum from the

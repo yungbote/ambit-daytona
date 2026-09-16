@@ -111,8 +111,8 @@ No image was rebuilt from these commits. The daemon and launcher changes require
 
 The browser build updates inherited Debian dependencies through the same
 authenticated snapshot transaction that installs its display dependencies.
-`browser.lock.json` binds both the exact parent and current source
-`toolchains.lock.json` bytes. Reconciliation permits only added or changed
+`browser.lock.json` binds both the exact parent and this component's effective
+`browser/locks/toolchains.lock.json` bytes. Reconciliation permits only added or changed
 Debian package pins; all other toolchain fields and every inherited pin remain
 present. The installer checks all resulting toolchain versions before copying
 the exact new source lock into active lineage. The previous lock and its dpkg
@@ -126,15 +126,33 @@ or add another runtime package path. The archive retains npm's bundled license
 and dependency notices. Include its exact `archiveName` in `browser_inputs`.
 
 After an actual candidate installation, export the resulting canonical
-`lineage/installed-dpkg.lock` into source `locks/installed-dpkg.lock` and freeze
-the source again before final qualification. That roster describes this
-complete browser composition, including the inherited file tools. A standalone
-toolchain image has a different composition and needs its own observed roster.
+`lineage/installed-dpkg.lock` into source `browser/locks/installed-dpkg.lock` and
+freeze the source again before final qualification. Both browser lock files
+describe this complete composition, including the inherited file tools. The
+standalone Dockerfile continues to own the original top-level `locks` inputs;
+browser maintenance does not replace its package declaration or observed roster.
 Conformance compares the source lock, the stored receipt, and live dpkg output;
 neither a simulated dependency solution nor an unchanged parent receipt proves
 the final installed packages. Regenerate executable inventory and fresh image
 supply evidence after updates. Package updates do not themselves establish
 admission or remove scanner findings without an actual-image measurement.
+
+The common conformance script defaults to the standalone lock and roster.
+For the browser image, select these two component files explicitly while
+retaining the shared Python and Node sidecars in `SOURCE_LOCKS`. From the
+repository root:
+
+```sh
+docker run --rm --network none \
+  --mount type=bind,src="$PWD/images/ambit-agent-workspace",dst=/source,readonly \
+  --env SOURCE_LOCKS=/source/locks \
+  --env SOURCE_TOOLCHAIN_LOCK=/source/browser/locks/toolchains.lock.json \
+  --env SOURCE_DPKG_ROSTER=/source/browser/locks/installed-dpkg.lock \
+  --entrypoint bash IMAGE /source/conformance/verify.sh
+```
+
+Missing or mismatched selected files fail qualification. There is no fallback
+to another composition, and the image does not select its own expected inputs.
 
 ## Acceptance still required before activation
 
