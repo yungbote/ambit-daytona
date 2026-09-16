@@ -7,7 +7,6 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(git -C "$script_dir" rev-parse --show-toplevel)"
 source_url="https://github.com/yungbote/ambit-daytona"
-revision_token="SOURCE_REVISION_REQUIRED"
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/ambit-daytona-production-render.XXXXXX")"
 
 cleanup() {
@@ -81,7 +80,9 @@ inspect_labels() {
     }
 }
 
-source_revision=""
+bindings_file="$work_dir/component-bindings.json"
+printf '{}\n' > "$bindings_file"
+declare -A verified_revisions=()
 for repository in "${component_repositories[@]}"; do
   matches=()
   for image in "${rendered_images[@]}"; do
@@ -115,37 +116,48 @@ for repository in "${component_repositories[@]}"; do
     exit 1
   }
 
-  if [[ -z "$source_revision" ]]; then
-    source_revision="$image_revision"
-  elif [[ "$image_revision" != "$source_revision" ]]; then
-    echo "Daytona component images do not share one source revision" >&2
-    exit 1
+  # Each component retains its own source identity. Resolving one component
+  # never relabels another image, nor asks for an unrelated rebuild.
+  if [[ -z "${verified_revisions[$image_revision]+present}" ]]; then
+    resolved_revision="$(git -C "$repo_root" rev-parse --verify "$image_revision^{commit}" 2>/dev/null || true)"
+    if [[ -z "$resolved_revision" ]]; then
+      resolved_revision="$(
+        curl --fail --silent --show-error --location \
+          --connect-timeout 5 --max-time 20 --retry 2 --retry-all-errors \
+          "https://api.github.com/repos/yungbote/ambit-daytona/commits/$image_revision" |
+          jq -er '.sha'
+      )"
+    fi
+    [[ "$resolved_revision" == "$image_revision" ]] || {
+      echo "OCI source revision does not resolve to the exact public Git commit: $image" >&2
+      exit 1
+    }
+    verified_revisions[$image_revision]=1
   fi
+
+  component="${repository##*/daytona-}"
+  revision_token="DAYTONA_${component^^}_SOURCE_REVISION_REQUIRED"
+  revision_token="${revision_token//-/_}"
+  jq --arg image "$image" --arg component "$component" \
+    --arg revision "$image_revision" --arg token "$revision_token" \
+    '. + {($image): {component:$component, revision:$revision, token:$token}}' \
+    "$bindings_file" > "$work_dir/next-bindings.json"
+  mv "$work_dir/next-bindings.json" "$bindings_file"
 done
 
-resolved_revision="$(git -C "$repo_root" rev-parse --verify "$source_revision^{commit}" 2>/dev/null || true)"
-if [[ -z "$resolved_revision" ]]; then
-  # The operational infra repository carries a byte-identical derived copy of
-  # this package, not Daytona's Git object database. Prove the public source
-  # commit directly when rendering from that copy or from a shallow checkout.
-  resolved_revision="$(
-    curl --fail --silent --show-error --location \
-      --connect-timeout 5 --max-time 20 --retry 2 --retry-all-errors \
-      "https://api.github.com/repos/yungbote/ambit-daytona/commits/$source_revision" |
-      jq -er '.sha'
-  )"
-fi
-[[ "$resolved_revision" == "$source_revision" ]] || {
-  echo "OCI source revision does not resolve to the exact public Git commit" >&2
-  exit 1
+# Decode using the existing Kubernetes client, strictly locally. This is a
+# no-op in-memory merge, not an apply or a server-side admission request.
+validate_annotations() {
+  kubectl patch --local=true --type=merge --patch='{}' \
+    --filename="$1" --output=json |
+    jq -es --slurpfile bindings "$bindings_file" --arg phase "$2" \
+      --arg source "$source_url" -f "$script_dir/validate-component-provenance.jq" > /dev/null
 }
-
-token_count="$(grep -c "$revision_token" "$raw_render" || true)"
-[[ "$token_count" -eq 5 ]] || {
-  echo "expected five Daytona source-revision template annotations, found $token_count" >&2
-  exit 1
-}
-sed "s/$revision_token/$source_revision/g" "$raw_render" > "$admitted_render"
+validate_annotations "$raw_render" token
+jq -r 'to_entries[] | "s/" + .value.token + "/" + (.value.revision | tojson) + "/g"' \
+  "$bindings_file" > "$work_dir/revisions.sed"
+sed -f "$work_dir/revisions.sed" "$raw_render" > "$admitted_render"
+validate_annotations "$admitted_render" revision
 
 if grep -En 'REQUIRED_|build-required|source-build-required|SOURCE_REVISION_REQUIRED' "$admitted_render" >&2; then
   echo 'production render contains an unresolved release input' >&2
@@ -162,15 +174,6 @@ for image in "${rendered_images[@]}"; do
     exit 1
   }
 done
-
-[[ "$(grep -Fc "ambit.sh/source-url: $source_url" "$admitted_render")" -eq 5 ]] || {
-  echo 'expected five canonical Daytona source URL annotations' >&2
-  exit 1
-}
-[[ "$(grep -Fc "ambit.sh/source-revision: $source_revision" "$admitted_render")" -eq 5 ]] || {
-  echo 'Daytona workload annotations do not match admitted OCI provenance' >&2
-  exit 1
-}
 
 [[ "$(grep -Fc 'networking.gke.io/certmap: ambit-daytona-public' "$admitted_render")" -eq 1 ]] \
   && [[ "$(grep -Fc 'value: ambit-daytona-gateway-ip' "$admitted_render")" -eq 1 ]] \
@@ -198,5 +201,5 @@ grep -Fq 'addr: harbor-redis.daytona-state.svc.cluster.local:6379' "$script_dir/
     exit 1
   }
 
-printf 'verified Daytona component provenance at source revision %s\n' "$source_revision" >&2
+jq -r 'to_entries[] | "verified Daytona " + .value.component + " source " + .value.revision + " for " + .key' "$bindings_file" >&2
 cat "$admitted_render"

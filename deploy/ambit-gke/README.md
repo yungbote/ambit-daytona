@@ -16,8 +16,11 @@ public-load-balancing contracts explicitly.
 It does **not** copy or depend on Daytona's later proprietary chart or source.
 All files in this directory are AGPL-3.0. Before serving network users, publish
 the complete corresponding fork source. The production render admits a
-revision only when all four immutable component images expose the canonical
-repository URL and the same full Git SHA through OCI labels. Keeping the URL in
+component revision only when its immutable image exposes the canonical
+repository URL and a full Git SHA that resolves to that source commit. Each
+workload and its Pod template carry their own component's revision; the API
+and its migration Job share the API image and revision. Components need not
+be rebuilt together when their interfaces and dependencies remain compatible. Keeping the URL in
 a manifest is not itself AGPL source availability.
 
 ## Why the boundary looks like this
@@ -45,8 +48,10 @@ a manifest is not itself AGPL source availability.
 
 ## Inputs that must exist before render/apply
 
-Build all four images from this AGPL fork and address them by immutable digest.
-Never substitute the stale upstream `latest` images. In the deployment overlay,
+All four component images must come from this AGPL fork and be addressed by
+immutable digest. A compatible release may replace only its changed components;
+retained images keep their own verified source identity. Never substitute stale
+upstream `latest` images. In the deployment overlay,
 set:
 
 ```sh

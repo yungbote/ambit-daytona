@@ -18,7 +18,9 @@ certificate map.
 
 Kustomize does not allow a nested overlay to import its ancestor
 Kustomization, so this overlay lists the base resource files explicitly. The
-raw base carries `SOURCE_REVISION_REQUIRED`; do not invoke Kustomize directly
+raw base carries a source-revision placeholder; the production-only provenance
+patch gives each component its own placeholder on both workload and Pod
+metadata. Do not invoke Kustomize directly
 for an admitted production release. Render from the repository root with:
 
 ```sh
@@ -26,11 +28,29 @@ deploy/ambit-gke/overlays/production/render-production.sh > rendered.yaml
 ```
 
 The renderer reads the four immutable Daytona manifests from Artifact Registry,
-requires one canonical `org.opencontainers.image.source`, requires one shared
-full `org.opencontainers.image.revision` that resolves to an exact Git commit,
-and only then writes that revision into the five Daytona workload annotations.
+requires the canonical `org.opencontainers.image.source` for each, and verifies
+each full `org.opencontainers.image.revision` resolves to its exact Git commit.
+It checks the actual named main container and component role before replacing
+that component's workload and Pod annotations. The API and migration Job must
+use the same API image and revision. Independently released components may
+retain different revisions; shared resources receive no component revision.
 It also rejects every unresolved input, mutable image, retired `daytona-oss-*`
 repository, managed-Redis CA seam, or missing proxy apex/deep-wildcard route.
+
+These renderer checks establish image/source attribution, not SLSA verification
+or runtime compatibility. The existing publication owner must still verify each
+selected image's build, source tree/archive and SLSA evidence. Runtime interface,
+physical component, migration and drain qualification remain separate gates.
+An unchanged component keeps its own verified image rather than acquiring the
+new API or Runner revision as a release label.
+
+The offline contract test uses real Kustomize/local decoding with stubbed cloud
+and public-source responses; it makes no cloud calls:
+
+```sh
+python3 deploy/ambit-gke/overlays/production/test-component-provenance.py
+```
+
 
 The exact official Harbor 1.19.2 chart is vendored under `charts/`; its archive
 SHA-256 was verified against the official repository index and is recorded in

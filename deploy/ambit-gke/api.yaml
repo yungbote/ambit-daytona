@@ -29,8 +29,8 @@ metadata:
     app.kubernetes.io/component: api
   annotations:
     ambit.sh/source-url: https://github.com/yungbote/ambit-daytona
-    # render-production.sh replaces this only after all four immutable
-    # component images prove one matching OCI source revision.
+    # The environment overlay binds this to the API image's verified source.
+    # Other Daytona components may come from different source revisions.
     ambit.sh/source-revision: SOURCE_REVISION_REQUIRED
 spec:
   # First boot is intentionally serialized because c4 bootstraps its default
