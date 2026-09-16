@@ -51,11 +51,15 @@ Go and x/text notices under `/usr/share/licenses/ambit-atomic-materialize`.
 This replaces the inherited materializer; it does not assert source equivalence
 or provenance for that older binary. The build does not run native filesystem
 race or recovery probes, and exact compilation is not runtime qualification.
-The final build check runs as `daytona` and exercises ordinary framed creation,
-verification and idempotence for a binary payload and an empty file. It reads
-back exact bytes and immutable modes, then removes only its own temporary
-directory and proves `/workspace` remains empty. The same source-owned check
-must run against the published image under the admitted sandbox policy.
+Image construction checks binary identity, root ownership, immutable modes and
+build-lock/license readability as `daytona`. It does not assume that the image
+builder's filesystem implements the runtime's file operations.
+`build/check-materializer.py` is mandatory for actual-image runtime
+qualification under the declared workspace UID and sandbox policy. It exercises
+ordinary framed creation, verification and idempotence for a binary payload and
+an empty file, reads back exact bytes and modes, then removes only its own
+temporary directory and proves `/workspace` remains empty. Failure blocks
+runtime qualification; a successful image build cannot substitute for it.
 
 The image also records `/opt/ambit/runtime-base/workspace/lineage/executables.json`, derived from the existing locked Python console scripts, Node package bins, Debian command ownership and archive toolchains. The build reads both the installed browser and file-tools component locks, including the separate file-tools Python environment. Entries must resolve to those actual installed paths; optional Rustup shims without an installed component are excluded. Locked libraries are recorded separately in `libraries` groups, each with its actual `interpreter`, environment `root`, and `packages` containing names and versions. Imports without console entrypoints do not become commands. The file is build evidence for the existing runtime profile, not a capability grant or a substitute for C18 qualification. Help argv provides the normal CLI entrypoint; detailed use remains discoverable from the tool itself.
 

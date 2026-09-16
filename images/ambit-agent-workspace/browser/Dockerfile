@@ -20,6 +20,7 @@ RUN --network=none sha256sum -c source.sha256 \
  && GOPROXY=off GOSUMDB=off go mod verify \
  && GOPROXY=off GOSUMDB=off go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o /out/ambit-atomic-materialize . \
  && sha256sum -c binary.sha256 \
+ && go version -m /out/ambit-atomic-materialize \
  && mkdir -p /out/licenses /out/lineage \
  && cp LICENSE.md license.lock.json /out/licenses/ \
  && cp materializer.lock.json source.sha256 binary.sha256 /out/lineage/ \
@@ -93,10 +94,15 @@ WORKDIR /workspace
 # no tmpfs over it — so the launcher's fixed socket directory would otherwise be
 # baked in. Remove it here and prove /workspace is left exactly as the parent's
 # `io.ambit.workspace-contract` states: writable by the runtime user, empty.
-RUN --mount=type=bind,source=build/check-materializer.py,target=/checks/check-materializer.py,ro \
+RUN --mount=type=bind,source=build/install-browser.py,target=/checks/install-browser.py,ro \
     test -w /workspace \
  && test -r /opt/ambit/runtime-base/workspace/lineage/materializer/materializer.lock.json \
- && python3 /checks/check-materializer.py \
+ && test -x /opt/ambit/runtime-pack/core-document/bin/ambit-atomic-materialize \
+ && test -r /usr/share/licenses/ambit-atomic-materialize/LICENSE.md \
+ && test -r /usr/share/licenses/ambit-atomic-materialize/license.lock.json \
+ && test -r /usr/share/licenses/ambit-atomic-materialize/Go-LICENSE \
+ && test -r /usr/share/licenses/ambit-atomic-materialize/golang.org-x-text-LICENSE \
+ && python3 /checks/install-browser.py materializer /opt/ambit/browser/browser.lock.json "${BASE_IMAGE}" \
  && Xvfb -help >/dev/null 2>&1 \
  && xauth -V >/dev/null \
  && xvfb-run --help >/dev/null \
