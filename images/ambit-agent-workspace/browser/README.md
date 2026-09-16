@@ -38,11 +38,30 @@ Refreshing Debian inputs means selecting snapshots that contain the entire reque
 
 Cargo consumes the fork's committed lock with `--locked`. The final image records the browser lock, Cargo dependency lock, license notices, and installed Debian roster under `/opt/ambit/browser`. Source changes require a new lock and image digest. No installation or browser download occurs during a Run.
 
+The atomic materializer is built from the backend source archive named by the
+same browser lock. The installer verifies the archive, backend build-lock hash,
+declared recipe, source files and binary manifest before the pinned Go 1.25.13
+builder consumes them. Only module acquisition uses the network; source checks,
+module verification and compilation then run without networking. The resulting
+binary must match the backend's declared `binary.sha256` exactly. The final
+image installs it at the existing runtime path with root ownership and mode
+`0555`, records its lock and source manifests under
+`/opt/ambit/runtime-base/workspace/lineage/materializer`, and includes its own,
+Go and x/text notices under `/usr/share/licenses/ambit-atomic-materialize`.
+This replaces the inherited materializer; it does not assert source equivalence
+or provenance for that older binary. The build does not run native filesystem
+race or recovery probes, and exact compilation is not runtime qualification.
+The final build check runs as `daytona` and exercises ordinary framed creation,
+verification and idempotence for a binary payload and an empty file. It reads
+back exact bytes and immutable modes, then removes only its own temporary
+directory and proves `/workspace` remains empty. The same source-owned check
+must run against the published image under the admitted sandbox policy.
+
 The image also records `/opt/ambit/runtime-base/workspace/lineage/executables.json`, derived from the existing locked Python console scripts, Node package bins, Debian command ownership and archive toolchains. The build reads both the installed browser and file-tools component locks, including the separate file-tools Python environment. Entries must resolve to those actual installed paths; optional Rustup shims without an installed component are excluded. Locked libraries are recorded separately in `libraries` groups, each with its actual `interpreter`, environment `root`, and `packages` containing names and versions. Imports without console entrypoints do not become commands. The file is build evidence for the existing runtime profile, not a capability grant or a substitute for C18 qualification. Help argv provides the normal CLI entrypoint; detailed use remains discoverable from the tool itself.
 
 `build/inspect-executables.py` also works on the original workspace image without a browser lock. Repeat `--component-lock /path/to/installed.lock.json` to include additional installed components. A component may declare `python` with `venv`, `requirements` and `requirementsSha256`; `node` with `root` and `packages`; a direct `debianPackages` name/version map; and `executables` with `name`, `version` and full `helpArgv`. Relative Python and Node paths resolve from that lock's directory. Python metadata comes from the specified venv, so a separate MarkItDown environment retains its own library versions and console-script symlinks. Explicit wrapper descriptors, such as Tika's, require the source-qualified wrapper to exist on PATH. The collector records metadata and does not route formats or run conversion sequences.
 
-Prepare the exact Git source archive with `git archive --format=tar.gz --prefix=agent-browser/ REVISION` and download the Chrome URL in the lock into a task-local directory. Their filenames and SHA-256 values must equal the lock; the build refuses different bytes. Build from the Daytona repository root after the fork revision is published:
+Prepare the exact Git source archive with `git archive --format=tar.gz --prefix=agent-browser/ REVISION` and download the Chrome URL in the lock into a task-local directory. Also prepare the backend helper archive from its exact locked commit and source path: `git archive --format=tar REVISION runtime/agent-workspace-atomic-materializer`, compressed with `gzip -n -9`. Put all three archives in the existing `browser_inputs` directory. Their filenames and SHA-256 values must equal the lock; the build refuses different bytes. Release preparation must verify the backend helper tree against the locked source tree, rather than infer that identity from an archive filename. Build from the Daytona repository root after the fork revision is published:
 
 ```sh
 docker build --build-context browser_inputs=/path/to/exact-browser-inputs \
