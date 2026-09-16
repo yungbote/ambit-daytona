@@ -142,6 +142,20 @@ with tempfile.TemporaryDirectory(prefix='browser-helper-proof-') as temp:
         assert cli('eval', "document.querySelector('#t').value")['result'] == ''.join(key for key, _ in intended)+'aA'
         call('reset')
         receipts['printableTextLevelsAndCapsLock'] = True
+        cli('eval', "window.keyCustody=[];document.addEventListener('keydown',e=>keyCustody.push([e.type,e.code]));document.addEventListener('keyup',e=>keyCustody.push([e.type,e.code]));document.querySelector('#t').focus()")
+        call('input',events=[dict(type='input_keyboard',eventType='keyDown',key='z',code='KeyA',text='z'),dict(type='input_keyboard',eventType='keyDown',key='a',code='KeyA',modifiers=2),dict(type='input_keyboard',eventType='keyUp',key='a',code='KeyA',modifiers=2),dict(type='input_keyboard',eventType='keyUp',key='Control',code='ControlLeft',modifiers=0)])
+        custody = cli('eval', 'window.keyCustody')['result']
+        assert custody.count(['keydown','KeyZ']) == 1 and custody.count(['keyup','KeyZ']) == 1, custody
+        assert custody.count(['keydown','KeyA']) == 1 and custody.count(['keyup','KeyA']) == 1, custody
+        receipts['remappedRepeatSettlesEarlierNativeKey'] = True
+        cli('eval', "window.keyCustody=[];document.querySelector('#t').value='';document.querySelector('#t').focus()")
+        call('input',events=[dict(type='input_keyboard',eventType='keyDown',key='CapsLock',code='CapsLock'),dict(type='input_keyboard',eventType='keyUp',key='CapsLock',code='CapsLock'),dict(type='input_keyboard',eventType='keyDown',key='Shift',code='ShiftRight',modifiers=8),dict(type='input_keyboard',eventType='keyDown',key='A',code='KeyA',text='A',modifiers=8),dict(type='input_keyboard',eventType='keyUp',key='A',code='KeyA',modifiers=8)])
+        custody = cli('eval', 'window.keyCustody')['result']
+        assert custody.count(['keydown','ShiftRight']) == 2 and custody.count(['keyup','ShiftRight']) == 1, custody
+        assert not any(code == 'ShiftLeft' for kind,code in custody), custody
+        assert cli('eval', "document.querySelector('#t').value")['result'] == 'A'
+        call('input',events=[dict(type='input_keyboard',eventType='keyUp',key='Shift',code='ShiftRight',modifiers=0),dict(type='input_keyboard',eventType='keyDown',key='CapsLock',code='CapsLock'),dict(type='input_keyboard',eventType='keyUp',key='CapsLock',code='CapsLock')])
+        receipts['textLevelRestoresExactRightShift'] = True
         call('input', events=[dict(type='input_keyboard', eventType='keyDown', key='F11', code='F11'), dict(type='input_keyboard', eventType='keyUp', key='F11', code='F11')])
         receipts['nativeF11Delivered'] = True
         call('input', events=[dict(type='input_keyboard', eventType='keyDown', key='F11', code='F11'), dict(type='input_keyboard', eventType='keyUp', key='F11', code='F11')])
