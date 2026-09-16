@@ -14,6 +14,9 @@ func TestBrowserFileControlAuthorityAndProjection(t *testing.T) {
 	controller := "17cc0f0a-c9d7-4b71-bae8-e6f65c9574a5"
 	destination := "e61ad83a-0cef-4095-8a7c-06bb94447b88"
 	point := 0.0
+	if result, ok := browserFileResponse(json.RawMessage(`{}`), browserControlRequest{Op: "drop"}, "duplicate"); !ok || len(result) != 0 {
+		t.Fatal("duplicate drop must not create another destination")
+	}
 	if !validBrowserControlRequest(browserControlRequest{Op: "downloads"}) || validBrowserControlRequest(browserControlRequest{Op: "downloads", ControllerID: controller}) {
 		t.Fatal("download observation must be readonly and cannot borrow a controller")
 	}

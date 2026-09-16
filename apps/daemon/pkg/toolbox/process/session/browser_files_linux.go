@@ -44,6 +44,9 @@ func browserFileResponse(body json.RawMessage, request browserControlRequest, st
 		return nil, false
 	}
 	if request.Op == "drop" {
+		if status == "duplicate" && data.Destination == nil {
+			return gin.H{}, true
+		}
 		if (status != "destination" && status != "duplicate") || !data.Destination.valid() {
 			return nil, false
 		}
