@@ -7,26 +7,90 @@ crate graph; source and Chrome archives are independently pinned by SHA-256.
 
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
 import tempfile
 import zipfile
 
+MATERIALIZER_LINEAGE = Path("/opt/ambit/runtime-base/workspace/lineage/materializer")
+MATERIALIZER_BUILDER = "docker.io/library/golang@sha256:40dfc169bd5ad8a8617e49c8ead7fe16c6873e79d6937539e9c2e5947b7984ef"
 
-def verify_input(artifact):
+
+def verify_input(artifact, inputs=Path("/inputs")):
     name = artifact["archiveName"]
     if Path(name).name != name:
         raise ValueError("Browser archive must be one input filename")
-    source = Path("/inputs") / name
+    source = inputs / name
     with source.open("rb") as content:
         actual = hashlib.file_digest(content, "sha256").hexdigest()
     if actual != artifact["sha256"]:
         raise ValueError(f"Browser input checksum mismatch: {name}")
     return source
+
+
+def read_materializer_lock(path, binding):
+    content = path.read_bytes()
+    if hashlib.sha256(content).hexdigest() != binding["buildLockSha256"]:
+        raise ValueError("Materializer build lock differs from the source binding")
+    lock = json.loads(content)
+    if (
+        lock["schema"] != "ambit.atomic-materializer-build-lock/v1"
+        or lock["ownership"]["repository"] != binding["repository"]
+        or lock["ownership"]["treePath"] != binding["sourcePath"]
+        or lock["builderImage"] != MATERIALIZER_BUILDER
+        or lock["goVersion"] != "1.25.13"
+        or lock["platform"] != "linux/amd64"
+        or lock["build"] != {
+            "cgoEnabled": False,
+            "network": "none_after_module_acquisition",
+            "flags": ["-trimpath", "-buildvcs=false", "-ldflags=-s -w -buildid="],
+        }
+    ):
+        raise ValueError("Materializer declaration differs from this build recipe")
+    return lock
+
+
+def prepare_materializer_source(binding, destination, inputs=Path("/inputs")):
+    """Validate the backend-owned source input before the Go build consumes it."""
+    relative = PurePosixPath(binding["sourcePath"])
+    if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+        raise ValueError("Materializer source must be inside its backend archive")
+    archive = verify_input(binding, inputs)
+    with tempfile.TemporaryDirectory(prefix="ambit-materializer-source-") as temporary:
+        extracted = Path(temporary)
+        with tarfile.open(archive) as bundle:
+            if any(not (member.isfile() or member.isdir()) for member in bundle.getmembers()):
+                raise ValueError("Materializer source archive must contain regular files and directories")
+            bundle.extractall(extracted, filter="data")
+        source = extracted / relative
+        lock = read_materializer_lock(source / "materializer.lock.json", binding)
+        for name, expected in lock["sourceSha256"].items():
+            if Path(name).name != name or hashlib.sha256((source / name).read_bytes()).hexdigest() != expected:
+                raise ValueError("Materializer source differs from its build lock")
+        binary_manifest = f"{lock['binary']['sha256']}  /out/ambit-atomic-materialize\n"
+        if (source / "binary.sha256").read_text() != binary_manifest:
+            raise ValueError("Materializer binary manifest differs from its build lock")
+        shutil.copytree(source, destination)
+
+
+def verify_materializer_install(binding, lineage=MATERIALIZER_LINEAGE):
+    lock = read_materializer_lock(lineage / "materializer.lock.json", binding)
+    expected = lock["binary"]
+    executable = Path(expected["installedPath"])
+    metadata = executable.lstat()
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or stat.S_IMODE(metadata.st_mode) != 0o555
+        or metadata.st_uid != 0
+        or metadata.st_size != expected["bytes"]
+        or hashlib.sha256(executable.read_bytes()).hexdigest() != expected["sha256"]
+    ):
+        raise ValueError("Installed materializer differs from its declared source build")
 
 
 def install_debian_packages(lock, scratch):
@@ -94,10 +158,12 @@ def main():
         raise ValueError("Unknown browser image lock")
     if base_image != lock["baseImage"]:
         raise ValueError("Browser build must retain the exact locked workspace parent")
-    helper = lock["inheritedMaterializer"]
-    with Path(helper["path"]).open("rb") as binary:
-        if hashlib.file_digest(binary, "sha256").hexdigest() != helper["sha256"]:
-            raise ValueError("Inherited workspace materializer differs from the locked base")
+    if mode == "materializer-source":
+        prepare_materializer_source(lock["materializer"], Path("/materializer-source"))
+        return
+    if mode == "materializer":
+        verify_materializer_install(lock["materializer"])
+        return
     root = Path("/opt/ambit/browser")
     root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="ambit-browser-build-") as temporary:

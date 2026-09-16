@@ -5,11 +5,11 @@
     "repository": "https://github.com/yungbote/ambit-agent-browser",
     "upstreamRepository": "https://github.com/vercel-labs/agent-browser",
     "upstreamRevision": "72007a6788d863611b23bed0b59d0d659c638d8e",
-    "revision": "f4f65f01866317e43e203602dbb502514233ac67",
-    "sourceTree": "031ecf9ae410f814d85c13694f4dbe158436f5c1",
+    "revision": "9f506b40682866f5c68523786f6e110bf3e1abe3",
+    "sourceTree": "8b01d6dabf767442f3339ef478b3f018d1da4878",
     "version": "0.37.1",
     "archiveName": "agent-browser-source.tar.gz",
-    "sha256": "3f29de680de6c05cefc6a8a8f71fca4921c07acf6df0fc3ca78dc0f55d378be5"
+    "sha256": "119c2e364258661cf03ff1dfa677376244bd5a3972da7639b0a87646279181c4"
   },
   "chrome": {
     "version": "152.0.7977.82",
@@ -40,12 +40,6 @@
     "xvfb": "2:21.1.16-1.3+deb13u3",
     "xauth": "1:1.1.2-1.1"
   },
-  "inheritedMaterializer": {
-    "path": "/opt/ambit/runtime-pack/core-document/bin/ambit-atomic-materialize",
-    "sha256": "d6d8bd4248570e7f66fe7e545e8117e558a1d6c1ce1e149a55a36c7f17c7748d",
-    "bytes": 2666622,
-    "sourceBuildProvenance": "not-established; retained as exact existing workspace image input"
-  },
   "executables": [
     {
       "name": "Xvfb",
@@ -63,5 +57,14 @@
         "help"
       ]
     }
-  ]
+  ],
+  "materializer": {
+    "repository": "https://github.com/yungbote/m-backend",
+    "revision": "7863e0f6351b0995351dc34414e1a98d68226cdd",
+    "sourceTree": "a9e546be90ea1e16d2728ddf19af13e4d722a855",
+    "sourcePath": "runtime/agent-workspace-atomic-materializer",
+    "archiveName": "atomic-materializer-source.tar.gz",
+    "sha256": "b7f2e3c1c0bf451727854ca62b0851609449de912fb8f65317a2f4e06cc28a24",
+    "buildLockSha256": "4648877e3408f215960c99a1f5dd971cb08290202c59389cd4157f52133b87ec"
+  }
 }
