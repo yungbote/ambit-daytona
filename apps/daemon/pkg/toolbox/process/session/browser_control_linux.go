@@ -33,6 +33,10 @@ type browserControlRequest struct {
 	Sequence                  uint64            `json:"sequence,omitempty"`
 	Events                    []json.RawMessage `json:"events,omitempty"`
 	ExpectedSurfaceGeneration string            `json:"expectedSurfaceGeneration,omitempty"`
+	DestinationID             string            `json:"destinationId,omitempty"`
+	Files                     []string          `json:"files,omitempty"`
+	X                         *float64          `json:"x,omitempty"`
+	Y                         *float64          `json:"y,omitempty"`
 }
 
 // ControlBrowserView addresses the same proved native instance as the visual
@@ -100,7 +104,7 @@ func (s *SessionController) ControlBrowserView(c *gin.Context) {
 		return
 	}
 	responseLimit := browserControlLimit
-	if request.Op == "copy" {
+	if request.Op == "copy" || request.Op == "files" || request.Op == "downloads" {
 		responseLimit = browserCopyResponseLimit
 	}
 	line, err := bufio.NewReader(io.LimitReader(connection, int64(responseLimit+1))).ReadBytes('\n')
@@ -120,7 +124,7 @@ func (s *SessionController) ControlBrowserView(c *gin.Context) {
 	if !response.Success {
 		code := response.Code
 		switch code {
-		case "browser_control_invalid", "browser_control_conflict", "browser_control_expired", "browser_control_stale", "browser_control_sequence_gap", "browser_control_outcome_unknown", "browser_controlled_by_user", "browser_control_copy_too_large", "browser_control_surface_stale":
+		case "browser_control_invalid", "browser_control_conflict", "browser_control_expired", "browser_control_stale", "browser_control_sequence_gap", "browser_control_outcome_unknown", "browser_controlled_by_user", "browser_control_copy_too_large", "browser_control_surface_stale", "browser_control_file_stale", "browser_control_file_unsupported", "browser_control_files_unavailable", "browser_control_drop_rejected":
 		default:
 			code = "browser_control_unavailable"
 		}
@@ -131,7 +135,7 @@ func (s *SessionController) ControlBrowserView(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"code": "browser_control_outcome_unknown"})
 		return
 	}
-	if request.Op == "inspect" {
+	if request.Op == "inspect" || request.Op == "downloads" {
 		var inspection struct {
 			Supported  bool            `json:"supported"`
 			Controlled bool            `json:"controlled"`
@@ -141,7 +145,16 @@ func (s *SessionController) ControlBrowserView(c *gin.Context) {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"code": "browser_control_unavailable"})
 			return
 		}
-		c.JSON(http.StatusOK, inspection)
+		if request.Op == "downloads" {
+			files, ok := browserFileResponse(response.Data, request, "files")
+			if !ok {
+				c.JSON(http.StatusBadGateway, gin.H{"code": "browser_control_unavailable"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"supported": true, "controlled": inspection.Controlled, "downloads": files["downloads"]})
+		} else {
+			c.JSON(http.StatusOK, inspection)
+		}
 		return
 	}
 	// Do not forward upstream error strings, request data or unrelated metadata.
@@ -154,6 +167,20 @@ func (s *SessionController) ControlBrowserView(c *gin.Context) {
 	}
 	if json.Unmarshal(response.Data, &data) != nil || data.ControllerID != request.ControllerID || data.LastSequence > 9_007_199_254_740_991 || (data.Surface != nil && !data.Surface.valid()) {
 		c.JSON(http.StatusBadGateway, gin.H{"code": "browser_control_outcome_unknown"})
+		return
+	}
+	if request.Op == "files" || request.Op == "drop" {
+		files, ok := browserFileResponse(response.Data, request, data.Status)
+		if !ok {
+			c.JSON(http.StatusBadGateway, gin.H{"code": "browser_control_outcome_unknown"})
+			return
+		}
+		files["controllerId"], files["expiresAt"] = data.ControllerID, data.ExpiresAt
+		files["lastSequence"], files["status"] = data.LastSequence, data.Status
+		if data.Surface != nil {
+			files["surface"] = data.Surface
+		}
+		c.JSON(http.StatusOK, files)
 		return
 	}
 	if request.Op == "copy" {
@@ -178,7 +205,7 @@ func (s *SessionController) ControlBrowserView(c *gin.Context) {
 		return
 	}
 	switch data.Status {
-	case "controlled", "released", "applied", "duplicate":
+	case "controlled", "released", "applied", "duplicate", "dismissed":
 		c.JSON(http.StatusOK, data)
 	default:
 		c.JSON(http.StatusBadGateway, gin.H{"code": "browser_control_outcome_unknown"})
@@ -205,10 +232,16 @@ func browserControlRequestLimit(request browserControlRequest) int {
 }
 
 func validBrowserControlRequest(request browserControlRequest) bool {
-	if request.ExpectedSurfaceGeneration != "" && (request.Op != "input" || !validBrowserUUID(request.ExpectedSurfaceGeneration)) {
+	if request.ExpectedSurfaceGeneration != "" && ((request.Op != "input" && request.Op != "drop") || !validBrowserUUID(request.ExpectedSurfaceGeneration)) {
 		return false
 	}
-	if request.Op == "inspect" {
+	if request.Op == "files" || request.Op == "drop" || request.Op == "setfiles" || request.Op == "dismissfiles" {
+		return validBrowserFileRequest(request)
+	}
+	if request.DestinationID != "" || len(request.Files) != 0 || request.X != nil || request.Y != nil {
+		return false
+	}
+	if request.Op == "inspect" || request.Op == "downloads" {
 		return request.ControllerID == "" && request.ExpiresAt == 0 && request.Sequence == 0 && len(request.Events) == 0
 	}
 	if !validBrowserUUID(request.ControllerID) {
