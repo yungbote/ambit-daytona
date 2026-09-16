@@ -6,11 +6,13 @@ package storage
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"sort"
 	"strings"
@@ -123,13 +125,7 @@ func (m *minioClient) CreatePrivateObject(
 	contentType string,
 	metadata map[string]string,
 ) error {
-	opts := minio.PutObjectOptions{
-		ContentType:      contentType,
-		UserMetadata:     cloneStringMap(metadata),
-		Checksum:         minio.ChecksumSHA256,
-		DisableMultipart: true,
-	}
-	opts.SetMatchETagExcept("*")
+	opts := privateObjectPutOptions(int64(len(data)), contentType, metadata)
 	_, err := m.client.PutObject(
 		ctx,
 		m.bucketName,
@@ -158,11 +154,7 @@ func (m *minioClient) CreatePrivateObjectStream(
 	if reader == nil || size < 0 {
 		return fmt.Errorf("private stream object reader or size is invalid")
 	}
-	opts := minio.PutObjectOptions{
-		ContentType: contentType, UserMetadata: cloneStringMap(metadata),
-		Checksum: minio.ChecksumSHA256, DisableMultipart: true,
-	}
-	opts.SetMatchETagExcept("*")
+	opts := privateObjectPutOptions(size, contentType, metadata)
 	_, err := m.client.PutObject(ctx, m.bucketName, key, reader, size, opts)
 	if err != nil {
 		if isPreconditionFailure(err) {
@@ -171,6 +163,25 @@ func (m *minioClient) CreatePrivateObjectStream(
 		return fmt.Errorf("create private stream object: %w", err)
 	}
 	return nil
+}
+
+func privateObjectPutOptions(size int64, contentType string, metadata map[string]string) minio.PutObjectOptions {
+	opts := minio.PutObjectOptions{
+		ContentType: contentType, UserMetadata: cloneStringMap(metadata),
+		Checksum: minio.ChecksumSHA256, DisableMultipart: true,
+	}
+	if size == 0 {
+		// minio-go attaches checksum trailers only for contentLength > 0.
+		// Supply the real empty-body checksum as a request header so the
+		// provider validates and retains it for ordinary empty objects too.
+		if opts.UserMetadata == nil {
+			opts.UserMetadata = make(map[string]string)
+		}
+		digest := sha256.Sum256(nil)
+		opts.UserMetadata[strings.ToLower(minio.ChecksumSHA256.Key())] = base64.StdEncoding.EncodeToString(digest[:])
+	}
+	opts.SetMatchETagExcept("*")
+	return opts
 }
 
 func (m *minioClient) OpenPrivateObject(
@@ -284,13 +295,58 @@ func (m *minioClient) StatPrivateObject(ctx context.Context, key string) (Privat
 		}
 		return PrivateObjectInfo{}, fmt.Errorf("stat private object: %w", err)
 	}
+	checksum := canonicalChecksumSHA256(info.ChecksumSHA256)
+	if info.Size == 0 && info.ChecksumSHA256 == "" {
+		// Preserve already retained empty objects produced by the SDK's
+		// omitted-trailer path. A metadata assertion is not a checksum: bind
+		// a bounded read to this exact object and prove immediate EOF.
+		if err := m.verifyEmptyPrivateObject(ctx, key, info); err != nil {
+			return PrivateObjectInfo{}, fmt.Errorf("verify retained empty private object: %w", err)
+		}
+		digest := sha256.Sum256(nil)
+		checksum = "sha256:" + hex.EncodeToString(digest[:])
+	}
 	return PrivateObjectInfo{
 		Size:          info.Size,
-		ContentSHA256: canonicalChecksumSHA256(info.ChecksumSHA256),
+		ContentSHA256: checksum,
 		ETag:          info.ETag,
 		VersionID:     info.VersionID,
 		UserMetadata:  cloneStringMap(info.UserMetadata),
 	}, nil
+}
+
+func (m *minioClient) verifyEmptyPrivateObject(ctx context.Context, key string, expected minio.ObjectInfo) error {
+	options := minio.GetObjectOptions{VersionID: expected.VersionID}
+	if err := options.SetMatchETag(expected.ETag); err != nil {
+		return err
+	}
+	object, err := m.client.GetObject(ctx, m.bucketName, key, options)
+	if err != nil {
+		return err
+	}
+	defer object.Close()
+	stopClosing := context.AfterFunc(ctx, func() { _ = object.Close() })
+	defer stopClosing()
+	data, err := io.ReadAll(io.LimitReader(object, 1))
+	if err != nil {
+		return err
+	}
+	if len(data) != 0 {
+		return fmt.Errorf("object reported empty but contains bytes")
+	}
+	// Stat uses the headers of the completed GET, not another unbound HEAD.
+	observed, err := object.Stat()
+	if err != nil {
+		return err
+	}
+	digest := sha256.Sum256(nil)
+	emptyChecksum := "sha256:" + hex.EncodeToString(digest[:])
+	if observed.Size != 0 || observed.ETag != expected.ETag || observed.VersionID != expected.VersionID ||
+		!maps.Equal(cloneStringMap(observed.UserMetadata), cloneStringMap(expected.UserMetadata)) ||
+		(observed.ChecksumSHA256 != "" && canonicalChecksumSHA256(observed.ChecksumSHA256) != emptyChecksum) {
+		return fmt.Errorf("empty private object identity or metadata changed during verification")
+	}
+	return object.Close()
 }
 
 func (m *minioClient) DeletePrivateObject(ctx context.Context, key string) error {
