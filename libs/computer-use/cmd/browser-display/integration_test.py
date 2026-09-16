@@ -156,6 +156,14 @@ with tempfile.TemporaryDirectory(prefix='browser-helper-proof-') as temp:
         assert cli('eval', "document.querySelector('#t').value")['result'] == 'A'
         call('input',events=[dict(type='input_keyboard',eventType='keyUp',key='Shift',code='ShiftRight',modifiers=0),dict(type='input_keyboard',eventType='keyDown',key='CapsLock',code='CapsLock'),dict(type='input_keyboard',eventType='keyUp',key='CapsLock',code='CapsLock')])
         receipts['textLevelRestoresExactRightShift'] = True
+        cli('eval', "window.keyCustody=[];document.querySelector('#t').focus()")
+        call('input',events=[dict(type='input_keyboard',eventType='keyDown',key='1',code='Digit1',text='1'),dict(type='input_keyboard',eventType='keyDown',key='1',code='Numpad1',text='1'),dict(type='input_keyboard',eventType='keyUp',key='1',code='Digit1')])
+        custody = cli('eval', 'window.keyCustody')['result']
+        assert ['keyup','Digit1'] not in custody, custody
+        call('input',events=[dict(type='input_keyboard',eventType='keyUp',key='1',code='Numpad1')])
+        custody = cli('eval', 'window.keyCustody')['result']
+        assert custody.count(['keyup','Digit1']) == 1, custody
+        receipts['sharedNativeKeyReleasedByLastLogicalHolder'] = True
         call('input', events=[dict(type='input_keyboard', eventType='keyDown', key='F11', code='F11'), dict(type='input_keyboard', eventType='keyUp', key='F11', code='F11')])
         receipts['nativeF11Delivered'] = True
         call('input', events=[dict(type='input_keyboard', eventType='keyDown', key='F11', code='F11'), dict(type='input_keyboard', eventType='keyUp', key='F11', code='F11')])
