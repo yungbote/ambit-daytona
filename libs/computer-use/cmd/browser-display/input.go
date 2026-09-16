@@ -174,26 +174,44 @@ func (d *display) keyboardInput(event inputEvent) error {
 		// native key we pressed, including a press whose acknowledgment was lost.
 		code = held
 	}
+	if held := d.heldCodes[identity]; down && held != 0 && held != code {
+		// A repeat can change from text-level mapping to a physical shortcut.
+		// Settle the earlier exact press before replacing its identity.
+		if err := d.key(held, false); err != nil {
+			return err
+		}
+		delete(d.heldCodes, identity)
+	}
+	var saved map[byte]bool
+	if mask != event.Modifiers {
+		if err := d.modifiers(event.Modifiers); err != nil {
+			return unknown()
+		}
+		saved = d.heldModifiers()
+	}
 	if err := d.modifiers(mask); err != nil {
+		if saved != nil {
+			_ = d.restoreModifiers(saved)
+		}
 		return unknown()
 	}
 	if down {
 		d.heldCodes[identity] = code
 	}
-	if err := d.key(code, down); err != nil {
-		return err
-	}
-	if !down {
+	primary := d.key(code, down)
+	if primary == nil && !down {
 		delete(d.heldCodes, identity)
 	}
-	// Synthetic text-level modifiers must not remain held for subsequent mouse
-	// input or native clipboard chords. Keep the user's actual modifier mask.
-	if mask != event.Modifiers {
-		if err := d.modifiers(event.Modifiers); err != nil {
-			return unknown()
-		}
+	// Preserve the exact modifier sides, including a right Shift temporarily
+	// removed to compensate for a different native CapsLock state.
+	var restored error
+	if saved != nil {
+		restored = d.restoreModifiers(saved)
 	}
-	return nil
+	if primary != nil {
+		return primary
+	}
+	return restored
 }
 
 var physicalNames = map[string]string{
@@ -362,6 +380,13 @@ func (d *display) modifiers(mask int) error {
 	}
 	return nil
 }
+func (d *display) heldModifiers() map[byte]bool {
+	saved := map[byte]bool{}
+	for _, modifier := range d.modifierCodes() {
+		saved[modifier] = d.keys[modifier]
+	}
+	return saved
+}
 func (d *display) restoreModifiers(saved map[byte]bool) error {
 	var first error
 	for _, code := range d.modifierCodes() {
@@ -483,10 +508,7 @@ func (d *display) chord(key string) error {
 	if code == 0 {
 		return invalid()
 	}
-	saved := map[byte]bool{}
-	for _, modifier := range d.modifierCodes() {
-		saved[modifier] = d.keys[modifier]
-	}
+	saved := d.heldModifiers()
 	if err := d.modifiers(2); err != nil {
 		_ = d.restoreModifiers(saved)
 		return err
