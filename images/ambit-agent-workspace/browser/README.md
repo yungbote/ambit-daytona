@@ -78,8 +78,8 @@ docker build --build-context browser_inputs=/path/to/exact-browser-inputs \
 Measure `agent-browser mcp --describe-host-bound` from the actual installed driver and compare its canonical descriptor bytes with the selected backend consumer catalog. Descriptions contribute to the descriptor digest even when all tool names and input schemas remain unchanged. A locally built driver establishes preparation inputs; the published image must supply its own descriptor measurement before qualification.
 
 The same source archive supplies `libs/computer-use/cmd/browser-display` through
-the `browser_display_source` context. The existing pinned Go 1.25.11 builder
-compiles only this CGO-free helper with the module's unchanged dependency locks.
+the `browser_display_source` context. It shares the materializer's pinned Go
+1.25.13 builder and compiles only this CGO-free helper with unchanged dependency locks.
 The final image contains the helper beside the driver, with its Daytona, XGB, XGBUtil and
 Go license notices. Its exact binary is measured during image qualification.
 The launcher selects the actual browser window and this image-owned helper;

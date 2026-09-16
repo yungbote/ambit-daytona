@@ -30,12 +30,12 @@ RUN --network=none sha256sum -c source.sha256 \
  && chmod 0755 /out/licenses /out/lineage \
  && chmod 0444 /out/licenses/* /out/lineage/*
 
-FROM golang@sha256:49be5c3f5f2b766e5ba74e0bb690fea4fa03ebf5df8fe94665d42dfa727acf31 AS browser-display
+FROM docker.io/library/golang@sha256:40dfc169bd5ad8a8617e49c8ead7fe16c6873e79d6937539e9c2e5947b7984ef AS browser-display
 WORKDIR /source
 ENV GOTOOLCHAIN=local GOWORK=off CGO_ENABLED=0
 COPY --from=browser_display_source libs/computer-use/go.mod libs/computer-use/go.sum ./
 COPY --from=browser_display_source libs/computer-use/cmd/browser-display ./cmd/browser-display
-RUN test "$(go version)" = "go version go1.25.11 linux/amd64" \
+RUN test "$(go version)" = "go version go1.25.13 linux/amd64" \
  && go build -mod=readonly -trimpath -buildvcs=false -o /out/bin/browser-display ./cmd/browser-display \
  && mkdir -p /out/licenses \
  && module_dir="$(go list -mod=readonly -m -f '{{.Dir}}' github.com/robotn/xgb)" \
