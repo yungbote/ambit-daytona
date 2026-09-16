@@ -5,6 +5,7 @@
 
 import { Module } from '@nestjs/common'
 import { AdminRunnerController } from './controllers/runner.controller'
+import { AdminRegionController } from './controllers/region.controller'
 import { AdminSandboxController } from './controllers/sandbox.controller'
 import { AdminUserController } from './controllers/user.controller'
 import { AdminWebhookController } from './controllers/webhook.controller'
@@ -32,6 +33,7 @@ import { AuditModule } from '../audit/audit.module'
   ],
   controllers: [
     AdminRunnerController,
+    AdminRegionController,
     AdminSandboxController,
     AdminUserController,
     AdminWebhookController,
