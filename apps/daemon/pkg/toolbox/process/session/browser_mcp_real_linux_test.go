@@ -75,11 +75,17 @@ func TestRealBrowserMcpHelperRetainsNativeSessionCustody(t *testing.T) {
 		controller.browserSocketDir = socketDir
 	})
 	workspace := &browserWorkspace{engine: engine, socketDir: socketDir}
-	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, `<!doctype html><title>Supervisor browser</title><input id=field><button style="position:absolute;left:40px;top:120px;width:100px;height:40px" onclick="document.querySelector('#field').value='Image coordinates hit'">Target</button>`)
+		w.Header().Set("Cache-Control", "no-store")
+		profile := "fresh"
+		if cookie, err := r.Cookie("owned_profile"); err == nil && cookie.Value == "retained" {
+			profile = "retained"
+		}
+		http.SetCookie(w, &http.Cookie{Name: "owned_profile", Value: "retained", Path: "/", MaxAge: 3600, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+		fmt.Fprintf(w, `<!doctype html><title>Supervisor browser</title><input id=field><input id=profile-state readonly value="%s"><button style="position:absolute;left:40px;top:120px;width:100px;height:40px" onclick="document.querySelector('#field').value='Image coordinates hit'">Target</button>`, profile)
 	}))
-	defer page.Close()
+	defer site.Close()
 	environment := map[string]string{}
 	for _, item := range os.Environ() {
 		name, value, _ := strings.Cut(item, "=")
@@ -178,7 +184,7 @@ invokeIntrinsicBrowserMcp(request,{command:%s,artifactDigest:%s,cwd:%s,environme
 	invoke := func(session, name string, arguments any) map[string]any {
 		return invokeChecked(session, name, arguments, nil, "")
 	}
-	first := invoke("mcp-first", "agent_browser_open", map[string]any{"url": page.URL})
+	first := invoke("mcp-first", "agent_browser_open", map[string]any{"url": site.URL})
 	view, _ := workspace.only(t, "mcp-first", "browser")
 	identity := first["browser"].(map[string]any)["page"].(map[string]any)["targetId"]
 	pidPath := filepath.Join(socketDir, "namespaces", namespace, "run", "browser.pid")
@@ -270,12 +276,16 @@ invokeIntrinsicBrowserMcp(request,{command:%s,artifactDigest:%s,cwd:%s,environme
 		if current := strings.TrimSpace(string(awaitFile(t, pidPath))); current != strconv.Itoa(pid) {
 			t.Fatal("native window close replaced the retained daemon")
 		}
-		reopened := invoke("mcp-reopen", "agent_browser_open", map[string]any{"url": "about:blank"})
+		reopened := invoke("mcp-reopen", "agent_browser_open", map[string]any{"url": site.URL})
 		if reopened["browser"].(map[string]any)["page"].(map[string]any)["targetId"] == identity {
 			t.Fatal("explicit reopen claimed to restore a closed tab")
 		}
 		if owned, err := service.ObserveOwnedProcess("mcp-first", pid); err != nil || owned.PID != pid {
 			t.Fatalf("explicit reopen lost original native custody: %v %v", owned, err)
+		}
+		profile := invoke("mcp-profile-read", "agent_browser_get_value", map[string]any{"selector": "#profile-state"})
+		if profile["response"].(map[string]any)["data"].(map[string]any)["value"] != "retained" {
+			t.Fatal("native window close and explicit reopen discarded the owned persistent login cookie")
 		}
 	}
 	invoke("mcp-close", "agent_browser_close", map[string]any{})
