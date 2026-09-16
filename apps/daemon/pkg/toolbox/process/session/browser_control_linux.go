@@ -137,9 +137,10 @@ func (s *SessionController) ControlBrowserView(c *gin.Context) {
 	}
 	if request.Op == "inspect" || request.Op == "downloads" {
 		var inspection struct {
-			Supported  bool            `json:"supported"`
-			Controlled bool            `json:"controlled"`
-			Surface    *browserSurface `json:"surface,omitempty"`
+			Supported      bool            `json:"supported"`
+			Controlled     bool            `json:"controlled"`
+			FilesSupported bool            `json:"filesSupported,omitempty"`
+			Surface        *browserSurface `json:"surface,omitempty"`
 		}
 		if json.Unmarshal(response.Data, &inspection) != nil || !inspection.Supported || (inspection.Surface != nil && !inspection.Surface.valid()) {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"code": "browser_control_unavailable"})
