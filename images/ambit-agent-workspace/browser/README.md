@@ -40,13 +40,23 @@ The image also records `/opt/ambit/runtime-base/workspace/lineage/executables.js
 
 `build/inspect-executables.py` also works on the original workspace image without a browser lock. Repeat `--component-lock /path/to/installed.lock.json` to include additional installed components. A component may declare `python` with `venv`, `requirements` and `requirementsSha256`; `node` with `root` and `packages`; a direct `debianPackages` name/version map; and `executables` with `name`, `version` and full `helpArgv`. Relative Python and Node paths resolve from that lock's directory. Python metadata comes from the specified venv, so a separate MarkItDown environment retains its own library versions and console-script symlinks. Explicit wrapper descriptors, such as Tika's, require the source-qualified wrapper to exist on PATH. The collector records metadata and does not route formats or run conversion sequences.
 
-Prepare the exact Git source archive with `git archive --format=tar.gz --prefix=agent-browser/ REVISION` and download the Chrome URL in the lock into a task-local directory. Their filenames and SHA-256 values must equal the lock; the build refuses different bytes. Build from this directory after the fork revision is published:
+Prepare the exact Git source archive with `git archive --format=tar.gz --prefix=agent-browser/ REVISION` and download the Chrome URL in the lock into a task-local directory. Their filenames and SHA-256 values must equal the lock; the build refuses different bytes. Build from the Daytona repository root after the fork revision is published:
 
 ```sh
 docker build --build-context browser_inputs=/path/to/exact-browser-inputs \
+  --build-context browser_display_source=. \
   --build-arg BUILD_SOURCE_REVISION="$(git rev-parse HEAD)" \
-  -t ambit-agent-workspace-browser:candidate .
+  --file images/ambit-agent-workspace/browser/Dockerfile \
+  -t ambit-agent-workspace-browser:candidate images/ambit-agent-workspace/browser
 ```
+
+The same source archive supplies `libs/computer-use/cmd/browser-display` through
+the `browser_display_source` context. The existing pinned Go 1.25.11 builder
+compiles only this CGO-free helper with the module's unchanged dependency locks.
+The final image contains the helper beside the driver, with its Daytona, XGB, XGBUtil and
+Go license notices. Its exact binary is measured during image qualification.
+The launcher selects the actual browser window and this image-owned helper;
+the driver supplies its private display and process identity.
 
 Run `conformance/browser.py` and `conformance/browser.py --headed` as the normal non-root workspace user in a dedicated candidate container, with only init and Python present in its PID namespace before the test. It exercises explicit foreground/attach-only execution against a local fixture: navigation, semantic interaction, screenshots, downloads, separate sessions, daemon close, and cancellation. Cleanup records PID/start-time identities across the whole namespace and requires no additional live process after close or SIGTERM, including reparented renderers. The native session HTTP conformance separately verifies ordinary detached startup, retained scope after command exit, and exact session deletion. Capture the exact image digest, runtime policy, conformance output, and screenshot artifacts. The actual Runner's process owner and sandbox policy need their own integrated verification; a locally passing browser command does not establish production network enforcement, sandbox confinement, restart recovery, or browser-facing chat completion.
 

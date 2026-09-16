@@ -2,6 +2,21 @@
 # Retain every existing workspace/toolchain/document-helper layer. This is the
 # ordinary Daytona workspace lineage, not the C18 specialist-render image.
 ARG BASE_IMAGE=us-east4-docker.pkg.dev/mwcc-infrastructure/ambit/ambit-agent-workspace@sha256:fa261983f89770cb8647b2a165abd68bfb81c9bbe7dd02e13d2dc51f04eeff46
+FROM golang@sha256:49be5c3f5f2b766e5ba74e0bb690fea4fa03ebf5df8fe94665d42dfa727acf31 AS browser-display
+WORKDIR /source
+ENV GOTOOLCHAIN=local GOWORK=off CGO_ENABLED=0
+COPY --from=browser_display_source libs/computer-use/go.mod libs/computer-use/go.sum ./
+COPY --from=browser_display_source libs/computer-use/cmd/browser-display ./cmd/browser-display
+RUN test "$(go version)" = "go version go1.25.11 linux/amd64" \
+ && go build -mod=readonly -trimpath -buildvcs=false -o /out/bin/browser-display ./cmd/browser-display \
+ && mkdir -p /out/licenses \
+ && module_dir="$(go list -mod=readonly -m -f '{{.Dir}}' github.com/robotn/xgb)" \
+ && cp "$module_dir/LICENSE" /out/licenses/browser-display-xgb-LICENSE \
+ && module_dir="$(go list -mod=readonly -m -f '{{.Dir}}' github.com/robotn/xgbutil)" \
+ && cp "$module_dir/COPYING" /out/licenses/browser-display-xgbutil-COPYING \
+ && cp /usr/local/go/LICENSE /out/licenses/browser-display-Go-LICENSE
+COPY --from=browser_display_source LICENSE /out/licenses/browser-display-LICENSE
+
 FROM ${BASE_IMAGE} AS driver
 ARG BASE_IMAGE
 USER root
@@ -21,6 +36,8 @@ RUN --mount=type=bind,source=browser.lock.json,target=/source/browser.lock.json,
 FROM browser-runtime
 COPY --from=driver /opt/ambit/browser/bin /opt/ambit/browser/bin
 COPY --from=driver /opt/ambit/browser/licenses /opt/ambit/browser/licenses
+COPY --from=browser-display /out/bin /opt/ambit/browser/bin
+COPY --from=browser-display /out/licenses /opt/ambit/browser/licenses
 COPY --from=driver /opt/ambit/browser/Cargo.lock /opt/ambit/browser/Cargo.lock
 COPY --chmod=0755 runtime/agent-browser /usr/local/bin/agent-browser
 COPY README.md /opt/ambit/browser/README.md
