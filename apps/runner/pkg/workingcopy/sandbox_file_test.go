@@ -184,6 +184,110 @@ func TestNativeFileObservationRecoversWithoutTheMutablePath(t *testing.T) {
 	}
 }
 
+func TestNativeRetirementRetriesCleanupByOperationAfterIntentWasRemoved(t *testing.T) {
+	s, objects, physical, request := nativeFixture(t)
+	receipt, err := s.CaptureSandboxFile(context.Background(), nativeSandboxID, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects.failDeleteSuffix = "/content.bin"
+	if _, err := s.DeleteSandboxFile(context.Background(), nativeSandboxID, SandboxFileDeleteRequest{Receipt: &receipt}); err == nil {
+		t.Fatal("cleanup failure was hidden")
+	}
+	lookup := SandboxFileObserveRequest{OrganizationID: request.OrganizationID, OperationID: request.OperationID}
+	observed, err := s.ObserveSandboxFile(context.Background(), nativeSandboxID, lookup)
+	if err != nil || observed.Status != "retired" {
+		t.Fatalf("operation was not fenced: %#v %v", observed, err)
+	}
+	objects.failDeleteSuffix = ""
+	physical.failure = errors.New("source no longer exists")
+	result, err := s.DeleteSandboxFile(context.Background(), nativeSandboxID, SandboxFileDeleteRequest{OrganizationID: request.OrganizationID, OperationID: request.OperationID})
+	if err != nil || result.Outcome != "deleted" || result.CaptureID == nil || *result.CaptureID != receipt.CaptureID {
+		t.Fatalf("retired cleanup failed without mutable path: %#v %v", result, err)
+	}
+	if _, exists := objects.findSuffix("/content.bin"); exists {
+		t.Fatal("private bytes remain after cleanup")
+	}
+	if physical.inspectCalls != 1 || physical.captureCalls != 1 {
+		t.Fatal("cleanup re-opened the source")
+	}
+}
+
+func TestNativeOperationOnlyCancellationDoesNotInventAPath(t *testing.T) {
+	s, objects, physical, request := nativeFixture(t)
+	result, err := s.DeleteSandboxFile(context.Background(), nativeSandboxID, SandboxFileDeleteRequest{OrganizationID: request.OrganizationID, OperationID: request.OperationID})
+	if err != nil || result.CaptureID != nil || result.Outcome != "already_absent" {
+		t.Fatalf("unadmitted retirement failed: %#v %v", result, err)
+	}
+	for _, record := range objects.objects {
+		if strings.Contains(string(record.data), `"path"`) || strings.Contains(string(record.data), `"identity"`) {
+			t.Fatal("unadmitted retirement fabricated a source identity or path")
+		}
+	}
+	if _, err := s.CaptureSandboxFile(context.Background(), nativeSandboxID, request); !errors.Is(err, ErrConflict) {
+		t.Fatalf("late create reused canceled operation: %v", err)
+	}
+	if physical.inspectCalls != 0 || physical.captureCalls != 0 {
+		t.Fatal("cancellation reached source work")
+	}
+}
+
+func TestNativeRetirementPreservesLateIntentAsDurableCleanupLocator(t *testing.T) {
+	s, original, _, request := nativeFixture(t)
+	receipt, err := s.CaptureSandboxFile(context.Background(), nativeSandboxID, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	internal, err := validateSandboxFileReceipt(nativeSandboxID, receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := bindingObjectRoot(internal.CaptureBinding)
+	lateIntent, exists, err := s.readIntent(context.Background(), root)
+	if err != nil || !exists {
+		t.Fatalf("fixture intent unavailable: %v", err)
+	}
+	objects := newFakeObjectStore()
+	s.objects = objects
+	operation := SandboxFileDeleteRequest{OrganizationID: request.OrganizationID, OperationID: request.OperationID}
+	if _, err := s.DeleteSandboxFile(context.Background(), nativeSandboxID, operation); err != nil {
+		t.Fatal(err)
+	}
+	// Deterministic store-state fixture: admission was already in flight when
+	// retirement observed no intent. This is not a native filesystem race.
+	for key, object := range original.objects {
+		objects.objects[key] = object
+	}
+	objects.failDeleteSuffix = "/content.bin"
+	if _, err := s.DeleteSandboxFile(context.Background(), nativeSandboxID, operation); err == nil {
+		t.Fatal("content cleanup failure hidden")
+	}
+	if _, exists, err := s.readIntent(context.Background(), root); err != nil || !exists {
+		t.Fatalf("deleter lost the only durable late identity: %v", err)
+	}
+	if err := s.ensureNotDeleting(context.Background(), lateIntent); !errors.Is(err, ErrConflict) {
+		t.Fatalf("creator retirement fence failed: %v", err)
+	}
+	if _, exists, err := s.readIntent(context.Background(), root); err != nil || !exists {
+		t.Fatalf("creator cleanup lost the late identity: %v", err)
+	}
+	objects.failDeleteSuffix = ""
+	result, err := s.DeleteSandboxFile(context.Background(), nativeSandboxID, operation)
+	if err != nil || result.Outcome != "deleted" {
+		t.Fatalf("cleanup recovery failed: %#v %v", result, err)
+	}
+	if _, exists := objects.findSuffix("/content.bin"); exists {
+		t.Fatal("bytes were not cleaned")
+	}
+	if _, exists, err := s.readIntent(context.Background(), root); err != nil || !exists {
+		t.Fatalf("cleanup discarded the delayed-write locator: %v", err)
+	}
+	result, err = s.DeleteSandboxFile(context.Background(), nativeSandboxID, operation)
+	if err != nil || result.Outcome != "already_absent" {
+		t.Fatalf("retained metadata masquerades as remaining file bytes: %#v %v", result, err)
+	}
+}
+
 func TestNativeFileOperationCancellationBeforeAndAfterAdmission(t *testing.T) {
 	for _, admitted := range []bool{false, true} {
 		t.Run(map[bool]string{false: "before", true: "after"}[admitted], func(t *testing.T) {
@@ -192,7 +296,7 @@ func TestNativeFileOperationCancellationBeforeAndAfterAdmission(t *testing.T) {
 				physical.failure = ErrUnavailable
 				_, _ = s.CaptureSandboxFile(context.Background(), nativeSandboxID, request)
 			}
-			retired, err := s.DeleteSandboxFile(context.Background(), nativeSandboxID, SandboxFileDeleteRequest{OrganizationID: request.OrganizationID, OperationID: request.OperationID, Path: request.Path})
+			retired, err := s.DeleteSandboxFile(context.Background(), nativeSandboxID, SandboxFileDeleteRequest{OrganizationID: request.OrganizationID, OperationID: request.OperationID, Path: &request.Path})
 			if err != nil {
 				t.Fatal(err)
 			}

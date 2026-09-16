@@ -1235,10 +1235,13 @@ func (s *Service) operationalObjectsPresent(
 	ctx context.Context,
 	identity CaptureIdentity,
 ) (bool, error) {
-	keys := keysForIdentity(identity)
+	return s.captureObjectsPresent(ctx, identity, false)
+}
+
+func (s *Service) captureObjectsPresent(ctx context.Context, identity CaptureIdentity, preserveIntent bool) (bool, error) {
 	present := false
 	var failures []error
-	for _, key := range []string{keys.receipt, keys.content, keys.intent} {
+	for _, key := range operationalCaptureKeys(identity, preserveIntent) {
 		exists, err := s.privateObjectExists(ctx, key)
 		present = present || exists
 		if err != nil {
@@ -1260,9 +1263,20 @@ func (s *Service) privateObjectExists(ctx context.Context, key string) (bool, er
 }
 
 func (s *Service) deleteOperationalObjects(ctx context.Context, identity CaptureIdentity) error {
+	return s.deleteCaptureObjects(ctx, identity, false)
+}
+
+func operationalCaptureKeys(identity CaptureIdentity, preserveIntent bool) []string {
 	keys := keysForIdentity(identity)
+	if preserveIntent {
+		return []string{keys.receipt, keys.content}
+	}
+	return []string{keys.receipt, keys.content, keys.intent}
+}
+
+func (s *Service) deleteCaptureObjects(ctx context.Context, identity CaptureIdentity, preserveIntent bool) error {
 	var failures []error
-	for _, key := range []string{keys.receipt, keys.content, keys.intent} {
+	for _, key := range operationalCaptureKeys(identity, preserveIntent) {
 		if err := s.deleteObjectReconciled(ctx, key); err != nil {
 			failures = append(failures, err)
 		}
@@ -1301,16 +1315,24 @@ func (s *Service) ensureNotDeleting(ctx context.Context, intent captureIntent) e
 	}
 	identity := identityFromIntent(intent)
 	if deletion.Version == 2 {
-		if err := requireSandboxFileRequest(intent.Binding, deletion.SandboxFile.SandboxID, deletion.SandboxFile.Request); err != nil {
+		if err := requireSandboxFileLookup(intent.Binding, deletion.SandboxFile.SandboxID, deletion.SandboxFile.Request); err != nil {
 			return err
 		}
 	} else if deletion.Identity != identity {
 		return fmt.Errorf("%w: deletion identity differs", ErrConflict)
 	}
-	if cleanupErr := s.deleteOperationalObjects(ctx, identity); cleanupErr != nil {
+	if cleanupErr := s.deleteCaptureObjects(ctx, identity, deletion.requiresIntentForCleanup()); cleanupErr != nil {
 		return errors.Join(fmt.Errorf("%w: capture has been retired", ErrConflict), cleanupErr)
 	}
 	return fmt.Errorf("%w: capture has been retired", ErrConflict)
+}
+
+// An operation can be retired before source admission. If a previously
+// in-flight creator later persists its intent, that intent is the only durable
+// locator for late content. Keep it alongside the immutable retirement rather
+// than losing cleanup authority after a failed or delayed content write.
+func (deletion captureDeletion) requiresIntentForCleanup() bool {
+	return deletion.Version == 2 && deletion.Identity == (CaptureIdentity{})
 }
 
 func (s *Service) readReceipt(

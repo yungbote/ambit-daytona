@@ -181,7 +181,8 @@ export class SandboxFileCaptureReadResponseDto {
 export class SandboxFileCaptureDeleteRequestDto {
   @ApiPropertyOptional({
     type: SandboxFileCaptureReceiptDto,
-    description: 'Exact receipt, or operationId and path when retiring pending work.',
+    description:
+      'Exact receipt, or operationId with an optional original-path assertion when retiring or retrying cleanup.',
   })
   @IsOptional()
   @ValidateNested()

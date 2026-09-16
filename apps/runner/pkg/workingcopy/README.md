@@ -29,11 +29,21 @@ operations under the same path are:
   listing or mutable file disappears; a supplied path must match the intent.
 - `/read`, with `{receipt, offset, maximumBytes}`: an exact immutable range, up to
   4 MiB, returned as canonical base64 with its digest/length/EOF identity.
-- `/delete`, with `{receipt}` or the original `{operationId,path}`: retire the
-  operation and release private bytes. The latter also cancels pending work or
-  retires a key before source admission. A durable retirement prevents a late
-  create from reusing it. `captureId` is null only when no source was selected;
-  this does not fabricate a receipt. Cleanup is idempotent and retryable.
+- `/delete`, with `{receipt}` or `{operationId,path?}`: retire the operation and
+  release private bytes. The latter also cancels pending work or retires a key
+  before source admission. An omitted path is not invented. A durable retirement
+  prevents a late create from reusing it. `captureId` is null only when no source
+  was selected. Cleanup is idempotent and retryable directly by operationId after
+  the original intent, browser listing or source path has disappeared. Observed
+  `retired` means admission is fenced, not that byte cleanup already succeeded;
+  retry `/delete` to reconcile an interrupted cleanup.
+
+If retirement preceded admission, a late intent can be the only durable locator
+for delayed content. That small intent is retained with the identity-free
+retirement, including after byte cleanup, so later cleanup retries cannot lose
+the address of an in-flight write. Ordinary identity-bearing retirements retain
+their existing full object cleanup. This uses the existing custody records;
+there is no new recovery registry or mutable tombstone writer.
 
 Native capture uses the same private object store, conditional publication,
 anonymous scratch, byte verification and descriptor-based FICLONE reader. Its

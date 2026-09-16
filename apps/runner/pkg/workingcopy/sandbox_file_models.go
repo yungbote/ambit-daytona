@@ -71,7 +71,7 @@ type SandboxFileDeleteRequest struct {
 	Receipt        *SandboxFileReceipt `json:"receipt,omitempty"`
 	OrganizationID string              `json:"organizationId,omitempty"`
 	OperationID    string              `json:"operationId,omitempty"`
-	Path           string              `json:"path,omitempty"`
+	Path           *string             `json:"path,omitempty"`
 }
 
 type SandboxFileDeleteReceipt struct {
@@ -82,6 +82,6 @@ type SandboxFileDeleteReceipt struct {
 // Retirement precedes cleanup and can exist before a source generation was
 // admitted. It fences an operation without inventing a capture or Product grant.
 type sandboxFileRetirement struct {
-	SandboxID string             `json:"sandboxId"`
-	Request   SandboxFileRequest `json:"request"`
+	SandboxID string                    `json:"sandboxId"`
+	Request   SandboxFileObserveRequest `json:"request"`
 }

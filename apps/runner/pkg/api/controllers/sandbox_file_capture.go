@@ -119,7 +119,7 @@ func ReadSandboxFile(ctx *gin.Context) {
 //
 // @Tags sandbox
 // @Summary Retire a native file operation and release its private bytes
-// @Description Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification.
+// @Description Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification. Retirement accepts a receipt or operationId with optional path assertion and retries private-byte cleanup even after retirement.
 // @Accept json
 // @Produce json
 // @Param sandboxId path string true "Sandbox ID"

@@ -101,9 +101,8 @@ export class WorkingCopyCaptureService {
     const { sandbox, adapter } = await this.executionAuthority.authorizeSandbox(organizationId, sandboxIdOrName)
     try {
       const receipt = await adapter.captureSandboxFile(sandbox.id, { ...request, organizationId }, signal)
-      nativeCaptureValidation(
-        () => assertSandboxFileReceipt(receipt, { organizationId, sandboxId: sandbox.id, ...request }),
-        ConflictException,
+      mutationReceiptGuard(() =>
+        assertSandboxFileReceipt(receipt, { organizationId, sandboxId: sandbox.id, ...request }),
       )
       return receipt
     } catch (error) {
@@ -174,7 +173,7 @@ export class WorkingCopyCaptureService {
         request.receipt ? request : { ...request, organizationId },
         signal,
       )
-      nativeCaptureValidation(() => assertSandboxFileDeleteReceipt(receipt, request.receipt), ConflictException)
+      mutationReceiptGuard(() => assertSandboxFileDeleteReceipt(receipt, request.receipt))
       return receipt
     } catch (error) {
       throw translateRunnerCaptureError(error, true)

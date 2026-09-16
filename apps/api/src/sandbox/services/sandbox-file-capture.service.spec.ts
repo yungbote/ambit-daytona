@@ -1,6 +1,12 @@
 /* Copyright 2026 Ambit. SPDX-License-Identifier: AGPL-3.0 */
 
-import { BadRequestException, ConflictException, ForbiddenException, ValidationPipe } from '@nestjs/common'
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  ServiceUnavailableException,
+  ValidationPipe,
+} from '@nestjs/common'
 import { WorkingCopyCaptureService } from './working-copy-capture.service'
 import { SandboxExecutionAuthorityService } from './sandbox-execution-authority.service'
 import { SandboxService } from './sandbox.service'
@@ -126,7 +132,9 @@ describe('native sandbox file capture authority', () => {
     'rejects a Runner receipt for another %s',
     async (field) => {
       adapter.captureSandboxFile.mockResolvedValue({ ...receipt(), [field]: 'other' })
-      await expect(service.captureSandboxFile(ORGANIZATION, SANDBOX, request)).rejects.toBeInstanceOf(ConflictException)
+      const outcome = await service.captureSandboxFile(ORGANIZATION, SANDBOX, request).catch((error) => error)
+      expect(outcome).toBeInstanceOf(ServiceUnavailableException)
+      expect(outcome.getResponse()).toMatchObject({ code: 'WORKING_COPY_CAPTURE_OUTCOME_UNKNOWN' })
     },
   )
 
@@ -212,6 +220,22 @@ describe('native sandbox file capture authority', () => {
     )
   })
 
+  it('retries retired cleanup by operation without resolving a source path', async () => {
+    const operation = { operationId: request.operationId }
+    adapter.deleteSandboxFile.mockResolvedValue({ captureId: receipt().captureId, outcome: 'deleted' })
+    await expect(service.deleteSandboxFile(ORGANIZATION, SANDBOX, operation)).resolves.toEqual({
+      captureId: receipt().captureId,
+      outcome: 'deleted',
+    })
+    expect(adapter.deleteSandboxFile).toHaveBeenCalledWith(
+      SANDBOX,
+      { ...operation, organizationId: ORGANIZATION },
+      undefined,
+    )
+    expect(adapter.observeSandboxFile).not.toHaveBeenCalled()
+    expect(adapter.captureSandboxFile).not.toHaveBeenCalled()
+  })
+
   it('accepts the actual production DTO transformation for pending and completed work', async () => {
     const pipe = new ValidationPipe({ transform: true })
     const pending = await pipe.transform(request, { type: 'body', metatype: SandboxFileCaptureDeleteRequestDto })
@@ -245,6 +269,15 @@ describe('native sandbox file capture authority', () => {
       eof: true,
       byteLength: 0,
     })
+  })
+
+  it('requires reconciliation when a mutating cleanup reply is malformed', async () => {
+    adapter.deleteSandboxFile.mockResolvedValue({ captureId: null, outcome: 'deleted' })
+    const outcome = await service
+      .deleteSandboxFile(ORGANIZATION, SANDBOX, { operationId: request.operationId })
+      .catch((error) => error)
+    expect(outcome).toBeInstanceOf(ServiceUnavailableException)
+    expect(outcome.getResponse()).toMatchObject({ code: 'WORKING_COPY_CAPTURE_OUTCOME_UNKNOWN' })
   })
 
   it('refuses ambiguous deletion and honors already-aborted requests', async () => {

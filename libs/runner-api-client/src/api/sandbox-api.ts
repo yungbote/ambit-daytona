@@ -291,7 +291,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification.
+         * Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification. Retirement accepts a receipt or operationId with optional path assertion and retries private-byte cleanup even after retirement.
          * @summary Retire a native file operation and release its private bytes
          * @param {string} sandboxId Sandbox ID
          * @param {WorkingcopySandboxFileDeleteRequest} request Native file capture operation
@@ -1606,7 +1606,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification.
+         * Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification. Retirement accepts a receipt or operationId with optional path assertion and retries private-byte cleanup even after retirement.
          * @summary Retire a native file operation and release its private bytes
          * @param {string} sandboxId Sandbox ID
          * @param {WorkingcopySandboxFileDeleteRequest} request Native file capture operation
@@ -2077,7 +2077,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.createBackup(sandboxId, sandbox, options).then((request) => request(axios, basePath));
         },
         /**
-         * Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification.
+         * Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification. Retirement accepts a receipt or operationId with optional path assertion and retries private-byte cleanup even after retirement.
          * @summary Retire a native file operation and release its private bytes
          * @param {string} sandboxId Sandbox ID
          * @param {WorkingcopySandboxFileDeleteRequest} request Native file capture operation
@@ -2460,7 +2460,7 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     * Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification.
+     * Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification. Retirement accepts a receipt or operationId with optional path assertion and retries private-byte cleanup even after retirement.
      * @summary Retire a native file operation and release its private bytes
      * @param {string} sandboxId Sandbox ID
      * @param {WorkingcopySandboxFileDeleteRequest} request Native file capture operation

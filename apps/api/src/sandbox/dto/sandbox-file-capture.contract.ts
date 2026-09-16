@@ -174,7 +174,7 @@ export function assertSandboxFileDeleteRequest(value: SandboxFileCaptureDeleteRe
   if (value?.receipt !== undefined) {
     exact(value, ['receipt'])
     if (!value.receipt) throw new Error('Native capture deletion receipt is absent.')
-  } else assertSandboxFileRequest(value as SandboxFileCaptureRequestDto)
+  } else assertSandboxFileObserveRequest(value as SandboxFileCaptureObserveRequestDto)
 }
 
 export function assertSandboxFileDeleteReceipt(

@@ -1921,7 +1921,7 @@
     },
     "/sandboxes/{sandboxId}/working-copy-captures/sandbox-files/delete": {
       "post": {
-        "description": "Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification.",
+        "description": "Provider organization authority is supplied by the authenticated API, not a Product Run. File capture admits only work/outputs regular files and requires native descriptor cloning. Component measurement is not runtime qualification. Retirement accepts a receipt or operationId with optional path assertion and retries private-byte cleanup even after retirement.",
         "consumes": [
           "application/json"
         ],

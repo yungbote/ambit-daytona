@@ -90,7 +90,7 @@ func (s *Service) ObserveSandboxFile(ctx context.Context, sandboxID string, requ
 		return SandboxFileObservation{}, err
 	} else if retired {
 		if request.Path != nil {
-			expected := SandboxFileRequest{OrganizationID: request.OrganizationID, OperationID: request.OperationID, Path: *request.Path}
+			expected := request
 			if err := requireSandboxFileRetirement(deletion, sandboxID, expected); err != nil {
 				return SandboxFileObservation{}, err
 			}
@@ -104,12 +104,7 @@ func (s *Service) ObserveSandboxFile(ctx context.Context, sandboxID string, requ
 	if !exists {
 		return SandboxFileObservation{Status: "absent"}, nil
 	}
-	zone, _ := semanticZoneRoot(intent.Binding.Selector.SemanticZoneRef)
-	path := zone + "/" + intent.Binding.Selector.ZoneRelativePath
-	if request.Path != nil {
-		path = *request.Path
-	}
-	if err := requireSandboxFileRequest(intent.Binding, sandboxID, SandboxFileRequest{OrganizationID: request.OrganizationID, OperationID: request.OperationID, Path: path}); err != nil {
+	if err := requireSandboxFileLookup(intent.Binding, sandboxID, request); err != nil {
 		return SandboxFileObservation{}, err
 	}
 	observed, err := s.observeLocked(ctx, intent.Binding, nil)
@@ -141,10 +136,10 @@ func (s *Service) ReadSandboxFile(ctx context.Context, sandboxID string, request
 }
 
 func (s *Service) DeleteSandboxFile(ctx context.Context, sandboxID string, request SandboxFileDeleteRequest) (SandboxFileDeleteReceipt, error) {
-	native := SandboxFileRequest{OrganizationID: request.OrganizationID, OperationID: request.OperationID, Path: request.Path}
+	native := SandboxFileObserveRequest{OrganizationID: request.OrganizationID, OperationID: request.OperationID, Path: request.Path}
 	var expected *CaptureReceipt
 	if request.Receipt != nil {
-		if native != (SandboxFileRequest{}) {
+		if native != (SandboxFileObserveRequest{}) {
 			return SandboxFileDeleteReceipt{}, invalidf("delete requires exactly a receipt or an operation")
 		}
 		receipt, err := validateSandboxFileReceipt(sandboxID, *request.Receipt)
@@ -152,10 +147,16 @@ func (s *Service) DeleteSandboxFile(ctx context.Context, sandboxID string, reque
 			return SandboxFileDeleteReceipt{}, err
 		}
 		expected = &receipt
-		native = SandboxFileRequest{OrganizationID: request.Receipt.OrganizationID, OperationID: request.Receipt.OperationID, Path: request.Receipt.Path}
+		path := request.Receipt.Path
+		native = SandboxFileObserveRequest{OrganizationID: request.Receipt.OrganizationID, OperationID: request.Receipt.OperationID, Path: &path}
 	}
-	if _, err := validateSandboxFileRequest(sandboxID, native); err != nil {
+	if err := validateSandboxFileOperation(sandboxID, native.OrganizationID, native.OperationID); err != nil {
 		return SandboxFileDeleteReceipt{}, err
+	}
+	if native.Path != nil {
+		if _, err := sandboxFileSelector(*native.Path); err != nil {
+			return SandboxFileDeleteReceipt{}, err
+		}
 	}
 	root := sandboxFileObjectRoot(native.OrganizationID, sandboxID, native.OperationID)
 	release := s.locks.acquire(root)
@@ -176,7 +177,7 @@ func (s *Service) DeleteSandboxFile(ctx context.Context, sandboxID string, reque
 		return SandboxFileDeleteReceipt{}, err
 	}
 	if exists {
-		if err := requireSandboxFileRequest(intent.Binding, sandboxID, native); err != nil {
+		if err := requireSandboxFileLookup(intent.Binding, sandboxID, native); err != nil {
 			return SandboxFileDeleteReceipt{}, err
 		}
 		if expected != nil && expected.CaptureIdentity != identityFromIntent(intent) {
@@ -184,6 +185,9 @@ func (s *Service) DeleteSandboxFile(ctx context.Context, sandboxID string, reque
 		}
 		if !retired {
 			deletion.Identity = identityFromIntent(intent)
+			zone, _ := semanticZoneRoot(intent.Binding.Selector.SemanticZoneRef)
+			admittedPath := zone + "/" + intent.Binding.Selector.ZoneRelativePath
+			deletion.SandboxFile.Request.Path = &admittedPath
 		}
 	}
 	if expected != nil && deletion.Identity != (CaptureIdentity{}) && deletion.Identity != expected.CaptureIdentity {
@@ -214,7 +218,7 @@ func (s *Service) DeleteSandboxFile(ctx context.Context, sandboxID string, reque
 	}
 	identity := deletion.Identity
 	if exists {
-		if err := requireSandboxFileRequest(intent.Binding, sandboxID, native); err != nil {
+		if err := requireSandboxFileLookup(intent.Binding, sandboxID, native); err != nil {
 			return SandboxFileDeleteReceipt{}, err
 		}
 		identity = identityFromIntent(intent)
@@ -223,11 +227,12 @@ func (s *Service) DeleteSandboxFile(ctx context.Context, sandboxID string, reque
 	if identity != (CaptureIdentity{}) {
 		id := identity.ProviderResourceID
 		result.CaptureID = &id
-		present, err := s.operationalObjectsPresent(ctx, identity)
+		preserveIntent := deletion.requiresIntentForCleanup()
+		present, err := s.captureObjectsPresent(ctx, identity, preserveIntent)
 		if err != nil {
 			return SandboxFileDeleteReceipt{}, err
 		}
-		if err := s.deleteOperationalObjects(ctx, identity); err != nil {
+		if err := s.deleteCaptureObjects(ctx, identity, preserveIntent); err != nil {
 			return SandboxFileDeleteReceipt{}, err
 		}
 		if present {
@@ -239,15 +244,20 @@ func (s *Service) DeleteSandboxFile(ctx context.Context, sandboxID string, reque
 
 func validateSandboxFileRetirement(deletion captureDeletion, root string) error {
 	native := deletion.SandboxFile
-	if _, err := validateSandboxFileRequest(native.SandboxID, native.Request); err != nil {
+	if err := validateSandboxFileOperation(native.SandboxID, native.Request.OrganizationID, native.Request.OperationID); err != nil {
 		return fmt.Errorf("%w: native retirement request is invalid", ErrConflict)
+	}
+	if native.Request.Path != nil {
+		if _, err := sandboxFileSelector(*native.Request.Path); err != nil {
+			return fmt.Errorf("%w: native retirement path is invalid", ErrConflict)
+		}
 	}
 	if root != sandboxFileObjectRoot(native.Request.OrganizationID, native.SandboxID, native.Request.OperationID) {
 		return fmt.Errorf("%w: native retirement scope differs", ErrConflict)
 	}
 	if deletion.Identity != (CaptureIdentity{}) {
 		binding := deletion.Identity.CaptureBinding
-		if validateSandboxFileBinding(native.SandboxID, binding) != nil || requireSandboxFileRequest(binding, native.SandboxID, native.Request) != nil ||
+		if validateSandboxFileBinding(native.SandboxID, binding) != nil || requireSandboxFileLookup(binding, native.SandboxID, native.Request) != nil ||
 			deletion.Identity.ProviderResourceID != providerResourceID(binding, generationstop.TerminalGeneration{}) {
 			return fmt.Errorf("%w: native retirement identity is invalid", ErrConflict)
 		}
@@ -255,14 +265,18 @@ func validateSandboxFileRetirement(deletion captureDeletion, root string) error 
 	return nil
 }
 
-func requireSandboxFileRetirement(deletion captureDeletion, sandboxID string, request SandboxFileRequest) error {
+func requireSandboxFileRetirement(deletion captureDeletion, sandboxID string, request SandboxFileObserveRequest) error {
 	if deletion.Version == 2 {
-		if deletion.SandboxFile.SandboxID != sandboxID || deletion.SandboxFile.Request != request {
+		actual := deletion.SandboxFile
+		if actual.SandboxID != sandboxID || actual.Request.OrganizationID != request.OrganizationID || actual.Request.OperationID != request.OperationID ||
+			(actual.Request.Path != nil && request.Path != nil && *actual.Request.Path != *request.Path) {
 			return fmt.Errorf("%w: native operation retirement differs", ErrConflict)
 		}
-		return nil
+		if deletion.Identity == (CaptureIdentity{}) {
+			return nil
+		}
 	}
-	return requireSandboxFileRequest(deletion.Identity.CaptureBinding, sandboxID, request)
+	return requireSandboxFileLookup(deletion.Identity.CaptureBinding, sandboxID, request)
 }
 
 func requireProductCapture(binding CaptureBinding) error {
@@ -351,14 +365,25 @@ func validateSandboxFileBinding(sandboxID string, binding CaptureBinding) error 
 }
 
 func requireSandboxFileRequest(binding CaptureBinding, sandboxID string, request SandboxFileRequest) error {
-	selector, err := validateSandboxFileRequest(sandboxID, request)
-	if err != nil {
+	return requireSandboxFileLookup(binding, sandboxID, SandboxFileObserveRequest{OrganizationID: request.OrganizationID, OperationID: request.OperationID, Path: &request.Path})
+}
+
+func requireSandboxFileLookup(binding CaptureBinding, sandboxID string, request SandboxFileObserveRequest) error {
+	if err := validateSandboxFileOperation(sandboxID, request.OrganizationID, request.OperationID); err != nil {
 		return err
 	}
+	if request.Path != nil {
+		selector, err := sandboxFileSelector(*request.Path)
+		if err != nil {
+			return err
+		}
+		if selector != binding.Selector {
+			return fmt.Errorf("%w: native operation is already bound to a different path", ErrConflict)
+		}
+	}
 	source := binding.SandboxFile
-	if source.Contract != SandboxFileCaptureContract || source.OrganizationID != request.OrganizationID ||
-		source.SandboxID != sandboxID || source.OperationID != request.OperationID || binding.Selector != selector {
-		return fmt.Errorf("%w: native operation is already bound to a different source or path", ErrConflict)
+	if source.Contract != SandboxFileCaptureContract || source.OrganizationID != request.OrganizationID || source.SandboxID != sandboxID || source.OperationID != request.OperationID {
+		return fmt.Errorf("%w: native operation is already bound to a different source", ErrConflict)
 	}
 	return nil
 }
@@ -368,7 +393,7 @@ func (s *Service) sandboxFileRetired(ctx context.Context, root, sandboxID string
 	if err != nil || !retired {
 		return false, err
 	}
-	if err := requireSandboxFileRetirement(deletion, sandboxID, request); err != nil {
+	if err := requireSandboxFileRetirement(deletion, sandboxID, SandboxFileObserveRequest{OrganizationID: request.OrganizationID, OperationID: request.OperationID, Path: &request.Path}); err != nil {
 		return false, err
 	}
 	return true, nil
