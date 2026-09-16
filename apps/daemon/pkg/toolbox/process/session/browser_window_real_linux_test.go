@@ -51,7 +51,7 @@ func TestRealBrowserWindowGeometryInputAndHandoff(t *testing.T) {
 			fmt.Fprint(w, `<!doctype html><title>Native modal</title><button autofocus onclick="document.body.dataset.answer=String(confirm('Local window qualification'))">Confirm</button>`)
 			return
 		}
-		fmt.Fprintf(w, `<!doctype html><title>Window %s</title><style>html,body{margin:0;background:#134f2f;color:white;min-height:100%%}button{position:absolute;left:20px;top:10px;width:100px;height:40px}textarea{position:absolute;left:20px;top:80px;width:280px;height:120px}</style><button onclick="window.clicks++">Count</button><textarea aria-label="Notes"></textarea><script>window.clicks=0;addEventListener('pointermove',e=>window.actualPointer={x:e.screenX,y:e.screenY})</script>`, r.URL.Path)
+		fmt.Fprintf(w, `<!doctype html><title>Window %s</title><style>html,body{margin:0;background:#134f2f;color:white;min-height:100%%}button{position:absolute;left:20px;top:10px;width:100px;height:40px}textarea{position:absolute;left:20px;top:80px;width:280px;height:120px}</style><button onclick="window.clicks++">Count</button><button id=popup style="left:200px" onclick="window.open('/popup','','popup,width=500,height=400')">Popup</button><textarea aria-label="Notes"></textarea><script>window.clicks=0;addEventListener('pointermove',e=>window.actualPointer={x:e.screenX,y:e.screenY})</script>`, r.URL.Path)
 	}))
 	defer page.Close()
 	var environment []string
@@ -250,6 +250,28 @@ func TestRealBrowserWindowGeometryInputAndHandoff(t *testing.T) {
 		if answer != fmt.Sprint(key == "Enter") {
 			t.Fatalf("native %s did not resolve the preserved dialog after resize: %v", key, answer)
 		}
+		restored := cli(true, "eval", "JSON.stringify({width:screen.width,height:screen.height})")["data"].(map[string]any)["result"]
+		if restored != `{"width":800,"height":1200}` {
+			t.Fatalf("controller release did not restore the primary viewer layout: %v", restored)
+		}
+	}
+	cli(true, "open", page.URL)
+	cli(true, "click", "#popup")
+	cli(true, "snapshot")
+	if title := cli(true, "get", "title")["data"].(map[string]any)["title"]; title != "Window /popup" {
+		t.Fatalf("page action did not follow the actual focused popup window: %v", title)
+	}
+	const popupController = "baaaaabb-cccc-4ddd-8eee-ffff00000006"
+	popupLease := control(map[string]any{"op": "acquire", "controllerId": popupController, "expiresAt": time.Now().Add(25 * time.Second).UnixMilli()}, http.StatusOK)
+	control(map[string]any{"op": "input", "controllerId": popupController, "sequence": 1,
+		"expectedSurfaceGeneration": popupLease["surface"].(map[string]any)["generation"], "events": []map[string]any{
+			{"type": "input_keyboard", "eventType": "keyDown", "key": "w", "code": "KeyW", "modifiers": 10},
+			{"type": "input_keyboard", "eventType": "keyUp", "key": "w", "code": "KeyW", "modifiers": 0},
+		}}, http.StatusOK)
+	control(map[string]any{"op": "release", "controllerId": popupController}, http.StatusOK)
+	cli(true, "snapshot")
+	if title := cli(true, "get", "title")["data"].(map[string]any)["title"]; title != "Window /" {
+		t.Fatalf("closing the native popup lost the original window: %v", title)
 	}
 	cli(true, "close")
 }

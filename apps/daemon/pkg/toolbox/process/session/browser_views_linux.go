@@ -291,7 +291,13 @@ func (s *SessionController) StreamBrowserView(c *gin.Context) {
 		c.Status(http.StatusNotFound)
 		return
 	}
-	address := fmt.Sprintf("ws://127.0.0.1:%d/?pacing=ack&maxFps=10", selected.port)
+	maxFps := 10
+	if presentation != nil {
+		// The native presentation owner permits this rate only for the
+		// primary connection; secondary viewers remain capped at 10 fps.
+		maxFps = 20
+	}
+	address := fmt.Sprintf("ws://127.0.0.1:%d/?pacing=ack&maxFps=%d", selected.port, maxFps)
 	var headers http.Header
 	if presentation != nil {
 		address += fmt.Sprintf("&width=%d&height=%d", presentation.Width, presentation.Height)
