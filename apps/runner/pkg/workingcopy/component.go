@@ -16,9 +16,9 @@ import (
 // caller's workspace image, current qualification, or historical capture lineage.
 // The host runtime owns those authorities. This process owns these measured bytes.
 type CaptureComponent struct {
-	RoleRef  string                   `json:"roleRef"`
-	Protocol CaptureAuthorityArtifact `json:"protocol"`
-	Helper   CaptureAuthorityArtifact `json:"helper"`
+	RoleRef  string                   `json:"roleRef" validate:"required"`
+	Protocol CaptureAuthorityArtifact `json:"protocol" validate:"required"`
+	Helper   CaptureAuthorityArtifact `json:"helper" validate:"required"`
 }
 
 // MeasureCaptureComponent pins the actual running executable through its open

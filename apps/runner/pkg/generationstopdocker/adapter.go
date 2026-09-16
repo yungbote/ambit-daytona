@@ -160,18 +160,7 @@ func observation(
 			labels["ambitRuntimeKind"],
 		)
 	}
-	state := inspect.State
-	finishedAt := state.FinishedAt
-	exitCode, oomKilled := state.ExitCode, state.OOMKilled
-	// Docker retains the previous execution's FinishedAt after an explicit
-	// start, even though StartedAt now names the new execution. Terminal
-	// outcome fields do not describe a currently live (including paused) run.
-	// A restarting state still describes a finished attempt awaiting restart.
-	if state.Running && !state.Restarting {
-		finishedAt, exitCode, oomKilled = "", 0, false
-	} else if finishedAt == "0001-01-01T00:00:00Z" || strings.HasPrefix(finishedAt, "0001-01-01T00:00:00.") {
-		finishedAt = ""
-	}
+	generation, runtimeState := physicalGeneration(inspect)
 	return generationstop.CurrentGenerationObservation{
 		Source: generationstop.Source{
 			ProviderResourceID:  strings.TrimPrefix(inspect.Name, "/"),
@@ -188,7 +177,52 @@ func observation(
 		Fence: generationstop.Fence{
 			WorkspaceExecutionManifestRef: labels["ambitWorkspaceExecutionManifestRef"],
 		},
-		Generation: generationstop.ContainerGeneration{
+		Generation: generation,
+		State:      runtimeState,
+	}, nil
+}
+
+// InspectSandboxGeneration proves provider ownership without interpreting
+// Product labels. Only the authenticated provider API can supply the expected
+// organization to the native capture service.
+func (adapter *Adapter) InspectSandboxGeneration(ctx context.Context, sandboxID string) (generationstop.SandboxGenerationObservation, error) {
+	inspect, err := adapter.api.ContainerInspect(ctx, sandboxID)
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return generationstop.SandboxGenerationObservation{}, generationstop.ErrNotFound
+		}
+		return generationstop.SandboxGenerationObservation{}, err
+	}
+	if inspect.ContainerJSONBase == nil || inspect.Config == nil || inspect.State == nil ||
+		strings.TrimPrefix(inspect.Name, "/") != sandboxID ||
+		inspect.Config.Labels["daytona.runner.container-kind"] != "sandbox" ||
+		inspect.Config.Labels["daytona.organization_id"] == "" {
+		return generationstop.SandboxGenerationObservation{}, errors.New("native sandbox generation lacks exact provider ownership")
+	}
+	generation, state := physicalGeneration(inspect)
+	if err := generationstop.ValidateExpectedGeneration(generation.ExpectedGeneration); err != nil {
+		return generationstop.SandboxGenerationObservation{}, fmt.Errorf("native sandbox generation is invalid: %w", err)
+	}
+	return generationstop.SandboxGenerationObservation{
+		SandboxID: sandboxID, OrganizationID: inspect.Config.Labels["daytona.organization_id"],
+		Generation: generation, State: state,
+	}, nil
+}
+
+func physicalGeneration(inspect containertypes.InspectResponse) (generationstop.ContainerGeneration, generationstop.RuntimeState) {
+	state := inspect.State
+	finishedAt := state.FinishedAt
+	exitCode, oomKilled := state.ExitCode, state.OOMKilled
+	// Docker retains the previous execution's FinishedAt after an explicit
+	// start, even though StartedAt now names the new execution. Terminal
+	// outcome fields do not describe a currently live (including paused) run.
+	// A restarting state still describes a finished attempt awaiting restart.
+	if state.Running && !state.Restarting {
+		finishedAt, exitCode, oomKilled = "", 0, false
+	} else if finishedAt == "0001-01-01T00:00:00Z" || strings.HasPrefix(finishedAt, "0001-01-01T00:00:00.") {
+		finishedAt = ""
+	}
+	return generationstop.ContainerGeneration{
 			ExpectedGeneration: generationstop.ExpectedGeneration{
 				ContainerID:        inspect.ID,
 				ContainerCreatedAt: canonicalInstantMillis(inspect.Created),
@@ -198,16 +232,14 @@ func observation(
 			ExecutionFinishedAt: canonicalInstantMillis(finishedAt),
 			ExitCode:            exitCode,
 			OOMKilled:           oomKilled,
-		},
-		State: generationstop.RuntimeState{
+		}, generationstop.RuntimeState{
 			Status:     state.Status,
 			Running:    state.Running,
 			Paused:     state.Paused,
 			Restarting: state.Restarting,
 			Dead:       state.Dead,
 			PID:        state.Pid,
-		},
-	}, nil
+		}
 }
 
 func requireExactTarget(
