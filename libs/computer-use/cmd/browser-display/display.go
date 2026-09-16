@@ -22,6 +22,8 @@ type display struct {
 	keys        map[byte]bool
 	buttons     map[byte]bool
 	keysyms     map[string]byte
+	textKeys    map[rune][]textKey
+	heldCodes   map[string]byte
 	keyboard    *xgbutil.XUtil
 	modes       map[string]randr.Mode
 	wheelX      float64

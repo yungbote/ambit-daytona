@@ -5,8 +5,14 @@ package session
 
 import (
 	"encoding/json"
+	"github.com/google/uuid"
 	"math"
 )
+
+func validBrowserUUID(value string) bool {
+	id, err := uuid.Parse(value)
+	return err == nil && id != uuid.Nil && id.String() == value
+}
 
 // The driver emits these records only after acknowledged input. Project the
 // finite visual fields instead of forwarding keyboard data or task payloads.
@@ -15,21 +21,35 @@ func browserActivity(message []byte) ([]byte, bool) {
 		return nil, false
 	}
 	var value struct {
-		Type           string   `json:"type"`
-		PageGeneration string   `json:"pageGeneration"`
-		Source         string   `json:"source"`
-		EventType      string   `json:"eventType"`
-		Kind           string   `json:"kind"`
-		Timestamp      *float64 `json:"timestamp"`
-		X              *float64 `json:"x"`
-		Y              *float64 `json:"y"`
-		Buttons        *int     `json:"buttons"`
-		Modifiers      *int     `json:"modifiers"`
+		Type              string   `json:"type"`
+		PageGeneration    string   `json:"pageGeneration"`
+		Source            string   `json:"source"`
+		EventType         string   `json:"eventType"`
+		Kind              string   `json:"kind"`
+		Timestamp         *float64 `json:"timestamp"`
+		X                 *float64 `json:"x"`
+		Y                 *float64 `json:"y"`
+		Buttons           *int     `json:"buttons"`
+		Modifiers         *int     `json:"modifiers"`
+		CoordinateSpace   string   `json:"coordinateSpace"`
+		SurfaceGeneration string   `json:"surfaceGeneration"`
 	}
 	if json.Unmarshal(message, &value) != nil || len(value.PageGeneration) == 0 || len(value.PageGeneration) > 256 || !boundedBrowserNumber(value.Timestamp, 0, math.MaxFloat64) {
 		return nil, false
 	}
 	projected := map[string]any{"type": value.Type, "pageGeneration": value.PageGeneration, "timestamp": *value.Timestamp}
+	if value.CoordinateSpace != "" {
+		if value.CoordinateSpace != "viewport-css" && value.CoordinateSpace != "display-pixels" {
+			return nil, false
+		}
+		projected["coordinateSpace"] = value.CoordinateSpace
+	}
+	if value.CoordinateSpace == "display-pixels" {
+		if value.Type != "pointer" || value.Source != "agent" || !validBrowserUUID(value.SurfaceGeneration) || !boundedBrowserNumber(value.X, 0, 4096) || !boundedBrowserNumber(value.Y, 0, 4096) {
+			return nil, false
+		}
+		projected["surfaceGeneration"] = value.SurfaceGeneration
+	}
 	if value.Type == "pointer" && value.EventType == "reset" {
 		projected["eventType"] = "reset"
 	} else {

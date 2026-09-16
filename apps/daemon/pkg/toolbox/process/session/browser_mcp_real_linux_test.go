@@ -29,8 +29,13 @@ func TestRealBrowserMcpHelperRetainsNativeSessionCustody(t *testing.T) {
 	driver := os.Getenv("AMBIT_TEST_BROWSER_EXECUTABLE")
 	chrome := os.Getenv("AMBIT_TEST_CHROME_EXECUTABLE")
 	bundle := os.Getenv("AMBIT_TEST_BROWSER_MCP_BUNDLE")
+	windowMode := os.Getenv("AMBIT_TEST_BROWSER_WINDOW") == "1"
+	displayHelper := os.Getenv("AMBIT_TEST_BROWSER_DISPLAY_HELPER")
 	if driver == "" || chrome == "" || bundle == "" {
 		t.Skip("set real browser executables and AMBIT_TEST_BROWSER_MCP_BUNDLE")
+	}
+	if windowMode && displayHelper == "" {
+		t.Fatal("window qualification requires AMBIT_TEST_BROWSER_DISPLAY_HELPER")
 	}
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -72,7 +77,7 @@ func TestRealBrowserMcpHelperRetainsNativeSessionCustody(t *testing.T) {
 	workspace := &browserWorkspace{engine: engine, socketDir: socketDir}
 	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprint(w, "<!doctype html><title>Supervisor browser</title><input id=field>")
+		fmt.Fprint(w, `<!doctype html><title>Supervisor browser</title><input id=field><button style="position:absolute;left:40px;top:120px;width:100px;height:40px" onclick="document.querySelector('#field').value='Image coordinates hit'">Target</button>`)
 	}))
 	defer page.Close()
 	environment := map[string]string{}
@@ -88,6 +93,11 @@ func TestRealBrowserMcpHelperRetainsNativeSessionCustody(t *testing.T) {
 	environment["AGENT_BROWSER_IDLE_TIMEOUT_MS"] = "20000"
 	environment["AGENT_BROWSER_NO_WEBMCP"] = "1"
 	environment["NO_COLOR"] = "1"
+	if windowMode {
+		environment["DISPLAY"] = ""
+		environment["AGENT_BROWSER_WINDOW_STREAM"] = "1"
+		environment["AGENT_BROWSER_DISPLAY_HELPER"] = displayHelper
+	}
 	jsonString := func(value any) string {
 		bytes, err := json.Marshal(value)
 		if err != nil {
@@ -108,7 +118,7 @@ invokeIntrinsicBrowserMcp(request,{command:%s,artifactDigest:%s,cwd:%s,environme
 	}
 	const namespace = "aaaabbbbcccc4dddeeeeffff00001111"
 	quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'" }
-	invoke := func(session, name string, arguments any) map[string]any {
+	invokeChecked := func(session, name string, arguments any, observation any, errorCode string) map[string]any {
 		t.Helper()
 		workspace.open(t, session)
 		directory := filepath.Join(scratch, session)
@@ -116,7 +126,11 @@ invokeIntrinsicBrowserMcp(request,{command:%s,artifactDigest:%s,cwd:%s,environme
 			t.Fatal(err)
 		}
 		configPath := filepath.Join(directory, "config.json")
-		if err := os.WriteFile(configPath, []byte(jsonString(map[string]any{"version": 1, "namespace": namespace, "session": "browser", "requireSandbox": true, "captureDirectory": directory})), 0600); err != nil {
+		config := map[string]any{"version": 1, "namespace": namespace, "session": "browser", "requireSandbox": true, "captureDirectory": directory}
+		if observation != nil {
+			config["expectedObservation"] = observation
+		}
+		if err := os.WriteFile(configPath, []byte(jsonString(config)), 0600); err != nil {
 			t.Fatal(err)
 		}
 		request := filepath.Join(directory, "request.json")
@@ -147,15 +161,22 @@ invokeIntrinsicBrowserMcp(request,{command:%s,artifactDigest:%s,cwd:%s,environme
 				t.Fatalf("synchronous helper failed: %d %s", reply.status, reply.body)
 			}
 			var result map[string]any
-			if json.Unmarshal([]byte(*execution.Stdout), &result) != nil || result["isError"] == true {
+			if json.Unmarshal([]byte(*execution.Stdout), &result) != nil || (result["isError"] == true) != (errorCode != "") {
 				t.Fatalf("helper result: %s", *execution.Stdout)
 			}
+			content := result["structuredContent"].(map[string]any)
+			if errorCode != "" && content["response"].(map[string]any)["code"] != errorCode {
+				t.Fatalf("unexpected native result: %s", *execution.Stdout)
+			}
 			t.Logf("helper session=%s exit=%d scope=%s inputClosed=%v", session, *execution.ExitCode, execution.ProcessScope, execution.InputClosed)
-			return result["structuredContent"].(map[string]any)
+			return content
 		case <-time.After(15 * time.Second):
 			t.Fatal("synchronous helper did not return while its browser remained live")
 			return nil
 		}
+	}
+	invoke := func(session, name string, arguments any) map[string]any {
+		return invokeChecked(session, name, arguments, nil, "")
 	}
 	first := invoke("mcp-first", "agent_browser_open", map[string]any{"url": page.URL})
 	view, _ := workspace.only(t, "mcp-first", "browser")
@@ -181,6 +202,81 @@ invokeIntrinsicBrowserMcp(request,{command:%s,artifactDigest:%s,cwd:%s,environme
 	}
 	if owner, err := service.Get("mcp-first"); err != nil || owner.ProcessScope != "running" || !owner.InputClosed {
 		t.Fatalf("first helper's closed input ended browser custody: %v %v", owner, err)
+	}
+	if windowMode {
+		server := httptest.NewServer(engine)
+		defer server.Close()
+		path := "/process/session/mcp-first/browser-views/" + view
+		request, _ := http.NewRequest(http.MethodGet, server.URL+path+"/stream?width=780&height=600", nil)
+		request.Header.Set("X-Ambit-Browser-Viewer", "baaaaabb-cccc-4ddd-8eee-ffff00000002")
+		stream, err := server.Client().Do(request)
+		if err != nil || stream.StatusCode != http.StatusOK {
+			t.Fatalf("native MCP window stream: %v", err)
+		}
+		defer stream.Body.Close()
+		records := streamRecords(t, stream.Body)
+		for {
+			record := nextRecord(t, records, 10*time.Second)
+			if record["type"] == "frame" {
+				surface := record["surface"].(map[string]any)
+				if surface["width"] == float64(1560) && surface["height"] == float64(1200) {
+					break
+				}
+			}
+		}
+		fresh := invokeChecked("mcp-resized", "agent_browser_get_value", map[string]any{"selector": "#field"}, nil, "browser_observation_required")
+		browser := fresh["browser"].(map[string]any)
+		capture := browser["capture"].(map[string]any)
+		space := capture["coordinateSpace"].(map[string]any)
+		if space["name"] != "viewport-css" || space["cssWidth"] != float64(780) || space["devicePixelRatio"] != float64(2) {
+			t.Fatalf("MCP capture retained old or display geometry: %v", space)
+		}
+		page := browser["page"].(map[string]any)
+		observation := map[string]any{"targetId": page["targetId"], "loaderId": page["loaderId"], "pageGeneration": page["pageGeneration"], "geometrySha256": space["geometrySha256"]}
+		invokeChecked("mcp-image-move", "agent_browser_mouse_move", map[string]any{"x": 90, "y": 140}, observation, "")
+		invokeChecked("mcp-image-down", "agent_browser_mouse_down", map[string]any{"button": "left"}, observation, "")
+		invokeChecked("mcp-image-up", "agent_browser_mouse_up", map[string]any{"button": "left"}, observation, "")
+		clicked := invoke("mcp-image-read", "agent_browser_get_value", map[string]any{"selector": "#field"})
+		if clicked["response"].(map[string]any)["data"].(map[string]any)["value"] != "Image coordinates hit" {
+			t.Fatal("image coordinates after X11 resize missed the real page target")
+		}
+		control := func(request any) map[string]any {
+			t.Helper()
+			status, body := call(t, engine, http.MethodPost, path+"/control", request)
+			var value map[string]any
+			if status != http.StatusOK || json.Unmarshal(body, &value) != nil {
+				t.Fatalf("native MCP control: %d %s", status, body)
+			}
+			return value
+		}
+		lease := control(map[string]any{"op": "acquire", "controllerId": browserFixtureController, "expiresAt": time.Now().Add(25 * time.Second).UnixMilli()})
+		control(map[string]any{"op": "input", "controllerId": browserFixtureController, "sequence": 1,
+			"expectedSurfaceGeneration": lease["surface"].(map[string]any)["generation"],
+			"events": []map[string]any{
+				{"type": "input_keyboard", "eventType": "keyDown", "key": "w", "code": "KeyW", "windowsVirtualKeyCode": 87, "modifiers": 10},
+				{"type": "input_keyboard", "eventType": "keyUp", "key": "w", "code": "KeyW", "windowsVirtualKeyCode": 87, "modifiers": 0},
+			}})
+		deadline := time.Now().Add(5 * time.Second)
+		for control(map[string]any{"op": "inspect"})["surface"] != nil {
+			if time.Now().After(deadline) {
+				t.Fatal("native Close window did not end the owned Chrome process")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		closed := invokeChecked("mcp-after-close", "agent_browser_mouse_move", map[string]any{"x": 90, "y": 140}, observation, "browser_observation_required")
+		if closed["browser"].(map[string]any)["capture"].(map[string]any)["code"] != "no_active_page" {
+			t.Fatalf("closed browser was silently relaunched before feedback: %v", closed)
+		}
+		if current := strings.TrimSpace(string(awaitFile(t, pidPath))); current != strconv.Itoa(pid) {
+			t.Fatal("native window close replaced the retained daemon")
+		}
+		reopened := invoke("mcp-reopen", "agent_browser_open", map[string]any{"url": "about:blank"})
+		if reopened["browser"].(map[string]any)["page"].(map[string]any)["targetId"] == identity {
+			t.Fatal("explicit reopen claimed to restore a closed tab")
+		}
+		if owned, err := service.ObserveOwnedProcess("mcp-first", pid); err != nil || owned.PID != pid {
+			t.Fatalf("explicit reopen lost original native custody: %v %v", owned, err)
+		}
 	}
 	invoke("mcp-close", "agent_browser_close", map[string]any{})
 	deadline := time.Now().Add(5 * time.Second)
