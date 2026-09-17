@@ -14,6 +14,7 @@ import (
 	"image/jpeg"
 	"strings"
 	"testing"
+	"time"
 )
 
 func browserFixtureJPEG(width, height int) []byte {
@@ -212,6 +213,42 @@ func TestBrowserFrameWindowCountsWireBytesAndExactCumulativeACKs(t *testing.T) {
 	}
 	if forward, valid := w.acknowledge(30); forward || valid {
 		t.Fatal("future ACK admitted")
+	}
+}
+
+func TestBrowserFrameACKWaitsForDeliveryCompletion(t *testing.T) {
+	header, payload := browserFixtureFrame(false)
+	frame, err := parseBrowserBinaryFrame(packBrowserFixtureFrame(header, payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch := browserViewChannel{pending: browserFrameWindow{limit: 1}}
+	entered, release, delivered := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(delivered)
+		_, _ = ch.deliverFrame(frame.header.browserFrameHeader, frame.wireSize(), func() error { close(entered); <-release; return nil })
+	}()
+	<-entered
+	attempted := make(chan struct{})
+	ack := make(chan bool, 1)
+	go func() { close(attempted); forward, valid := ch.acknowledgeFrame(10); ack <- forward && valid }()
+	<-attempted
+	select {
+	case <-ack:
+		close(release)
+		<-delivered
+		t.Fatal("ACK consumed credit before the blocked frame write completed")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	<-delivered
+	select {
+	case valid := <-ack:
+		if !valid {
+			t.Fatal("ACK after delivery rejected")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ACK stayed blocked after delivery")
 	}
 }
 

@@ -29,7 +29,12 @@ const browserFixtureViewer = "33333333-3333-4333-8333-333333333333"
 // listener. It accepts presentation updates while a frame remains unacknowledged.
 func serveBrowserViewChannelFixture(w http.ResponseWriter, r *http.Request, dir, name, mode string, closeListener func() error) {
 	query := r.URL.Query()
-	if query.Get("pacing") != "ack" || query.Get("maxFps") != "60" || query.Get("patches") != "1" || query.Get("width") != "320" || query.Get("height") != "240" || r.Header.Get("X-Ambit-Browser-Viewer") != browserFixtureViewer {
+	observer := mode == "view-channel-observer"
+	validPresentation := query.Get("maxFps") == "60" && query.Get("width") == "320" && query.Get("height") == "240" && r.Header.Get("X-Ambit-Browser-Viewer") == browserFixtureViewer
+	if observer {
+		validPresentation = query.Get("maxFps") == "10" && !query.Has("width") && !query.Has("height") && r.Header.Get("X-Ambit-Browser-Viewer") == ""
+	}
+	if query.Get("pacing") != "ack" || query.Get("patches") != "1" || !validPresentation {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -46,6 +51,20 @@ func serveBrowserViewChannelFixture(w http.ResponseWriter, r *http.Request, dir,
 	binaryFrames := query.Get("frames") == "binary"
 	_ = connection.WriteJSON(map[string]any{"type": "status", "connected": true, "screencasting": true, "private": browserFixtureSecret})
 	_ = connection.WriteJSON(map[string]any{"type": "console", "text": browserFixtureSecret})
+	if mode == "view-channel-legacy" || mode == "view-channel-old-native" || mode == "view-channel-malformed-text" {
+		header, payload := browserFixtureFrame(false)
+		delete(header, "byteLength")
+		header["data"] = base64.StdEncoding.EncodeToString(payload)
+		if mode == "view-channel-legacy" {
+			delete(header, "surface")
+		}
+		if mode == "view-channel-malformed-text" {
+			header["data"] = "not-a-jpeg"
+		}
+		_ = connection.WriteJSON(header)
+		drainBrowserFixture(connection)
+		return
+	}
 	if mode == "view-channel-window" || mode == "view-channel-window-overflow" {
 		if query.Get("frameWindow") != "8" {
 			return
@@ -60,6 +79,15 @@ func serveBrowserViewChannelFixture(w http.ResponseWriter, r *http.Request, dir,
 	}
 	for _, patched := range []bool{false, true} {
 		header, payload := browserFixtureFrame(patched)
+		if mode == "view-channel-format-change" && patched {
+			header, payload = browserFixtureFrame(false)
+			header["seq"] = 12
+			delete(header, "byteLength")
+			header["data"] = base64.StdEncoding.EncodeToString(payload)
+			_ = connection.WriteJSON(header)
+			drainBrowserFixture(connection)
+			return
+		}
 		if mode == "view-channel-bad-frame" {
 			header["byteLength"] = len(payload) + 1
 		}
@@ -272,6 +300,7 @@ func TestBrowserViewerChannelRejectsUnboundAndForeignUpgrades(t *testing.T) {
 		{"viewer-owner", "", "", http.StatusBadRequest},
 		{"viewer-owner", "?width=320&height=240", "", http.StatusBadRequest},
 		{"viewer-owner", "?width=0&height=240", browserFixtureViewer, http.StatusBadRequest},
+		{"viewer-owner", "?width=320", browserFixtureViewer, http.StatusBadRequest},
 		{"viewer-owner", "?width=320&height=240&frames=other", browserFixtureViewer, http.StatusBadRequest},
 		{"viewer-owner", "?width=320&height=240&frames=binary&frames=binary", browserFixtureViewer, http.StatusBadRequest},
 		{"viewer-owner", "?width=320&height=240&frameWindow=9", browserFixtureViewer, http.StatusBadRequest},
@@ -295,6 +324,48 @@ func TestBrowserViewerChannelRejectsUnboundAndForeignUpgrades(t *testing.T) {
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusUpgradeRequired {
 		t.Fatalf("plain GET: %d", response.StatusCode)
+	}
+}
+
+func TestBrowserViewerChannelObserverHasNoPresentationAuthority(t *testing.T) {
+	workspace := newBrowserWorkspace(t)
+	workspace.open(t, "viewer-owner")
+	workspace.runDriver(t, "viewer-owner", "primary", "view-channel-observer")
+	id, _ := workspace.only(t, "viewer-owner", "primary")
+	server := workspace.serve(t)
+	channel, _, err := websocket.DefaultDialer.Dial(browserViewerAddress(server, "viewer-owner", id)+"?frames=binary&frameWindow=8", http.Header{"X-Ambit-Browser-Viewer": []string{browserFixtureViewer}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer channel.Close()
+	if readViewerText(t, channel)["type"] != "status" {
+		t.Fatal("observer state missing")
+	}
+	readViewerFrame(t, channel, false)
+	sendFrame(t, channel, map[string]any{"type": "ack", "seq": 10})
+	readViewerFrame(t, channel, true)
+	sendFrame(t, channel, map[string]any{"type": "presentation", "width": 400, "height": 300})
+	expectClose(t, channel, websocket.ClosePolicyViolation, "browser_view_invalid_message", 5*time.Second)
+}
+
+func TestBrowserViewerChannelFallsBackOnlyForValidInitialOldFrames(t *testing.T) {
+	for _, mode := range []string{"view-channel-legacy", "view-channel-old-native", "view-channel-malformed-text", "view-channel-format-change"} {
+		t.Run(mode, func(t *testing.T) {
+			workspace := newBrowserWorkspace(t)
+			workspace.open(t, "viewer-owner")
+			workspace.runDriver(t, "viewer-owner", "primary", mode)
+			id, _ := workspace.only(t, "viewer-owner", "primary")
+			channel := openBrowserViewer(t, workspace.serve(t), "viewer-owner", id, true)
+			if mode == "view-channel-format-change" {
+				readViewerFrame(t, channel, false)
+				sendFrame(t, channel, map[string]any{"type": "ack", "seq": 10})
+			}
+			if mode == "view-channel-legacy" || mode == "view-channel-old-native" {
+				expectClose(t, channel, websocket.CloseUnsupportedData, "browser_view_channel_unsupported", 5*time.Second)
+			} else {
+				expectClose(t, channel, websocket.CloseInternalServerErr, "browser_view_invalid_frame", 5*time.Second)
+			}
+		})
 	}
 }
 

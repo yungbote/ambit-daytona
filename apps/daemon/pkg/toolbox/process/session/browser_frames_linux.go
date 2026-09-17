@@ -7,6 +7,7 @@ package session
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -48,6 +49,23 @@ type browserBinaryFrame struct {
 }
 
 var errBrowserBinaryFrame = errors.New("invalid binary browser frame")
+
+// Capability fallback needs an actual old image record, not a malformed native
+// frame. This check is used only before the first native frame is admitted.
+func browserTextFrameHasJPEG(message []byte) bool {
+	var frame struct {
+		Data string `json:"data"`
+	}
+	if json.Unmarshal(message, &frame) != nil || frame.Data == "" {
+		return false
+	}
+	payload, err := base64.StdEncoding.Strict().DecodeString(frame.Data)
+	if err != nil {
+		return false
+	}
+	_, err = jpeg.DecodeConfig(bytes.NewReader(payload))
+	return err == nil
+}
 
 func parseBrowserBinaryFrame(message []byte) (browserBinaryFrame, error) {
 	var frame browserBinaryFrame

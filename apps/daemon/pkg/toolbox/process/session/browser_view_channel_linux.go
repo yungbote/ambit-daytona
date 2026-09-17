@@ -33,10 +33,10 @@ func (s *SessionController) ViewBrowserChannel(c *gin.Context) {
 		c.Status(http.StatusUpgradeRequired)
 		return
 	}
-	presentation, valid := parseBrowserPresentation(c.Request)
+	presentation, valid := parseBrowserChannelPresentation(c.Request)
 	formats := c.Request.URL.Query()["frames"]
 	window, windowValid := parseBrowserFrameWindow(c.Request)
-	if !valid || presentation == nil || !windowValid || len(formats) > 1 || (len(formats) == 1 && formats[0] != "binary") {
+	if !valid || !windowValid || len(formats) > 1 || (len(formats) == 1 && formats[0] != "binary") {
 		c.JSON(http.StatusBadRequest, gin.H{"code": "browser_view_invalid"})
 		return
 	}
@@ -45,11 +45,20 @@ func (s *SessionController) ViewBrowserChannel(c *gin.Context) {
 		return
 	}
 	binaryFrames := len(formats) == 1
-	address := fmt.Sprintf("ws://127.0.0.1:%d/?pacing=ack&maxFps=60&patches=1&frameWindow=%d&width=%d&height=%d", selected.port, window, presentation.Width, presentation.Height)
+	maxFps := 10
+	var headers http.Header
+	if presentation != nil {
+		maxFps = 60
+		headers = http.Header{"X-Ambit-Browser-Viewer": []string{presentation.Viewer}}
+	}
+	address := fmt.Sprintf("ws://127.0.0.1:%d/?pacing=ack&maxFps=%d&patches=1&frameWindow=%d", selected.port, maxFps, window)
+	if presentation != nil {
+		address += fmt.Sprintf("&width=%d&height=%d", presentation.Width, presentation.Height)
+	}
 	if binaryFrames {
 		address += "&frames=binary"
 	}
-	upstream, _, err := (&websocket.Dialer{HandshakeTimeout: browserDriverWriteTimeout}).DialContext(c.Request.Context(), address, http.Header{"X-Ambit-Browser-Viewer": []string{presentation.Viewer}})
+	upstream, _, err := (&websocket.Dialer{HandshakeTimeout: browserDriverWriteTimeout}).DialContext(c.Request.Context(), address, headers)
 	if err != nil {
 		c.Status(http.StatusBadGateway)
 		return
@@ -67,8 +76,19 @@ func (s *SessionController) ViewBrowserChannel(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	channel := &browserViewChannel{controller: s, view: *selected, socket: socket, upstream: upstream, binary: binaryFrames, pending: browserFrameWindow{limit: window}}
+	channel := &browserViewChannel{controller: s, view: *selected, socket: socket, upstream: upstream, binary: binaryFrames, presentation: presentation != nil, pending: browserFrameWindow{limit: window}}
 	channel.run(c.Request.Context())
+}
+
+func parseBrowserChannelPresentation(request *http.Request) (*browserPresentation, bool) {
+	if !validBrowserUUID(request.Header.Get("X-Ambit-Browser-Viewer")) {
+		return nil, false
+	}
+	query := request.URL.Query()
+	if !query.Has("width") && !query.Has("height") {
+		return nil, true
+	}
+	return parseBrowserPresentation(request)
 }
 
 func parseBrowserFrameWindow(request *http.Request) (int, bool) {
@@ -101,14 +121,16 @@ func (s *SessionController) browserViewCurrent(view browserView) (ended bool, er
 }
 
 type browserViewChannel struct {
-	controller *SessionController
-	view       browserView
-	socket     *websocket.Conn
-	upstream   *websocket.Conn
-	binary     bool
-	pending    browserFrameWindow
-	unanswered atomic.Int32
-	closeOnce  sync.Once
+	controller   *SessionController
+	view         browserView
+	socket       *websocket.Conn
+	upstream     *websocket.Conn
+	binary       bool
+	presentation bool
+	delivery     sync.Mutex
+	pending      browserFrameWindow
+	unanswered   atomic.Int32
+	closeOnce    sync.Once
 	// Only the upstream reader owns the prior frame's geometry and sequence.
 	previous browserFrameHeader
 }
@@ -146,24 +168,34 @@ func (ch *browserViewChannel) run(parent context.Context) {
 		}
 		if kind == websocket.BinaryMessage {
 			frame, err := parseBrowserBinaryFrame(message)
-			if !ch.binary || err != nil || !ch.acceptFrame(frame.header.browserFrameHeader, frame.wireSize()) {
+			if !ch.binary || err != nil {
 				ch.close(websocket.CloseInternalServerErr, "browser_view_invalid_frame")
 				return
 			}
-			_ = ch.socket.SetWriteDeadline(time.Now().Add(browserViewerWriteTimeout))
-			writer, err := ch.socket.NextWriter(websocket.BinaryMessage)
-			if err != nil {
-				return
+			accepted, err := ch.deliverFrame(frame.header.browserFrameHeader, frame.wireSize(), func() error {
+				_ = ch.socket.SetWriteDeadline(time.Now().Add(browserViewerWriteTimeout))
+				writer, err := ch.socket.NextWriter(websocket.BinaryMessage)
+				if err != nil {
+					return err
+				}
+				writeErr := frame.writeTo(writer)
+				closeErr := writer.Close()
+				if writeErr != nil {
+					return writeErr
+				}
+				return closeErr
+			})
+			if !accepted {
+				ch.close(websocket.CloseInternalServerErr, "browser_view_invalid_frame")
 			}
-			writeErr := frame.writeTo(writer)
-			closeErr := writer.Close()
-			if writeErr != nil || closeErr != nil {
+			if !accepted || err != nil {
 				return
 			}
 			continue
 		}
 		var envelope struct {
-			Type string `json:"type"`
+			Type    string          `json:"type"`
+			Surface json.RawMessage `json:"surface"`
 		}
 		if kind != websocket.TextMessage || !utf8.Valid(message) || json.Unmarshal(message, &envelope) != nil {
 			ch.close(websocket.CloseInternalServerErr, "browser_view_invalid_frame")
@@ -188,15 +220,50 @@ func (ch *browserViewChannel) run(parent context.Context) {
 		}
 		if sequence != 0 {
 			var frame browserFrameHeader
-			if ch.binary || json.Unmarshal(projected, &frame) != nil || !ch.acceptFrame(frame, len(projected)) {
+			if ch.previous.Seq == 0 && (ch.binary || envelope.Surface == nil) && browserTextFrameHasJPEG(projected) {
+				ch.close(websocket.CloseUnsupportedData, "browser_view_channel_unsupported")
+				return
+			}
+			if ch.binary || json.Unmarshal(projected, &frame) != nil {
 				ch.close(websocket.CloseInternalServerErr, "browser_view_invalid_frame")
 				return
 			}
+			accepted, err := ch.deliverFrame(frame, len(projected), func() error { return ch.writeText(projected) })
+			if !accepted {
+				ch.close(websocket.CloseInternalServerErr, "browser_view_invalid_frame")
+			}
+			if !accepted || err != nil {
+				return
+			}
+			continue
 		}
 		if ch.writeText(projected) != nil {
 			return
 		}
 	}
+}
+
+// ACK credit cannot be consumed until the frame's WebSocket write completes.
+// Waiting for completion also avoids rejecting a legitimate fast peer's ACK.
+func (ch *browserViewChannel) deliverFrame(frame browserFrameHeader, size int, write func() error) (bool, error) {
+	ch.delivery.Lock()
+	defer ch.delivery.Unlock()
+	if !ch.acceptFrame(frame, size) {
+		return false, nil
+	}
+	err := write()
+	if err != nil {
+		// A failed write cannot release usable credit for an undelivered frame.
+		// Close the upstream before allowing a waiting ACK to proceed.
+		ch.close(websocket.CloseInternalServerErr, "screencast_failed")
+	}
+	return true, err
+}
+
+func (ch *browserViewChannel) acknowledgeFrame(sequence uint64) (forward, valid bool) {
+	ch.delivery.Lock()
+	defer ch.delivery.Unlock()
+	return ch.pending.acknowledge(sequence)
 }
 
 func (ch *browserViewChannel) acceptFrame(frame browserFrameHeader, bytes int) bool {
@@ -323,12 +390,12 @@ func (ch *browserViewChannel) readViewer() {
 			return
 		}
 		projected, ack, valid := browserViewerMessage(message)
-		if !valid {
+		if !valid || (ack == 0 && !ch.presentation) {
 			ch.close(websocket.ClosePolicyViolation, "browser_view_invalid_message")
 			return
 		}
 		if ack != 0 {
-			forward, valid := ch.pending.acknowledge(ack)
+			forward, valid := ch.acknowledgeFrame(ack)
 			if !valid {
 				ch.close(websocket.ClosePolicyViolation, "browser_view_invalid_message")
 				return
