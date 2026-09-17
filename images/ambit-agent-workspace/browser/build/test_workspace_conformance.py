@@ -1,11 +1,36 @@
 """Execute the source-owned Bash roster gate, including producer failures."""
 
+import hashlib
 import json
 import os
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+
+
+class BrowserBuildContextTests(unittest.TestCase):
+    def test_effective_toolchain_lock_comes_from_the_browser_context(self):
+        browser = Path(__file__).parents[1]
+        dockerfile = (browser / "Dockerfile").read_text()
+        mounts = [
+            dict(field.split("=", 1) if "=" in field else (field, True)
+                 for field in line.strip().split("--mount=", 1)[1].split()[0].split(","))
+            for line in dockerfile.splitlines()
+            if "--mount=" in line and "target=/source/toolchains.lock.json" in line
+        ]
+        self.assertEqual(len(mounts), 1)
+        mount = mounts[0]
+        # The repository context excludes images through .dockerignore. This
+        # component already owns its effective lock in the primary context.
+        self.assertNotIn("from", mount)
+        self.assertEqual(mount["type"], "bind")
+        self.assertTrue(mount["ro"])
+        source = (browser / mount["source"]).resolve()
+        self.assertTrue(source.is_relative_to(browser.resolve()))
+        lock = json.loads((browser / "browser.lock.json").read_text())
+        self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(),
+                         lock["toolchains"]["sourceLockSha256"])
 
 
 class LiveDpkgConformanceTests(unittest.TestCase):
