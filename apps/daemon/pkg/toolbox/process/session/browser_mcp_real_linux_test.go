@@ -210,6 +210,10 @@ invokeIntrinsicBrowserMcp(request,{command:%s,artifactDigest:%s,cwd:%s,environme
 		t.Fatalf("first helper's closed input ended browser custody: %v %v", owner, err)
 	}
 	if windowMode {
+		before := third["browser"].(map[string]any)
+		beforePage := before["page"].(map[string]any)
+		beforeSpace := before["capture"].(map[string]any)["coordinateSpace"].(map[string]any)
+		beforeResize := map[string]any{"targetId": beforePage["targetId"], "loaderId": beforePage["loaderId"], "pageGeneration": beforePage["pageGeneration"], "geometrySha256": beforeSpace["geometrySha256"]}
 		server := httptest.NewServer(engine)
 		defer server.Close()
 		path := "/process/session/mcp-first/browser-views/" + view
@@ -230,13 +234,16 @@ invokeIntrinsicBrowserMcp(request,{command:%s,artifactDigest:%s,cwd:%s,environme
 				}
 			}
 		}
-		fresh := invokeChecked("mcp-resized", "agent_browser_get_value", map[string]any{"selector": "#field"}, nil, "browser_observation_required")
+		// Passive layout is not human input. Reads remain available, while an
+		// action carrying coordinates from the previous geometry is refused.
+		fresh := invoke("mcp-resized", "agent_browser_get_value", map[string]any{"selector": "#field"})
 		browser := fresh["browser"].(map[string]any)
 		capture := browser["capture"].(map[string]any)
 		space := capture["coordinateSpace"].(map[string]any)
 		if space["name"] != "viewport-css" || space["cssWidth"] != float64(780) || space["devicePixelRatio"] != float64(2) {
 			t.Fatalf("MCP capture retained old or display geometry: %v", space)
 		}
+		invokeChecked("mcp-stale-move", "agent_browser_mouse_move", map[string]any{"x": 90, "y": 140}, beforeResize, "browser_observation_stale")
 		page := browser["page"].(map[string]any)
 		observation := map[string]any{"targetId": page["targetId"], "loaderId": page["loaderId"], "pageGeneration": page["pageGeneration"], "geometrySha256": space["geometrySha256"]}
 		invokeChecked("mcp-image-move", "agent_browser_mouse_move", map[string]any{"x": 90, "y": 140}, observation, "")
