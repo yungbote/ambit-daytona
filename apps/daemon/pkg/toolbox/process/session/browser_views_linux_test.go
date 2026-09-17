@@ -547,6 +547,40 @@ func TestBrowserPortRequiresTheAdvertisedProcessesListeningSocket(t *testing.T) 
 	}
 }
 
+// Re-proving a view holds it by its listener's socket identity: the identity
+// is held exactly as long as the listener is open, and a reopened listener on
+// the same port is a different socket.
+func TestBrowserListenerIsHeldUntilClosed(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := uint16(listener.Addr().(*net.TCPAddr).Port)
+	defer listener.Close()
+	identity, err := processBrowserListener(os.Getpid(), port)
+	if err != nil || identity == "" {
+		t.Fatalf("own listener was not observed: listener=%q error=%v", identity, err)
+	}
+	if held, err := processHoldsSocket(os.Getpid(), identity); err != nil || !held {
+		t.Fatalf("open listener is not held: held=%v error=%v", held, err)
+	}
+	listener.Close()
+	if held, err := processHoldsSocket(os.Getpid(), identity); err != nil || held {
+		t.Fatalf("closed listener remained held: held=%v error=%v", held, err)
+	}
+	reopened, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if held, err := processHoldsSocket(os.Getpid(), identity); err != nil || held {
+		t.Fatalf("reopened port revived the old listener's identity: held=%v error=%v", held, err)
+	}
+	if held, err := processHoldsSocket(os.Getpid(), "0"); err != nil || held {
+		t.Fatalf("an identity no socket has is held: held=%v error=%v", held, err)
+	}
+}
+
 func TestBrowserStreamFinishesBeforeTheDriverProcessExits(t *testing.T) {
 	workspace := newBrowserWorkspace(t)
 	workspace.open(t, "browser-owner")

@@ -143,12 +143,12 @@ func browserStreamPort(path string) (uint16, error) {
 	return uint16(port), nil
 }
 
-// processBrowserListener returns the kernel identity of this process's exact
-// listening socket. Reopening the same port creates a different view instance.
-func processBrowserListener(pid int, port uint16) (string, error) {
+// processSockets returns the kernel identities of every socket this process
+// holds open.
+func processSockets(pid int) (map[string]bool, error) {
 	entries, err := os.ReadDir(fmt.Sprintf("/proc/%d/fd", pid))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	inodes := map[string]bool{}
 	for _, entry := range entries {
@@ -157,11 +157,35 @@ func processBrowserListener(pid int, port uint16) (string, error) {
 			continue
 		}
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if strings.HasPrefix(target, "socket:[") && strings.HasSuffix(target, "]") {
 			inodes[strings.TrimSuffix(strings.TrimPrefix(target, "socket:["), "]")] = true
 		}
+	}
+	return inodes, nil
+}
+
+// processHoldsSocket reports whether the process still holds this exact
+// socket. A socket keeps its kernel identity until it is closed, so holding
+// the listener's identity is holding that listener. This is how a proved view
+// is re-proved on every command: the kernel's TCP table would answer the same
+// question, but reading it walks every bucket of the host's established hash,
+// which costs milliseconds and grows with the host rather than the workspace.
+func processHoldsSocket(pid int, inode string) (bool, error) {
+	inodes, err := processSockets(pid)
+	if err != nil {
+		return false, err
+	}
+	return inodes[inode], nil
+}
+
+// processBrowserListener returns the kernel identity of this process's exact
+// listening socket. Reopening the same port creates a different view instance.
+func processBrowserListener(pid int, port uint16) (string, error) {
+	inodes, err := processSockets(pid)
+	if err != nil {
+		return "", err
 	}
 	table, err := os.ReadFile(fmt.Sprintf("/proc/%d/net/tcp", pid))
 	if err != nil {

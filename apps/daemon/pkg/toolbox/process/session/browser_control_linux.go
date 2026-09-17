@@ -367,8 +367,8 @@ func (s *SessionController) proveBrowserControlPeer(connection *net.UnixConn, se
 	if identity.StartTime != selected.born {
 		return errors.New("browser control instance changed")
 	}
-	listener, err := processBrowserListener(selected.pid, selected.port)
-	if err != nil || listener != selected.listener {
+	held, err := processHoldsSocket(selected.pid, selected.listener)
+	if err != nil || !held {
 		return errors.New("browser control view changed")
 	}
 	return nil
