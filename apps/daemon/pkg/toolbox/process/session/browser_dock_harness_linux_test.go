@@ -101,7 +101,7 @@ func TestBrowserDockHarness(t *testing.T) {
 		"driver":      driver, "config": config, "socketDir": scratch, "chrome": chrome, "viewport": map[string]int{"width": width, "height": height},
 		"maxFps": 10, "pacing": "ack", "auth": "task-local fixture only"}
 	if windowMode {
-		metadata["maxFps"] = 20
+		metadata["maxFps"] = 60
 		metadata["passiveMaxFps"] = 10
 		helper := os.Getenv("AGENT_BROWSER_DISPLAY_HELPER")
 		bytes, err := os.ReadFile(helper)

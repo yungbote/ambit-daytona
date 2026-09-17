@@ -45,19 +45,21 @@ func runBrowserFixture(args []string) bool {
 	if err != nil {
 		panic(err)
 	}
+	finished := &browserFixtureConnections{path: filepath.Join(dir, name+".connections")}
 	go func() {
 		for {
 			connection, err := control.Accept()
 			if err != nil {
 				return
 			}
-			if mode == "control" {
-				go serveBrowserControlFixture(connection)
-				continue
+			switch mode {
+			case "control", "channel":
+				go serveBrowserControlFixture(connection, mode == "channel", finished, control.Close)
+			default:
+				// Discovery reads only the peer credential. The driver's
+				// command channel is never spoken to.
+				_ = connection.Close()
 			}
-			// Discovery reads only the peer credential. The driver's command
-			// channel is never spoken to.
-			_ = connection.Close()
 		}
 	}()
 	screencast, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -153,23 +155,32 @@ func drainBrowserFixture(connection *websocket.Conn) {
 // error middleware, a real session service, and a browser socket directory a
 // test can own.
 type browserWorkspace struct {
-	engine    *gin.Engine
-	socketDir string
+	engine     *gin.Engine
+	controller *SessionController
+	socketDir  string
 }
 
 func newBrowserWorkspace(t *testing.T) *browserWorkspace {
 	t.Helper()
-	socketDir := t.TempDir()
+	// Unix socket paths have a small kernel bound. Do not include the full
+	// descriptive test name in each socket path, especially under GOTMPDIR.
+	socketDir, err := os.MkdirTemp("", "browser-view-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine, _ := newSessionEngine(t, t.TempDir(), func(controller *SessionController) {
+	workspace := &browserWorkspace{socketDir: socketDir}
+	workspace.engine, _ = newSessionEngine(t, t.TempDir(), func(controller *SessionController) {
 		controller.browserSocketDir = socketDir
 		// The driver stand-in is this test binary, re-executed.
 		controller.browserExecutable = executable
+		workspace.controller = controller
 	})
-	return &browserWorkspace{engine: engine, socketDir: socketDir}
+	return workspace
 }
 
 // open starts a session and returns its supervisor. Sessions start their
@@ -543,6 +554,40 @@ func TestBrowserPortRequiresTheAdvertisedProcessesListeningSocket(t *testing.T) 
 	}
 }
 
+// Re-proving a view holds it by its listener's socket identity: the identity
+// is held exactly as long as the listener is open, and a reopened listener on
+// the same port is a different socket.
+func TestBrowserListenerIsHeldUntilClosed(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := uint16(listener.Addr().(*net.TCPAddr).Port)
+	defer listener.Close()
+	identity, err := processBrowserListener(os.Getpid(), port)
+	if err != nil || identity == "" {
+		t.Fatalf("own listener was not observed: listener=%q error=%v", identity, err)
+	}
+	if held, err := processHoldsSocket(os.Getpid(), identity); err != nil || !held {
+		t.Fatalf("open listener is not held: held=%v error=%v", held, err)
+	}
+	listener.Close()
+	if held, err := processHoldsSocket(os.Getpid(), identity); err != nil || held {
+		t.Fatalf("closed listener remained held: held=%v error=%v", held, err)
+	}
+	reopened, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if held, err := processHoldsSocket(os.Getpid(), identity); err != nil || held {
+		t.Fatalf("reopened port revived the old listener's identity: held=%v error=%v", held, err)
+	}
+	if held, err := processHoldsSocket(os.Getpid(), "0"); err != nil || held {
+		t.Fatalf("an identity no socket has is held: held=%v error=%v", held, err)
+	}
+}
+
 func TestBrowserStreamFinishesBeforeTheDriverProcessExits(t *testing.T) {
 	workspace := newBrowserWorkspace(t)
 	workspace.open(t, "browser-owner")
@@ -600,23 +645,23 @@ func TestVisualStreamRejectsCommandsAndNonvisualData(t *testing.T) {
 		`{"type":"frame","seq":"3"}`,
 		`not json`,
 	} {
-		if _, _, kind := browserViewMessage([]byte(value)); kind != browserRecordDropped {
+		if _, _, kind := browserViewMessage([]byte(value), false); kind != browserRecordDropped {
 			t.Fatalf("forwarded nonvisual or malformed message: %s", value)
 		}
 	}
 	// A driver failure is a fact the viewer is owed; its text is not.
-	if body, _, kind := browserViewMessage([]byte(`{"type":"error","message":"secret task input"}`)); kind != browserRecordFailed || body != nil {
+	if body, _, kind := browserViewMessage([]byte(`{"type":"error","message":"secret task input"}`), false); kind != browserRecordFailed || body != nil {
 		t.Fatalf("driver failure was relayed as %v with body %s", kind, body)
 	}
-	if body, ack, kind := browserViewMessage([]byte(`{"type":"finished","private":"secret task input"}`)); kind != browserRecordFinished || body != nil || ack != 0 {
+	if body, ack, kind := browserViewMessage([]byte(`{"type":"finished","private":"secret task input"}`), false); kind != browserRecordFinished || body != nil || ack != 0 {
 		t.Fatalf("explicit stream completion retained driver data: kind=%v body=%s ack=%d", kind, body, ack)
 	}
 	frame := []byte(`{"type":"frame","seq":17,"data":"AA==","metadata":{"deviceWidth":1280,"deviceHeight":720}}`)
-	if body, ack, kind := browserViewMessage(frame); kind != browserRecordVisual || ack != 17 || string(body) != string(frame) {
+	if body, ack, kind := browserViewMessage(frame, false); kind != browserRecordVisual || ack != 17 || string(body) != string(frame) {
 		t.Fatal("visual frame lost its acknowledgment identity")
 	}
 	for _, value := range []string{`{"type":"status","connected":false}`, `{"type":"url","url":"https://example.com"}`} {
-		if _, ack, kind := browserViewMessage([]byte(value)); kind != browserRecordVisual || ack != 0 {
+		if _, ack, kind := browserViewMessage([]byte(value), false); kind != browserRecordVisual || ack != 0 {
 			t.Fatalf("visual state was rejected or treated as a frame: %s", value)
 		}
 	}
@@ -624,7 +669,7 @@ func TestVisualStreamRejectsCommandsAndNonvisualData(t *testing.T) {
 
 func TestBrowserViewProjectsOnlyTheCurrentTabLocation(t *testing.T) {
 	value := []byte(`{"type":"tabs","tabs":[{"active":false,"url":"https://private.test/","title":"private"},{"active":true,"url":"https://example.test/","title":"Current","targetId":"private"}],"token":"private"}`)
-	body, sequence, kind := browserViewMessage(value)
+	body, sequence, kind := browserViewMessage(value, false)
 	if kind != browserRecordVisual || sequence != 0 || string(body) != `{"type":"url","url":"https://example.test/","title":"Current"}` {
 		t.Fatalf("unexpected location projection: %s %d %v", body, sequence, kind)
 	}
@@ -635,12 +680,12 @@ func TestBrowserViewProjectsOnlyTheCurrentTabLocation(t *testing.T) {
 		`{"type":"tabs","tabs":[{"active":"true","url":"https://example.test/"}]}`,
 		`{"type":"tabs","tabs":[{"active":true,"url":"https://one.test/"},{"active":true,"url":"https://two.test/"}]}`,
 	} {
-		if _, _, kind := browserViewMessage([]byte(invalid)); kind != browserRecordDropped {
+		if _, _, kind := browserViewMessage([]byte(invalid), false); kind != browserRecordDropped {
 			t.Fatalf("ambiguous tab snapshot was forwarded: %s", invalid)
 		}
 	}
 	observed := []byte(`{"type":"tabs","tabs":[{"active":true,"url":"https://example.test/","canGoBack":true,"canGoForward":false,"history":["private"]}]}`)
-	body, _, kind = browserViewMessage(observed)
+	body, _, kind = browserViewMessage(observed, false)
 	if kind != browserRecordVisual || !bytes.Contains(body, []byte(`"canGoBack":true`)) || !bytes.Contains(body, []byte(`"canGoForward":false`)) || bytes.Contains(body, []byte("private")) {
 		t.Fatalf("history availability projection: %s", body)
 	}

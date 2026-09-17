@@ -23,14 +23,14 @@ type browserSurface struct {
 	OriginX           int32  `json:"originX"`
 	OriginY           int32  `json:"originY"`
 	DeviceScaleFactor uint32 `json:"deviceScaleFactor"`
-	CursorIncluded    bool   `json:"cursorIncluded"`
+	CursorIncluded    *bool  `json:"cursorIncluded"`
 }
 
 func (s *browserSurface) valid() bool {
 	return s != nil && s.Kind == "browser-window" && s.CoordinateSpace == "display-pixels" &&
 		validBrowserUUID(s.Generation) &&
 		s.Width > 0 && s.Width <= 4096 && s.Height > 0 && s.Height <= 4096 &&
-		s.OriginX == 0 && s.OriginY == 0 && s.DeviceScaleFactor == 2 && s.CursorIncluded
+		s.OriginX == 0 && s.OriginY == 0 && s.DeviceScaleFactor == 2 && s.CursorIncluded != nil
 }
 
 type browserPresentation struct {
@@ -79,4 +79,25 @@ func browserPresentationMessage(message []byte) ([]byte, bool) {
 	}
 	result, err := json.Marshal(value)
 	return result, err == nil
+}
+
+// Deltas remain bounded visual data. Their exact base is required so a viewer
+// can reject a broken chain instead of silently retaining stale pixels.
+type browserFramePatch struct {
+	SourceX uint32 `json:"sourceX"`
+	SourceY uint32 `json:"sourceY"`
+	X       uint32 `json:"x"`
+	Y       uint32 `json:"y"`
+	Width   uint32 `json:"width"`
+	Height  uint32 `json:"height"`
+	Data    string `json:"data"`
+}
+
+func (p browserFramePatch) valid(s browserSurface) bool {
+	return p.Data != "" && p.SourceX <= 16 && p.SourceY <= 16 && p.X < s.Width && p.Y < s.Height &&
+		p.X%16 == 0 && p.Y%16 == 0 && p.Width > 0 && p.Height > 0 &&
+		p.Width <= 512 && p.Height <= 512 &&
+		p.Width <= s.Width-p.X && p.Height <= s.Height-p.Y &&
+		(p.Width%16 == 0 || p.X+p.Width == s.Width) &&
+		(p.Height%16 == 0 || p.Y+p.Height == s.Height)
 }
