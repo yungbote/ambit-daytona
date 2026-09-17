@@ -11,8 +11,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -28,12 +32,15 @@ func (w *browserWorkspace) serve(t *testing.T) *httptest.Server {
 	return server
 }
 
+func browserChannelAddress(server *httptest.Server, sessionID, viewID string) string {
+	return "ws" + strings.TrimPrefix(server.URL, "http") + "/process/session/" + sessionID + "/browser-views/" + viewID + "/control/channel"
+}
+
 // channel opens one control channel. A refused upgrade is reported by its
 // HTTP status; an open channel is closed with the test.
 func (w *browserWorkspace) channel(t *testing.T, server *httptest.Server, sessionID, viewID string) (*websocket.Conn, int) {
 	t.Helper()
-	address := "ws" + strings.TrimPrefix(server.URL, "http") + "/process/session/" + sessionID + "/browser-views/" + viewID + "/control/channel"
-	connection, response, err := websocket.DefaultDialer.Dial(address, nil)
+	connection, response, err := websocket.DefaultDialer.Dial(browserChannelAddress(server, sessionID, viewID), nil)
 	if err != nil {
 		if response == nil {
 			t.Fatalf("channel dial: %v", err)
@@ -42,6 +49,34 @@ func (w *browserWorkspace) channel(t *testing.T, server *httptest.Server, sessio
 	}
 	t.Cleanup(func() { _ = connection.Close() })
 	return connection, http.StatusSwitchingProtocols
+}
+
+func (w *browserWorkspace) openChannel(t *testing.T, server *httptest.Server, sessionID, viewID string) *websocket.Conn {
+	t.Helper()
+	channel, status := w.channel(t, server, sessionID, viewID)
+	if channel == nil {
+		t.Fatalf("channel refused with %d", status)
+	}
+	return channel
+}
+
+// awaitFinishedConnections waits until the stand-in has finished with exactly
+// this many command-carrying connections.
+func (w *browserWorkspace) awaitFinishedConnections(t *testing.T, name string, want int) {
+	t.Helper()
+	path := filepath.Join(w.socketDir, name+".connections")
+	var last string
+	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		content, err := os.ReadFile(path)
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		last = strings.TrimSpace(string(content))
+		if last == strconv.Itoa(want) {
+			return
+		}
+	}
+	t.Fatalf("the stand-in finished %q connections, want %d", last, want)
 }
 
 func sendFrame(t *testing.T, connection *websocket.Conn, document any) {
@@ -99,6 +134,14 @@ func readResult(t *testing.T, connection *websocket.Conn, within time.Duration) 
 	return result
 }
 
+func expectFailure(t *testing.T, connection *websocket.Conn, status int, code string) {
+	t.Helper()
+	reply := readReply(t, connection, 15*time.Second)
+	if reply.OK || reply.Status != status || string(reply.Error) != `{"code":"`+code+`"}` {
+		t.Fatalf("reply %+v %s, want failure %d %s", reply, reply.Error, status, code)
+	}
+}
+
 func expectClose(t *testing.T, connection *websocket.Conn, code int, reason string, within time.Duration) {
 	t.Helper()
 	_ = connection.SetReadDeadline(time.Now().Add(within))
@@ -117,25 +160,30 @@ func browserInput(sequence int) map[string]any {
 		"events": []map[string]any{{"type": "input_mouse", "eventType": "mouseMoved", "x": 12, "y": 34}}}
 }
 
+func applied(t *testing.T, channel *websocket.Conn, sequence int) {
+	t.Helper()
+	sendFrame(t, channel, browserInput(sequence))
+	if result := readResult(t, channel, 15*time.Second); result["status"] != "applied" || result["lastSequence"] != float64(sequence) {
+		t.Fatalf("input %d acknowledgement is invalid: %v", sequence, result)
+	}
+}
+
 // Every frame is answered in order by exactly what the POST route answers for
 // the same document, failures included, and a failed command does not end the
-// channel. Against a driver that hangs up after each command, the channel also
-// replaces its lost link for every following command.
+// channel. A session that does not own the view, and a request that is not an
+// upgrade, are refused before any channel exists.
 func TestBrowserControlChannelAnswersEachCommandAsThePostWould(t *testing.T) {
 	workspace := newBrowserWorkspace(t)
 	workspace.open(t, "browser-owner")
-	workspace.runDriver(t, "browser-owner", "primary", "control")
+	workspace.runDriver(t, "browser-owner", "primary", "channel")
 	id, _ := workspace.only(t, "browser-owner", "primary")
 	server := workspace.serve(t)
-	channel, status := workspace.channel(t, server, "browser-owner", id)
-	if channel == nil {
-		t.Fatalf("channel refused with %d", status)
-	}
+	channel := workspace.openChannel(t, server, "browser-owner", id)
 	documents := []map[string]any{
 		{"op": "inspect"},
 		{"op": "acquire", "controllerId": browserFixtureController, "expiresAt": time.Now().Add(20 * time.Second).UnixMilli()},
 		browserInput(1),
-		browserInput(2), // the driver reports an unknown outcome
+		browserInput(browserFixtureUnknownSequence),                               // the driver reports an unknown outcome
 		{"op": "release", "controllerId": "aaaabbbb-cccc-4ddd-8eee-ffff00002222"}, // stale at the driver
 		{"op": "cdp", "method": "Runtime.evaluate"},                               // refused before the driver
 		browserInput(3),
@@ -148,7 +196,7 @@ func TestBrowserControlChannelAnswersEachCommandAsThePostWould(t *testing.T) {
 	target := "/process/session/browser-owner/browser-views/" + id + "/control"
 	for index, document := range documents {
 		expectedStatus, expectedBody := call(t, workspace.engine, http.MethodPost, target, document)
-		reply := readReply(t, channel, 10*time.Second)
+		reply := readReply(t, channel, 15*time.Second)
 		if expectedStatus == http.StatusOK {
 			if !reply.OK || reply.Status != 0 || reply.Error != nil || !bytes.Equal(reply.Result, expectedBody) {
 				t.Fatalf("reply %d = %+v, want ok with result %s", index, reply, expectedBody)
@@ -161,52 +209,94 @@ func TestBrowserControlChannelAnswersEachCommandAsThePostWould(t *testing.T) {
 	if refused, status := workspace.channel(t, server, "other-owner", id); refused != nil || status != http.StatusNotFound {
 		t.Fatalf("cross-session channel answered %d, want 404", status)
 	}
+	response, err := server.Client().Get(server.URL + "/process/session/browser-owner/browser-views/" + id + "/control/channel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusUpgradeRequired {
+		t.Fatalf("plain GET answered %d, want 426", response.StatusCode)
+	}
 }
 
-// The driver link is dialled once and kept: commands on one channel arrive on
-// one driver connection, while the POST route dials its own.
+// The driver link is dialled once and kept: no driver connection finishes
+// while a channel carries commands, while every POST finishes its own.
 func TestBrowserControlChannelKeepsOneDriverLink(t *testing.T) {
 	workspace := newBrowserWorkspace(t)
 	workspace.open(t, "browser-owner")
 	workspace.runDriver(t, "browser-owner", "primary", "channel")
 	id, _ := workspace.only(t, "browser-owner", "primary")
 	server := workspace.serve(t)
-	channel, status := workspace.channel(t, server, "browser-owner", id)
-	if channel == nil {
-		t.Fatalf("channel refused with %d", status)
+	channel := workspace.openChannel(t, server, "browser-owner", id)
+	for _, sequence := range []int{1, 3, 4} {
+		applied(t, channel, sequence)
 	}
-	connection := func(sequence int) float64 {
-		t.Helper()
+	target := "/process/session/browser-owner/browser-views/" + id + "/control"
+	if status, body := call(t, workspace.engine, http.MethodPost, target, browserInput(5)); status != http.StatusOK {
+		t.Fatalf("POST = %d %s", status, body)
+	}
+	workspace.awaitFinishedConnections(t, "primary", 1)
+	applied(t, channel, 6)
+	if content, err := os.ReadFile(filepath.Join(workspace.socketDir, "primary.connections")); err != nil || strings.TrimSpace(string(content)) != "1" {
+		t.Fatalf("the channel's driver link was replaced: finished=%q err=%v", content, err)
+	}
+}
+
+// A kept link the driver closed while idle is found out by the next command's
+// first write. Nothing reached the driver, so the command is carried once more
+// on a new link and the peer sees only its acknowledgement.
+func TestBrowserControlChannelResendsWhatAClosedLinkNeverCarried(t *testing.T) {
+	workspace := newBrowserWorkspace(t)
+	workspace.open(t, "browser-owner")
+	workspace.runDriver(t, "browser-owner", "primary", "control")
+	id, _ := workspace.only(t, "browser-owner", "primary")
+	channel := workspace.openChannel(t, workspace.serve(t), "browser-owner", id)
+	for index, sequence := range []int{1, 3, 4} {
+		applied(t, channel, sequence)
+		// The driver has hung up before the next command is sent.
+		workspace.awaitFinishedConnections(t, "primary", index+1)
+	}
+}
+
+// A link lost while a command is in flight leaves that command's outcome
+// unknown and is replaced for the next one. A driver that no longer accepts
+// connections fails each following command exactly as the POST route would,
+// and the channel stays open.
+func TestBrowserControlChannelRetiresALinkLostMidCommand(t *testing.T) {
+	workspace := newBrowserWorkspace(t)
+	workspace.open(t, "browser-owner")
+	workspace.runDriver(t, "browser-owner", "primary", "channel")
+	id, _ := workspace.only(t, "browser-owner", "primary")
+	channel := workspace.openChannel(t, workspace.serve(t), "browser-owner", id)
+	applied(t, channel, 1)
+	sendFrame(t, channel, browserInput(browserFixtureHangUpSequence))
+	expectFailure(t, channel, http.StatusBadGateway, "browser_control_outcome_unknown")
+	workspace.awaitFinishedConnections(t, "primary", 1)
+	applied(t, channel, 8)
+	sendFrame(t, channel, browserInput(browserFixtureRefuseSequence))
+	expectFailure(t, channel, http.StatusBadGateway, "browser_control_outcome_unknown")
+	workspace.awaitFinishedConnections(t, "primary", 2)
+	for _, sequence := range []int{10, 11} {
 		sendFrame(t, channel, browserInput(sequence))
-		result := readResult(t, channel, 10*time.Second)
-		if result["status"] != "applied" || result["lastSequence"] != float64(sequence) {
-			t.Fatalf("input %d acknowledgement is invalid: %v", sequence, result)
-		}
-		return result["expiresAt"].(float64)
-	}
-	first := connection(1)
-	if connection(3) != first || connection(4) != first {
-		t.Fatal("the channel redialled the driver between commands")
-	}
-	_, raw := call(t, workspace.engine, http.MethodPost, "/process/session/browser-owner/browser-views/"+id+"/control", browserInput(5))
-	var posted map[string]any
-	if err := json.Unmarshal(raw, &posted); err != nil || posted["expiresAt"] == first {
-		t.Fatalf("the POST route shared the channel's driver link: %s", raw)
-	}
-	if connection(6) != first {
-		t.Fatal("an interleaved POST cost the channel its driver link")
+		expectFailure(t, channel, http.StatusServiceUnavailable, "browser_control_unavailable")
 	}
 }
 
 // A frame that is not one text JSON document within the POST body limit ends
-// the channel with 1008 and a reason. A well-formed command the relay refuses
-// is that command's failure and nothing more.
+// the channel with 1008 and a reason. A frame of exactly the limit, and a
+// well-formed command the relay refuses, are that command's failure and
+// nothing more.
 func TestBrowserControlChannelClosesOnProtocolViolations(t *testing.T) {
 	workspace := newBrowserWorkspace(t)
 	workspace.open(t, "browser-owner")
 	workspace.runDriver(t, "browser-owner", "primary", "channel")
 	id, _ := workspace.only(t, "browser-owner", "primary")
 	server := workspace.serve(t)
+	padded := func(size int) []byte {
+		frame := []byte(`{"op":"inspect","pad":"`)
+		frame = append(frame, bytes.Repeat([]byte("a"), size-len(frame)-2)...)
+		return append(frame, '"', '}')
+	}
 	for _, violation := range []struct {
 		reason string
 		kind   int
@@ -216,55 +306,66 @@ func TestBrowserControlChannelClosesOnProtocolViolations(t *testing.T) {
 		{"frame_not_json", websocket.TextMessage, []byte(`inspect`)},
 		{"frame_not_json", websocket.TextMessage, []byte(``)},
 		{"frame_not_json", websocket.TextMessage, []byte(`{"op":"inspect"} {"op":"inspect"}`)},
-		{"frame_too_large", websocket.TextMessage, append([]byte(`{"op":"`), bytes.Repeat([]byte("a"), browserPasteRequestLimit)...)},
+		{"frame_too_large", websocket.TextMessage, padded(browserPasteRequestLimit + 1)},
 	} {
-		channel, status := workspace.channel(t, server, "browser-owner", id)
-		if channel == nil {
-			t.Fatalf("channel refused with %d", status)
-		}
+		channel := workspace.openChannel(t, server, "browser-owner", id)
 		if err := channel.WriteMessage(violation.kind, violation.frame); err != nil {
 			t.Fatal(err)
 		}
-		expectClose(t, channel, websocket.ClosePolicyViolation, violation.reason, 10*time.Second)
+		expectClose(t, channel, websocket.ClosePolicyViolation, violation.reason, 15*time.Second)
 	}
-	channel, status := workspace.channel(t, server, "browser-owner", id)
-	if channel == nil {
-		t.Fatalf("channel refused with %d", status)
+	channel := workspace.openChannel(t, server, "browser-owner", id)
+	// Exactly the limit is read and decoded; its unknown field is the
+	// relay's own refusal, exactly as the POST states it.
+	if err := channel.WriteMessage(websocket.TextMessage, padded(browserPasteRequestLimit)); err != nil {
+		t.Fatal(err)
 	}
-	// Within the body limit but past the 64 KiB an ordinary batch may use:
-	// the relay's own refusal, exactly as the POST states it.
+	expectFailure(t, channel, http.StatusBadRequest, "browser_control_invalid")
+	// Within the body limit but past the 64 KiB an ordinary batch may use.
 	oversized := browserInput(1)
 	oversized["events"] = []map[string]any{
 		{"type": "input_keyboard", "eventType": "insertText", "text": strings.Repeat("a", 40<<10)},
 		{"type": "input_keyboard", "eventType": "insertText", "text": strings.Repeat("a", 40<<10)},
 	}
 	sendFrame(t, channel, oversized)
-	if reply := readReply(t, channel, 10*time.Second); reply.OK || reply.Status != http.StatusBadRequest || string(reply.Error) != `{"code":"browser_control_invalid"}` {
-		t.Fatalf("oversized batch reply %+v, want the relay's 400", reply)
-	}
+	expectFailure(t, channel, http.StatusBadRequest, "browser_control_invalid")
 	sendFrame(t, channel, map[string]any{"op": "inspect"})
-	if result := readResult(t, channel, 10*time.Second); result["supported"] != true {
+	if result := readResult(t, channel, 15*time.Second); result["supported"] != true {
 		t.Fatalf("the channel did not continue after a refused command: %v", result)
 	}
 }
 
 // The view ending under an open channel closes it with the daemon's own code,
-// classified exactly as the visual stream classifies its finished record.
+// classified exactly as the visual stream classifies its finished record:
+// the shell under the driver ending, or the driver itself exiting.
 func TestBrowserControlChannelEndsWithTheView(t *testing.T) {
-	workspace := newBrowserWorkspace(t)
-	supervisor := workspace.open(t, "browser-owner")
-	workspace.runDriver(t, "browser-owner", "primary", "channel")
-	id, _ := workspace.only(t, "browser-owner", "primary")
-	channel, status := workspace.channel(t, workspace.serve(t), "browser-owner", id)
-	if channel == nil {
-		t.Fatalf("channel refused with %d", status)
+	for _, ending := range []struct {
+		name string
+		end  func(t *testing.T, workspace *browserWorkspace, supervisor, driver int)
+	}{
+		{"shell", func(t *testing.T, workspace *browserWorkspace, supervisor, driver int) {
+			workspace.endShellUncleanly(t, "browser-owner", supervisor)
+		}},
+		{"driver", func(t *testing.T, workspace *browserWorkspace, supervisor, driver int) {
+			if err := syscall.Kill(driver, syscall.SIGKILL); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(ending.name, func(t *testing.T) {
+			workspace := newBrowserWorkspace(t)
+			supervisor := workspace.open(t, "browser-owner")
+			driver := workspace.runDriver(t, "browser-owner", "primary", "channel")
+			id, _ := workspace.only(t, "browser-owner", "primary")
+			channel := workspace.openChannel(t, workspace.serve(t), "browser-owner", id)
+			sendFrame(t, channel, map[string]any{"op": "inspect"})
+			if result := readResult(t, channel, 15*time.Second); result["supported"] != true {
+				t.Fatalf("inspection is invalid: %v", result)
+			}
+			ending.end(t, workspace, supervisor, driver)
+			expectClose(t, channel, browserChannelViewEnded, "browser_view_ended", 15*time.Second)
+		})
 	}
-	sendFrame(t, channel, map[string]any{"op": "inspect"})
-	if result := readResult(t, channel, 10*time.Second); result["supported"] != true {
-		t.Fatalf("inspection is invalid: %v", result)
-	}
-	workspace.endShellUncleanly(t, "browser-owner", supervisor)
-	expectClose(t, channel, browserChannelViewEnded, "browser_view_ended", 15*time.Second)
 }
 
 // A peer that answers pings keeps its channel; one that stops answering is
@@ -274,12 +375,9 @@ func TestBrowserControlChannelDropsAPeerThatStopsAnsweringPings(t *testing.T) {
 	workspace.open(t, "browser-owner")
 	workspace.runDriver(t, "browser-owner", "primary", "channel")
 	id, _ := workspace.only(t, "browser-owner", "primary")
-	workspace.controller.browserPingInterval = 50 * time.Millisecond
+	workspace.controller.browserPingInterval = 200 * time.Millisecond
 	server := workspace.serve(t)
-	answering, status := workspace.channel(t, server, "browser-owner", id)
-	if answering == nil {
-		t.Fatalf("channel refused with %d", status)
-	}
+	answering := workspace.openChannel(t, server, "browser-owner", id)
 	// Pings are answered from a peer's reads, so the answering peer reads
 	// throughout; its one reply is collected for the end of the test.
 	answered := make(chan []byte, 1)
@@ -290,12 +388,9 @@ func TestBrowserControlChannelDropsAPeerThatStopsAnsweringPings(t *testing.T) {
 		}
 		answered <- frame
 	}()
-	silent, status := workspace.channel(t, server, "browser-owner", id)
-	if silent == nil {
-		t.Fatalf("channel refused with %d", status)
-	}
+	silent := workspace.openChannel(t, server, "browser-owner", id)
 	silent.SetPingHandler(func(string) error { return nil })
-	_ = silent.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_ = silent.SetReadDeadline(time.Now().Add(10 * time.Second))
 	_, frame, err := silent.ReadMessage()
 	// An abnormal closure is the peer's view of a connection dropped without
 	// a close frame; a deadline would mean the peer was kept.
@@ -311,7 +406,7 @@ func TestBrowserControlChannelDropsAPeerThatStopsAnsweringPings(t *testing.T) {
 		if frame == nil || json.Unmarshal(frame, &reply) != nil || !reply.OK {
 			t.Fatalf("an answering peer lost its channel: %s", frame)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("an answering peer was never answered")
 	}
 }
@@ -326,10 +421,11 @@ func TestBrowserControlChannelPerCommandLatency(t *testing.T) {
 	id, _ := workspace.only(t, "browser-owner", "primary")
 	server := workspace.serve(t)
 	const commands = 200
+	const first = browserFixtureRefuseSequence + 1
 	target := server.URL + "/process/session/browser-owner/browser-views/" + id + "/control"
 	client := server.Client()
 	post := make([]time.Duration, 0, commands)
-	for sequence := 3; sequence < 3+commands; sequence++ {
+	for sequence := first; sequence < first+commands; sequence++ {
 		body, _ := json.Marshal(browserInput(sequence))
 		started := time.Now()
 		response, err := client.Post(target, "application/json", bytes.NewReader(body))
@@ -343,17 +439,11 @@ func TestBrowserControlChannelPerCommandLatency(t *testing.T) {
 		_ = response.Body.Close()
 		post = append(post, time.Since(started))
 	}
-	channel, status := workspace.channel(t, server, "browser-owner", id)
-	if channel == nil {
-		t.Fatalf("channel refused with %d", status)
-	}
+	channel := workspace.openChannel(t, server, "browser-owner", id)
 	relayed := make([]time.Duration, 0, commands)
-	for sequence := 3; sequence < 3+commands; sequence++ {
+	for sequence := first; sequence < first+commands; sequence++ {
 		started := time.Now()
-		sendFrame(t, channel, browserInput(sequence))
-		if result := readResult(t, channel, 10*time.Second); result["lastSequence"] != float64(sequence) {
-			t.Fatalf("channel input %d acknowledgement is invalid: %v", sequence, result)
-		}
+		applied(t, channel, sequence)
 		relayed = append(relayed, time.Since(started))
 	}
 	// The peer proof after every reply is the channel's one remaining

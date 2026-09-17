@@ -42,9 +42,14 @@ const (
 // command leaves the channel open. A frame that is not text, not one JSON
 // document, or larger than the POST body limit is a protocol violation and
 // closes the channel with 1008. The view ending closes it with 4410
-// (browser_view_ended). The driver link is dialled and proved once, before the
-// upgrade, and kept for the channel's lifetime.
+// (browser_view_ended). The driver link is dialled and proved before the
+// upgrade and kept across commands; each reply is re-proved as the POST route
+// re-proves it, and a lost link is replaced.
 func (s *SessionController) ControlBrowserViewChannel(c *gin.Context) {
+	if !websocket.IsWebSocketUpgrade(c.Request) {
+		c.Status(http.StatusUpgradeRequired)
+		return
+	}
 	selected, ok := s.selectBrowserView(c)
 	if !ok {
 		return
@@ -188,8 +193,11 @@ func (ch *browserControlChannel) reply(outcome browserControlOutcome) error {
 
 // watch re-observes custody every second, as the visual stream does, and
 // pings the peer. Either ending closes the socket, which ends the command
-// loop. Pongs are only seen by the loop's reads, and a command holds the loop
-// for at most the control deadline, which is well inside one ping interval.
+// loop. Pongs are only seen by the loop's reads. A command can hold the loop
+// for two attempts, each bounded by the control deadline and a dial, which is
+// about 22 seconds; a drop needs three ticks with no read between them, more
+// than 30 seconds, and the loop reads between commands, when every pong that
+// arrived meanwhile is seen at once.
 func (ch *browserControlChannel) watch(ctx context.Context) {
 	custody := time.NewTicker(browserCustodyInterval)
 	defer custody.Stop()

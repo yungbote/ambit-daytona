@@ -45,15 +45,16 @@ func runBrowserFixture(args []string) bool {
 	if err != nil {
 		panic(err)
 	}
+	finished := &browserFixtureConnections{path: filepath.Join(dir, name+".connections")}
 	go func() {
-		for ordinal := int64(1); ; ordinal++ {
+		for {
 			connection, err := control.Accept()
 			if err != nil {
 				return
 			}
 			switch mode {
 			case "control", "channel":
-				go serveBrowserControlFixture(connection, mode == "channel", ordinal)
+				go serveBrowserControlFixture(connection, mode == "channel", finished, control.Close)
 			default:
 				// Discovery reads only the peer credential. The driver's
 				// command channel is never spoken to.
