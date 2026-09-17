@@ -51,6 +51,17 @@ func serveBrowserViewChannelFixture(w http.ResponseWriter, r *http.Request, dir,
 	binaryFrames := query.Get("frames") == "binary"
 	_ = connection.WriteJSON(map[string]any{"type": "status", "connected": true, "screencasting": true, "private": browserFixtureSecret})
 	_ = connection.WriteJSON(map[string]any{"type": "console", "text": browserFixtureSecret})
+	if mode == "view-channel-legacy-binary" || mode == "view-channel-malformed-legacy-binary" {
+		header, payload := browserFixtureFrame(false)
+		delete(header, "surface")
+		header["metadata"] = map[string]any{"deviceWidth": 640, "deviceHeight": 480}
+		if mode == "view-channel-malformed-legacy-binary" {
+			payload[len(payload)-1] = 0
+		}
+		_ = connection.WriteMessage(websocket.BinaryMessage, packBrowserFixtureFrame(header, payload))
+		drainBrowserFixture(connection)
+		return
+	}
 	if mode == "view-channel-legacy" || mode == "view-channel-old-native" || mode == "view-channel-malformed-text" {
 		header, payload := browserFixtureFrame(false)
 		delete(header, "byteLength")
@@ -79,6 +90,15 @@ func serveBrowserViewChannelFixture(w http.ResponseWriter, r *http.Request, dir,
 	}
 	for _, patched := range []bool{false, true} {
 		header, payload := browserFixtureFrame(patched)
+		if mode == "view-channel-legacy-binary-after-native" && patched {
+			header, payload = browserFixtureFrame(false)
+			header["seq"] = 12
+			delete(header, "surface")
+			header["metadata"] = map[string]any{"deviceWidth": 640, "deviceHeight": 480}
+			_ = connection.WriteMessage(websocket.BinaryMessage, packBrowserFixtureFrame(header, payload))
+			drainBrowserFixture(connection)
+			return
+		}
 		if mode == "view-channel-format-change" && patched {
 			header, payload = browserFixtureFrame(false)
 			header["seq"] = 12
@@ -349,18 +369,18 @@ func TestBrowserViewerChannelObserverHasNoPresentationAuthority(t *testing.T) {
 }
 
 func TestBrowserViewerChannelFallsBackOnlyForValidInitialOldFrames(t *testing.T) {
-	for _, mode := range []string{"view-channel-legacy", "view-channel-old-native", "view-channel-malformed-text", "view-channel-format-change"} {
+	for _, mode := range []string{"view-channel-legacy", "view-channel-old-native", "view-channel-malformed-text", "view-channel-format-change", "view-channel-legacy-binary", "view-channel-malformed-legacy-binary", "view-channel-legacy-binary-after-native"} {
 		t.Run(mode, func(t *testing.T) {
 			workspace := newBrowserWorkspace(t)
 			workspace.open(t, "viewer-owner")
 			workspace.runDriver(t, "viewer-owner", "primary", mode)
 			id, _ := workspace.only(t, "viewer-owner", "primary")
 			channel := openBrowserViewer(t, workspace.serve(t), "viewer-owner", id, true)
-			if mode == "view-channel-format-change" {
+			if mode == "view-channel-format-change" || mode == "view-channel-legacy-binary-after-native" {
 				readViewerFrame(t, channel, false)
 				sendFrame(t, channel, map[string]any{"type": "ack", "seq": 10})
 			}
-			if mode == "view-channel-legacy" || mode == "view-channel-old-native" {
+			if mode == "view-channel-legacy" || mode == "view-channel-old-native" || mode == "view-channel-legacy-binary" {
 				expectClose(t, channel, websocket.CloseUnsupportedData, "browser_view_channel_unsupported", 5*time.Second)
 			} else {
 				expectClose(t, channel, websocket.CloseInternalServerErr, "browser_view_invalid_frame", 5*time.Second)

@@ -173,6 +173,36 @@ func TestBrowserBinaryFrameBudgetsAndPatchCount(t *testing.T) {
 	}
 }
 
+func TestBrowserBinaryLegacyRecognitionRequiresAWholePageImage(t *testing.T) {
+	makeFrame := func() (map[string]any, []byte) {
+		header, payload := browserFixtureFrame(false)
+		delete(header, "surface")
+		header["metadata"] = map[string]any{"deviceWidth": 640, "deviceHeight": 480}
+		return header, payload
+	}
+	header, payload := makeFrame()
+	if !browserLegacyBinaryFrame(packBrowserFixtureFrame(header, payload)) {
+		t.Fatal("valid legacy binary JPEG was not recognized")
+	}
+	for field, value := range map[string]any{"type": "result", "seq": 0, "baseSeq": 1, "encoding": "png", "metadata": nil, "surface": nil, "patches": []any{}, "byteLength": 1} {
+		header, payload := makeFrame()
+		header[field] = value
+		if browserLegacyBinaryFrame(packBrowserFixtureFrame(header, payload)) {
+			t.Fatalf("invalid legacy %s=%v admitted", field, value)
+		}
+	}
+	header, payload = makeFrame()
+	delete(header, "metadata")
+	if browserLegacyBinaryFrame(packBrowserFixtureFrame(header, payload)) {
+		t.Fatal("missing metadata admitted")
+	}
+	for _, input := range [][]byte{nil, {0xff, 0xff, 0xff, 0xff}, make([]byte, browserBinaryFrameLimit+1)} {
+		if browserLegacyBinaryFrame(input) {
+			t.Fatal("unbounded or malformed framing admitted")
+		}
+	}
+}
+
 func TestBrowserViewerMessagesHaveClosedSchemas(t *testing.T) {
 	for _, input := range []string{`{"type":"ack","seq":10}`, `{"type":"presentation","width":1,"height":2048}`} {
 		if _, _, valid := browserViewerMessage([]byte(input)); !valid {
@@ -274,5 +304,6 @@ func FuzzBrowserBinaryFrameNeverPanics(f *testing.F) {
 			return
 		}
 		_, _ = parseBrowserBinaryFrame(input)
+		_ = browserLegacyBinaryFrame(input)
 	})
 }

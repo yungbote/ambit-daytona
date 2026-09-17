@@ -168,6 +168,10 @@ func (ch *browserViewChannel) run(parent context.Context) {
 		}
 		if kind == websocket.BinaryMessage {
 			frame, err := parseBrowserBinaryFrame(message)
+			if ch.binary && err != nil && ch.previous.Seq == 0 && browserLegacyBinaryFrame(message) {
+				ch.close(websocket.CloseUnsupportedData, "browser_view_channel_unsupported")
+				return
+			}
 			if !ch.binary || err != nil {
 				ch.close(websocket.CloseInternalServerErr, "browser_view_invalid_frame")
 				return

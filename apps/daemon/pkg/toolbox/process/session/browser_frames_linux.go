@@ -69,23 +69,15 @@ func browserTextFrameHasJPEG(message []byte) bool {
 
 func parseBrowserBinaryFrame(message []byte) (browserBinaryFrame, error) {
 	var frame browserBinaryFrame
-	if len(message) < 4 || len(message) > browserBinaryFrameLimit {
-		return frame, errBrowserBinaryFrame
-	}
-	length := binary.BigEndian.Uint32(message[:4])
-	if length == 0 || length > browserBinaryHeaderLimit || int(length) > len(message)-4 {
-		return frame, errBrowserBinaryFrame
-	}
-	headerLength := int(length)
-	header := message[4 : 4+headerLength]
-	if !utf8.Valid(header) || json.Unmarshal(header, &frame.header) != nil {
+	header, payload, valid := browserBinaryParts(message)
+	if !valid || json.Unmarshal(header, &frame.header) != nil {
 		return frame, errBrowserBinaryFrame
 	}
 	h := &frame.header
 	if h.Type != "frame" || h.Seq == 0 || h.Encoding != "jpeg" || !h.Surface.valid() {
 		return frame, errBrowserBinaryFrame
 	}
-	frame.payload = message[4+headerLength:]
+	frame.payload = payload
 	remaining := frame.payload
 	if h.Patches == nil {
 		if h.BaseSeq != 0 || h.ByteLength == 0 || uint64(h.ByteLength) != uint64(len(remaining)) {
@@ -116,6 +108,46 @@ func parseBrowserBinaryFrame(message []byte) (browserBinaryFrame, error) {
 		return frame, errBrowserBinaryFrame
 	}
 	return frame.project()
+}
+
+func browserBinaryParts(message []byte) (header, payload []byte, valid bool) {
+	if len(message) < 4 || len(message) > browserBinaryFrameLimit {
+		return nil, nil, false
+	}
+	length := binary.BigEndian.Uint32(message[:4])
+	if length == 0 || length > browserBinaryHeaderLimit || int(length) > len(message)-4 {
+		return nil, nil, false
+	}
+	headerLength := int(length)
+	header = message[4 : 4+headerLength]
+	return header, message[4+headerLength:], utf8.Valid(header)
+}
+
+// Older page streams can also negotiate the binary envelope. Recognize that
+// bounded whole-image format only to choose HTTP fallback, never to relay it as
+// a native window or broaden the surface schema.
+func browserLegacyBinaryFrame(message []byte) bool {
+	header, payload, valid := browserBinaryParts(message)
+	if !valid {
+		return false
+	}
+	var frame struct {
+		Type       string                     `json:"type"`
+		Seq        uint64                     `json:"seq"`
+		BaseSeq    uint64                     `json:"baseSeq"`
+		Encoding   string                     `json:"encoding"`
+		ByteLength uint32                     `json:"byteLength"`
+		Surface    json.RawMessage            `json:"surface"`
+		Metadata   map[string]json.RawMessage `json:"metadata"`
+		Patches    json.RawMessage            `json:"patches"`
+	}
+	if json.Unmarshal(header, &frame) != nil || frame.Type != "frame" || frame.Seq == 0 || frame.BaseSeq != 0 || frame.Encoding != "jpeg" ||
+		frame.Surface != nil || frame.Metadata == nil || frame.Patches != nil || frame.ByteLength == 0 || uint64(frame.ByteLength) != uint64(len(payload)) ||
+		len(payload) < 4 || payload[len(payload)-2] != 0xff || payload[len(payload)-1] != 0xd9 {
+		return false
+	}
+	_, err := jpeg.DecodeConfig(bytes.NewReader(payload))
+	return err == nil
 }
 
 func (f browserBinaryFrame) project() (browserBinaryFrame, error) {
