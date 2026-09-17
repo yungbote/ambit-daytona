@@ -1,0 +1,125 @@
+// Copyright 2026 Daytona Platforms Inc.
+// SPDX-License-Identifier: AGPL-3.0
+
+//go:build linux
+
+package session
+
+import (
+	"bytes"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"image/jpeg"
+	"io"
+	"unicode/utf8"
+)
+
+const (
+	browserBinaryFrameLimit  = 12 << 20
+	browserBinaryHeaderLimit = 64 << 10
+)
+
+type browserFrameHeader struct {
+	Type     string         `json:"type"`
+	Seq      uint64         `json:"seq"`
+	BaseSeq  uint64         `json:"baseSeq,omitempty"`
+	Encoding string         `json:"encoding"`
+	Surface  browserSurface `json:"surface"`
+}
+
+type browserBinaryPatch struct {
+	browserPatchBounds
+	ByteLength uint32 `json:"byteLength"`
+}
+
+type browserBinaryHeader struct {
+	browserFrameHeader
+	ByteLength uint32               `json:"byteLength,omitempty"`
+	Patches    []browserBinaryPatch `json:"patches,omitempty"`
+}
+
+// A binary record keeps its JPEG slices in the original read buffer. Only its
+// small, finite header is projected; pixels are neither copied nor base64 encoded.
+type browserBinaryFrame struct {
+	header    browserBinaryHeader
+	payload   []byte
+	projected []byte
+}
+
+var errBrowserBinaryFrame = errors.New("invalid binary browser frame")
+
+func parseBrowserBinaryFrame(message []byte) (browserBinaryFrame, error) {
+	var frame browserBinaryFrame
+	if len(message) < 4 || len(message) > browserBinaryFrameLimit {
+		return frame, errBrowserBinaryFrame
+	}
+	length := binary.BigEndian.Uint32(message[:4])
+	if length == 0 || length > browserBinaryHeaderLimit || int(length) > len(message)-4 {
+		return frame, errBrowserBinaryFrame
+	}
+	headerLength := int(length)
+	header := message[4 : 4+headerLength]
+	if !utf8.Valid(header) || json.Unmarshal(header, &frame.header) != nil {
+		return frame, errBrowserBinaryFrame
+	}
+	h := &frame.header
+	if h.Type != "frame" || h.Seq == 0 || h.Encoding != "jpeg" || !h.Surface.valid() {
+		return frame, errBrowserBinaryFrame
+	}
+	frame.payload = message[4+headerLength:]
+	remaining := frame.payload
+	if h.Patches == nil {
+		if h.BaseSeq != 0 || h.ByteLength == 0 || uint64(h.ByteLength) != uint64(len(remaining)) {
+			return frame, errBrowserBinaryFrame
+		}
+		config, err := jpeg.DecodeConfig(bytes.NewReader(remaining))
+		if err != nil || config.Width != int(h.Surface.Width) || config.Height != int(h.Surface.Height) {
+			return frame, errBrowserBinaryFrame
+		}
+		return frame.project()
+	}
+	if h.ByteLength != 0 || h.BaseSeq == 0 || h.BaseSeq >= h.Seq || len(h.Patches) == 0 || len(h.Patches) > 64 {
+		return frame, errBrowserBinaryFrame
+	}
+	for _, patch := range h.Patches {
+		if !patch.browserPatchBounds.valid(h.Surface) || patch.ByteLength == 0 || uint64(patch.ByteLength) > uint64(len(remaining)) {
+			return frame, errBrowserBinaryFrame
+		}
+		image := remaining[:int(patch.ByteLength)]
+		remaining = remaining[int(patch.ByteLength):]
+		config, err := jpeg.DecodeConfig(bytes.NewReader(image))
+		if err != nil || config.Width > int(patch.Width)+32 || config.Height > int(patch.Height)+32 ||
+			config.Width < int(patch.SourceX+patch.Width) || config.Height < int(patch.SourceY+patch.Height) {
+			return frame, errBrowserBinaryFrame
+		}
+	}
+	if len(remaining) != 0 {
+		return frame, errBrowserBinaryFrame
+	}
+	return frame.project()
+}
+
+func (f browserBinaryFrame) project() (browserBinaryFrame, error) {
+	var err error
+	f.projected, err = json.Marshal(f.header)
+	if err != nil || len(f.projected) > browserBinaryHeaderLimit || f.wireSize() > browserBinaryFrameLimit {
+		return f, errBrowserBinaryFrame
+	}
+	return f, nil
+}
+
+func (f browserBinaryFrame) wireSize() int { return 4 + len(f.projected) + len(f.payload) }
+
+func (f browserBinaryFrame) writeTo(writer io.Writer) error {
+	var prefix [4]byte
+	binary.BigEndian.PutUint32(prefix[:], uint32(len(f.projected)))
+	for _, part := range [][]byte{prefix[:], f.projected, f.payload} {
+		if n, err := writer.Write(part); err != nil {
+			return err
+		} else if n != len(part) {
+			return io.ErrShortWrite
+		}
+	}
+	return nil
+}

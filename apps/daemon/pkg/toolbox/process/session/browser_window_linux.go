@@ -84,17 +84,26 @@ func browserPresentationMessage(message []byte) ([]byte, bool) {
 // Deltas remain bounded visual data. Their exact base is required so a viewer
 // can reject a broken chain instead of silently retaining stale pixels.
 type browserFramePatch struct {
+	browserPatchBounds
+	Data string `json:"data"`
+}
+
+func (p browserFramePatch) valid(s browserSurface) bool {
+	return p.Data != "" && p.browserPatchBounds.valid(s)
+}
+
+// The region and crop have the same meaning for JSON and binary JPEG frames.
+type browserPatchBounds struct {
 	SourceX uint32 `json:"sourceX"`
 	SourceY uint32 `json:"sourceY"`
 	X       uint32 `json:"x"`
 	Y       uint32 `json:"y"`
 	Width   uint32 `json:"width"`
 	Height  uint32 `json:"height"`
-	Data    string `json:"data"`
 }
 
-func (p browserFramePatch) valid(s browserSurface) bool {
-	return p.Data != "" && p.SourceX <= 16 && p.SourceY <= 16 && p.X < s.Width && p.Y < s.Height &&
+func (p browserPatchBounds) valid(s browserSurface) bool {
+	return p.SourceX <= 16 && p.SourceY <= 16 && p.X < s.Width && p.Y < s.Height &&
 		p.X%16 == 0 && p.Y%16 == 0 && p.Width > 0 && p.Height > 0 &&
 		p.Width <= 512 && p.Height <= 512 &&
 		p.Width <= s.Width-p.X && p.Height <= s.Height-p.Y &&

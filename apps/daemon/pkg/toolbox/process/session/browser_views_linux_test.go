@@ -67,6 +67,10 @@ func runBrowserFixture(args []string) bool {
 		panic(err)
 	}
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(mode, "view-channel") {
+			serveBrowserViewChannelFixture(w, r, dir, name, mode, screencast.Close)
+			return
+		}
 		if r.URL.Query().Get("pacing") != "ack" || r.URL.Query().Get("maxFps") != "10" {
 			w.WriteHeader(http.StatusBadRequest)
 			return
@@ -93,10 +97,10 @@ func runBrowserFixture(args []string) bool {
 
 func serveBrowserFixture(connection *websocket.Conn, mode string) {
 	send := func(record map[string]any) bool { return connection.WriteJSON(record) == nil }
-	if !send(map[string]any{"type": "status", "connected": true, "screencasting": true}) {
+	if !send(map[string]any{"type": "status", "connected": true, "screencasting": true, "private": browserFixtureSecret}) {
 		return
 	}
-	location := map[string]any{"type": "url", "url": "https://example.test/one", "timestamp": 1}
+	location := map[string]any{"type": "url", "url": "https://example.test/one", "timestamp": 1, "private": browserFixtureSecret}
 	if mode == "seed-tabs" {
 		location = map[string]any{"type": "tabs", "tabs": []map[string]any{
 			{"active": false, "url": "https://private.test/", "title": browserFixtureSecret},

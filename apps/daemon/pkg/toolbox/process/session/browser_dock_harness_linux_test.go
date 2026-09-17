@@ -96,9 +96,12 @@ func TestBrowserDockHarness(t *testing.T) {
 	server := httptest.NewServer(engine)
 	defer server.Close()
 	metadata := map[string]any{"baseUrl": server.URL, "sessionId": session, "viewId": id, "pid": os.Getpid(),
-		"streamPath":  "/process/session/" + session + "/browser-views/" + id + "/stream",
-		"controlPath": "/process/session/" + session + "/browser-views/" + id + "/control",
-		"driver":      driver, "config": config, "socketDir": scratch, "chrome": chrome, "viewport": map[string]int{"width": width, "height": height},
+		"streamPath":              "/process/session/" + session + "/browser-views/" + id + "/stream",
+		"controlPath":             "/process/session/" + session + "/browser-views/" + id + "/control",
+		"viewChannelPath":         "/process/session/" + session + "/browser-views/" + id + "/channel",
+		"viewChannelViewerHeader": "X-Ambit-Browser-Viewer",
+		"viewChannelFrameWindow":  8,
+		"driver":                  driver, "config": config, "socketDir": scratch, "chrome": chrome, "viewport": map[string]int{"width": width, "height": height},
 		"maxFps": 10, "pacing": "ack", "auth": "task-local fixture only"}
 	if windowMode {
 		metadata["maxFps"] = 60
