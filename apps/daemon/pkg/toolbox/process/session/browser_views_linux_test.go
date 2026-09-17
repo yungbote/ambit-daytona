@@ -162,7 +162,13 @@ type browserWorkspace struct {
 
 func newBrowserWorkspace(t *testing.T) *browserWorkspace {
 	t.Helper()
-	socketDir := t.TempDir()
+	// Unix socket paths have a small kernel bound. Do not include the full
+	// descriptive test name in each socket path, especially under GOTMPDIR.
+	socketDir, err := os.MkdirTemp("", "browser-view-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -639,23 +645,23 @@ func TestVisualStreamRejectsCommandsAndNonvisualData(t *testing.T) {
 		`{"type":"frame","seq":"3"}`,
 		`not json`,
 	} {
-		if _, _, kind := browserViewMessage([]byte(value)); kind != browserRecordDropped {
+		if _, _, kind := browserViewMessage([]byte(value), false); kind != browserRecordDropped {
 			t.Fatalf("forwarded nonvisual or malformed message: %s", value)
 		}
 	}
 	// A driver failure is a fact the viewer is owed; its text is not.
-	if body, _, kind := browserViewMessage([]byte(`{"type":"error","message":"secret task input"}`)); kind != browserRecordFailed || body != nil {
+	if body, _, kind := browserViewMessage([]byte(`{"type":"error","message":"secret task input"}`), false); kind != browserRecordFailed || body != nil {
 		t.Fatalf("driver failure was relayed as %v with body %s", kind, body)
 	}
-	if body, ack, kind := browserViewMessage([]byte(`{"type":"finished","private":"secret task input"}`)); kind != browserRecordFinished || body != nil || ack != 0 {
+	if body, ack, kind := browserViewMessage([]byte(`{"type":"finished","private":"secret task input"}`), false); kind != browserRecordFinished || body != nil || ack != 0 {
 		t.Fatalf("explicit stream completion retained driver data: kind=%v body=%s ack=%d", kind, body, ack)
 	}
 	frame := []byte(`{"type":"frame","seq":17,"data":"AA==","metadata":{"deviceWidth":1280,"deviceHeight":720}}`)
-	if body, ack, kind := browserViewMessage(frame); kind != browserRecordVisual || ack != 17 || string(body) != string(frame) {
+	if body, ack, kind := browserViewMessage(frame, false); kind != browserRecordVisual || ack != 17 || string(body) != string(frame) {
 		t.Fatal("visual frame lost its acknowledgment identity")
 	}
 	for _, value := range []string{`{"type":"status","connected":false}`, `{"type":"url","url":"https://example.com"}`} {
-		if _, ack, kind := browserViewMessage([]byte(value)); kind != browserRecordVisual || ack != 0 {
+		if _, ack, kind := browserViewMessage([]byte(value), false); kind != browserRecordVisual || ack != 0 {
 			t.Fatalf("visual state was rejected or treated as a frame: %s", value)
 		}
 	}
@@ -663,7 +669,7 @@ func TestVisualStreamRejectsCommandsAndNonvisualData(t *testing.T) {
 
 func TestBrowserViewProjectsOnlyTheCurrentTabLocation(t *testing.T) {
 	value := []byte(`{"type":"tabs","tabs":[{"active":false,"url":"https://private.test/","title":"private"},{"active":true,"url":"https://example.test/","title":"Current","targetId":"private"}],"token":"private"}`)
-	body, sequence, kind := browserViewMessage(value)
+	body, sequence, kind := browserViewMessage(value, false)
 	if kind != browserRecordVisual || sequence != 0 || string(body) != `{"type":"url","url":"https://example.test/","title":"Current"}` {
 		t.Fatalf("unexpected location projection: %s %d %v", body, sequence, kind)
 	}
@@ -674,12 +680,12 @@ func TestBrowserViewProjectsOnlyTheCurrentTabLocation(t *testing.T) {
 		`{"type":"tabs","tabs":[{"active":"true","url":"https://example.test/"}]}`,
 		`{"type":"tabs","tabs":[{"active":true,"url":"https://one.test/"},{"active":true,"url":"https://two.test/"}]}`,
 	} {
-		if _, _, kind := browserViewMessage([]byte(invalid)); kind != browserRecordDropped {
+		if _, _, kind := browserViewMessage([]byte(invalid), false); kind != browserRecordDropped {
 			t.Fatalf("ambiguous tab snapshot was forwarded: %s", invalid)
 		}
 	}
 	observed := []byte(`{"type":"tabs","tabs":[{"active":true,"url":"https://example.test/","canGoBack":true,"canGoForward":false,"history":["private"]}]}`)
-	body, _, kind = browserViewMessage(observed)
+	body, _, kind = browserViewMessage(observed, false)
 	if kind != browserRecordVisual || !bytes.Contains(body, []byte(`"canGoBack":true`)) || !bytes.Contains(body, []byte(`"canGoForward":false`)) || bytes.Contains(body, []byte("private")) {
 		t.Fatalf("history availability projection: %s", body)
 	}

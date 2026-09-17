@@ -307,9 +307,13 @@ func (s *SessionController) StreamBrowserView(c *gin.Context) {
 	if presentation != nil {
 		// The native presentation owner permits this rate only for the
 		// primary connection; secondary viewers remain capped at 10 fps.
-		maxFps = 20
+		maxFps = 60
 	}
 	address := fmt.Sprintf("ws://127.0.0.1:%d/?pacing=ack&maxFps=%d", selected.port, maxFps)
+	patches := c.Query("patches") == "1"
+	if patches {
+		address += "&patches=1"
+	}
 	var headers http.Header
 	if presentation != nil {
 		address += fmt.Sprintf("&width=%d&height=%d", presentation.Width, presentation.Height)
@@ -362,7 +366,7 @@ func (s *SessionController) StreamBrowserView(c *gin.Context) {
 			}
 			return
 		}
-		filtered, sequence, kind := browserViewMessage(message)
+		filtered, sequence, kind := browserViewMessage(message, patches)
 		switch kind {
 		case browserRecordFinished:
 			// The admitted driver ended this stream explicitly. Do not race
@@ -442,7 +446,7 @@ const (
 	browserRecordFinished
 )
 
-func browserViewMessage(message []byte) ([]byte, uint64, browserRecordKind) {
+func browserViewMessage(message []byte, patches bool) ([]byte, uint64, browserRecordKind) {
 	var envelope struct {
 		Type    string          `json:"type"`
 		Seq     uint64          `json:"seq"`
@@ -461,13 +465,27 @@ func browserViewMessage(message []byte) ([]byte, uint64, browserRecordKind) {
 		}
 		if envelope.Surface != nil {
 			var frame struct {
-				Type     string         `json:"type"`
-				Seq      uint64         `json:"seq"`
-				Encoding string         `json:"encoding"`
-				Data     string         `json:"data"`
-				Surface  browserSurface `json:"surface"`
+				Type     string              `json:"type"`
+				Seq      uint64              `json:"seq"`
+				Encoding string              `json:"encoding"`
+				Data     string              `json:"data,omitempty"`
+				BaseSeq  uint64              `json:"baseSeq,omitempty"`
+				Patches  []browserFramePatch `json:"patches,omitempty"`
+				Surface  browserSurface      `json:"surface"`
 			}
-			if json.Unmarshal(message, &frame) != nil || !frame.Surface.valid() || frame.Encoding != "jpeg" || frame.Data == "" {
+			if json.Unmarshal(message, &frame) != nil || !frame.Surface.valid() || frame.Encoding != "jpeg" {
+				return nil, 0, browserRecordFailed
+			}
+			if len(frame.Patches) > 0 {
+				if !patches || frame.Data != "" || frame.BaseSeq == 0 || frame.BaseSeq >= frame.Seq || len(frame.Patches) > 64 {
+					return nil, 0, browserRecordFailed
+				}
+				for _, patch := range frame.Patches {
+					if !patch.valid(frame.Surface) {
+						return nil, 0, browserRecordFailed
+					}
+				}
+			} else if frame.Data == "" || frame.BaseSeq != 0 {
 				return nil, 0, browserRecordFailed
 			}
 			projected, err := json.Marshal(frame)

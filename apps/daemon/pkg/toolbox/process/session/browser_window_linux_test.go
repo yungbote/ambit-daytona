@@ -38,13 +38,13 @@ func TestBrowserWindowPresentationBoundsAndIdentity(t *testing.T) {
 func TestBrowserWindowFramesProjectOnlyTheVisualContract(t *testing.T) {
 	surface := map[string]any{"kind": "browser-window", "coordinateSpace": "display-pixels", "generation": "11111111-1111-4111-8111-111111111111", "width": 780, "height": 1688, "originX": 0, "originY": 0, "deviceScaleFactor": 2, "cursorIncluded": true}
 	frame, _ := json.Marshal(map[string]any{"type": "frame", "seq": 4, "encoding": "jpeg", "data": "image", "surface": surface, "clipboard": "private", "helperPid": 42})
-	projected, sequence, kind := browserViewMessage(frame)
+	projected, sequence, kind := browserViewMessage(frame, false)
 	if kind != browserRecordVisual || sequence != 4 || bytes.Contains(projected, []byte("private")) || bytes.Contains(projected, []byte("helperPid")) {
 		t.Fatalf("frame projection: %s/%d/%v", projected, sequence, kind)
 	}
 	surface["width"] = 4097
 	frame, _ = json.Marshal(map[string]any{"type": "frame", "seq": 5, "encoding": "jpeg", "data": "image", "surface": surface})
-	if _, _, kind := browserViewMessage(frame); kind != browserRecordFailed {
+	if _, _, kind := browserViewMessage(frame, false); kind != browserRecordFailed {
 		t.Fatal("invalid window raster was admitted")
 	}
 }
@@ -70,4 +70,50 @@ func TestBrowserWindowLargePasteIsOneExplicitIntent(t *testing.T) {
 	if browserControlRequestLimit(request) != browserControlLimit {
 		t.Fatal("oversize paste received the enlarged limit")
 	}
+}
+
+func TestBrowserWindowPatchesRequireNegotiationAndExactBase(t *testing.T) {
+	surface := map[string]any{"kind": "browser-window", "coordinateSpace": "display-pixels", "generation": "11111111-1111-4111-8111-111111111111", "width": 780, "height": 1688, "originX": 0, "originY": 0, "deviceScaleFactor": 2, "cursorIncluded": false}
+	patch := map[string]any{"x": 768, "y": 1680, "width": 12, "height": 8, "data": "jpeg", "sourceX": 16, "sourceY": 16, "private": "omit"}
+	frame := map[string]any{"type": "frame", "seq": 5, "baseSeq": 4, "encoding": "jpeg", "patches": []any{patch}, "surface": surface, "private": "omit"}
+	check := func(want browserRecordKind) {
+		t.Helper()
+		raw, _ := json.Marshal(frame)
+		out, seq, kind := browserViewMessage(raw, true)
+		if kind != want {
+			t.Fatalf("kind=%v want=%v for %s", kind, want, raw)
+		}
+		if want == browserRecordVisual && (seq != 5 || bytes.Contains(out, []byte("omit")) || !bytes.Contains(out, []byte(`"baseSeq":4`)) || !bytes.Contains(out, []byte(`"cursorIncluded":false`))) {
+			t.Fatalf("bad projection %s", out)
+		}
+	}
+	check(browserRecordVisual)
+	raw, _ := json.Marshal(frame)
+	if _, _, kind := browserViewMessage(raw, false); kind != browserRecordFailed {
+		t.Fatal("unnegotiated patches accepted")
+	}
+	for _, base := range []any{0, 5, 6, "4", nil} {
+		frame["baseSeq"] = base
+		check(browserRecordFailed)
+	}
+	frame["baseSeq"] = 4
+	frame["data"] = "whole"
+	check(browserRecordFailed)
+	delete(frame, "data")
+	for _, value := range []any{513, 13, 0, -1} {
+		patch["width"] = value
+		check(browserRecordFailed)
+	}
+	patch["width"] = 12
+	patch["sourceX"] = 17
+	check(browserRecordFailed)
+	patch["sourceX"] = 16
+	patch["x"] = 767
+	check(browserRecordFailed)
+	patch["x"] = 768
+	delete(surface, "cursorIncluded")
+	check(browserRecordFailed)
+	surface["cursorIncluded"] = false
+	frame["patches"] = []any{}
+	check(browserRecordFailed)
 }
