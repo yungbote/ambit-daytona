@@ -495,8 +495,35 @@ func browserViewMessage(message []byte, patches bool) ([]byte, uint64, browserRe
 			return projected, frame.Seq, browserRecordVisual
 		}
 		return body, envelope.Seq, browserRecordVisual
-	case "status", "url":
-		return body, 0, browserRecordVisual
+	case "status":
+		var status struct {
+			Type           string  `json:"type"`
+			Connected      *bool   `json:"connected,omitempty"`
+			Screencasting  *bool   `json:"screencasting,omitempty"`
+			ViewportWidth  *uint32 `json:"viewportWidth,omitempty"`
+			ViewportHeight *uint32 `json:"viewportHeight,omitempty"`
+			Engine         *string `json:"engine,omitempty"`
+			Recording      *bool   `json:"recording,omitempty"`
+		}
+		if json.Unmarshal(message, &status) != nil {
+			return nil, 0, browserRecordDropped
+		}
+		projected, _ := json.Marshal(status)
+		return projected, 0, browserRecordVisual
+	case "url":
+		var location struct {
+			Type         string  `json:"type"`
+			URL          string  `json:"url"`
+			Title        *string `json:"title,omitempty"`
+			Timestamp    *uint64 `json:"timestamp,omitempty"`
+			CanGoBack    *bool   `json:"canGoBack,omitempty"`
+			CanGoForward *bool   `json:"canGoForward,omitempty"`
+		}
+		if json.Unmarshal(message, &location) != nil {
+			return nil, 0, browserRecordDropped
+		}
+		projected, _ := json.Marshal(location)
+		return projected, 0, browserRecordVisual
 	case "presentation":
 		if projected, valid := browserPresentationMessage(message); valid {
 			return projected, 0, browserRecordVisual

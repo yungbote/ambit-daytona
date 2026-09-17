@@ -219,6 +219,7 @@ func (s *server) Start() error {
 			sessionGroup.POST("/:sessionId/exec", sessionController.SessionExecuteCommand)
 			sessionGroup.GET("/:sessionId", sessionController.GetSession)
 			sessionGroup.GET("/:sessionId/browser-views/:viewId/stream", sessionController.StreamBrowserView)
+			sessionGroup.GET("/:sessionId/browser-views/:viewId/channel", sessionController.ViewBrowserChannel)
 			sessionGroup.POST("/:sessionId/browser-views/:viewId/control", sessionController.ControlBrowserView)
 			sessionGroup.GET("/:sessionId/browser-views/:viewId/control/channel", sessionController.ControlBrowserViewChannel)
 			sessionGroup.DELETE("/:sessionId", sessionController.DeleteSession)
