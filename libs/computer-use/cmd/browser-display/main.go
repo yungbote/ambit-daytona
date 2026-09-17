@@ -33,6 +33,13 @@ type request struct {
 	Height   int          `json:"height,omitempty"`
 	WindowID uint32       `json:"windowId,omitempty"`
 	Events   []inputEvent `json:"events,omitempty"`
+	// capture only: composite the cursor (default true), the JPEG byte budget
+	// driving quality (0 is none), a full frame even when nothing changed, and
+	// permission to answer with patches of the damaged rectangles instead.
+	Cursor      *bool `json:"cursor,omitempty"`
+	BudgetBytes int   `json:"budgetBytes,omitempty"`
+	Force       bool  `json:"force,omitempty"`
+	Patches     bool  `json:"patches,omitempty"`
 }
 type failure struct {
 	Code               string `json:"code"`
@@ -70,17 +77,22 @@ func decodeRequest(line []byte) (request, error) {
 	if d.Decode(&extra) != io.EOF || value.ID == 0 {
 		return value, invalid()
 	}
+	captureFields := value.Cursor != nil || value.BudgetBytes != 0 || value.Force || value.Patches
 	switch value.Op {
-	case "info", "capture", "copy", "reset", "close":
-		if value.Width != 0 || value.Height != 0 || value.WindowID != 0 || value.Events != nil {
+	case "capture":
+		if value.Width != 0 || value.Height != 0 || value.WindowID != 0 || value.Events != nil || value.BudgetBytes < 0 {
+			return value, invalid()
+		}
+	case "info", "copy", "reset", "close":
+		if value.Width != 0 || value.Height != 0 || value.WindowID != 0 || value.Events != nil || captureFields {
 			return value, invalid()
 		}
 	case "resize":
-		if value.Events != nil || !validSize(value.Width, value.Height) {
+		if value.Events != nil || captureFields || !validSize(value.Width, value.Height) {
 			return value, invalid()
 		}
 	case "input":
-		if value.Width != 0 || value.Height != 0 || value.WindowID != 0 || len(value.Events) < 1 || len(value.Events) > 64 {
+		if value.Width != 0 || value.Height != 0 || value.WindowID != 0 || captureFields || len(value.Events) < 1 || len(value.Events) > 64 {
 			return value, invalid()
 		}
 	default:
@@ -100,8 +112,9 @@ func validSize(width, height int) bool {
 
 func main() {
 	pid := flag.Int("chrome-pid", 0, "PID of the browser owning this private display")
+	captureFD := flag.Int("capture-fd", 0, "descriptor serving capture requests concurrently with stdin")
 	flag.Parse()
-	if *pid <= 0 || flag.NArg() != 0 || !regexp.MustCompile(`^:[0-9]+(?:\.[0-9]+)?$`).MatchString(os.Getenv("DISPLAY")) || !filepath.IsAbs(os.Getenv("XAUTHORITY")) {
+	if *pid <= 0 || (*captureFD != 0 && *captureFD < 3) || flag.NArg() != 0 || !regexp.MustCompile(`^:[0-9]+(?:\.[0-9]+)?$`).MatchString(os.Getenv("DISPLAY")) || !filepath.IsAbs(os.Getenv("XAUTHORITY")) {
 		fmt.Fprintln(os.Stderr, "A private browser display and its authority are required.")
 		os.Exit(2)
 	}
@@ -116,14 +129,28 @@ func main() {
 		os.Exit(2)
 	}
 	defer display.close()
-	scanner := bufio.NewScanner(os.Stdin)
+	if *captureFD != 0 {
+		captures := os.NewFile(uintptr(*captureFD), "capture")
+		go display.serve(captures, captures, true)
+	}
+	display.serve(os.Stdin, os.Stdout, false)
+}
+
+// serve answers one channel's line-delimited requests in order until the
+// channel ends or a close request succeeds. The capture channel accepts only
+// capture, so a frame in flight never delays input on stdin.
+func (d *display) serve(in io.Reader, out io.Writer, captureOnly bool) {
+	scanner := bufio.NewScanner(in)
 	scanner.Buffer(make([]byte, 4096), maximumPasteRequest+1)
-	writer := bufio.NewWriter(os.Stdout)
+	writer := bufio.NewWriter(out)
 	for scanner.Scan() {
 		req, err := decodeRequest(scanner.Bytes())
+		if err == nil && captureOnly && req.Op != "capture" {
+			err = invalid()
+		}
 		var result any
 		if err == nil {
-			result, err = display.execute(req)
+			result, err = d.execute(req)
 		}
 		reply := response{ID: req.ID, Success: err == nil, Data: result}
 		if err != nil {
@@ -149,7 +176,7 @@ func (d *display) execute(req request) (any, error) {
 	case "info":
 		return d.info()
 	case "capture":
-		return d.capture()
+		return d.frames.capture(captureOptions{cursor: req.Cursor == nil || *req.Cursor, budget: req.BudgetBytes, force: req.Force, patches: req.Patches})
 	case "resize":
 		return d.resize(req.Width, req.Height, req.WindowID)
 	case "input":
