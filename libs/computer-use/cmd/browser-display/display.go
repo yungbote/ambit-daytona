@@ -32,6 +32,7 @@ type display struct {
 	paintEvents chan paintAlarm
 	paintSerial uint64
 	paintLatest *paintRequest
+	frames      *frameEngine
 }
 type windowInfo struct {
 	ID               uint32 `json:"id"`
@@ -58,8 +59,12 @@ func openDisplay(pid int) (*display, error) {
 		return nil, err
 	}
 	success := false
+	var frames *frameEngine
 	defer func() {
 		if !success {
+			if frames != nil {
+				frames.close()
+			}
 			c.Close()
 		}
 	}()
@@ -85,6 +90,11 @@ func openDisplay(pid int) (*display, error) {
 	if err := d.loadKeys(); err != nil {
 		return nil, err
 	}
+	// Every extension registration precedes event delivery on either connection.
+	if frames, err = openFrames(); err != nil {
+		return nil, err
+	}
+	d.frames = frames
 	if err := d.startClipboard(); err != nil {
 		return nil, err
 	}
@@ -96,7 +106,11 @@ func (d *display) close() {
 	if d.clipboard != nil {
 		d.clipboard.close()
 	}
+	d.frames.close()
 	d.conn.Close()
+	if d.clipboard != nil {
+		<-d.clipboard.done
+	}
 }
 func (d *display) size() (int, int, error) {
 	r, err := xproto.GetGeometry(d.conn, xproto.Drawable(d.screen.Root)).Reply()
