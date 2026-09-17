@@ -46,18 +46,19 @@ func runBrowserFixture(args []string) bool {
 		panic(err)
 	}
 	go func() {
-		for {
+		for ordinal := int64(1); ; ordinal++ {
 			connection, err := control.Accept()
 			if err != nil {
 				return
 			}
-			if mode == "control" {
-				go serveBrowserControlFixture(connection)
-				continue
+			switch mode {
+			case "control", "channel":
+				go serveBrowserControlFixture(connection, mode == "channel", ordinal)
+			default:
+				// Discovery reads only the peer credential. The driver's
+				// command channel is never spoken to.
+				_ = connection.Close()
 			}
-			// Discovery reads only the peer credential. The driver's command
-			// channel is never spoken to.
-			_ = connection.Close()
 		}
 	}()
 	screencast, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -153,8 +154,9 @@ func drainBrowserFixture(connection *websocket.Conn) {
 // error middleware, a real session service, and a browser socket directory a
 // test can own.
 type browserWorkspace struct {
-	engine    *gin.Engine
-	socketDir string
+	engine     *gin.Engine
+	controller *SessionController
+	socketDir  string
 }
 
 func newBrowserWorkspace(t *testing.T) *browserWorkspace {
@@ -164,12 +166,14 @@ func newBrowserWorkspace(t *testing.T) *browserWorkspace {
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine, _ := newSessionEngine(t, t.TempDir(), func(controller *SessionController) {
+	workspace := &browserWorkspace{socketDir: socketDir}
+	workspace.engine, _ = newSessionEngine(t, t.TempDir(), func(controller *SessionController) {
 		controller.browserSocketDir = socketDir
 		// The driver stand-in is this test binary, re-executed.
 		controller.browserExecutable = executable
+		workspace.controller = controller
 	})
-	return &browserWorkspace{engine: engine, socketDir: socketDir}
+	return workspace
 }
 
 // open starts a session and returns its supervisor. Sessions start their

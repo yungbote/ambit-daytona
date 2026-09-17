@@ -26,6 +26,10 @@ const browserCopyTextLimit = 1 << 20
 const browserCopyResponseLimit = 6*browserCopyTextLimit + 4096
 const browserPasteRequestLimit = 6*browserCopyTextLimit + 8192
 
+// One command is sent and answered within this long, whichever transport
+// carried it to the daemon.
+const browserControlDeadline = 10 * time.Second
+
 type browserControlRequest struct {
 	Op                        string            `json:"op"`
 	ControllerID              string            `json:"controllerId,omitempty"`
@@ -39,50 +43,143 @@ type browserControlRequest struct {
 	Y                         *float64          `json:"y,omitempty"`
 }
 
+// browserControlOutcome is one command's answer as the POST route states it:
+// the HTTP status and the JSON document. The channel relays the same pair, so
+// its reply is exactly what the POST would have returned.
+type browserControlOutcome struct {
+	status int
+	body   any
+}
+
+func browserControlFailure(status int, code string) browserControlOutcome {
+	return browserControlOutcome{status: status, body: gin.H{"code": code}}
+}
+
+var (
+	// The body is not exactly one JSON document.
+	errBrowserControlNotJSON = errors.New("browser control body is not one JSON document")
+	// The document is not a command this relay accepts.
+	errBrowserControlInvalid = errors.New("browser control command is invalid")
+)
+
+// decodeBrowserControlRequest reads exactly one command document and applies
+// the relay's own validation. The POST answers 400 to either failure; the
+// channel treats a body that is not one JSON document as a protocol violation
+// and an unacceptable command as that command's failure.
+func decodeBrowserControlRequest(body io.Reader) (browserControlRequest, error) {
+	decoder := json.NewDecoder(body)
+	decoder.DisallowUnknownFields()
+	var request browserControlRequest
+	if err := decoder.Decode(&request); err != nil {
+		var syntax *json.SyntaxError
+		if errors.As(err, &syntax) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return browserControlRequest{}, errBrowserControlNotJSON
+		}
+		return browserControlRequest{}, errBrowserControlInvalid
+	}
+	if decoder.Decode(new(any)) != io.EOF {
+		return browserControlRequest{}, errBrowserControlNotJSON
+	}
+	if !validBrowserControlRequest(request) {
+		return browserControlRequest{}, errBrowserControlInvalid
+	}
+	return request, nil
+}
+
 // ControlBrowserView addresses the same proved native instance as the visual
 // stream. Product owns current user/interaction authority; the driver owns
 // command serialization, lease expiry and input acknowledgements. Neither the
 // driver's socket nor arbitrary CDP commands are exposed to the browser client.
 func (s *SessionController) ControlBrowserView(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, browserPasteRequestLimit)
-	decoder := json.NewDecoder(c.Request.Body)
-	decoder.DisallowUnknownFields()
-	var request browserControlRequest
-	if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF || !validBrowserControlRequest(request) {
+	request, err := decodeBrowserControlRequest(c.Request.Body)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": "browser_control_invalid"})
 		return
 	}
+	selected, ok := s.selectBrowserView(c)
+	if !ok {
+		return
+	}
+	link, failure := s.dialBrowserControl(c.Request.Context(), *selected)
+	if link == nil {
+		c.JSON(failure.status, failure.body)
+		return
+	}
+	defer link.Close()
+	stop := context.AfterFunc(c.Request.Context(), func() { _ = link.Close() })
+	defer stop()
+	outcome := s.executeBrowserControl(link, request)
+	c.JSON(outcome.status, outcome.body)
+}
+
+// selectBrowserView resolves the addressed view under the addressed session's
+// custody. Every route that addresses one view answers a failed observation
+// and an unproven view the same way, so this answers them itself.
+func (s *SessionController) selectBrowserView(c *gin.Context) (*browserView, bool) {
 	views, err := s.browserViews(c.Request.Context(), c.Param("sessionId"))
 	if err != nil {
 		browserObservationError(c, err)
-		return
+		return nil, false
 	}
-	var selected *browserView
 	for index := range views {
 		if views[index].ID == c.Param("viewId") {
-			selected = &views[index]
-			break
+			return &views[index], true
 		}
 	}
-	if selected == nil {
-		c.Status(http.StatusNotFound)
-		return
-	}
-	connection, err := (&net.Dialer{Timeout: browserDialTimeout}).DialContext(c.Request.Context(), "unix", selected.socketPath)
+	c.Status(http.StatusNotFound)
+	return nil, false
+}
+
+// browserControlLink is one proved connection to the observed driver
+// instance. The POST route holds it for one command; the channel keeps it for
+// its lifetime and replaces it once it is lost.
+type browserControlLink struct {
+	connection *net.UnixConn
+	view       browserView
+	// lost records that the connection can no longer carry a command: the
+	// transport failed, a reply could not be read, or the instance changed
+	// under it. One line per command is then no longer in step, so nothing
+	// further is sent on it.
+	lost bool
+	// undelivered records that the last command never reached the driver:
+	// not one byte of it was accepted, so the driver had already closed the
+	// connection, which a kept link only learns when it next writes.
+	undelivered bool
+}
+
+func (l *browserControlLink) Close() error { return l.connection.Close() }
+
+// unknown answers a command whose outcome this relay cannot vouch for and
+// retires the link that carried it.
+func (l *browserControlLink) unknown() browserControlOutcome {
+	l.lost = true
+	return browserControlFailure(http.StatusBadGateway, "browser_control_outcome_unknown")
+}
+
+// dialBrowserControl connects to the observed instance's command socket and
+// proves the peer before any command is sent. A nil link is explained by the
+// failure the POST route would answer with.
+func (s *SessionController) dialBrowserControl(ctx context.Context, view browserView) (*browserControlLink, browserControlOutcome) {
+	connection, err := (&net.Dialer{Timeout: browserDialTimeout}).DialContext(ctx, "unix", view.socketPath)
 	if err != nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"code": "browser_control_unavailable"})
-		return
+		return nil, browserControlFailure(http.StatusServiceUnavailable, "browser_control_unavailable")
 	}
-	defer connection.Close()
-	stop := context.AfterFunc(c.Request.Context(), func() { _ = connection.Close() })
-	defer stop()
-	// The connection that receives the command must be the observed process,
+	link := &browserControlLink{connection: connection.(*net.UnixConn), view: view}
+	// The connection that receives commands must be the observed process,
 	// not a replacement that reused the advertised socket name.
-	if err := s.proveBrowserControlPeer(connection.(*net.UnixConn), *selected); err != nil {
-		c.JSON(http.StatusConflict, gin.H{"code": "browser_control_stale"})
-		return
+	if err := s.proveBrowserControlPeer(link.connection, view); err != nil {
+		_ = link.Close()
+		return nil, browserControlFailure(http.StatusConflict, "browser_control_stale")
 	}
-	_ = connection.SetDeadline(time.Now().Add(10 * time.Second))
+	return link, browserControlOutcome{}
+}
+
+// executeBrowserControl sends one validated command on the link and answers
+// exactly as the POST route does. The driver answers one line per command and
+// only after receiving it, so with commands sent one at a time nothing but
+// this command's reply can be waiting on the link.
+func (s *SessionController) executeBrowserControl(link *browserControlLink, request browserControlRequest) browserControlOutcome {
 	var command bytes.Buffer
 	commandEncoder := json.NewEncoder(&command)
 	// This is a JSON socket, not HTML. Preserve the already-bounded raw event
@@ -92,25 +189,23 @@ func (s *SessionController) ControlBrowserView(c *gin.Context) {
 		Action string `json:"action"`
 		browserControlRequest
 	}{Action: "ambit_browser_control", browserControlRequest: request}); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": "browser_control_invalid"})
-		return
+		return browserControlFailure(http.StatusBadRequest, "browser_control_invalid")
 	}
 	if command.Len() > browserControlRequestLimit(request) {
-		c.JSON(http.StatusBadRequest, gin.H{"code": "browser_control_invalid"})
-		return
+		return browserControlFailure(http.StatusBadRequest, "browser_control_invalid")
 	}
-	if _, err := io.Copy(connection, &command); err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"code": "browser_control_outcome_unknown"})
-		return
+	_ = link.connection.SetDeadline(time.Now().Add(browserControlDeadline))
+	if written, err := io.Copy(link.connection, &command); err != nil {
+		link.undelivered = written == 0
+		return link.unknown()
 	}
 	responseLimit := browserControlLimit
 	if request.Op == "copy" || request.Op == "files" || request.Op == "downloads" {
 		responseLimit = browserCopyResponseLimit
 	}
-	line, err := bufio.NewReader(io.LimitReader(connection, int64(responseLimit+1))).ReadBytes('\n')
+	line, err := bufio.NewReader(io.LimitReader(link.connection, int64(responseLimit+1))).ReadBytes('\n')
 	if err != nil || len(line) > responseLimit {
-		c.JSON(http.StatusBadGateway, gin.H{"code": "browser_control_outcome_unknown"})
-		return
+		return link.unknown()
 	}
 	var response struct {
 		Success bool            `json:"success"`
@@ -118,8 +213,7 @@ func (s *SessionController) ControlBrowserView(c *gin.Context) {
 		Data    json.RawMessage `json:"data"`
 	}
 	if json.Unmarshal(line, &response) != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"code": "browser_control_outcome_unknown"})
-		return
+		return link.unknown()
 	}
 	if !response.Success {
 		code := response.Code
@@ -128,12 +222,11 @@ func (s *SessionController) ControlBrowserView(c *gin.Context) {
 		default:
 			code = "browser_control_unavailable"
 		}
-		c.JSON(http.StatusConflict, gin.H{"code": code})
-		return
+		return browserControlFailure(http.StatusConflict, code)
 	}
-	if err := s.proveBrowserControlPeer(connection.(*net.UnixConn), *selected); err != nil {
-		c.JSON(http.StatusConflict, gin.H{"code": "browser_control_outcome_unknown"})
-		return
+	if err := s.proveBrowserControlPeer(link.connection, link.view); err != nil {
+		link.lost = true
+		return browserControlFailure(http.StatusConflict, "browser_control_outcome_unknown")
 	}
 	if request.Op == "inspect" || request.Op == "downloads" {
 		var inspection struct {
@@ -143,20 +236,16 @@ func (s *SessionController) ControlBrowserView(c *gin.Context) {
 			Surface        *browserSurface `json:"surface,omitempty"`
 		}
 		if json.Unmarshal(response.Data, &inspection) != nil || !inspection.Supported || (inspection.Surface != nil && !inspection.Surface.valid()) {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"code": "browser_control_unavailable"})
-			return
+			return browserControlFailure(http.StatusServiceUnavailable, "browser_control_unavailable")
 		}
 		if request.Op == "downloads" {
 			files, ok := browserFileResponse(response.Data, request, "files")
 			if !ok {
-				c.JSON(http.StatusBadGateway, gin.H{"code": "browser_control_unavailable"})
-				return
+				return browserControlFailure(http.StatusBadGateway, "browser_control_unavailable")
 			}
-			c.JSON(http.StatusOK, gin.H{"supported": true, "controlled": inspection.Controlled, "downloads": files["downloads"]})
-		} else {
-			c.JSON(http.StatusOK, inspection)
+			return browserControlOutcome{status: http.StatusOK, body: gin.H{"supported": true, "controlled": inspection.Controlled, "downloads": files["downloads"]}}
 		}
-		return
+		return browserControlOutcome{status: http.StatusOK, body: inspection}
 	}
 	// Do not forward upstream error strings, request data or unrelated metadata.
 	var data struct {
@@ -167,22 +256,19 @@ func (s *SessionController) ControlBrowserView(c *gin.Context) {
 		Surface      *browserSurface `json:"surface,omitempty"`
 	}
 	if json.Unmarshal(response.Data, &data) != nil || data.ControllerID != request.ControllerID || data.LastSequence > 9_007_199_254_740_991 || (data.Surface != nil && !data.Surface.valid()) {
-		c.JSON(http.StatusBadGateway, gin.H{"code": "browser_control_outcome_unknown"})
-		return
+		return browserControlFailure(http.StatusBadGateway, "browser_control_outcome_unknown")
 	}
 	if request.Op == "files" || request.Op == "drop" {
 		files, ok := browserFileResponse(response.Data, request, data.Status)
 		if !ok {
-			c.JSON(http.StatusBadGateway, gin.H{"code": "browser_control_outcome_unknown"})
-			return
+			return browserControlFailure(http.StatusBadGateway, "browser_control_outcome_unknown")
 		}
 		files["controllerId"], files["expiresAt"] = data.ControllerID, data.ExpiresAt
 		files["lastSequence"], files["status"] = data.LastSequence, data.Status
 		if data.Surface != nil {
 			files["surface"] = data.Surface
 		}
-		c.JSON(http.StatusOK, files)
-		return
+		return browserControlOutcome{status: http.StatusOK, body: files}
 	}
 	if request.Op == "copy" {
 		var copy struct {
@@ -194,22 +280,20 @@ func (s *SessionController) ControlBrowserView(c *gin.Context) {
 		}
 		if data.Status != "copied" || json.Unmarshal(response.Data, &copy) != nil || !copy.Clipboard.Complete ||
 			!utf8.ValidString(copy.Clipboard.Text) || len(copy.Clipboard.Text) > browserCopyTextLimit || copy.Clipboard.Bytes != len(copy.Clipboard.Text) {
-			c.JSON(http.StatusBadGateway, gin.H{"code": "browser_control_unavailable"})
-			return
+			return browserControlFailure(http.StatusBadGateway, "browser_control_unavailable")
 		}
 		result := gin.H{"controllerId": data.ControllerID, "expiresAt": data.ExpiresAt,
 			"lastSequence": data.LastSequence, "status": data.Status, "clipboard": copy.Clipboard}
 		if data.Surface != nil {
 			result["surface"] = data.Surface
 		}
-		c.JSON(http.StatusOK, result)
-		return
+		return browserControlOutcome{status: http.StatusOK, body: result}
 	}
 	switch data.Status {
 	case "controlled", "released", "applied", "duplicate", "dismissed":
-		c.JSON(http.StatusOK, data)
+		return browserControlOutcome{status: http.StatusOK, body: data}
 	default:
-		c.JSON(http.StatusBadGateway, gin.H{"code": "browser_control_outcome_unknown"})
+		return browserControlFailure(http.StatusBadGateway, "browser_control_outcome_unknown")
 	}
 }
 

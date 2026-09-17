@@ -22,33 +22,44 @@ import (
 const browserFixtureController = "aaaabbbb-cccc-4ddd-8eee-ffff00001111"
 
 // Transport stand-in only. The real Rust driver tests own input semantics;
-// this fixture proves our HTTP relay reaches the exact observed Unix peer and
-// projects its public reply without forwarding private data.
-func serveBrowserControlFixture(connection net.Conn) {
+// this fixture proves our relays reach the exact observed Unix peer and
+// project its public reply without forwarding private data. Like the real
+// driver it answers one line per command line. Persistent, it keeps answering
+// on the connection and reports the connection's ordinal as expiresAt, so a
+// test can tell a kept link from a redial; otherwise it hangs up after one
+// command, like a driver that closed the connection under the relay.
+func serveBrowserControlFixture(connection net.Conn, persistent bool, ordinal int64) {
 	defer connection.Close()
-	_ = connection.SetDeadline(time.Now().Add(5 * time.Second))
-	line, err := bufio.NewReader(connection).ReadBytes('\n')
-	if err != nil {
-		return // ordinary view discovery only reads the peer credential
+	reader := bufio.NewReader(connection)
+	for {
+		_ = connection.SetDeadline(time.Now().Add(5 * time.Second))
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			return // ordinary view discovery only reads the peer credential
+		}
+		reply := browserControlFixtureReply(line, persistent, ordinal)
+		if reply == nil || json.NewEncoder(connection).Encode(reply) != nil || !persistent {
+			return
+		}
 	}
+}
+
+func browserControlFixtureReply(line []byte, persistent bool, ordinal int64) map[string]any {
 	if len(line) > browserControlLimit {
-		_ = json.NewEncoder(connection).Encode(map[string]any{"success": false, "code": "browser_control_invalid"})
-		return
+		return map[string]any{"success": false, "code": "browser_control_invalid"}
 	}
 	var command struct {
 		Action string `json:"action"`
 		browserControlRequest
 	}
 	if json.Unmarshal(line, &command) != nil || command.Action != "ambit_browser_control" {
-		return
+		return nil
 	}
 	if command.Op == "inspect" {
-		_ = json.NewEncoder(connection).Encode(map[string]any{"success": true, "data": map[string]any{"supported": true, "controlled": false, "secret": browserFixtureSecret}})
-		return
+		return map[string]any{"success": true, "data": map[string]any{"supported": true, "controlled": false, "secret": browserFixtureSecret}}
 	}
 	if command.ControllerID != browserFixtureController {
-		_ = json.NewEncoder(connection).Encode(map[string]any{"success": false, "code": "browser_control_stale", "error": browserFixtureSecret})
-		return
+		return map[string]any{"success": false, "code": "browser_control_stale", "error": browserFixtureSecret}
 	}
 	status := "controlled"
 	if command.Op == "release" {
@@ -56,12 +67,15 @@ func serveBrowserControlFixture(connection net.Conn) {
 	}
 	if command.Op == "input" {
 		if command.Sequence == 2 {
-			_ = json.NewEncoder(connection).Encode(map[string]any{"success": false, "code": "browser_control_outcome_unknown", "error": browserFixtureSecret})
-			return
+			return map[string]any{"success": false, "code": "browser_control_outcome_unknown", "error": browserFixtureSecret}
 		}
 		status = "applied"
 	}
-	_ = json.NewEncoder(connection).Encode(map[string]any{"success": true, "data": map[string]any{"controllerId": command.ControllerID, "expiresAt": command.ExpiresAt, "lastSequence": command.Sequence, "status": status, "secret": browserFixtureSecret}})
+	expiresAt := command.ExpiresAt
+	if persistent {
+		expiresAt = ordinal
+	}
+	return map[string]any{"success": true, "data": map[string]any{"controllerId": command.ControllerID, "expiresAt": expiresAt, "lastSequence": command.Sequence, "status": status, "secret": browserFixtureSecret}}
 }
 
 func TestBrowserControlRelayUsesTheObservedSessionAndProjectsReplies(t *testing.T) {

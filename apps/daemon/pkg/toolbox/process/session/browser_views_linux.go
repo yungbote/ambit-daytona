@@ -275,20 +275,8 @@ func (s *SessionController) StreamBrowserView(c *gin.Context) {
 		return
 	}
 	sessionID := c.Param("sessionId")
-	views, err := s.browserViews(c.Request.Context(), sessionID)
-	if err != nil {
-		browserObservationError(c, err)
-		return
-	}
-	var selected *browserView
-	for index := range views {
-		if views[index].ID == c.Param("viewId") {
-			selected = &views[index]
-			break
-		}
-	}
-	if selected == nil {
-		c.Status(http.StatusNotFound)
+	selected, ok := s.selectBrowserView(c)
+	if !ok {
 		return
 	}
 	maxFps := 10
