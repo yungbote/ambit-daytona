@@ -667,10 +667,11 @@ export class DockerRegistryService {
   }
 
   /**
-   * Finds a registry with a URL that matches the start of the target string.
+   * Finds a registry whose URL and optional project contain the target image.
+   * An empty project allows any repository on the configured registry authority.
    *
    * @param registries - The list of registries to search.
-   * @param targetString - The string to match against registry URLs.
+   * @param targetString - The image reference to match against registry namespaces.
    * @returns The matching registry, or null if no match is found.
    */
   private findRegistryByUrlMatch(registries: DockerRegistry[], targetString: string): DockerRegistry | null {
@@ -684,14 +685,13 @@ export class DockerRegistryService {
     )
 
     for (const registry of sortedRegistries) {
-      const strippedUrl = registry.url.replace(/^(https?:\/\/)/, '')
-      if (targetString.startsWith(strippedUrl)) {
-        // Ensure match is at a proper boundary (followed by '/', ':', or end-of-string)
-        // to prevent "registry.depot.dev" from matching "registry.depot.dev-evil.com/..."
-        const nextChar = targetString[strippedUrl.length]
-        if (nextChar === undefined || nextChar === '/' || nextChar === ':') {
-          return registry
-        }
+      const strippedUrl = registry.url.replace(/^(https?:\/\/)/, '').replace(/\/+$/, '')
+      const project = registry.project?.replace(/^\/+|\/+$/g, '')
+      const imagePrefix = project ? `${strippedUrl}/${project}/` : `${strippedUrl}/`
+      // The slash boundary keeps both the registry authority (including its port)
+      // and the project exact, while allowing repositories nested under the project.
+      if (targetString.startsWith(imagePrefix) || (!project && targetString === strippedUrl)) {
+        return registry
       }
     }
     return null
