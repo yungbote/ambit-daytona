@@ -45,7 +45,7 @@ describe('ObjectStorageService endpoint boundaries', () => {
         body += chunk
       })
       request.on('end', () => {
-        received = { headers: request.headers, path: request.url!, body }
+        received = { headers: request.headers, path: request.url ?? '/', body }
         response.setHeader('Content-Type', 'application/xml')
         response.end(
           '<AssumeRoleResponse><AssumeRoleResult><Credentials>' +
@@ -77,7 +77,7 @@ describe('ObjectStorageService endpoint boundaries', () => {
     })
     const body = new URLSearchParams(received.body)
     expect(body.get('Action')).toBe('AssumeRole')
-    const policy = JSON.parse(body.get('Policy')!)
+    const policy = JSON.parse(body.get('Policy') ?? 'null')
     expect(policy.Statement[0].Resource).toEqual(['arn:aws:s3:::workspaces/organization-123/*'])
     expect(policy.Statement[1].Condition.StringLike['s3:prefix']).toEqual(['organization-123', 'organization-123/*'])
   })
@@ -102,7 +102,7 @@ describe('ObjectStorageService endpoint boundaries', () => {
       },
       { accessKeyId: values['s3.accessKey'], secretAccessKey: values['s3.secretKey'] },
     )
-    expect(received.headers.authorization).toBe(expected.headers!.Authorization)
+    expect(received.headers.authorization).toBe(expected.headers?.Authorization)
     expect(received.headers.authorization).toContain('/eu-central-1/sts/aws4_request')
   })
 
