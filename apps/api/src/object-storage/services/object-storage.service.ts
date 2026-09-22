@@ -13,6 +13,7 @@ import { STSClient, AssumeRoleCommand } from '@aws-sdk/client-sts'
 
 interface S3Config {
   endpoint: string
+  publicEndpoint?: string
   stsEndpoint: string
   accessKey: string
   secretKey: string
@@ -39,6 +40,7 @@ export class ObjectStorageService {
       const bucket = this.configService.getOrThrow('s3.defaultBucket')
       const s3Config: S3Config = {
         endpoint: this.configService.getOrThrow('s3.endpoint'),
+        publicEndpoint: this.configService.get('s3.publicEndpoint'),
         stsEndpoint: this.configService.getOrThrow('s3.stsEndpoint'),
         accessKey: this.configService.getOrThrow('s3.accessKey'),
         secretKey: this.configService.getOrThrow('s3.secretKey'),
@@ -87,6 +89,7 @@ export class ObjectStorageService {
   }
 
   private async getMinioCredentials(config: S3Config): Promise<StorageAccessDto> {
+    const stsUrl = new URL(config.stsEndpoint)
     const body = new URLSearchParams({
       Action: 'AssumeRole',
       Version: '2011-06-15',
@@ -95,9 +98,10 @@ export class ObjectStorageService {
     })
 
     const requestOptions = {
-      host: new URL(config.endpoint).hostname,
-      path: '/minio/v1/assume-role',
+      host: stsUrl.host,
+      path: stsUrl.pathname + stsUrl.search,
       service: 'sts',
+      region: config.region,
       method: 'POST',
       body: body.toString(),
       headers: {
@@ -127,7 +131,7 @@ export class ObjectStorageService {
       accessKey: creds.AccessKeyId,
       secret: creds.SecretAccessKey,
       sessionToken: creds.SessionToken,
-      storageUrl: config.endpoint,
+      storageUrl: config.publicEndpoint ?? config.endpoint,
       organizationId: config.organizationId,
       bucket: config.bucket,
     }
@@ -163,7 +167,7 @@ export class ObjectStorageService {
           accessKey: response.Credentials.AccessKeyId,
           secret: response.Credentials.SecretAccessKey,
           sessionToken: response.Credentials.SessionToken,
-          storageUrl: config.endpoint,
+          storageUrl: config.publicEndpoint ?? config.endpoint,
           organizationId: config.organizationId,
           bucket: config.bucket,
         }
