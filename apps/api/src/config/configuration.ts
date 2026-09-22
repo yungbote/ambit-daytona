@@ -227,6 +227,7 @@ const configuration = {
   },
   s3: {
     endpoint: process.env.S3_ENDPOINT,
+    publicEndpoint: process.env.S3_PUBLIC_ENDPOINT || undefined,
     stsEndpoint: process.env.S3_STS_ENDPOINT,
     region: process.env.S3_REGION,
     accessKey: process.env.S3_ACCESS_KEY,
