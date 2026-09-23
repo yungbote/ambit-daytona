@@ -105,7 +105,7 @@ RUN --mount=type=bind,source=build/install-browser.py,target=/checks/install-bro
  && test -r /usr/share/licenses/ambit-atomic-materialize/license.lock.json \
  && test -r /usr/share/licenses/ambit-atomic-materialize/Go-LICENSE \
  && test -r /opt/ambit/browser/runtime/playwright-runner.mjs \
- && node --input-type=module -e 'const p = await import("/usr/local/nvm/versions/node/v22.14.0/lib/node_modules/playwright-core/index.mjs"); if (typeof p.chromium.connectOverCDP !== "function") process.exit(1)' \
+ && node --input-type=module -e 'const p = await import("/usr/local/nvm/versions/node/v22.14.0/lib/node_modules/playwright-core/index.mjs"); if (typeof p.chromium.connectOverCDP !== "function" || p.ambitCdpContextAdoptionVersion !== 1) throw new Error("The runtime Playwright module is not the patched context-adoption client")' \
  && test -r /usr/share/licenses/ambit-atomic-materialize/golang.org-x-text-LICENSE \
  && python3 /checks/install-browser.py materializer /opt/ambit/browser/browser.lock.json "${BASE_IMAGE}" \
  && Xvfb -help >/dev/null 2>&1 \
