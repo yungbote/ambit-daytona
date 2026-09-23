@@ -12,6 +12,14 @@ The ordinary launcher selects a headed Chrome window on its own private authenti
 
 Both default launch and explicit `--headed` qualification now require one headed Chrome process, one private display, and an actual `browser-window` frame whose decoded JPEG dimensions match its declared surface. Browser sandbox, local/public navigation, screenshot, download, proxy trust, cancellation and whole-process cleanup checks remain required. A build that passes these checks still needs its current runtime qualification and integrated Product/browser acceptance.
 
+The GPU-less workspace selects Chromium's documented ANGLE software GLES driver with `--use-gl=angle --use-angle=swiftshader`. This supports WebGL1 and WebGL2 without disabling the Chromium sandbox or enabling its unsafe automatic WebGL fallback. The managed browser starts on `about:blank`; opening a normal new tab through Chrome still uses Chrome's own new-tab page. Explicit `AGENT_BROWSER_ARGS`, including an empty value, replaces this workspace default for another qualified environment. This is software graphics, not a claim of hardware acceleration, WebGPU, DRM or proprietary codec support. `conformance/graphics.py` checks actual shader pixels on an ordinary HTTP page, canvas/window resize, context loss/restoration, sandbox status and the pixels in the native window stream.
+
+### Playwright in the same browser
+
+The image pins `playwright-core` as a library in its existing Node environment. It installs only the client from a checksum-bound archive during image construction; it neither downloads a second browser nor installs packages during a Run. The native driver's `run-playwright` operation owns the program lifetime and attaches that client to the same selected Chrome tab/profile used by ordinary agent-browser tools. The workspace launcher supplies the installed runner and library paths. The matching host-bound tool participates in the existing browser Action, current human-control owner and retained conversation custody. Raw CDP attachment from arbitrary workspace code is not a substitute for that coordinated operation.
+
+The image's executable/library inventory includes the exact client version and environment path. Authentication remains in the existing retained Chrome profile; no credential copying or extra authentication store is introduced. The native runner, descriptor pin and image qualification must all be promoted together before this capability is advertised as deployed.
+
 ### The bound on a browser left open
 
 A browser daemon is ordinary scope-owned background work: the command that started it exits, its shell exits, and the session's process scope stays `running` with the daemon owned inside it. Deleting the session ends that whole scope, including detached and reparented descendants, and the native session tests and `conformance/session.py` prove it for a browser daemon, a double-forked `setsid` actor and a plain `cmd &` job alike.
