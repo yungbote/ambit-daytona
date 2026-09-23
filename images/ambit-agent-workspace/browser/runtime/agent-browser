@@ -13,12 +13,6 @@ export AGENT_BROWSER_WINDOW_STREAM=1
 export AGENT_BROWSER_DISPLAY_HELPER=/opt/ambit/browser/bin/browser-display
 export AGENT_BROWSER_PLAYWRIGHT_RUNNER=/opt/ambit/browser/runtime/playwright-runner.mjs
 export AGENT_BROWSER_PLAYWRIGHT_MODULE=/usr/local/nvm/versions/node/v22.14.0/lib/node_modules/playwright-core/index.mjs
-# The admitted workspace has no GPU render device. ANGLE's software GLES driver
-# supplies WebGL1/2 in the same sandboxed headed Chrome; this is not Chromium's
-# unsafe automatic WebGL fallback. Start on a blank tab so first-run layout does
-# not wait for Chrome's GPU-heavy new-tab page before navigating to the task.
-# An explicitly supplied value, including empty, retains the caller's choice.
-export AGENT_BROWSER_ARGS="${AGENT_BROWSER_ARGS---use-gl=angle,--use-angle=swiftshader,about:blank}"
 # AGENT_BROWSER_IDLE_TIMEOUT_MS is deliberately not set here. Unset, the driver
 # applies its own hour-long leak backstop, which never pulls a headed, WebDriver
 # or user-attached browser out from under a human; any explicit value, including
