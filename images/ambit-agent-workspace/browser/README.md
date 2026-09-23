@@ -18,6 +18,8 @@ The native Linux window owner selects Chromium's documented ANGLE software GLES 
 
 The image pins `playwright-core` as a library in its existing Node environment. It installs only the client from a checksum-bound archive during image construction; it neither downloads a second browser nor installs packages during a Run. The native driver's `run-playwright` operation owns the program lifetime and attaches that client to the same selected Chrome tab/profile used by ordinary agent-browser tools. The workspace launcher supplies the installed runner and library paths. The matching host-bound tool participates in the existing browser Action, current human-control owner and retained conversation custody. Raw CDP attachment from arbitrary workspace code is not a substitute for that coordinated operation.
 
+Stock Playwright 1.62.1 folds every existing Chromium context it did not create into its default context, so a program attached while an isolated window is open would read that window's pages and cookies as the default profile's. The installer therefore applies `patches/playwright-core-1.62.1-context-adoption.patch` to the client: each existing non-default context becomes its own borrowed context that attachment neither reconfigures nor disposes, the default context keeps its implicit CDP identity, and the package exports `ambitCdpContextAdoptionVersion = 1`, the marker the native runner requires before attaching while isolated windows are open. The lock binds the patch's SHA-256 beside the client version. A dry run without fuzz must accept every hunk against the archive's files before any file changes, and the final build step imports the launcher's module path and requires the marker. `conformance/playwright-context-adoption.test.mjs` qualifies the behavior against the image's Chrome.
+
 The image's executable/library inventory includes the exact client version and environment path. Authentication remains in the existing retained Chrome profile; no credential copying or extra authentication store is introduced. The native runner, descriptor pin and image qualification must all be promoted together before this capability is advertised as deployed.
 
 The current composition starts from the admitted bare-metal workspace image in Ambit's own registry. Rebuilding replaces the browser component's driver, runtime and license directories; it reuses Chrome only when the parent's exact Chrome archive declaration matches the new lock, then verifies the installed version. The prior browser lock remains as `parent-browser.lock.json`. Unchanged inherited toolchain bytes and their original history remain intact. This avoids a second full workspace reconstruction or dependence on the former GCloud registry.
@@ -42,7 +44,7 @@ The image's build finishes by running that launcher's `--version` through the or
 
 ## Build and qualify
 
-`browser.lock.json` names the exact workspace parent, fork revision and source archive checksum, Chrome archive version and checksum, and added Debian package versions. Debian inputs use timestamped snapshots with independently pinned `InRelease` SHA-256 values, following the signed snapshot approach used by the existing runtime packs. APT verifies signatures with the parent image's Debian archive keyring, then verifies index and package hashes. The installer rejects missing, partial or changed release metadata before installing anything. Historical release expiry is disabled only in these snapshot source entries; authentication remains required. Temporary source, index and cache paths exclude the parent's moving repositories during the build and leave its runtime APT configuration unchanged. Package removal is forbidden and all requested installed versions are checked.
+`browser.lock.json` names the exact workspace parent, fork revision and source archive checksum, Chrome archive version and checksum, npm and Playwright client archive checksums, the client patch checksum, and added Debian package versions. Debian inputs use timestamped snapshots with independently pinned `InRelease` SHA-256 values, following the signed snapshot approach used by the existing runtime packs. APT verifies signatures with the parent image's Debian archive keyring, then verifies index and package hashes. The installer rejects missing, partial or changed release metadata before installing anything. Historical release expiry is disabled only in these snapshot source entries; authentication remains required. Temporary source, index and cache paths exclude the parent's moving repositories during the build and leave its runtime APT configuration unchanged. Package removal is forbidden and all requested installed versions are checked.
 
 Refreshing Debian inputs means selecting snapshots that contain the entire requested roster, updating their release hashes and any deliberately changed package versions together, then rebuilding and qualifying the resulting image. Updating a package version without its repository snapshot can make it unavailable; selecting current mirrors would make the next rebuild depend on repository rotation again. Snapshot availability remains an external build dependency. This follows [Debian's snapshot instructions](https://snapshot.debian.org/#usage) and the source-scoped `Signed-By` and `Check-Valid-Until` options in [APT's sources.list contract](https://manpages.debian.org/trixie/apt/sources.list.5.en.html).
 
@@ -99,6 +101,8 @@ Run `conformance/browser.py` and `conformance/browser.py --headed` as the normal
 
 The local Linux witness uses the existing `capabilities/c18-specialist-packs/policy/specialist-seccomp-v1.json`, with every outer capability dropped and `no-new-privileges`. It checks real renderer process state for a nested PID namespace, an additional seccomp filter and zero effective capabilities. This reuses an existing policy for a task-local conformance container; it does not change the policy of production workspace containers. The Docker default profile does not permit the required Chromium sandbox on the qualification host and must fail without an unsafe fallback.
 
+Run `node --test conformance/playwright-context-adoption.test.mjs` in a candidate container with `PLAYWRIGHT_CONTEXT_ADOPTION_MODULE` set to the launcher's `AGENT_BROWSER_PLAYWRIGHT_MODULE` path, `PLAYWRIGHT_CONTEXT_CHROME=/opt/ambit/browser/chrome/chrome`, and `PLAYWRIGHT_CONTEXT_STOCK_MODULE` naming `index.mjs` of the unpatched client archive extracted into the container. The stock case must still reproduce the default-context merge, which proves the fixture can detect the defect; the remaining cases check per-context pages and cookies, later external contexts, owned-context options, explicit close, and preserved viewport, media, permission, download and proxy state.
+
 `conformance/browser.py --public-url https://example.com` additionally checks real public HTTPS navigation. `conformance/proxy.py` runs entirely on loopback and proves the launcher uses the configured HTTPS CONNECT proxy, rejects an untrusted certificate, and accepts that certificate only when the workspace CA is provided through `SSL_CERT_FILE`. This proves the adapter behavior; current permission and domain enforcement still require the actual Daytona provider journey.
 
 Deployment must preserve the existing workspace snapshot registration and admission path. Register the exact resulting image, bind its actual executable evidence to the existing runtime capability catalog, then test from a normal production chat. Existing workspaces retain their admitted image; they must not be relabeled as containing the new driver.
@@ -134,6 +138,20 @@ inventory contract as the other Node environments. The installer checks both
 `npm` and `npx` entrypoints and versions; it does not override nested packages
 or add another runtime package path. The archive retains npm's bundled license
 and dependency notices. Include its exact `archiveName` in `browser_inputs`.
+
+The Playwright patch is generated, not edited by hand: it is the unified diff
+between the archive's `index.*` and `lib/coreBundle.js` files and the same files
+from an offline build of the release with the source change applied. The bundle
+hunks are the esbuild output of `src/server/browser.ts`,
+`src/server/chromium/chromium.ts`, `src/server/chromium/crBrowser.ts` and
+`src/server/chromium/crPage.ts`. A new client version needs the change carried
+into that release, both builds, proof that the unchanged build reproduces the
+archive's copies of those files, and
+`git diff --no-index --no-prefix a b` with the archive's files under `a` and the
+patched build's under `b`. Update the version, archive and patch entries
+together, then rerun the context-adoption qualification. When an upstream
+release adopts existing contexts itself, remove the patch together with the
+runner's marker requirement.
 
 After an actual candidate installation, export the resulting canonical
 `lineage/installed-dpkg.lock` into source `browser/locks/installed-dpkg.lock` and
