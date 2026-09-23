@@ -206,6 +206,29 @@ def install_npm(lock, scratch, inputs=Path("/inputs")):
             raise ValueError(f"Installed {command} version differs from the lock")
 
 
+def install_playwright(lock, scratch, inputs=Path("/inputs")):
+    """Install the pinned client offline; Chrome remains owned by this image."""
+    artifact = lock["playwright"]
+    archive = verify_input(artifact, inputs)
+    node = lock["node"]
+    version = node["packages"]["playwright-core"]
+    if artifact["version"] != version:
+        raise ValueError("Playwright package and library inventory versions differ")
+    prefix = Path(node["root"]).parent
+    subprocess.run([
+        "npm", "install", "--global", "--prefix", str(prefix), "--offline",
+        "--ignore-scripts", "--no-audit", "--no-fund", "--cache", str(scratch / "npm-cache"),
+        str(archive),
+    ], check=True)
+    package = Path(node["root"]) / "node_modules/playwright-core"
+    descriptor = json.loads((package / "package.json").read_text())
+    if descriptor.get("name") != "playwright-core" or descriptor.get("version") != version:
+        raise ValueError("Installed Playwright differs from the lock")
+    for required in ("index.mjs", "index.js", "LICENSE", "NOTICE", "ThirdPartyNotices.txt"):
+        if not (package / required).is_file():
+            raise ValueError(f"Installed Playwright is missing {required}")
+
+
 def record_toolchain_update(source, target, lineage=TOOLCHAIN_LINEAGE):
     for name, expected in target["debian"]["packages"].items():
         observed = subprocess.check_output(["dpkg-query", "-W", "-f=${Version}", name], text=True)
@@ -252,6 +275,9 @@ def main():
             subprocess.run(["cargo", "build", "--release", "--locked", "--manifest-path", str(manifest)], check=True)
             (root / "bin").mkdir()
             shutil.copy2(source_root / "cli/target/release/agent-browser", root / "bin/agent-browser")
+            runtime_root = root / "runtime"
+            runtime_root.mkdir()
+            shutil.copy2(source_root / "cli/runtime/playwright-runner.mjs", runtime_root / "playwright-runner.mjs")
             license_root = root / "licenses"
             license_root.mkdir()
             shutil.copy2(source_root / "LICENSE", license_root / "agent-browser-LICENSE")
@@ -285,6 +311,7 @@ def main():
             debian, target_toolchains = toolchain_update(lock, source_toolchains)
             install_debian_packages(debian, scratch)
             install_npm(lock, scratch)
+            install_playwright(lock, scratch)
             record_toolchain_update(source_toolchains, target_toolchains)
             archive = verify_input(lock["chrome"])
             with zipfile.ZipFile(archive) as bundle:

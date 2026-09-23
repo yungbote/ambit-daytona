@@ -11,6 +11,8 @@ export AGENT_BROWSER_REQUIRE_SANDBOX=1
 # owns its private display; no sandbox-global desktop or DISPLAY is selected.
 export AGENT_BROWSER_WINDOW_STREAM=1
 export AGENT_BROWSER_DISPLAY_HELPER=/opt/ambit/browser/bin/browser-display
+export AGENT_BROWSER_PLAYWRIGHT_RUNNER=/opt/ambit/browser/runtime/playwright-runner.mjs
+export AGENT_BROWSER_PLAYWRIGHT_MODULE=/usr/local/nvm/versions/node/v22.14.0/lib/node_modules/playwright-core/index.mjs
 # AGENT_BROWSER_IDLE_TIMEOUT_MS is deliberately not set here. Unset, the driver
 # applies its own hour-long leak backstop, which never pulls a headed, WebDriver
 # or user-attached browser out from under a human; any explicit value, including

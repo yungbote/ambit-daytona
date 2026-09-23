@@ -387,5 +387,56 @@ class NpmInstallationTests(unittest.TestCase):
                 installer.install_npm(self.lock, self.root, self.root)
 
 
+class PlaywrightInstallationTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.prefix = self.root / "node"
+        self.package = self.prefix / "lib/node_modules/playwright-core"
+        self.package.mkdir(parents=True)
+        for name in ("index.mjs", "index.js", "LICENSE", "NOTICE", "ThirdPartyNotices.txt"):
+            (self.package / name).write_text("fixture")
+        (self.package / "package.json").write_text(json.dumps({"name": "playwright-core", "version": "1.62.1"}))
+        archive = self.root / "playwright-core-1.62.1.tgz"
+        archive.write_bytes(b"fixture archive")
+        self.lock = {
+            "playwright": {"archiveName": archive.name, "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(), "version": "1.62.1"},
+            "node": {"root": str(self.prefix / "lib"), "packages": {"npm": "10.9.9", "playwright-core": "1.62.1"}},
+        }
+
+    def test_offline_client_install_uses_existing_node_owner_without_browser_download(self):
+        with patch.object(installer.subprocess, "run") as run:
+            installer.install_playwright(self.lock, self.root, self.root)
+        run.assert_called_once()
+        command = run.call_args.args[0]
+        self.assertEqual(command[:5], ["npm", "install", "--global", "--prefix", str(self.prefix)])
+        for option in ("--offline", "--ignore-scripts", "--no-audit", "--no-fund"):
+            self.assertIn(option, command)
+        self.assertEqual(command[-1], str(self.root / "playwright-core-1.62.1.tgz"))
+
+    def test_changed_archive_or_disagreeing_inventory_refused_before_install(self):
+        for field, value in (("sha256", "0" * 64), ("version", "2.0.0")):
+            with self.subTest(field=field), patch.object(installer.subprocess, "run") as run:
+                changed = copy.deepcopy(self.lock)
+                changed["playwright"][field] = value
+                with self.assertRaises(ValueError):
+                    installer.install_playwright(changed, self.root, self.root)
+                run.assert_not_called()
+
+    def test_installed_version_and_required_runtime_and_licenses_verified(self):
+        for missing in ("index.mjs", "LICENSE", "NOTICE", "ThirdPartyNotices.txt"):
+            with self.subTest(missing=missing), patch.object(installer.subprocess, "run"):
+                file = self.package / missing
+                original = file.read_text()
+                file.unlink()
+                with self.assertRaises(ValueError):
+                    installer.install_playwright(self.lock, self.root, self.root)
+                file.write_text(original)
+        (self.package / "package.json").write_text(json.dumps({"name": "playwright-core", "version": "1.61.1"}))
+        with patch.object(installer.subprocess, "run"), self.assertRaises(ValueError):
+            installer.install_playwright(self.lock, self.root, self.root)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -71,6 +71,7 @@ RUN --mount=type=bind,source=browser.lock.json,target=/source/browser.lock.json,
     --mount=type=bind,source=build/install-browser.py,target=/source/install-browser.py,ro \
     python3 /source/install-browser.py materializer /source/browser.lock.json "${BASE_IMAGE}"
 COPY --from=driver /opt/ambit/browser/bin /opt/ambit/browser/bin
+COPY --from=driver /opt/ambit/browser/runtime /opt/ambit/browser/runtime
 COPY --from=driver /opt/ambit/browser/licenses /opt/ambit/browser/licenses
 COPY --from=browser-display /out/bin /opt/ambit/browser/bin
 COPY --from=browser-display /out/licenses /opt/ambit/browser/licenses
@@ -102,6 +103,8 @@ RUN --mount=type=bind,source=build/install-browser.py,target=/checks/install-bro
  && test -r /usr/share/licenses/ambit-atomic-materialize/LICENSE.md \
  && test -r /usr/share/licenses/ambit-atomic-materialize/license.lock.json \
  && test -r /usr/share/licenses/ambit-atomic-materialize/Go-LICENSE \
+ && test -r /opt/ambit/browser/runtime/playwright-runner.mjs \
+ && node --input-type=module -e 'const p = await import("/usr/local/nvm/versions/node/v22.14.0/lib/node_modules/playwright-core/index.mjs"); if (typeof p.chromium.connectOverCDP !== "function") process.exit(1)' \
  && test -r /usr/share/licenses/ambit-atomic-materialize/golang.org-x-text-LICENSE \
  && python3 /checks/install-browser.py materializer /opt/ambit/browser/browser.lock.json "${BASE_IMAGE}" \
  && Xvfb -help >/dev/null 2>&1 \

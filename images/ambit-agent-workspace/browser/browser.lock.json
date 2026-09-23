@@ -89,7 +89,14 @@
   "node": {
     "root": "/usr/local/nvm/versions/node/v22.14.0/lib",
     "packages": {
-      "npm": "10.9.9"
+      "npm": "10.9.9",
+      "playwright-core": "1.62.1"
     }
+  },
+  "playwright": {
+    "version": "1.62.1",
+    "url": "https://registry.npmjs.org/playwright-core/-/playwright-core-1.62.1.tgz",
+    "archiveName": "playwright-core-1.62.1.tgz",
+    "sha256": "954be1e183d0ddb9748fe0d2d08b0b66a9210c74dd75c397aeb70303b9f08a00"
   }
 }
