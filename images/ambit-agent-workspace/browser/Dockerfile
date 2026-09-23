@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 # Preserve the ordinary workspace toolchains; replace the materializer with
 # its declared source build. This is not the C18 specialist-render image.
-ARG BASE_IMAGE=us-east4-docker.pkg.dev/mwcc-infrastructure/ambit/ambit-agent-workspace@sha256:fa261983f89770cb8647b2a165abd68bfb81c9bbe7dd02e13d2dc51f04eeff46
+ARG BASE_IMAGE=registry.daytona.ambit.sh/ambit-runtime/ambit-agent-workspace@sha256:22d387dd65b0e37122fd4ff1b605c426eadd26bc2ee5dc9d16824ff38281d8bc
 FROM ${BASE_IMAGE} AS materializer-source
 ARG BASE_IMAGE
 USER root

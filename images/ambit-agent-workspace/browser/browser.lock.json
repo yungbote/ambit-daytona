@@ -1,6 +1,6 @@
 {
   "schema": "ambit.workspace-browser-lock/v1",
-  "baseImage": "us-east4-docker.pkg.dev/mwcc-infrastructure/ambit/ambit-agent-workspace@sha256:fa261983f89770cb8647b2a165abd68bfb81c9bbe7dd02e13d2dc51f04eeff46",
+  "baseImage": "registry.daytona.ambit.sh/ambit-runtime/ambit-agent-workspace@sha256:22d387dd65b0e37122fd4ff1b605c426eadd26bc2ee5dc9d16824ff38281d8bc",
   "agentBrowser": {
     "repository": "https://github.com/yungbote/ambit-agent-browser",
     "upstreamRepository": "https://github.com/vercel-labs/agent-browser",
@@ -78,7 +78,7 @@
     "buildLockSha256": "4648877e3408f215960c99a1f5dd971cb08290202c59389cd4157f52133b87ec"
   },
   "toolchains": {
-    "parentLockSha256": "c61261b5fd7e53c7320b65cff05e04332f3992dbb361a30feb388d4b4b6e2e58",
+    "parentLockSha256": "db1f8f54828efb8136e22964b75338646e00c13f93bc6da308034faa8780e194",
     "sourceLockSha256": "db1f8f54828efb8136e22964b75338646e00c13f93bc6da308034faa8780e194"
   },
   "npm": {

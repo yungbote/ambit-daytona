@@ -334,6 +334,20 @@ class WorkspaceUpdateTests(unittest.TestCase):
         self.assertEqual((self.lineage / "toolchains.lock.json").read_bytes(), prior)
         self.assertFalse((self.lineage / "parent-toolchains").exists())
 
+    def test_component_only_update_preserves_existing_toolchain_history(self):
+        current = self.source.read_bytes()
+        (self.lineage / "toolchains.lock.json").write_bytes(current)
+        history = self.lineage / "parent-toolchains"
+        history.mkdir()
+        (history / "prior").write_text("retained history")
+        def query(command, *, text):
+            return self.target["debian"]["packages"][command[-1]]
+        with patch.object(installer.subprocess, "check_output", side_effect=query):
+            installer.record_toolchain_update(self.source, self.target, self.lineage)
+        self.assertEqual((self.lineage / "toolchains.lock.json").read_bytes(), current)
+        self.assertEqual((self.lineage / "installed-dpkg.lock").read_text(), "parent observation\n")
+        self.assertEqual((history / "prior").read_text(), "retained history")
+
 
 class NpmInstallationTests(unittest.TestCase):
     def setUp(self):
@@ -436,6 +450,44 @@ class PlaywrightInstallationTests(unittest.TestCase):
         (self.package / "package.json").write_text(json.dumps({"name": "playwright-core", "version": "1.61.1"}))
         with patch.object(installer.subprocess, "run"), self.assertRaises(ValueError):
             installer.install_playwright(self.lock, self.root, self.root)
+
+
+class BrowserComponentUpdateTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.parent = Path(temporary.name)
+        self.root = self.parent / "browser"
+        self.root.mkdir()
+        self.lock = {"chrome": {"version": "152.0.7977.82", "sha256": "exact-archive"}}
+        self.previous = json.dumps(self.lock).encode()
+        (self.root / "browser.lock.json").write_bytes(self.previous)
+        for directory in ("chrome", "bin", "runtime", "licenses"):
+            (self.root / directory).mkdir()
+            (self.root / directory / "old-file").write_text(directory)
+        (self.root / "Cargo.lock").write_text("old dependency graph")
+        (self.parent / "unrelated-toolchain").write_text("preserved")
+
+    def test_exact_chrome_parent_reused_while_obsolete_driver_files_are_pruned(self):
+        self.assertTrue(installer.prepare_browser_component(self.root, "chrome", self.lock))
+        self.assertEqual((self.root / "chrome/old-file").read_text(), "chrome")
+        for removed in ("bin", "runtime", "licenses", "Cargo.lock"):
+            self.assertFalse((self.root / removed).exists(), removed)
+        self.assertEqual((self.root / "parent-browser.lock.json").read_bytes(), self.previous)
+        self.assertEqual((self.parent / "unrelated-toolchain").read_text(), "preserved")
+
+    def test_changed_chrome_is_replaced_and_driver_build_has_no_stale_component_files(self):
+        changed = {"chrome": {**self.lock["chrome"], "sha256": "different-archive"}}
+        self.assertFalse(installer.prepare_browser_component(self.root, "chrome", changed))
+        self.assertFalse((self.root / "chrome").exists())
+        self.assertFalse(installer.prepare_browser_component(self.root, "driver", changed))
+        self.assertEqual(list(self.root.iterdir()), [])
+        self.assertEqual((self.parent / "unrelated-toolchain").read_text(), "preserved")
+
+    def test_unknown_mode_does_not_remove_component(self):
+        with self.assertRaises(ValueError):
+            installer.prepare_browser_component(self.root, "unknown", self.lock)
+        self.assertEqual((self.root / "bin/old-file").read_text(), "bin")
 
 
 if __name__ == "__main__":

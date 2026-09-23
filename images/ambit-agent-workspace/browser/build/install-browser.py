@@ -234,6 +234,10 @@ def record_toolchain_update(source, target, lineage=TOOLCHAIN_LINEAGE):
         observed = subprocess.check_output(["dpkg-query", "-W", "-f=${Version}", name], text=True)
         if observed != expected:
             raise ValueError(f"Workspace package version mismatch: {name}")
+    if source.read_bytes() == (lineage / "toolchains.lock.json").read_bytes():
+        # A browser-component update can retain its already qualified parent
+        # toolchain verbatim. Preserve that parent's history and observation.
+        return
     # Preserve the parent's observation with the parent's exact input lock.
     historical = lineage / "parent-toolchains"
     historical.mkdir()
@@ -244,6 +248,32 @@ def record_toolchain_update(source, target, lineage=TOOLCHAIN_LINEAGE):
     (lineage / "installed-dpkg.lock").write_text("\n".join(sorted(observed.splitlines())) + "\n")
     for name in ("toolchains.lock.json", "installed-dpkg.lock"):
         (lineage / name).chmod(0o444)
+
+
+def prepare_browser_component(root, mode, lock):
+    """Replace owned build outputs and retain an exactly pinned Chrome parent."""
+    if mode not in ("driver", "chrome"):
+        raise ValueError("Unknown browser install mode")
+    previous_lock = root / "browser.lock.json"
+    previous_bytes = previous_lock.read_bytes() if previous_lock.is_file() else None
+    previous = json.loads(previous_bytes) if previous_bytes is not None else None
+    reuse_chrome = mode == "chrome" and previous is not None and previous.get("chrome") == lock["chrome"]
+    # This is an image build, replacing exactly the browser component's owned
+    # files. Reusing an admitted full workspace must not retain stale driver or
+    # license files, nor copy its unchanged Chrome distribution into a new layer.
+    if mode == "driver" and root.exists():
+        shutil.rmtree(root)
+    elif mode == "chrome":
+        for owned in ("bin", "runtime", "licenses"):
+            if (root / owned).exists():
+                shutil.rmtree(root / owned)
+        (root / "Cargo.lock").unlink(missing_ok=True)
+        if not reuse_chrome and (root / "chrome").exists():
+            shutil.rmtree(root / "chrome")
+    root.mkdir(parents=True, exist_ok=True)
+    if mode == "chrome" and previous_bytes is not None:
+        (root / "parent-browser.lock.json").write_bytes(previous_bytes)
+    return reuse_chrome
 
 
 def main():
@@ -260,7 +290,7 @@ def main():
         verify_materializer_install(lock["materializer"])
         return
     root = Path("/opt/ambit/browser")
-    root.mkdir(parents=True, exist_ok=True)
+    reuse_chrome = prepare_browser_component(root, mode, lock)
     with tempfile.TemporaryDirectory(prefix="ambit-browser-build-") as temporary:
         scratch = Path(temporary)
         if mode == "driver":
@@ -313,11 +343,12 @@ def main():
             install_npm(lock, scratch)
             install_playwright(lock, scratch)
             record_toolchain_update(source_toolchains, target_toolchains)
-            archive = verify_input(lock["chrome"])
-            with zipfile.ZipFile(archive) as bundle:
-                bundle.extractall(scratch)
-            chrome_root = scratch / "chrome-linux64"
-            shutil.move(str(chrome_root), root / "chrome")
+            if not reuse_chrome:
+                archive = verify_input(lock["chrome"])
+                with zipfile.ZipFile(archive) as bundle:
+                    bundle.extractall(scratch)
+                chrome_root = scratch / "chrome-linux64"
+                shutil.move(str(chrome_root), root / "chrome")
             # ZIP entries do not retain Unix executable modes through zipfile.
             for name in ("chrome", "chrome_crashpad_handler", "chrome_sandbox"):
                 (root / "chrome" / name).chmod(0o755)

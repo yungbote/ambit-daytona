@@ -20,6 +20,8 @@ The image pins `playwright-core` as a library in its existing Node environment. 
 
 The image's executable/library inventory includes the exact client version and environment path. Authentication remains in the existing retained Chrome profile; no credential copying or extra authentication store is introduced. The native runner, descriptor pin and image qualification must all be promoted together before this capability is advertised as deployed.
 
+The current composition starts from the admitted bare-metal workspace image in Ambit's own registry. Rebuilding replaces the browser component's driver, runtime and license directories; it reuses Chrome only when the parent's exact Chrome archive declaration matches the new lock, then verifies the installed version. The prior browser lock remains as `parent-browser.lock.json`. Unchanged inherited toolchain bytes and their original history remain intact. This avoids a second full workspace reconstruction or dependence on the former GCloud registry.
+
 ### The bound on a browser left open
 
 A browser daemon is ordinary scope-owned background work: the command that started it exits, its shell exits, and the session's process scope stays `running` with the daemon owned inside it. Deleting the session ends that whole scope, including detached and reparented descendants, and the native session tests and `conformance/session.py` prove it for a browser daemon, a double-forked `setsid` actor and a plain `cmd &` job alike.
