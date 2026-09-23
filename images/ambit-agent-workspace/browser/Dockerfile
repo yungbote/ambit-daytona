@@ -60,6 +60,7 @@ USER root
 RUN --mount=type=bind,source=browser.lock.json,target=/source/browser.lock.json,ro \
     --mount=type=bind,source=build/install-browser.py,target=/source/install-browser.py,ro \
     --mount=type=bind,source=locks/toolchains.lock.json,target=/source/toolchains.lock.json,ro \
+    --mount=type=bind,source=patches,target=/source/patches,ro \
     --mount=type=bind,from=browser_inputs,source=.,target=/inputs,ro \
     python3 /source/install-browser.py chrome /source/browser.lock.json "${BASE_IMAGE}"
 

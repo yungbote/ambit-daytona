@@ -97,6 +97,10 @@
     "version": "1.62.1",
     "url": "https://registry.npmjs.org/playwright-core/-/playwright-core-1.62.1.tgz",
     "archiveName": "playwright-core-1.62.1.tgz",
-    "sha256": "954be1e183d0ddb9748fe0d2d08b0b66a9210c74dd75c397aeb70303b9f08a00"
+    "sha256": "954be1e183d0ddb9748fe0d2d08b0b66a9210c74dd75c397aeb70303b9f08a00",
+    "patch": {
+      "path": "patches/playwright-core-1.62.1-context-adoption.patch",
+      "sha256": "5cce8cf41c14da714bc899f82579e768bfa250ad61d6544d9bc9271bb0bbef60"
+    }
   }
 }

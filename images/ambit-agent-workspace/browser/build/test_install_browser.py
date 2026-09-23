@@ -1,4 +1,5 @@
 import copy
+import difflib
 import hashlib
 import importlib.util
 import io
@@ -402,6 +403,10 @@ class NpmInstallationTests(unittest.TestCase):
 
 
 class PlaywrightInstallationTests(unittest.TestCase):
+    PRISTINE = "one\ntwo\nthree\nfour\nfive\nsix\nseven\n"
+    PATCHED = PRISTINE.replace("four\n", "four\nadopted\n")
+    PATCHED_FILES = ("index.js", "index.mjs")
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -410,32 +415,73 @@ class PlaywrightInstallationTests(unittest.TestCase):
         self.package = self.prefix / "lib/node_modules/playwright-core"
         self.package.mkdir(parents=True)
         for name in ("index.mjs", "index.js", "LICENSE", "NOTICE", "ThirdPartyNotices.txt"):
-            (self.package / name).write_text("fixture")
+            (self.package / name).write_text(self.PRISTINE)
         (self.package / "package.json").write_text(json.dumps({"name": "playwright-core", "version": "1.62.1"}))
         archive = self.root / "playwright-core-1.62.1.tgz"
         archive.write_bytes(b"fixture archive")
+        # The lock names its patch relative to the lock's own directory.
+        self.source = self.root / "source"
+        self.patch_file = self.source / "patches/playwright-core.patch"
+        self.patch_file.parent.mkdir(parents=True)
+        self.patch_file.write_text("".join(
+            "".join(difflib.unified_diff(
+                self.PRISTINE.splitlines(True), self.PATCHED.splitlines(True), f"a/{name}", f"b/{name}"))
+            for name in self.PATCHED_FILES
+        ))
         self.lock = {
-            "playwright": {"archiveName": archive.name, "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(), "version": "1.62.1"},
+            "playwright": {
+                "archiveName": archive.name, "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(), "version": "1.62.1",
+                "patch": {"path": "patches/playwright-core.patch", "sha256": hashlib.sha256(self.patch_file.read_bytes()).hexdigest()},
+            },
             "node": {"root": str(self.prefix / "lib"), "packages": {"npm": "10.9.9", "playwright-core": "1.62.1"}},
         }
 
-    def test_offline_client_install_uses_existing_node_owner_without_browser_download(self):
-        with patch.object(installer.subprocess, "run") as run:
-            installer.install_playwright(self.lock, self.root, self.root)
-        run.assert_called_once()
-        command = run.call_args.args[0]
-        self.assertEqual(command[:5], ["npm", "install", "--global", "--prefix", str(self.prefix)])
-        for option in ("--offline", "--ignore-scripts", "--no-audit", "--no-fund"):
-            self.assertIn(option, command)
-        self.assertEqual(command[-1], str(self.root / "playwright-core-1.62.1.tgz"))
+    def install(self, lock=None):
+        installer.install_playwright(lock or self.lock, self.root, self.source, self.root)
 
-    def test_changed_archive_or_disagreeing_inventory_refused_before_install(self):
-        for field, value in (("sha256", "0" * 64), ("version", "2.0.0")):
-            with self.subTest(field=field), patch.object(installer.subprocess, "run") as run:
+    def install_with_real_patch(self):
+        """The fixture package stands in for npm's extraction; GNU patch runs for real."""
+        real = subprocess.run
+
+        def run(command, **options):
+            if command[0] == "npm":
+                return subprocess.CompletedProcess(command, 0)
+            return real(command, **options, capture_output=True)
+
+        with patch.object(installer.subprocess, "run", side_effect=run):
+            self.install()
+
+    def package_files(self):
+        return {path.relative_to(self.package): path.read_bytes() for path in self.package.rglob("*")}
+
+    def test_offline_client_install_is_patched_only_after_a_matching_dry_run(self):
+        with patch.object(installer.subprocess, "run") as run:
+            self.install()
+        install, dry_run, application = (call.args[0] for call in run.call_args_list)
+        self.assertEqual(install[:5], ["npm", "install", "--global", "--prefix", str(self.prefix)])
+        for option in ("--offline", "--ignore-scripts", "--no-audit", "--no-fund"):
+            self.assertIn(option, install)
+        self.assertEqual(install[-1], str(self.root / "playwright-core-1.62.1.tgz"))
+        self.assertEqual(application[0], "patch")
+        for option in ("--forward", "--fuzz=0", f"--directory={self.package}", f"--input={self.patch_file}"):
+            self.assertIn(option, application)
+        self.assertEqual(dry_run, [*application, "--dry-run"])
+
+    def test_changed_inputs_or_disagreeing_inventory_refused_before_install(self):
+        for key, field, value in (
+            ("playwright", "sha256", "0" * 64),
+            ("playwright", "version", "2.0.0"),
+            ("patch", "sha256", "0" * 64),
+            # Both name the real, correctly hashed file from outside the lock's tree.
+            ("patch", "path", str(self.patch_file)),
+            ("patch", "path", "../source/patches/playwright-core.patch"),
+        ):
+            with self.subTest(key=key, field=field, value=value), patch.object(installer.subprocess, "run") as run:
                 changed = copy.deepcopy(self.lock)
-                changed["playwright"][field] = value
+                entry = changed["playwright"]
+                (entry if key == "playwright" else entry["patch"])[field] = value
                 with self.assertRaises(ValueError):
-                    installer.install_playwright(changed, self.root, self.root)
+                    self.install(changed)
                 run.assert_not_called()
 
     def test_installed_version_and_required_runtime_and_licenses_verified(self):
@@ -445,11 +491,40 @@ class PlaywrightInstallationTests(unittest.TestCase):
                 original = file.read_text()
                 file.unlink()
                 with self.assertRaises(ValueError):
-                    installer.install_playwright(self.lock, self.root, self.root)
+                    self.install()
                 file.write_text(original)
         (self.package / "package.json").write_text(json.dumps({"name": "playwright-core", "version": "1.61.1"}))
         with patch.object(installer.subprocess, "run"), self.assertRaises(ValueError):
-            installer.install_playwright(self.lock, self.root, self.root)
+            self.install()
+
+    def test_locked_patch_changes_exactly_its_files_and_leaves_no_backups_or_rejects(self):
+        before = self.package_files()
+        self.install_with_real_patch()
+        after = self.package_files()
+        self.assertEqual(after.keys(), before.keys())
+        changed = {str(name) for name in after if after[name] != before[name]}
+        self.assertEqual(changed, set(self.PATCHED_FILES))
+        for name in self.PATCHED_FILES:
+            self.assertEqual((self.package / name).read_text(), self.PATCHED)
+
+    def test_any_hunk_mismatch_fails_before_any_file_changes_even_where_fuzz_would_apply(self):
+        # Drift in the edge context of one hunk; the other file still matches.
+        (self.package / "index.mjs").write_text(self.PRISTINE.replace("two\n", "TWO\n"))
+        subprocess.run(
+            ["patch", "--batch", "--dry-run", "--strip=1", f"--directory={self.package}", f"--input={self.patch_file}"],
+            check=True, capture_output=True,
+        )  # Default fuzz would accept this drift.
+        before = self.package_files()
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.install_with_real_patch()
+        self.assertEqual(self.package_files(), before)
+
+    def test_already_patched_client_is_refused_rather_than_reversed(self):
+        self.install_with_real_patch()
+        patched = self.package_files()
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.install_with_real_patch()
+        self.assertEqual(self.package_files(), patched)
 
 
 class BrowserComponentUpdateTests(unittest.TestCase):

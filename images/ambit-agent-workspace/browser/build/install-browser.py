@@ -206,10 +206,22 @@ def install_npm(lock, scratch, inputs=Path("/inputs")):
             raise ValueError(f"Installed {command} version differs from the lock")
 
 
-def install_playwright(lock, scratch, inputs=Path("/inputs")):
-    """Install the pinned client offline; Chrome remains owned by this image."""
+def install_playwright(lock, scratch, source, inputs=Path("/inputs")):
+    """Install the pinned client offline and apply its pinned patch.
+
+    Chrome remains owned by this image. The patch path resolves from the lock's
+    directory, `source`. Its dry run must accept every hunk against the exact
+    archive's files without fuzz before any file changes, so a mismatch fails
+    the build instead of leaving a partially patched client.
+    """
     artifact = lock["playwright"]
     archive = verify_input(artifact, inputs)
+    relative = PurePosixPath(artifact["patch"]["path"])
+    if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+        raise ValueError("Playwright patch must be a file in the browser image source")
+    patch = source / relative
+    if hashlib.sha256(patch.read_bytes()).hexdigest() != artifact["patch"]["sha256"]:
+        raise ValueError("Playwright patch differs from the lock")
     node = lock["node"]
     version = node["packages"]["playwright-core"]
     if artifact["version"] != version:
@@ -227,6 +239,12 @@ def install_playwright(lock, scratch, inputs=Path("/inputs")):
     for required in ("index.mjs", "index.js", "LICENSE", "NOTICE", "ThirdPartyNotices.txt"):
         if not (package / required).is_file():
             raise ValueError(f"Installed Playwright is missing {required}")
+    apply = [
+        "patch", "--batch", "--forward", "--fuzz=0", "--no-backup-if-mismatch",
+        "--strip=1", f"--directory={package}", f"--input={patch}",
+    ]
+    subprocess.run([*apply, "--dry-run"], check=True)
+    subprocess.run(apply, check=True)
 
 
 def record_toolchain_update(source, target, lineage=TOOLCHAIN_LINEAGE):
@@ -341,7 +359,7 @@ def main():
             debian, target_toolchains = toolchain_update(lock, source_toolchains)
             install_debian_packages(debian, scratch)
             install_npm(lock, scratch)
-            install_playwright(lock, scratch)
+            install_playwright(lock, scratch, Path(lock_path).parent)
             record_toolchain_update(source_toolchains, target_toolchains)
             if not reuse_chrome:
                 archive = verify_input(lock["chrome"])

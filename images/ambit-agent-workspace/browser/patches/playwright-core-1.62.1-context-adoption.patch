@@ -1,0 +1,281 @@
+diff --git a/index.d.ts b/index.d.ts
+index 97c1493..d0eacc6 100644
+--- a/index.d.ts
++++ b/index.d.ts
+@@ -15,3 +15,4 @@
+  */
+ 
+ export * from './types/types';
++export const ambitCdpContextAdoptionVersion: 1;
+diff --git a/index.js b/index.js
+index 9fc51a4..9c33cfc 100644
+--- a/index.js
++++ b/index.js
+@@ -15,3 +15,4 @@
+  */
+ require('./lib/bootstrap');
+ module.exports = require('./lib/coreBundle').inprocess.playwright;
++module.exports.ambitCdpContextAdoptionVersion = 1;
+diff --git a/index.mjs b/index.mjs
+index 3b3c75b..e6eda30 100644
+--- a/index.mjs
++++ b/index.mjs
+@@ -16,6 +16,7 @@
+ 
+ import playwright from './index.js';
+ 
++export const ambitCdpContextAdoptionVersion = playwright.ambitCdpContextAdoptionVersion;
+ export const chromium = playwright.chromium;
+ export const firefox = playwright.firefox;
+ export const webkit = playwright.webkit;
+diff --git a/lib/coreBundle.js b/lib/coreBundle.js
+index d9041dd..c0be8e2 100644
+--- a/lib/coreBundle.js
++++ b/lib/coreBundle.js
+@@ -37392,7 +37392,8 @@ var init_crPage = __esm({
+           this._client.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true })
+         ];
+         if (!this._page.isStorageStatePage) {
+-          const skipDefaultOverrides = this._crPage._browserContext._browser.options.noDefaults && this._crPage._browserContext === this._crPage._browserContext._browser._defaultContext;
++          const context2 = this._crPage._browserContext;
++          const skipDefaultOverrides = context2.isBorrowed || context2._browser.options.noDefaults && context2 === context2._browser._defaultContext;
+           if (this._crPage._browserContext.needsPlaywrightBinding())
+             promises2.push(this.exposePlaywrightBinding());
+           if (this._isMainFrame() && !skipDefaultOverrides)
+@@ -37414,7 +37415,7 @@ var init_crPage = __esm({
+             promises2.push(emulateLocale(this._client, options.locale));
+           if (options.timezoneId)
+             promises2.push(emulateTimezone(this._client, options.timezoneId));
+-          if (!this._crPage._browserContext._browser.options.headful)
++          if (!this._crPage._browserContext._browser.options.headful && !skipDefaultOverrides)
+             promises2.push(this._setDefaultFontFamilies(this._client));
+           promises2.push(this._updateGeolocation(true));
+           if (!skipDefaultOverrides)
+@@ -38056,6 +38057,8 @@ var init_crBrowser = __esm({
+     import_path23 = __toESM(require("path"));
+     init_assert();
+     init_crypto();
++    init_debugLogger();
++    init_manualPromise();
+     init_artifact();
+     init_browser();
+     init_browserContext();
+@@ -38078,6 +38081,8 @@ var init_crBrowser = __esm({
+         this._revision = "";
+         this._tracingRecording = false;
+         this._userAgent = "";
++        this._pendingAttachments = /* @__PURE__ */ new Map();
++        this._contextCreations = /* @__PURE__ */ new Set();
+         this._connection = connection;
+         this._session = this._connection.rootSession;
+         this._connection.on(ConnectionEvents.Disconnected, () => this._didDisconnect());
+@@ -38110,6 +38115,16 @@ var init_crBrowser = __esm({
+           return browser;
+         }
+         browser._defaultContext = new CRBrowserContext(browser, void 0, options.persistent);
++        if (options.isCDPConnection) {
++          const { browserContextIds, defaultBrowserContextId } = await session2.send("Target.getBrowserContexts");
++          if (!defaultBrowserContextId)
++            throw new Error("This Chromium connection does not expose its default browser context identity.");
++          browser._defaultContextId = defaultBrowserContextId;
++          await Promise.all([
++            browser._defaultContext.initialize(),
++            ...browserContextIds.map((id) => browser._adoptContext(id).initialize())
++          ]);
++        }
+         await Promise.all([
+           session2.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }).then(async () => {
+             await session2.send("Target.getTargetInfo");
+@@ -38128,16 +38143,53 @@ var init_crBrowser = __esm({
+           else
+             proxyBypassList = proxy.bypass;
+         }
+-        const { browserContextId } = await this._session.send("Target.createBrowserContext", {
+-          disposeOnDetach: true,
+-          proxyServer: proxy ? proxy.server : void 0,
+-          proxyBypassList
++        const creation = new ManualPromise();
++        this._contextCreations.add(creation);
++        try {
++          const { browserContextId } = await this._session.send("Target.createBrowserContext", {
++            disposeOnDetach: true,
++            proxyServer: proxy ? proxy.server : void 0,
++            proxyBypassList
++          });
++          const context2 = new CRBrowserContext(this, browserContextId, options);
++          this._contexts.set(browserContextId, context2);
++          try {
++            await context2.initialize();
++          } catch (error) {
++            this._contexts.delete(browserContextId);
++            await this._session._sendMayFail("Target.disposeBrowserContext", { browserContextId });
++            throw error;
++          }
++          return context2;
++        } finally {
++          creation.resolve();
++          this._contextCreations.delete(creation);
++        }
++      }
++      _adoptContext(id) {
++        const existing = this._contexts.get(id);
++        if (existing)
++          return existing;
++        const context2 = new CRBrowserContext(this, id, {
++          noDefaultViewport: true,
++          acceptDownloads: "internal-browser-default"
++        }, true);
++        this._contexts.set(id, context2);
++        void context2.initialize().then(() => {
++          if (this._contexts.get(id) === context2 && !this._connection._closed)
++            this.emit(Browser.Events.Context, context2);
++        }).catch((error) => {
++          debugLogger.log("error", error);
++          this._connection.close();
+         });
+-        const context2 = new CRBrowserContext(this, browserContextId, options);
+-        await context2.initialize();
+-        this._contexts.set(browserContextId, context2);
+         return context2;
+       }
++      async _contextForTarget(id) {
++        if (id === this._defaultContextId)
++          return this._defaultContext;
++        await Promise.all(this._contextCreations);
++        return this._contexts.get(id) || this._adoptContext(id);
++      }
+       contexts() {
+         return Array.from(this._contexts.values());
+       }
+@@ -38161,6 +38213,8 @@ var init_crBrowser = __esm({
+         return this.options.name === "clank";
+       }
+       async _waitForAllPagesToBeInitialized() {
++        while (this._pendingAttachments.size)
++          await Promise.all([...this._pendingAttachments.values()].map((attachment) => attachment.finished));
+         await Promise.all([...this._crPages.values()].map((crPage) => crPage._page.waitForInitializedOrError()));
+       }
+       _onAttachedToTarget({ targetInfo, sessionId, waitingForDebugger }) {
+@@ -38168,20 +38222,41 @@ var init_crBrowser = __esm({
+           return;
+         const session2 = this._session.createChildSession(sessionId);
+         assert(targetInfo.browserContextId, "targetInfo: " + JSON.stringify(targetInfo, null, 2));
+-        let context2 = this._contexts.get(targetInfo.browserContextId) || null;
+-        if (!context2) {
+-          context2 = this._defaultContext;
+-        }
+         if (targetInfo.type === "other" && targetInfo.url.startsWith("devtools://devtools") && this._devtools) {
+           this._devtools.install(session2);
+           return;
+         }
+         const treatOtherAsPage = targetInfo.type === "other" && process.env.PW_CHROMIUM_ATTACH_TO_OTHER;
+-        if (!context2 || targetInfo.type === "other" && !treatOtherAsPage) {
++        const contextId4 = targetInfo.browserContextId;
++        if (targetInfo.type === "other" && !treatOtherAsPage) {
+           session2.detach().catch(() => {
+           });
+           return;
+         }
++        if (this.options.isCDPConnection) {
++          const finished = this._contextForTarget(contextId4).then(async (context3) => {
++            await context3.initialize();
++            if (!this._pendingAttachments.has(sessionId) || this._connection._closed)
++              return;
++            this._attachTarget(targetInfo, session2, context3, !!treatOtherAsPage);
++          }).finally(() => this._pendingAttachments.delete(sessionId));
++          this._pendingAttachments.set(sessionId, { session: session2, finished });
++          void finished.catch((error) => {
++            debugLogger.log("error", error);
++            session2.detach().catch(() => {
++            });
++            this._connection.close();
++          });
++          return;
++        }
++        const context2 = this._contexts.get(contextId4) || this._defaultContext;
++        if (context2)
++          this._attachTarget(targetInfo, session2, context2, !!treatOtherAsPage);
++        else
++          session2.detach().catch(() => {
++          });
++      }
++      _attachTarget(targetInfo, session2, context2, treatOtherAsPage) {
+         assert(!this._crPages.has(targetInfo.targetId), "Duplicate target " + targetInfo.targetId);
+         assert(!this._serviceWorkers.has(targetInfo.targetId), "Duplicate target " + targetInfo.targetId);
+         if (targetInfo.type === "page" || treatOtherAsPage) {
+@@ -38200,20 +38275,42 @@ var init_crBrowser = __esm({
+         });
+       }
+       _onDetachedFromTarget(payload) {
++        const pending = this._pendingAttachments.get(payload.sessionId);
++        if (pending) {
++          this._pendingAttachments.delete(payload.sessionId);
++          pending.session.dispose();
++        }
+         const targetId = payload.targetId;
+         const crPage = this._crPages.get(targetId);
+         if (crPage) {
+           this._crPages.delete(targetId);
+           crPage.didClose();
++          this._reconcileBorrowedContexts(crPage._browserContext);
+           return;
+         }
+         const serviceWorker = this._serviceWorkers.get(targetId);
+         if (serviceWorker) {
+           this._serviceWorkers.delete(targetId);
+           serviceWorker.didClose();
++          this._reconcileBorrowedContexts(serviceWorker.browserContext);
+           return;
+         }
+       }
++      _reconcileBorrowedContexts(context2) {
++        if (!context2.isBorrowed || context2.possiblyUninitializedPages().length || this._contextReconciliation)
++          return;
++        const candidates = [...this._contexts].filter(([, context3]) => context3.isBorrowed);
++        this._contextReconciliation = this._session.send("Target.getBrowserContexts").then(({ browserContextIds }) => {
++          const existing = new Set(browserContextIds);
++          for (const [id, borrowed] of candidates) {
++            if (!existing.has(id) && this._contexts.get(id) === borrowed) {
++              this._contexts.delete(id);
++              borrowed.browserClosed();
++            }
++          }
++        }).catch(() => {
++        }).finally(() => this._contextReconciliation = void 0);
++      }
+       _didDisconnect() {
+         for (const crPage of this._crPages.values())
+           crPage.didClose();
+@@ -38311,14 +38408,18 @@ var init_crBrowser = __esm({
+       ServiceWorker: "serviceworker"
+     };
+     CRBrowserContext = class extends BrowserContext {
++      constructor(browser, browserContextId, options, isBorrowed = false) {
++        super(browser, options, browserContextId);
++        this.isBorrowed = isBorrowed;
++        this.authenticateProxyViaCredentials();
++      }
+       static {
+         this.CREvents = CREvents;
+       }
+-      constructor(browser, browserContextId, options) {
+-        super(browser, options, browserContextId);
+-        this.authenticateProxyViaCredentials();
++      initialize() {
++        return this._initialization ||= this._initialize();
+       }
+-      async initialize() {
++      async _initialize() {
+         assert(!Array.from(this._browser._crPages.values()).some((page) => page._browserContext === this));
+         const promises2 = [super.initialize()];
+         if (this._browser.options.name !== "clank" && this._options.acceptDownloads !== "internal-browser-default") {
+@@ -42869,7 +42970,8 @@ ${remoteDebuggingHint(channel)}`);
+             downloadsPath: options.downloadsPath || artifactsDir,
+             tracesDir: options.tracesDir || artifactsDir,
+             originalLaunchOptions: {},
+-            noDefaults: options.noDefaults
++            noDefaults: options.noDefaults,
++            isCDPConnection: true
+           };
+           validateBrowserContextOptions(persistent, browserOptions);
+           const browser = await progress2.race(CRBrowser.connect(this.attribution.playwright, transport, browserOptions));

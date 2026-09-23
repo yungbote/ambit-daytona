@@ -3,34 +3,52 @@
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import subprocess
 import tempfile
 import unittest
 
 
+BROWSER = Path(__file__).parents[1]
+
+
+def dockerfile_mounts():
+    """Yield each RUN instruction with the fields of every mount it declares."""
+    for instruction in (BROWSER / "Dockerfile").read_text().replace("\\\n", " ").splitlines():
+        for token in instruction.split():
+            if token.startswith("--mount="):
+                yield instruction, dict(field.split("=", 1) if "=" in field else (field, True)
+                                        for field in token.removeprefix("--mount=").split(","))
+
+
 class BrowserBuildContextTests(unittest.TestCase):
-    def test_effective_toolchain_lock_comes_from_the_browser_context(self):
-        browser = Path(__file__).parents[1]
-        dockerfile = (browser / "Dockerfile").read_text()
-        mounts = [
-            dict(field.split("=", 1) if "=" in field else (field, True)
-                 for field in line.strip().split("--mount=", 1)[1].split()[0].split(","))
-            for line in dockerfile.splitlines()
-            if "--mount=" in line and "target=/source/toolchains.lock.json" in line
-        ]
-        self.assertEqual(len(mounts), 1)
-        mount = mounts[0]
+    def assert_primary_context_bind(self, mount):
         # The repository context excludes images through .dockerignore. This
-        # component already owns its effective lock in the primary context.
+        # component owns its build inputs in the primary context.
         self.assertNotIn("from", mount)
         self.assertEqual(mount["type"], "bind")
         self.assertTrue(mount["ro"])
-        source = (browser / mount["source"]).resolve()
-        self.assertTrue(source.is_relative_to(browser.resolve()))
-        lock = json.loads((browser / "browser.lock.json").read_text())
+        source = (BROWSER / mount["source"]).resolve()
+        self.assertTrue(source.is_relative_to(BROWSER.resolve()))
+        return source
+
+    def test_effective_toolchain_lock_comes_from_the_browser_context(self):
+        mounts = [mount for _, mount in dockerfile_mounts() if mount.get("target") == "/source/toolchains.lock.json"]
+        self.assertEqual(len(mounts), 1)
+        source = self.assert_primary_context_bind(mounts[0])
+        lock = json.loads((BROWSER / "browser.lock.json").read_text())
         self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(),
                          lock["toolchains"]["sourceLockSha256"])
+
+    def test_client_install_mounts_the_locked_playwright_patch_beside_its_lock(self):
+        mounts = {mount["target"]: mount for instruction, mount in dockerfile_mounts()
+                  if "install-browser.py chrome" in instruction}
+        lock_mount = mounts["/source/browser.lock.json"]
+        patch = json.loads((BROWSER / lock_mount["source"]).read_text())["playwright"]["patch"]
+        # The installer resolves the patch from the lock's directory.
+        target = PurePosixPath(lock_mount["target"]).parent / patch["path"]
+        source = self.assert_primary_context_bind(mounts[str(target.parent)]) / target.name
+        self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(), patch["sha256"])
 
 
 class LiveDpkgConformanceTests(unittest.TestCase):
