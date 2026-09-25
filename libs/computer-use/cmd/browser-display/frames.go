@@ -14,6 +14,7 @@ import (
 
 	"github.com/robotn/xgb"
 	"github.com/robotn/xgb/damage"
+	"github.com/robotn/xgb/shm"
 	"github.com/robotn/xgb/xfixes"
 	"github.com/robotn/xgb/xproto"
 )
@@ -428,6 +429,7 @@ type frameEngine struct {
 	fetch    []bool
 	encode   []bool
 	rects    []image.Rectangle
+	shared   *sharedImage
 }
 
 func openFrames() (*frameEngine, error) {
@@ -452,6 +454,10 @@ func openFrames() (*frameEngine, error) {
 	if _, err := damage.QueryVersion(c, 1, 1).Reply(); err != nil {
 		return nil, err
 	}
+	// MIT-SHM is optional. Registering an extension writes xgb's process-wide
+	// event tables, which every connection's reader consults, so it too
+	// precedes every event source.
+	sharedAvailable := shm.Init(c) == nil
 	setup := xproto.Setup(c)
 	screen := setup.DefaultScreen(c)
 	layout, ok := rootLayout(setup, screen)
@@ -481,6 +487,9 @@ func openFrames() (*frameEngine, error) {
 		return nil, err
 	}
 	e.damage = id
+	if sharedAvailable {
+		e.shared = openSharedImage(c)
+	}
 	go e.observe()
 	success = true
 	return e, nil
@@ -529,6 +538,7 @@ func (e *frameEngine) close() {
 	}
 	e.closed = true
 	if e.alive() {
+		e.shared.release(e.conn)
 		_ = damage.DestroyChecked(e.conn, e.damage).Check()
 		_ = xproto.DestroyWindowChecked(e.conn, e.window).Check()
 		e.conn.Close()
@@ -596,6 +606,7 @@ func (e *frameEngine) captureOnce(options captureOptions) (any, bool, error) {
 		return nil, false, unavailable()
 	}
 	if width != p.width || height != p.height {
+		p.retained = e.shared.buffer(e.conn, p.layout.stride(width)*height, p.retained)
 		p.resize(width, height)
 		bands := bandCount(height)
 		e.fetch, e.encode = make([]bool, bands), make([]bool, bands)
@@ -669,10 +680,31 @@ func (e *frameEngine) awaitMarker(serial uint32) bool {
 }
 
 // fetchBands reads every marked band into the retained framebuffer, one
-// pipelined request per run.
+// pipelined request per run. With shared memory the server writes the rows
+// into the retained framebuffer itself; otherwise they cross the socket.
 func (e *frameEngine) fetchBands() error {
 	p := &e.pipeline
 	runs := bandRuns(e.fetch, fetchGap)
+	if e.shared.holds(p.retained) {
+		cookies := make([]shm.GetImageCookie, len(runs))
+		for index, run := range runs {
+			top, bottom := bandRect(run[0], p.width, p.height).Min.Y, bandRect(run[1], p.width, p.height).Max.Y
+			cookies[index] = shm.GetImage(e.conn, xproto.Drawable(e.root), 0, int16(top), uint16(p.width), uint16(bottom-top), 0xffffffff, xproto.ImageFormatZPixmap, e.shared.segment, uint32(top*p.stride))
+		}
+		for index, cookie := range cookies {
+			reply, err := cookie.Reply()
+			if err != nil {
+				// Retry the capture over the socket; its pixels are the same.
+				e.shared.disable()
+				return err
+			}
+			top, bottom := bandRect(runs[index][0], p.width, p.height).Min.Y, bandRect(runs[index][1], p.width, p.height).Max.Y
+			if reply.Depth != p.layout.depth || reply.Visual != p.layout.visual.VisualId || int(reply.Size) != p.stride*(bottom-top) {
+				return unavailable()
+			}
+		}
+		return nil
+	}
 	cookies := make([]xproto.GetImageCookie, len(runs))
 	for index, run := range runs {
 		top, bottom := bandRect(run[0], p.width, p.height).Min.Y, bandRect(run[1], p.width, p.height).Max.Y

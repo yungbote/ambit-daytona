@@ -26,6 +26,8 @@ Stdio accepts one bounded JSON request per line, with a positive numeric `id` an
 
 The helper never replays effects. Validation failures record `operationPerformed:false`; unacknowledged input effects record `unknown`. Oversize clipboard transfer records that native Copy happened while refusing truncated output. Requests, text, clipboard contents and page pixels never enter diagnostics.
 
+Damaged rows are fetched through MIT-SHM into the retained framebuffer when the X server can attach the helper's segment (the helper's private Xvfb shares its IPC namespace and user); otherwise, and after any shared fetch fails, they cross the socket as `GetImage`, with the same pixels.
+
 The initial native image mode uses Chromium's real startup DPR 2, a maximum 4096×4096 physical display, and actual X11 geometry. This bounded mode does not prove arbitrary display-density or size parity. Activation requires exact driver/image qualification and integrated Product tests.
 
 One user paste stays one native paste. Splitting a paste into several Ctrl+V operations changes the clipboard while Chromium is processing earlier input and can duplicate later chunks. Selection transfer acknowledgment means bytes crossed the X11 boundary; it does not assert that an arbitrary page finished applying them. There is no sleep or automatic retry intended to manufacture that assertion.
