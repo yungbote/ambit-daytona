@@ -200,29 +200,35 @@ func encodeCursorPNG(source cursorPixels) []byte {
 // per capture: CursorNotify events, recorded by the frame observer, trigger
 // one GetCursorImageAndName round trip per new cursor object.
 type cursorTracker struct {
-	notified atomic.Uint64 // 1 + the newest notified serial; 0 before any
-	examined uint64        // the notified value the last fetch answered
-	known    bool
-	current  cursorIdentity
-	reported string // key of the identity last reported; "" before any
+	notified atomic.Uint64  // 1 + the newest notified serial; 0 before any
+	known    bool           // a fetch has answered
+	current  cursorIdentity // the cursor the last fetch found displayed
+	reported string         // key of the identity last reported; "" before any
 }
 
 func (t *cursorTracker) notify(serial uint32) { t.notified.Store(uint64(serial) + 1) }
 
-// begin issues the fetch a notification since the last one calls for, so its
-// reply can be collected beside a capture's other replies.
-func (t *cursorTracker) begin(c *xgb.Conn) (*xfixes.GetCursorImageAndNameCookie, uint64) {
-	pending := t.notified.Load()
-	if t.known && pending == t.examined {
-		return nil, pending
+// begin issues a fetch when the newest cursor the server announced is not the
+// one held, so its reply can be collected beside a capture's other replies.
+// The comparison is with the cursor the last fetch found, never with the
+// announcement that asked for it: the cursor can change while a fetch is in
+// flight, and the browser shows an earlier cursor again under its earlier
+// serial. With no announcement since the subscription, the cursor fetched is
+// still the one displayed.
+func (t *cursorTracker) begin(c *xgb.Conn) *xfixes.GetCursorImageAndNameCookie {
+	if t.known {
+		switch t.notified.Load() {
+		case 0, uint64(t.current.Serial) + 1:
+			return nil
+		}
 	}
 	cookie := xfixes.GetCursorImageAndName(c)
-	return &cookie, pending
+	return &cookie
 }
 
 // finish resolves a fetch. An X protocol error means no cursor is displayed;
 // the next capture asks again. Any other failure is the connection's.
-func (t *cursorTracker) finish(cookie *xfixes.GetCursorImageAndNameCookie, pending uint64) error {
+func (t *cursorTracker) finish(cookie *xfixes.GetCursorImageAndNameCookie) error {
 	if cookie == nil {
 		return nil
 	}
@@ -233,7 +239,6 @@ func (t *cursorTracker) finish(cookie *xfixes.GetCursorImageAndNameCookie, pendi
 		}
 		return err
 	}
-	t.examined = pending
 	if t.known && reply.CursorSerial == t.current.Serial {
 		return nil
 	}

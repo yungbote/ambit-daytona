@@ -740,8 +740,7 @@ func (e *frameEngine) identity(options captureOptions) (*cursorIdentity, error) 
 	if !options.identity {
 		return nil, nil
 	}
-	cookie, pending := e.cursor.begin(e.conn)
-	if err := e.cursor.finish(cookie, pending); err != nil {
+	if err := e.cursor.finish(e.cursor.begin(e.conn)); err != nil {
 		return nil, err
 	}
 	return e.cursor.unreported(), nil
@@ -759,9 +758,8 @@ func (e *frameEngine) captureOnce(options captureOptions) (any, bool, error) {
 		cursorCookie = xfixes.GetCursorImage(e.conn)
 	}
 	var identityCookie *xfixes.GetCursorImageAndNameCookie
-	var identityPending uint64
 	if options.identity {
-		identityCookie, identityPending = e.cursor.begin(e.conn)
+		identityCookie = e.cursor.begin(e.conn)
 	}
 	reply, err := geometry.Reply()
 	if err != nil {
@@ -782,7 +780,7 @@ func (e *frameEngine) captureOnce(options captureOptions) (any, bool, error) {
 	}
 	var identity *cursorIdentity
 	if options.identity {
-		if err := e.cursor.finish(identityCookie, identityPending); err != nil {
+		if err := e.cursor.finish(identityCookie); err != nil {
 			return nil, false, err
 		}
 		identity = e.cursor.unreported()

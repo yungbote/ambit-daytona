@@ -119,3 +119,16 @@ func TestCursorIdentityIsReportedOncePerObservableChange(t *testing.T) {
 		t.Fatal("a return to an earlier cursor was not reported")
 	}
 }
+
+// A capture fetches nothing while the newest announced cursor is the one held,
+// or while nothing was announced since the subscription.
+func TestCursorTrackerFetchesNothingForTheCursorItHolds(t *testing.T) {
+	tracker := cursorTracker{known: true, current: cursorIdentity{Serial: 7}}
+	if tracker.begin(nil) != nil {
+		t.Fatal("fetched with nothing announced")
+	}
+	tracker.notify(7)
+	if tracker.begin(nil) != nil {
+		t.Fatal("fetched the cursor held")
+	}
+}

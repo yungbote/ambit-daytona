@@ -48,6 +48,12 @@ func mustCall(t *testing.T, d *display, line string) map[string]any {
 
 func (p *painter) fontCursor(t *testing.T, glyph uint16) {
 	t.Helper()
+	p.useCursor(t, p.cursorFromFont(t, glyph))
+}
+
+// cursorFromFont creates one cursor object from the server's cursor font.
+func (p *painter) cursorFromFont(t *testing.T, glyph uint16) xproto.Cursor {
+	t.Helper()
 	font, err := xproto.NewFontId(p.conn)
 	if err != nil {
 		t.Fatal(err)
@@ -63,6 +69,13 @@ func (p *painter) fontCursor(t *testing.T, glyph uint16) {
 	if err := xproto.CreateGlyphCursorChecked(p.conn, cursor, font, font, glyph, glyph+1, 0, 0, 0, 0xffff, 0xffff, 0xffff).Check(); err != nil {
 		t.Fatal(err)
 	}
+	return cursor
+}
+
+// useCursor shows an existing cursor object again, with its own serial, as
+// the browser does when the pointer returns to an element.
+func (p *painter) useCursor(t *testing.T, cursor xproto.Cursor) {
+	t.Helper()
 	if err := xproto.ChangeWindowAttributesChecked(p.conn, p.root, xproto.CwCursor, []uint32{uint32(cursor)}).Check(); err != nil {
 		t.Fatal(err)
 	}
@@ -551,6 +564,81 @@ func TestXvfbCaptureWaitEndsWhereTheFrameIsRead(t *testing.T) {
 		if delay > 0 && wait < (delay-5*time.Millisecond).Microseconds() {
 			t.Fatalf("waitUs %d does not cover the %v wait", wait, delay)
 		}
+	}
+}
+
+func cursorCSS(reply map[string]any) any {
+	cursor, _ := reply["cursor"].(map[string]any)
+	if cursor == nil {
+		return nil
+	}
+	return cursor["css"]
+}
+
+// The displayed cursor is fetched whenever the newest one the server announced
+// is not the one the helper holds. A cursor that changed while its fetch was
+// in flight and then came back, with its earlier serial as the browser reuses
+// it, is reported again rather than left at the cursor that fetch found.
+func TestXvfbCursorIdentityFollowsACursorThatChangedDuringItsFetch(t *testing.T) {
+	startXvfb(t, 800, 600)
+	d, err := openDisplay(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.close()
+	page, grabber := newPainter(t), newPainter(t)
+	page.warp(t, 400, 300)
+	pointer, text, resize := page.cursorFromFont(t, 60), page.cursorFromFont(t, 152), page.cursorFromFont(t, 108)
+	tracker := &d.frames.cursor
+	announced := func(what string, done func(uint64) bool) uint64 {
+		t.Helper()
+		for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+			if value := tracker.notified.Load(); done(value) {
+				return value
+			}
+		}
+		t.Fatalf("the server never announced %s", what)
+		return 0
+	}
+	identity := `{"id":1,"op":"capture","cursor":false,"cursorIdentity":true,"waitMs":100}`
+	page.useCursor(t, pointer)
+	if reply := mustCall(t, d, identity); cursorCSS(reply) != "pointer" {
+		t.Fatalf("first identity: %v", reply["cursor"])
+	}
+	held := uint64(tracker.current.Serial) + 1
+	page.useCursor(t, text)
+	textAnnounced := announced("the text cursor", func(value uint64) bool { return value != 0 && value != held })
+	// The fetch the text cursor calls for waits behind a server grab while the
+	// cursor changes again, so it finds the resize cursor.
+	func() {
+		d.frames.mu.Lock()
+		defer d.frames.mu.Unlock()
+		if err := xproto.GrabServerChecked(grabber.conn).Check(); err != nil {
+			t.Fatal(err)
+		}
+		defer xproto.UngrabServer(grabber.conn)
+		cookie := tracker.begin(d.frames.conn)
+		if cookie == nil {
+			t.Fatal("no fetch for an announced cursor")
+		}
+		grabber.useCursor(t, resize)
+		if err := xproto.UngrabServerChecked(grabber.conn).Check(); err != nil {
+			t.Fatal(err)
+		}
+		if err := tracker.finish(cookie); err != nil {
+			t.Fatal(err)
+		}
+		tracker.delivered(tracker.unreported())
+	}()
+	if tracker.current.CSS == nil || *tracker.current.CSS != "ew-resize" {
+		t.Fatalf("the delayed fetch found %+v, not the cursor shown when it ran", tracker.current)
+	}
+	announced("the resize cursor", func(value uint64) bool { return value == uint64(tracker.current.Serial)+1 })
+	// The pointer returns to the text cursor's element: its serial again.
+	page.useCursor(t, text)
+	announced("the text cursor again", func(value uint64) bool { return value == textAnnounced })
+	if reply := mustCall(t, d, identity); cursorCSS(reply) != "text" {
+		t.Fatalf("the cursor shown again was not reported: %v", reply["cursor"])
 	}
 }
 
