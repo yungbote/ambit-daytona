@@ -139,6 +139,20 @@ inventory contract as the other Node environments. The installer checks both
 or add another runtime package path. The archive retains npm's bundled license
 and dependency notices. Include its exact `archiveName` in `browser_inputs`.
 
+The inherited base Python (CPython 3.11 at `/usr/local`, from the Daytona
+sandbox) is upgraded the same way, only where the lock says so. The component
+`python` declaration uses the requirement-lock contract of the other Python
+environments: `browser/locks/system-python-requirements.lock.txt` pins each
+distribution by version and wheel hash, and `python.wheels` names the exact
+wheels, which must be in `browser_inputs`. `python.replaces` names the
+inherited version each pin replaces; a parent that carries another version
+refuses the build until the entry is updated or removed. pip installs without
+an index, so dependencies must already be satisfied at `/usr/local`. The
+installer then requires every locked distribution once at its locked version,
+nothing else changed, and no new `pip check` problem. The installed lock and
+its requirement lock put those distributions in the image's executable
+inventory.
+
 The Playwright patch is generated, not edited by hand: it is the unified diff
 between the archive's `index.*` and `lib/coreBundle.js` files and the same files
 from an offline build of the release with the source change applied. The bundle

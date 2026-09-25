@@ -7,6 +7,7 @@ crate graph; source and Chrome archives are independently pinned by SHA-256.
 
 import copy
 import hashlib
+from importlib import metadata
 import json
 from pathlib import Path, PurePosixPath
 import re
@@ -21,6 +22,8 @@ import zipfile
 MATERIALIZER_LINEAGE = Path("/opt/ambit/runtime-base/workspace/lineage/materializer")
 TOOLCHAIN_LINEAGE = MATERIALIZER_LINEAGE.parent
 MATERIALIZER_BUILDER = "docker.io/library/golang@sha256:40dfc169bd5ad8a8617e49c8ead7fe16c6873e79d6937539e9c2e5947b7984ef"
+# The pin grammar inspect-executables.py reads from a Python requirement lock.
+PYTHON_PIN = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[A-Za-z0-9_,.-]+\])?==([^\s;\\]+)", re.MULTILINE)
 
 
 def verify_input(artifact, inputs=Path("/inputs")):
@@ -247,6 +250,80 @@ def install_playwright(lock, scratch, source, inputs=Path("/inputs")):
     subprocess.run(apply, check=True)
 
 
+def python_name(name):
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def python_distributions(environment):
+    """Every distribution in one environment's site-packages, by normalized name."""
+    sites = sorted(Path(environment).glob("lib/python*/site-packages"))
+    if len(sites) != 1:
+        raise ValueError(f"Python environment has no single site-packages: {environment}")
+    observed = {}
+    for distribution in metadata.distributions(path=[str(sites[0])]):
+        observed.setdefault(python_name(distribution.metadata["Name"]), []).append(distribution.version)
+    return {name: sorted(versions) for name, versions in observed.items()}
+
+
+def install_python(lock, scratch, source, inputs=Path("/inputs")):
+    """Upgrade exactly the locked distributions of the inherited Python environment.
+
+    The requirement lock pins each distribution by version and wheel hash; the
+    wheels arrive as verified inputs. Each pin names the inherited version it
+    replaces, so a parent that moved refuses the build instead of being silently
+    downgraded. pip installs without an index, so a dependency the environment
+    does not already satisfy fails the build instead of being fetched. Afterwards
+    each locked distribution is installed once at its locked version, nothing
+    else has changed, and `pip check` reports no problem it did not report
+    before. Returns the verified requirement lock.
+    """
+    python = lock["python"]
+    relative = PurePosixPath(python["requirements"])
+    if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+        raise ValueError("Python requirement lock must be a file in the browser image source")
+    requirements = source / relative
+    content = requirements.read_bytes()
+    if hashlib.sha256(content).hexdigest() != python["requirementsSha256"]:
+        raise ValueError("Python requirement lock differs from the browser lock")
+    pins = {python_name(name): version for name, version in PYTHON_PIN.findall(content.decode())}
+    wheels = {
+        (python_name(wheel["archiveName"].split("-")[0]), wheel["archiveName"].split("-")[1])
+        for wheel in python["wheels"]
+    }
+    if not pins or len(python["wheels"]) != len(pins) or wheels != set(pins.items()):
+        raise ValueError("Each locked Python distribution needs exactly its own locked wheel")
+    replaced = {python_name(name): version for name, version in python["replaces"].items()}
+    if replaced.keys() != pins.keys():
+        raise ValueError("Each locked Python distribution must name the inherited version it replaces")
+    environment = Path(python["venv"])
+    pip = [str(environment / "bin/python3"), "-m", "pip"]
+    offline = scratch / "python-wheels"
+    offline.mkdir()
+    for wheel in python["wheels"]:
+        shutil.copyfile(verify_input(wheel, inputs), offline / wheel["archiveName"])
+
+    def problems():
+        check = subprocess.run([*pip, "check"], capture_output=True, text=True)
+        return set() if check.returncode == 0 else set(check.stdout.splitlines())
+
+    before = python_distributions(environment)
+    if any(before.get(name) != [version] for name, version in replaced.items()):
+        raise ValueError("Inherited Python distributions differ from the versions the lock replaces")
+    known = problems()
+    subprocess.run([
+        *pip, "install", "--no-index", "--find-links", str(offline), "--require-hashes",
+        "--no-cache-dir", "--disable-pip-version-check", "--no-input",
+        "--root-user-action=ignore", "--requirement", str(requirements),
+    ], check=True)
+    after = python_distributions(environment)
+    changed = {name for name in before.keys() | after.keys() if before.get(name) != after.get(name)}
+    if changed != pins.keys() or any(after.get(name) != [version] for name, version in pins.items()):
+        raise ValueError("Inherited Python environment differs from its locked distributions")
+    if introduced := problems() - known:
+        raise ValueError("Locked Python distributions break installed requirements: " + "; ".join(sorted(introduced)))
+    return requirements
+
+
 def record_toolchain_update(source, target, lineage=TOOLCHAIN_LINEAGE):
     for name, expected in target["debian"]["packages"].items():
         observed = subprocess.check_output(["dpkg-query", "-W", "-f=${Version}", name], text=True)
@@ -282,7 +359,7 @@ def prepare_browser_component(root, mode, lock):
     if mode == "driver" and root.exists():
         shutil.rmtree(root)
     elif mode == "chrome":
-        for owned in ("bin", "runtime", "licenses"):
+        for owned in ("bin", "runtime", "licenses", "locks"):
             if (root / owned).exists():
                 shutil.rmtree(root / owned)
         (root / "Cargo.lock").unlink(missing_ok=True)
@@ -360,6 +437,7 @@ def main():
             install_debian_packages(debian, scratch)
             install_npm(lock, scratch)
             install_playwright(lock, scratch, Path(lock_path).parent)
+            requirements = install_python(lock, scratch, Path(lock_path).parent) if "python" in lock else None
             record_toolchain_update(source_toolchains, target_toolchains)
             if not reuse_chrome:
                 archive = verify_input(lock["chrome"])
@@ -375,6 +453,11 @@ def main():
                 raise ValueError(f"Unexpected Chrome version: {observed}")
             installed = subprocess.check_output(["dpkg-query", "-W", "-f=${Package}\t${Version}\n"], text=True)
             (root / "installed-dpkg.lock").write_text("\n".join(sorted(installed.splitlines())) + "\n")
+            if requirements is not None:
+                # The installed lock names its requirement lock relative to itself.
+                installed_requirements = root / lock["python"]["requirements"]
+                installed_requirements.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(requirements, installed_requirements)
         else:
             raise ValueError("Unknown browser install mode")
     shutil.copy2(lock_path, root / "browser.lock.json")

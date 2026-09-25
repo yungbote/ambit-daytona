@@ -102,5 +102,20 @@
       "path": "patches/playwright-core-1.62.1-context-adoption.patch",
       "sha256": "5cce8cf41c14da714bc899f82579e768bfa250ad61d6544d9bc9271bb0bbef60"
     }
+  },
+  "python": {
+    "venv": "/usr/local",
+    "requirements": "locks/system-python-requirements.lock.txt",
+    "requirementsSha256": "14d3371dfcd2c4043dbf6a0015b7fcdae87104722ee5d7abc526b9c6e66887b6",
+    "replaces": {
+      "anyio": "4.12.1"
+    },
+    "wheels": [
+      {
+        "url": "https://files.pythonhosted.org/packages/da/35/f2287558c17e29fafc8ef3daf819bb9834061cfa43bff8014f7df7f63bdc/anyio-4.14.2-py3-none-any.whl",
+        "archiveName": "anyio-4.14.2-py3-none-any.whl",
+        "sha256": "9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494"
+      }
+    ]
   }
 }

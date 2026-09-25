@@ -1,0 +1,14 @@
+#
+# Inherited base Python: locked distribution upgrades.
+#
+# The pinned Daytona slim sandbox ships CPython 3.11.14 at /usr/local with its
+# own packages. build/install-browser.py upgrades exactly the distributions
+# below in that environment, offline, from the wheels browser.lock.json names
+# under python.wheels. Their dependencies must already be satisfied there:
+# pip resolves without an index, so a missing one fails the build instead of
+# being fetched.
+#
+anyio==4.14.2 \
+    --hash=sha256:9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494
+    # CVE-2026-63374 in the inherited 4.12.1. Requires idna>=2.8 and
+    # typing_extensions>=4.5, both already installed at /usr/local.

@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import shutil
 import stat
 import subprocess
 import tarfile
@@ -527,6 +528,119 @@ class PlaywrightInstallationTests(unittest.TestCase):
         self.assertEqual(self.package_files(), patched)
 
 
+class PythonInstallationTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.environment = self.root / "usr-local"
+        self.site = self.environment / "lib/python3.11/site-packages"
+        for name, version in (("anyio", "4.12.1"), ("idna", "3.11")):
+            self.distribution(name, version)
+        wheel = self.root / "anyio-4.14.2-py3-none-any.whl"
+        wheel.write_bytes(b"fixture wheel")
+        digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
+        # The lock names its requirement lock relative to the lock's own directory.
+        self.source = self.root / "source"
+        self.requirements = self.source / "locks/system-python-requirements.lock.txt"
+        self.requirements.parent.mkdir(parents=True)
+        self.requirements.write_text(f"# fixture\nanyio==4.14.2 \\\n    --hash=sha256:{digest}\n")
+        self.lock = {"python": {
+            "venv": str(self.environment),
+            "requirements": "locks/system-python-requirements.lock.txt",
+            "requirementsSha256": hashlib.sha256(self.requirements.read_bytes()).hexdigest(),
+            "replaces": {"anyio": "4.12.1"},
+            "wheels": [{"archiveName": wheel.name, "sha256": digest}],
+        }}
+        self.scratch = self.root / "scratch"
+        self.scratch.mkdir()
+
+    def distribution(self, name, version):
+        metadata = self.site / f"{name}-{version}.dist-info"
+        metadata.mkdir(parents=True)
+        (metadata / "METADATA").write_text(f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n")
+
+    def pip(self, changes=(), before=(), after=()):
+        """Stand in for the inherited interpreter's pip: install applies `changes`;
+        check reports `before` until the install ran and `after` from then on."""
+        calls = []
+
+        def run(command, **options):
+            calls.append(command)
+            if command[3] == "install":
+                for name, old, new in changes:
+                    shutil.rmtree(self.site / f"{name}-{old}.dist-info")
+                    self.distribution(name, new)
+                return subprocess.CompletedProcess(command, 0)
+            problems = after if any(call[3] == "install" for call in calls) else before
+            output = "".join(f"{line}\n" for line in problems) or "No broken requirements found.\n"
+            return subprocess.CompletedProcess(command, 1 if problems else 0, stdout=output)
+
+        return run, calls
+
+    def install(self, run, lock=None):
+        with patch.object(installer.subprocess, "run", side_effect=run):
+            return installer.install_python(lock or self.lock, self.scratch, self.source, self.root)
+
+    def test_locked_wheels_replace_exactly_their_inherited_versions_offline(self):
+        run, calls = self.pip(changes=[("anyio", "4.12.1", "4.14.2")])
+        self.assertEqual(self.install(run), self.requirements)
+        self.assertEqual([call[3] for call in calls], ["check", "install", "check"])
+        install = calls[1]
+        self.assertEqual(install[:4], [str(self.environment / "bin/python3"), "-m", "pip", "install"])
+        for option in ("--no-index", "--require-hashes", "--no-cache-dir"):
+            self.assertIn(option, install)
+        offline = Path(install[install.index("--find-links") + 1])
+        self.assertEqual([path.name for path in offline.iterdir()], ["anyio-4.14.2-py3-none-any.whl"])
+        self.assertEqual(install[install.index("--requirement") + 1], str(self.requirements))
+        self.assertEqual(
+            installer.python_distributions(self.environment),
+            {"anyio": ["4.14.2"], "idna": ["3.11"]},
+        )
+
+    def test_changed_or_disagreeing_inputs_are_refused_before_pip_runs(self):
+        cases = {
+            "requirement lock": lambda lock: lock["python"].update(requirementsSha256="0" * 64),
+            "wheel bytes": lambda lock: lock["python"]["wheels"][0].update(sha256="0" * 64),
+            "wheel for another version": lambda lock: lock["python"]["wheels"][0].update(
+                archiveName="anyio-4.14.1-py3-none-any.whl"),
+            "no replaced version": lambda lock: lock["python"].update(replaces={}),
+            "requirement lock outside the source": lambda lock: lock["python"].update(
+                requirements="../system-python-requirements.lock.txt"),
+        }
+        for name, change in cases.items():
+            with self.subTest(name):
+                lock = copy.deepcopy(self.lock)
+                change(lock)
+                run, calls = self.pip(changes=[("anyio", "4.12.1", "4.14.2")])
+                with self.assertRaises(ValueError):
+                    self.install(run, lock)
+                self.assertEqual(calls, [])
+
+    def test_a_parent_that_moved_is_refused_rather_than_downgraded(self):
+        shutil.rmtree(self.site / "anyio-4.12.1.dist-info")
+        self.distribution("anyio", "4.15.0")
+        run, calls = self.pip(changes=[("anyio", "4.15.0", "4.14.2")])
+        with self.assertRaisesRegex(ValueError, "versions the lock replaces"):
+            self.install(run)
+        self.assertEqual(calls, [])
+
+    def test_changes_beyond_the_lock_fail_the_build(self):
+        run, _ = self.pip(changes=[("anyio", "4.12.1", "4.14.2"), ("idna", "3.11", "3.12")])
+        with self.assertRaisesRegex(ValueError, "differs from its locked distributions"):
+            self.install(run)
+
+    def test_a_new_dependency_problem_fails_but_an_inherited_one_does_not(self):
+        broken = "daytona 0.22.0 has requirement anyio<4.13, but you have anyio 4.14.2."
+        run, _ = self.pip(changes=[("anyio", "4.12.1", "4.14.2")], after=[broken])
+        with self.assertRaisesRegex(ValueError, "break installed requirements"):
+            self.install(run)
+        self.setUp()
+        inherited = "fixture 1.0 requires missing-library, which is not installed."
+        run, _ = self.pip(changes=[("anyio", "4.12.1", "4.14.2")], before=[inherited], after=[inherited])
+        self.assertEqual(self.install(run), self.requirements)
+
+
 class BrowserComponentUpdateTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -537,7 +651,7 @@ class BrowserComponentUpdateTests(unittest.TestCase):
         self.lock = {"chrome": {"version": "152.0.7977.82", "sha256": "exact-archive"}}
         self.previous = json.dumps(self.lock).encode()
         (self.root / "browser.lock.json").write_bytes(self.previous)
-        for directory in ("chrome", "bin", "runtime", "licenses"):
+        for directory in ("chrome", "bin", "runtime", "licenses", "locks"):
             (self.root / directory).mkdir()
             (self.root / directory / "old-file").write_text(directory)
         (self.root / "Cargo.lock").write_text("old dependency graph")
@@ -546,7 +660,7 @@ class BrowserComponentUpdateTests(unittest.TestCase):
     def test_exact_chrome_parent_reused_while_obsolete_driver_files_are_pruned(self):
         self.assertTrue(installer.prepare_browser_component(self.root, "chrome", self.lock))
         self.assertEqual((self.root / "chrome/old-file").read_text(), "chrome")
-        for removed in ("bin", "runtime", "licenses", "Cargo.lock"):
+        for removed in ("bin", "runtime", "licenses", "locks", "Cargo.lock"):
             self.assertFalse((self.root / removed).exists(), removed)
         self.assertEqual((self.root / "parent-browser.lock.json").read_bytes(), self.previous)
         self.assertEqual((self.parent / "unrelated-toolchain").read_text(), "preserved")

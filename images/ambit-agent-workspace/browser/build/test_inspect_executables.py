@@ -134,6 +134,24 @@ class InventoryTests(unittest.TestCase):
             {"name": "markitdown", "version": "0.1.5"},
         ])
 
+    def test_component_python_may_pin_an_inherited_environment_by_absolute_root(self):
+        # The browser lock pins upgraded distributions of the inherited base Python
+        # (/usr/local): an absolute environment root and a requirement lock of its own.
+        self.python_environment(self.root / "inherited", {"anyio": "4.14.2", "unlocked-library": "1.0"}, {})
+        browser = self.root / "browser"
+        requirements = browser / "locks/system-python-requirements.lock.txt"
+        requirements.parent.mkdir(parents=True)
+        requirements.write_text("anyio==4.14.2 \\\n    --hash=sha256:" + "0" * 64 + "\n")
+        path = self.component(browser, {"python": {
+            "venv": str(self.root / "inherited/python"),
+            "requirements": "locks/system-python-requirements.lock.txt",
+            "requirementsSha256": hashlib.sha256(requirements.read_bytes()).hexdigest(),
+        }})
+        observed = inventory.collect_executables([path])
+        group = next(g for g in observed["libraries"] if g["root"] == str(self.root / "inherited/python"))
+        self.assertEqual(group["interpreter"], str(self.root / "inherited/python/bin/python3"))
+        self.assertEqual(group["packages"], [{"name": "anyio", "version": "4.14.2"}])
+
     def test_multiple_component_locks_and_repeated_environment_are_deterministic(self):
         first = self.component(self.root / "first", {"executables": []})
         root = self.root / "second"
