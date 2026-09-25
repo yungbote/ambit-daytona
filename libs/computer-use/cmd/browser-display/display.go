@@ -63,9 +63,10 @@ type displayInfo struct {
 
 // A size-class framebuffer is the window rounded up to whole steps, so a dock
 // resize inside the class changes only the output mode and the window. It
-// grows at once and shrinks only when a resize finds it at least two steps
-// larger than needed and unchanged for sizeClassSettle, so a drag never
-// reallocates it on every step.
+// grows at once when the window no longer fits and shrinks only when a resize
+// finds it at least two steps larger than needed and unchanged for
+// sizeClassSettle, so a drag never reallocates it on every step. A framebuffer
+// that holds the window stays, whether or not it is a whole class.
 const sizeClassStep = 256
 const sizeClassSettle = 10 * time.Second
 
@@ -78,7 +79,7 @@ func sizeClass(value, limit int) int {
 func framebufferFor(width, height, currentWidth, currentHeight, limitWidth, limitHeight int, settled bool) (int, int) {
 	pick := func(value, current, limit int) int {
 		class := sizeClass(value, limit)
-		if class > current || (settled && current-class >= 2*sizeClassStep) {
+		if value > current || (settled && current-class >= 2*sizeClassStep) {
 			return class
 		}
 		return min(current, limit)
