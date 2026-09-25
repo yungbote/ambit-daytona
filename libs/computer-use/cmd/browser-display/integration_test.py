@@ -73,7 +73,8 @@ with tempfile.TemporaryDirectory(prefix='browser-helper-proof-') as temp:
             raise RuntimeError(str(value.get('error')))
         return value['data']
     try:
-        cli('open', 'data:text/html,<meta charset=utf-8><title>Native display proof</title><style>body{font:16px sans-serif;background:white}textarea{width:90%;height:250px}</style><p id=marker>Native 16px text</p><textarea id=t></textarea><input id=password type=password value=PRIVATE_TEST_SENTINEL>')
+        proof_page = 'data:text/html,<meta charset=utf-8><title>Native display proof</title><style>body{font:16px sans-serif;background:white}textarea{width:90%;height:250px}</style><p id=marker>Native 16px text</p><textarea id=t></textarea><input id=password type=password value=PRIVATE_TEST_SENTINEL>'
+        cli('open', proof_page)
         daemon = int(next(root.rglob('browser.pid')).read_text())
         children = {pid for task in Path(f'/proc/{daemon}/task').iterdir() for pid in (task / 'children').read_text().split()}
         chrome = next((int(pid) for pid in children if Path(f'/proc/{pid}/exe').resolve() == Path(CHROME)))
@@ -112,6 +113,77 @@ with tempfile.TemporaryDirectory(prefix='browser-helper-proof-') as temp:
             recovered = call('resize', width=1580, height=1240, windowId=window)
             assert recovered['width'] == 1580 and recovered['height'] == 1240
             receipts['paintRecovery'] = {'first':first_pending['operationPerformed'], 'sameSize':same_pending['operationPerformed'], 'newer':newer_pending['operationPerformed'], 'recovered':True}
+        # Size class: a dock drag lays out only the output mode and the window
+        # inside a framebuffer that stays put; Chromium's screen still equals
+        # the window, and each layout's first frame is the painted geometry.
+        receipts['sizeClass'] = []
+        drag = [(1418, 1888)] + [(1418 - 16 * step, 1888) for step in range(1, 13)] + [(1226, 1888 - 16 * step) for step in range(1, 13)] + [(1600, 1700), (1418, 1888)]
+        framebuffer, reallocated = None, time.monotonic()
+        for width, height in drag:
+            started = time.monotonic()
+            info = call('resize', width=width, height=height, windowId=window, sizeClass=True)
+            laid = time.monotonic()
+            frame = call('capture', cursor=False, waitMs=250)
+            framed = time.monotonic()
+            fw, fh = info['width'], info['height']
+            assert fw >= width and fh >= height, info
+            # Inside the framebuffer, and before it could settle smaller, a
+            # step changes only the mode and the window.
+            if framebuffer and width <= framebuffer[0] and height <= framebuffer[1] and started - reallocated < 10:
+                assert (fw, fh) == framebuffer, {'window': (width, height), 'was': framebuffer, 'now': (fw, fh)}
+            if (fw, fh) != framebuffer:
+                framebuffer, reallocated = (fw, fh), laid
+            placed = next(w for w in info['windows'] if w['id'] == window)
+            assert (placed['x'], placed['y'], placed['width'], placed['height']) == (0, 0, width, height), placed
+            assert frame['changed'] and (frame['width'], frame['height']) == (fw, fh), {k: v for k, v in frame.items() if k != 'data'}
+            assert frame.get('visible') == ({'x': 0, 'y': 0, 'width': width, 'height': height} if (fw, fh) != (width, height) else None), frame.get('visible')
+            state = cli('eval', '({width:innerWidth,dpr:devicePixelRatio,screenWidth:screen.width,screenHeight:screen.height})')['result']
+            assert state['width'] == width / 2 and state['screenWidth'] == width / 2 and state['screenHeight'] == height / 2, state
+            receipts['sizeClass'].append({'window': [width, height], 'framebuffer': [fw, fh], 'layoutMs': round((laid - started) * 1000, 1), 'frameMs': round((framed - laid) * 1000, 1), 'frameBytes': len(frame.get('data') or '') * 3 // 4})
+        (OUT / 'size-class.jpeg').write_bytes(base64.b64decode(frame['data']))
+        receipts['exactLayout'] = []
+        for width, height in drag[:13]:
+            started = time.monotonic()
+            call('resize', width=width, height=height, windowId=window)
+            receipts['exactLayout'].append({'window': [width, height], 'layoutMs': round((time.monotonic() - started) * 1000, 1)})
+        # Cursor identity: the pinned Chromium draws each CSS cursor keyword from
+        # the X server's cursor font, and cursor.go names those images. Every
+        # keyword is hovered through native input and must answer exactly its
+        # class's keyword; a page's own cursor must travel as its image.
+        keywords = ['auto', 'default', 'none', 'context-menu', 'help', 'pointer', 'progress', 'wait', 'cell', 'crosshair', 'text', 'vertical-text', 'alias', 'copy', 'move', 'no-drop', 'not-allowed', 'grab', 'grabbing', 'all-scroll', 'col-resize', 'row-resize', 'n-resize', 'e-resize', 's-resize', 'w-resize', 'ne-resize', 'nw-resize', 'se-resize', 'sw-resize', 'ew-resize', 'ns-resize', 'nesw-resize', 'nwse-resize', 'zoom-in', 'zoom-out']
+        expected = {'auto': 'default', 'wait': 'progress', 'grabbing': 'pointer', 'all-scroll': 'move', 'col-resize': 'ew-resize', 'row-resize': 'ns-resize'}
+        for keyword in ['context-menu', 'help', 'vertical-text', 'alias', 'copy', 'no-drop', 'not-allowed', 'nesw-resize', 'nwse-resize', 'zoom-in', 'zoom-out']:
+            expected[keyword] = 'default'
+        custom = "url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2224%22 height=%2224%22><circle cx=%2212%22 cy=%2212%22 r=%2210%22 fill=%22red%22/></svg>') 12 12, auto"
+        cells = ''.join(f'<div id="k-{k}" style="cursor:{k};width:100px;height:60px;float:left"></div>' for k in keywords) + f'<div id="k-custom" style="cursor:{custom};width:100px;height:60px;float:left"></div>'
+        cli('open', 'data:text/html;charset=utf-8,' + urllib.parse.quote('<body style="margin:0">' + cells))
+        call('resize', width=1560, height=1200, windowId=window)
+        # The page's own hit test names the cell under the native pointer.
+        cli('eval', "window.over=null;document.addEventListener('mouseover',e=>{over=e.target.id})")
+        centres = cli('eval', "Object.fromEntries([...document.querySelectorAll('[id^=k-]')].map(e=>{const r=e.getBoundingClientRect();return [e.id.slice(2),[Math.round((r.x+r.width/2)*devicePixelRatio),Math.round((outerHeight-innerHeight+r.y+r.height/2)*devicePixelRatio)]]}))")['result']
+        receipts['cursor'] = {}
+        reported = None
+        for keyword in keywords + ['custom']:
+            x, y = centres[keyword]
+            call('input', events=[dict(type='input_mouse', eventType='mouseMoved', x=x, y=y)])
+            want = expected.get(keyword, keyword)
+            def matches():
+                if reported is None:
+                    return False
+                if keyword == 'custom':
+                    image = reported.get('image')
+                    return reported['css'] is None and bool(image) and image['scale'] == 2 and (image['width'], image['height'], image['hotX'], image['hotY']) == (48, 48, 24, 24)
+                return reported['css'] == want
+            for attempt in range(8):
+                reply = call('capture', cursor=False, cursorIdentity=True, waitMs=250)
+                if reply.get('cursor'):
+                    reported = reply['cursor']
+                if matches():
+                    break
+            hovered = cli('eval', 'over')['result']
+            assert hovered == 'k-' + keyword and matches(), {'keyword': keyword, 'hovered': hovered, 'expected': want, 'reported': reported and {k: v for k, v in reported.items() if k != 'image'}}
+            receipts['cursor'][keyword] = {k: v for k, v in reported['image'].items() if k != 'png'} if keyword == 'custom' else reported['css']
+        cli('open', proof_page)
         if os.environ.get('AMBIT_DISPLAY_TEST_PAINT_ONLY') == '1':
             call('close')
             helper.wait(5)
@@ -256,43 +328,6 @@ with tempfile.TemporaryDirectory(prefix='browser-helper-proof-') as temp:
                     key, value = line.split(':', 1)
                     memory[key] = value.strip()
             receipts['captureEnvelope'].append({'width': width, 'height': height, 'samplesMs': samples, 'helperMemory': memory})
-        # Cursor identity: the pinned Chromium draws each CSS cursor keyword from
-        # the X server's cursor font, and cursor.go names those images. Every
-        # keyword is hovered through native input and must answer exactly its
-        # class's keyword; a page's own cursor must travel as its image.
-        keywords = ['auto', 'default', 'none', 'context-menu', 'help', 'pointer', 'progress', 'wait', 'cell', 'crosshair', 'text', 'vertical-text', 'alias', 'copy', 'move', 'no-drop', 'not-allowed', 'grab', 'grabbing', 'all-scroll', 'col-resize', 'row-resize', 'n-resize', 'e-resize', 's-resize', 'w-resize', 'ne-resize', 'nw-resize', 'se-resize', 'sw-resize', 'ew-resize', 'ns-resize', 'nesw-resize', 'nwse-resize', 'zoom-in', 'zoom-out']
-        expected = {'auto': 'default', 'wait': 'progress', 'grabbing': 'pointer', 'all-scroll': 'move', 'col-resize': 'ew-resize', 'row-resize': 'ns-resize'}
-        for keyword in ['context-menu', 'help', 'vertical-text', 'alias', 'copy', 'no-drop', 'not-allowed', 'nesw-resize', 'nwse-resize', 'zoom-in', 'zoom-out']:
-            expected[keyword] = 'default'
-        custom = "url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2224%22 height=%2224%22><circle cx=%2212%22 cy=%2212%22 r=%2210%22 fill=%22red%22/></svg>') 12 12, auto"
-        cells = ''.join(f'<div id="k-{k}" style="cursor:{k};width:100px;height:60px;float:left"></div>' for k in keywords) + f'<div id="k-custom" style="cursor:{custom};width:100px;height:60px;float:left"></div>'
-        cli('open', 'data:text/html;charset=utf-8,' + urllib.parse.quote('<body style="margin:0">' + cells))
-        call('resize', width=1560, height=1200, windowId=window)
-        # The page's own hit test names the cell under the native pointer.
-        cli('eval', "window.over=null;document.addEventListener('mouseover',e=>{over=e.target.id})")
-        centres = cli('eval', "Object.fromEntries([...document.querySelectorAll('[id^=k-]')].map(e=>{const r=e.getBoundingClientRect();return [e.id.slice(2),[Math.round((r.x+r.width/2)*devicePixelRatio),Math.round((outerHeight-innerHeight+r.y+r.height/2)*devicePixelRatio)]]}))")['result']
-        receipts['cursor'] = {}
-        reported = None
-        for keyword in keywords + ['custom']:
-            x, y = centres[keyword]
-            call('input', events=[dict(type='input_mouse', eventType='mouseMoved', x=x, y=y)])
-            want = expected.get(keyword, keyword)
-            def matches():
-                if reported is None:
-                    return False
-                if keyword == 'custom':
-                    image = reported.get('image')
-                    return reported['css'] is None and bool(image) and image['scale'] == 2 and (image['width'], image['height'], image['hotX'], image['hotY']) == (48, 48, 24, 24)
-                return reported['css'] == want
-            for attempt in range(8):
-                reply = call('capture', cursor=False, cursorIdentity=True, waitMs=250)
-                if reply.get('cursor'):
-                    reported = reply['cursor']
-                if matches():
-                    break
-            hovered = cli('eval', 'over')['result']
-            assert hovered == 'k-' + keyword and matches(), {'keyword': keyword, 'hovered': hovered, 'expected': want, 'reported': reported and {k: v for k, v in reported.items() if k != 'image'}}
-            receipts['cursor'][keyword] = {k: v for k, v in reported['image'].items() if k != 'png'} if keyword == 'custom' else reported['css']
         call('close')
         helper.wait(5)
         receipts['helperExit'] = helper.returncode
