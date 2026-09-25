@@ -20,6 +20,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 // Real native session, driver, private X11 helper and Chrome. These assertions
@@ -221,14 +223,43 @@ func TestRealBrowserWindowGeometryInputAndHandoff(t *testing.T) {
 	if duplicate := control(input, http.StatusOK); duplicate["status"] != "duplicate" {
 		t.Fatalf("input replay: %v", duplicate)
 	}
+	// The control channel pipelines: every key leaves before any reply is
+	// read, and the real driver applies and answers them once each, in order.
+	channel, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+path+"/control/channel", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const pipelined = "pipelinedkeys"
+	started = time.Now()
+	for index, letter := range pipelined {
+		key := string(letter)
+		code := "Key" + strings.ToUpper(key)
+		if err := channel.WriteJSON(map[string]any{"op": "input", "controllerId": browserFixtureController, "sequence": 3 + index,
+			"expectedSurfaceGeneration": input["expectedSurfaceGeneration"], "events": []map[string]any{
+				{"type": "input_keyboard", "eventType": "keyDown", "key": key, "text": key, "code": code},
+				{"type": "input_keyboard", "eventType": "keyUp", "key": key, "code": code}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for index := range len(pipelined) {
+		var reply struct {
+			OK     bool           `json:"ok"`
+			Result map[string]any `json:"result"`
+		}
+		if err := channel.ReadJSON(&reply); err != nil || !reply.OK || reply.Result["status"] != "applied" || reply.Result["lastSequence"] != float64(3+index) {
+			t.Fatalf("pipelined reply %d: %v %+v", index, err, reply)
+		}
+	}
+	t.Logf("pipelined control channel: %d one-key commands answered in order in %s", len(pipelined), time.Since(started))
+	_ = channel.Close()
 	control(map[string]any{"op": "release", "controllerId": browserFixtureController}, http.StatusOK)
 	if refresh := cli(false, "get", "title"); refresh["code"] != "browser_observation_required" {
 		t.Fatalf("missing handoff observation: %v", refresh)
 	}
 	cli(true, "snapshot")
 	value := cli(true, "get", "value", "textarea")["data"].(map[string]any)["value"]
-	if value != paste {
-		t.Fatalf("atomic Unicode paste did not survive native handoff: got %d bytes", len(fmt.Sprint(value)))
+	if value != paste+pipelined {
+		t.Fatalf("atomic Unicode paste and pipelined keys did not survive native handoff: got %d bytes", len(fmt.Sprint(value)))
 	}
 	// The native tab strip changes focus without calling the driver's tab
 	// selection primitive. The following snapshot must follow actual focus.
