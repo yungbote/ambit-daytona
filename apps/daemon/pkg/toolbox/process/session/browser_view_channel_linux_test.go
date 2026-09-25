@@ -34,7 +34,10 @@ func serveBrowserViewChannelFixture(w http.ResponseWriter, r *http.Request, dir,
 	if observer {
 		validPresentation = query.Get("maxFps") == "10" && !query.Has("width") && !query.Has("height") && r.Header.Get("X-Ambit-Browser-Viewer") == ""
 	}
-	if query.Get("pacing") != "ack" || query.Get("patches") != "1" || !validPresentation {
+	// Only a viewer that declared it draws the pointer reaches the driver with
+	// cursor=viewer, and then exactly so.
+	pointer := mode == "view-channel-pointer"
+	if query.Get("pacing") != "ack" || query.Get("patches") != "1" || !validPresentation || query.Has("cursor") != pointer || (pointer && query.Get("cursor") != "viewer") {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -51,6 +54,13 @@ func serveBrowserViewChannelFixture(w http.ResponseWriter, r *http.Request, dir,
 	binaryFrames := query.Get("frames") == "binary"
 	_ = connection.WriteJSON(map[string]any{"type": "status", "connected": true, "screencasting": true, "private": browserFixtureSecret})
 	_ = connection.WriteJSON(map[string]any{"type": "console", "text": browserFixtureSecret})
+	if pointer {
+		// A files doorbell and a cursor record, each with a field that must
+		// not travel; a doorbell without its clock does not travel at all.
+		_ = connection.WriteJSON(map[string]any{"type": "files", "ts": 1234567, "path": browserFixtureSecret})
+		_ = connection.WriteJSON(map[string]any{"type": "files"})
+		_ = connection.WriteJSON(map[string]any{"type": "cursor", "ts": 1234568, "serial": 17, "css": "text", "private": browserFixtureSecret})
+	}
 	if mode == "view-channel-legacy-binary" || mode == "view-channel-malformed-legacy-binary" {
 		header, payload := browserFixtureFrame(false)
 		delete(header, "surface")
@@ -366,6 +376,37 @@ func TestBrowserViewerChannelObserverHasNoPresentationAuthority(t *testing.T) {
 	readViewerFrame(t, channel, true)
 	sendFrame(t, channel, map[string]any{"type": "presentation", "width": 400, "height": 300})
 	expectClose(t, channel, websocket.ClosePolicyViolation, "browser_view_invalid_message", 5*time.Second)
+}
+
+// A viewer that draws the pointer itself declares so on its upgrade, and the
+// declaration reaches the driver as it was made; any other value is invalid.
+// The driver's files doorbell and cursor records reach the viewer as their
+// bounded projections, and a doorbell without its clock does not.
+func TestBrowserViewerChannelRelaysThePointerDeclarationDoorbellsAndCursors(t *testing.T) {
+	workspace := newBrowserWorkspace(t)
+	workspace.open(t, "viewer-owner")
+	workspace.runDriver(t, "viewer-owner", "primary", "view-channel-pointer")
+	id, _ := workspace.only(t, "viewer-owner", "primary")
+	address := browserViewerAddress(workspace.serve(t), "viewer-owner", id) + "?width=320&height=240&frames=binary"
+	headers := http.Header{"X-Ambit-Browser-Viewer": []string{browserFixtureViewer}}
+	if _, response, err := websocket.DefaultDialer.Dial(address+"&cursor=hidden", headers); err == nil || response == nil || response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("an unknown pointer declaration was accepted: %v %v", err, response)
+	}
+	channel, _, err := websocket.DefaultDialer.Dial(address+"&cursor=viewer", headers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer channel.Close()
+	if readViewerText(t, channel)["type"] != "status" {
+		t.Fatal("initial state missing")
+	}
+	if doorbell := readViewerText(t, channel); len(doorbell) != 2 || doorbell["type"] != "files" || doorbell["ts"] != float64(1234567) {
+		t.Fatalf("files doorbell: %v", doorbell)
+	}
+	if cursor := readViewerText(t, channel); len(cursor) != 4 || cursor["type"] != "cursor" || cursor["ts"] != float64(1234568) || cursor["serial"] != float64(17) || cursor["css"] != "text" {
+		t.Fatalf("cursor record: %v", cursor)
+	}
+	readViewerFrame(t, channel, false)
 }
 
 func TestBrowserViewerChannelFallsBackOnlyForValidInitialOldFrames(t *testing.T) {

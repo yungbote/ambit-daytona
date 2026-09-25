@@ -27,7 +27,10 @@ const browserViewerMessageLimit = 4096
 const browserMaximumFrameWindow = 8
 
 // ViewBrowserChannel carries only visual output, painted-frame acknowledgements
-// and presentation sizes. The upgrade binds the viewer identity for its lifetime.
+// and presentation sizes. The upgrade binds the viewer identity for its
+// lifetime, and with cursor=viewer declares that this viewer draws the pointer
+// itself, from pointer samples and cursor records, so the driver may leave it
+// out of the frames once every connected viewer says so.
 func (s *SessionController) ViewBrowserChannel(c *gin.Context) {
 	if !websocket.IsWebSocketUpgrade(c.Request) {
 		c.Status(http.StatusUpgradeRequired)
@@ -35,8 +38,9 @@ func (s *SessionController) ViewBrowserChannel(c *gin.Context) {
 	}
 	presentation, valid := parseBrowserChannelPresentation(c.Request)
 	formats := c.Request.URL.Query()["frames"]
+	pointer := c.Request.URL.Query()["cursor"]
 	window, windowValid := parseBrowserFrameWindow(c.Request)
-	if !valid || !windowValid || len(formats) > 1 || (len(formats) == 1 && formats[0] != "binary") {
+	if !valid || !windowValid || len(formats) > 1 || (len(formats) == 1 && formats[0] != "binary") || len(pointer) > 1 || (len(pointer) == 1 && pointer[0] != "viewer") {
 		c.JSON(http.StatusBadRequest, gin.H{"code": "browser_view_invalid"})
 		return
 	}
@@ -57,6 +61,9 @@ func (s *SessionController) ViewBrowserChannel(c *gin.Context) {
 	}
 	if binaryFrames {
 		address += "&frames=binary"
+	}
+	if len(pointer) == 1 {
+		address += "&cursor=viewer"
 	}
 	upstream, _, err := (&websocket.Dialer{HandshakeTimeout: browserDriverWriteTimeout}).DialContext(c.Request.Context(), address, headers)
 	if err != nil {

@@ -541,6 +541,18 @@ func browserViewMessage(message []byte, patches bool) ([]byte, uint64, browserRe
 			return projected, 0, browserRecordVisual
 		}
 		return nil, 0, browserRecordDropped
+	case "files":
+		// A file chooser opened or ended, or a download settled: the controller
+		// asks for files once instead of polling. Only the capture clock rides it.
+		var doorbell struct {
+			Type string  `json:"type"`
+			Ts   *uint64 `json:"ts"`
+		}
+		if json.Unmarshal(message, &doorbell) != nil || doorbell.Ts == nil || *doorbell.Ts > browserSafeInteger {
+			return nil, 0, browserRecordDropped
+		}
+		projected, _ := json.Marshal(doorbell)
+		return projected, 0, browserRecordVisual
 	case "tabs":
 		// A newly attached viewer receives the driver's current tab snapshot,
 		// not a navigation event. Project only the active location into our
