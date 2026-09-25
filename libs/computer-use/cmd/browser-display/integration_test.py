@@ -162,11 +162,16 @@ with tempfile.TemporaryDirectory(prefix='browser-helper-proof-') as temp:
         cli('eval', "window.over=null;document.addEventListener('mouseover',e=>{over=e.target.id})")
         centres = cli('eval', "Object.fromEntries([...document.querySelectorAll('[id^=k-]')].map(e=>{const r=e.getBoundingClientRect();return [e.id.slice(2),[Math.round((r.x+r.width/2)*devicePixelRatio),Math.round((outerHeight-innerHeight+r.y+r.height/2)*devicePixelRatio)]]}))")['result']
         receipts['cursor'] = {}
-        reported = None
+        # Pointer move sent -> the capture reply naming the new identity, for
+        # each move that changes the identity (the helper's share of P5).
+        receipts['cursorIdentityMs'] = {}
+        reported, previous = None, None
         for keyword in keywords + ['custom']:
             x, y = centres[keyword]
+            moved = time.monotonic()
             call('input', events=[dict(type='input_mouse', eventType='mouseMoved', x=x, y=y)])
             want = expected.get(keyword, keyword)
+            identified = None
             def matches():
                 if reported is None:
                     return False
@@ -178,11 +183,15 @@ with tempfile.TemporaryDirectory(prefix='browser-helper-proof-') as temp:
                 reply = call('capture', cursor=False, cursorIdentity=True, waitMs=250)
                 if reply.get('cursor'):
                     reported = reply['cursor']
+                    identified = time.monotonic()
                 if matches():
                     break
             hovered = cli('eval', 'over')['result']
             assert hovered == 'k-' + keyword and matches(), {'keyword': keyword, 'hovered': hovered, 'expected': want, 'reported': reported and {k: v for k, v in reported.items() if k != 'image'}}
             receipts['cursor'][keyword] = {k: v for k, v in reported['image'].items() if k != 'png'} if keyword == 'custom' else reported['css']
+            if want != previous and identified:
+                receipts['cursorIdentityMs'][keyword] = round((identified - moved) * 1000, 1)
+            previous = want
         cli('open', proof_page)
         if os.environ.get('AMBIT_DISPLAY_TEST_PAINT_ONLY') == '1':
             call('close')
