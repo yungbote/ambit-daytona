@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -305,6 +306,39 @@ func TestBrowserControlChannelPipelinesCommandsInOrder(t *testing.T) {
 	overlapped, err := os.ReadFile(filepath.Join(workspace.socketDir, "primary.overlapped"))
 	if count, _ := strconv.Atoi(strings.TrimSpace(string(overlapped))); err != nil || count == 0 {
 		t.Fatalf("no command reached the driver before the previous reply: %q %v", overlapped, err)
+	}
+}
+
+// A peer that leaves while more commands wait than the pipeline holds still
+// ends its channel. The command loop, held back by the full pipeline, is let
+// go once the replies can no longer be written, and so is the driver link.
+func TestBrowserControlChannelEndsWhenAPeerLeavesAFullPipeline(t *testing.T) {
+	workspace := newBrowserWorkspace(t)
+	workspace.open(t, "browser-owner")
+	workspace.runDriver(t, "browser-owner", "primary", "channel-slow")
+	id, _ := workspace.only(t, "browser-owner", "primary")
+	before := browserControlLoops()
+	channel := workspace.openChannel(t, workspace.serve(t), "browser-owner", id)
+	// Sequences past the stand-in's scripted ones, so every input applies.
+	for sequence := 10; sequence < 10+2*browserControlPipeline+8; sequence++ {
+		sendFrame(t, channel, browserInput(sequence))
+	}
+	_ = channel.UnderlyingConn().Close()
+	for deadline := time.Now().Add(10 * time.Second); browserControlLoops() > before; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the command loop outlived its peer behind a full pipeline")
+		}
+	}
+}
+
+// browserControlLoops counts the control channels whose command loop runs.
+func browserControlLoops() int {
+	buffer := make([]byte, 1<<20)
+	for {
+		if n := runtime.Stack(buffer, true); n < len(buffer) {
+			return strings.Count(string(buffer[:n]), "(*browserControlChannel).run(")
+		}
+		buffer = make([]byte, 2*len(buffer))
 	}
 }
 

@@ -120,6 +120,9 @@ func (ch *browserControlChannel) run(parent context.Context) {
 				return
 			}
 			if ch.reply(pending.outcome) != nil {
+				// The peer is gone. The loop may be waiting for pipeline room
+				// that only these replies would make, so it is let go too.
+				cancel()
 				_ = ch.socket.Close()
 				return
 			}
