@@ -45,6 +45,9 @@ type request struct {
 	// answering unchanged, and report the cursor's identity when it changed.
 	WaitMs         int  `json:"waitMs,omitempty"`
 	CursorIdentity bool `json:"cursorIdentity,omitempty"`
+	// resize only: keep the framebuffer at a size class and lay out only the
+	// output mode and window.
+	SizeClass bool `json:"sizeClass,omitempty"`
 }
 type failure struct {
 	Code               string `json:"code"`
@@ -85,12 +88,12 @@ func decodeRequest(line []byte) (request, error) {
 	captureFields := value.Cursor != nil || value.BudgetBytes != 0 || value.Force || value.Patches || value.WaitMs != 0 || value.CursorIdentity
 	switch value.Op {
 	case "capture":
-		if value.Width != 0 || value.Height != 0 || value.WindowID != 0 || value.Events != nil || value.BudgetBytes < 0 ||
+		if value.Width != 0 || value.Height != 0 || value.WindowID != 0 || value.Events != nil || value.BudgetBytes < 0 || value.SizeClass ||
 			value.WaitMs < 0 || value.WaitMs > int(maximumCaptureWait/time.Millisecond) {
 			return value, invalid()
 		}
 	case "info", "copy", "reset", "close":
-		if value.Width != 0 || value.Height != 0 || value.WindowID != 0 || value.Events != nil || captureFields {
+		if value.Width != 0 || value.Height != 0 || value.WindowID != 0 || value.Events != nil || captureFields || value.SizeClass {
 			return value, invalid()
 		}
 	case "resize":
@@ -98,7 +101,7 @@ func decodeRequest(line []byte) (request, error) {
 			return value, invalid()
 		}
 	case "input":
-		if value.Width != 0 || value.Height != 0 || value.WindowID != 0 || captureFields || len(value.Events) < 1 || len(value.Events) > 64 {
+		if value.Width != 0 || value.Height != 0 || value.WindowID != 0 || captureFields || value.SizeClass || len(value.Events) < 1 || len(value.Events) > 64 {
 			return value, invalid()
 		}
 	default:
@@ -185,7 +188,7 @@ func (d *display) execute(req request) (any, error) {
 		return d.frames.capture(captureOptions{cursor: req.Cursor == nil || *req.Cursor, budget: req.BudgetBytes, force: req.Force, patches: req.Patches,
 			wait: time.Duration(req.WaitMs) * time.Millisecond, identity: req.CursorIdentity})
 	case "resize":
-		return d.resize(req.Width, req.Height, req.WindowID)
+		return d.resize(req.Width, req.Height, req.WindowID, req.SizeClass)
 	case "input":
 		return map[string]any{}, d.input(req.Events)
 	case "copy":

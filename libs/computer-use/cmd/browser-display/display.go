@@ -4,6 +4,8 @@ package main
 
 import (
 	"fmt"
+	"image"
+	"time"
 
 	"github.com/robotn/xgb"
 	"github.com/robotn/xgb/randr"
@@ -33,6 +35,9 @@ type display struct {
 	paintSerial uint64
 	paintLatest *paintRequest
 	frames      *frameEngine
+	// framebufferChanged is when this helper last changed the framebuffer
+	// size; zero before it ever has.
+	framebufferChanged time.Time
 }
 type windowInfo struct {
 	ID               uint32 `json:"id"`
@@ -54,6 +59,31 @@ type displayInfo struct {
 	// Features lists the protocol extensions this helper serves; only info
 	// answers it.
 	Features []string `json:"features,omitempty"`
+}
+
+// A size-class framebuffer is the window rounded up to whole steps, so a dock
+// resize inside the class changes only the output mode and the window. It
+// grows at once and shrinks only when a resize finds it at least two steps
+// larger than needed and unchanged for sizeClassSettle, so a drag never
+// reallocates it on every step.
+const sizeClassStep = 256
+const sizeClassSettle = 10 * time.Second
+
+func sizeClass(value, limit int) int {
+	return max(value, min(limit, (value+sizeClassStep-1)/sizeClassStep*sizeClassStep))
+}
+
+// framebufferFor is the framebuffer a window of width x height needs, given
+// the current one.
+func framebufferFor(width, height, currentWidth, currentHeight, limitWidth, limitHeight int, settled bool) (int, int) {
+	pick := func(value, current, limit int) int {
+		class := sizeClass(value, limit)
+		if class > current || (settled && current-class >= 2*sizeClassStep) {
+			return class
+		}
+		return min(current, limit)
+	}
+	return pick(width, currentWidth, limitWidth), pick(height, currentHeight, limitHeight)
 }
 
 func openDisplay(pid int) (*display, error) {
@@ -191,7 +221,13 @@ func (d *display) info() (displayInfo, error) {
 	}
 	return result, nil
 }
-func (d *display) resize(width, height int, windowID uint32) (displayInfo, error) {
+
+// resize lays out the output mode and the browser window at width x height.
+// With sizeClass the framebuffer is a size class holding them; without it,
+// the framebuffer is exactly that size. Frames stop at the layout's start and
+// resume once the browser has painted the new geometry (or the paint wait
+// ends), so no frame shows a configure the browser has not drawn.
+func (d *display) resize(width, height int, windowID uint32, sizeClass bool) (displayInfo, error) {
 	if !validSize(width, height) {
 		return displayInfo{}, invalid()
 	}
@@ -218,13 +254,25 @@ func (d *display) resize(width, height int, windowID uint32) (displayInfo, error
 	if err != nil {
 		return displayInfo{}, err
 	}
-	if oldW == width && oldH == height {
-		return d.resizeWindow(width, height, windowID)
-	}
 	limits, err := randr.GetScreenSizeRange(d.conn, d.screen.Root).Reply()
 	if err != nil || width > int(limits.MaxWidth) || height > int(limits.MaxHeight) {
 		return displayInfo{}, invalid()
 	}
+	framebufferW, framebufferH := width, height
+	if sizeClass {
+		settled := d.framebufferChanged.IsZero() || time.Since(d.framebufferChanged) >= sizeClassSettle
+		framebufferW, framebufferH = framebufferFor(width, height, oldW, oldH, int(limits.MaxWidth), int(limits.MaxHeight), settled)
+	}
+	d.frames.beginLayout()
+	result, err := d.layout(width, height, framebufferW, framebufferH, oldW, oldH, windowID)
+	visible := image.Rectangle{}
+	if framebufferW != width || framebufferH != height {
+		visible = image.Rect(0, 0, width, height)
+	}
+	d.frames.endLayout(visible, err == nil)
+	return result, err
+}
+func (d *display) layout(width, height, framebufferW, framebufferH, oldW, oldH int, windowID uint32) (displayInfo, error) {
 	resources, err := randr.GetScreenResourcesCurrent(d.conn, d.screen.Root).Reply()
 	if err != nil || len(resources.Outputs) != 1 {
 		return displayInfo{}, unavailable()
@@ -235,6 +283,14 @@ func (d *display) resize(width, height int, windowID uint32) (displayInfo, error
 		return displayInfo{}, unavailable()
 	}
 	crtc := oi.Crtc
+	scanout, err := randr.GetCrtcInfo(d.conn, crtc, resources.ConfigTimestamp).Reply()
+	if err != nil {
+		return displayInfo{}, unavailable()
+	}
+	framebufferChanges := framebufferW != oldW || framebufferH != oldH
+	if !framebufferChanges && scanout.Mode != 0 && int(scanout.Width) == width && int(scanout.Height) == height {
+		return d.resizeWindow(width, height, framebufferW, framebufferH, windowID)
+	}
 	name := fmt.Sprintf("ambit-%dx%d", width, height)
 	mode, exists := d.modes[name]
 	if !exists {
@@ -251,17 +307,21 @@ func (d *display) resize(width, height int, windowID uint32) (displayInfo, error
 		}
 		d.modes[name] = mode
 	}
-	// Disable the old scanout before shrinking; grow first when needed. Each
-	// request is checked. Any failure after scanout mutation is an unknown
-	// outcome, never a reason to replay input against guessed dimensions.
-	if width < oldW || height < oldH {
+	// Disable the old scanout before shrinking the framebuffer; grow first
+	// when needed. Each request is checked. Any failure after scanout mutation
+	// is an unknown outcome, never a reason to replay input against guessed
+	// dimensions.
+	if framebufferW < oldW || framebufferH < oldH {
 		r, e := randr.SetCrtcConfig(d.conn, crtc, 0, 0, 0, 0, 0, randr.RotationRotate0, nil).Reply()
 		if e != nil || r.Status != 0 {
 			return displayInfo{}, unknown()
 		}
 	}
-	if err := randr.SetScreenSizeChecked(d.conn, d.screen.Root, uint16(width), uint16(height), uint32(max(1, width*254/960)), uint32(max(1, height*254/960))).Check(); err != nil {
-		return displayInfo{}, unknown()
+	if framebufferChanges {
+		d.framebufferChanged = time.Now()
+		if err := randr.SetScreenSizeChecked(d.conn, d.screen.Root, uint16(framebufferW), uint16(framebufferH), uint32(max(1, framebufferW*254/960)), uint32(max(1, framebufferH*254/960))).Check(); err != nil {
+			return displayInfo{}, unknown()
+		}
 	}
 	r, err := randr.SetCrtcConfig(d.conn, crtc, 0, 0, 0, 0, mode, randr.RotationRotate0, []randr.Output{output}).Reply()
 	if err != nil || r.Status != 0 {
@@ -276,16 +336,16 @@ func (d *display) resize(width, height int, windowID uint32) (displayInfo, error
 			delete(d.modes, oldName)
 		}
 	}
-	return d.resizeWindow(width, height, windowID)
+	return d.resizeWindow(width, height, framebufferW, framebufferH, windowID)
 }
-func (d *display) resizeWindow(width, height int, windowID uint32) (displayInfo, error) {
+func (d *display) resizeWindow(width, height, framebufferW, framebufferH int, windowID uint32) (displayInfo, error) {
 	if windowID != 0 {
 		if err := d.paintAfterResize(xproto.Window(windowID), width, height); err != nil {
 			return displayInfo{}, unknown()
 		}
 	}
 	current, err := d.info()
-	if err != nil || current.Width != width || current.Height != height {
+	if err != nil || current.Width != framebufferW || current.Height != framebufferH {
 		return displayInfo{}, unknown()
 	}
 	if windowID != 0 {

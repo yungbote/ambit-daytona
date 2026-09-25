@@ -249,7 +249,7 @@ func TestXvfbIncrementalCapture(t *testing.T) {
 	expectUnchanged(t, d, cursorOff, "cursor ignored while moving")
 	expectFrame(t, d, cursorOn, "cursor composited again")
 
-	if _, err := d.resize(1200, 900, 0); err != nil {
+	if _, err := d.resize(1200, 900, 0, false); err != nil {
 		t.Fatal(err)
 	}
 	resized := expectFrame(t, d, cursorOn, "resized display")

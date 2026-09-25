@@ -24,8 +24,8 @@ type captureOptions struct {
 	budget  int
 	force   bool
 	patches bool
-	// wait bounds how long an unchanged capture waits for damage or a new
-	// cursor identity before answering unchanged.
+	// wait bounds how long an unchanged capture waits for damage, a new
+	// cursor identity or a finished layout before answering unchanged.
 	wait time.Duration
 	// identity asks for the displayed cursor's identity whenever it differs
 	// from the one this helper last reported.
@@ -33,7 +33,7 @@ type captureOptions struct {
 }
 
 // The capture features the driver may use; see the README.
-var captureFeatures = []string{"captureWait", "cursorIdentity"}
+var captureFeatures = []string{"captureWait", "cursorIdentity", "layoutGate", "sizeClass"}
 
 const maximumCaptureWait = 250 * time.Millisecond
 
@@ -58,20 +58,29 @@ type framePatch struct {
 	Data    []byte `json:"data"`
 }
 type capturedFrame struct {
-	Changed        bool            `json:"changed"`
-	Width          int             `json:"width"`
-	Height         int             `json:"height"`
-	Encoding       string          `json:"encoding"`
-	Data           []byte          `json:"data,omitempty"`
-	Patches        []framePatch    `json:"patches,omitempty"`
-	CursorIncluded bool            `json:"cursorIncluded"`
-	Quality        int             `json:"quality"`
-	Timings        stageTimings    `json:"timings"`
-	Cursor         *cursorIdentity `json:"cursor,omitempty"`
+	Changed        bool         `json:"changed"`
+	Width          int          `json:"width"`
+	Height         int          `json:"height"`
+	Encoding       string       `json:"encoding"`
+	Data           []byte       `json:"data,omitempty"`
+	Patches        []framePatch `json:"patches,omitempty"`
+	CursorIncluded bool         `json:"cursorIncluded"`
+	Quality        int          `json:"quality"`
+	Timings        stageTimings `json:"timings"`
+	// Visible is the browser window inside a larger framebuffer; absent when
+	// the window is the whole frame.
+	Visible *visibleRect    `json:"visible,omitempty"`
+	Cursor  *cursorIdentity `json:"cursor,omitempty"`
 }
 type unchangedFrame struct {
 	Changed bool            `json:"changed"`
 	Cursor  *cursorIdentity `json:"cursor,omitempty"`
+}
+type visibleRect struct {
+	X      int `json:"x"`
+	Y      int `json:"y"`
+	Width  int `json:"width"`
+	Height int `json:"height"`
 }
 
 func micros(since time.Time) int64 { return time.Since(since).Microseconds() }
@@ -452,7 +461,42 @@ type frameEngine struct {
 	fetch    []bool
 	encode   []bool
 	rects    []image.Rectangle
+	layout   layoutGate
 	shared   *sharedImage
+}
+
+// layoutGate keeps frames of a window configure the browser has not painted
+// from being captured. While pending, captures answer unchanged; damage keeps
+// accumulating and the first capture after the paint takes all of it.
+type layoutGate struct {
+	pending bool
+	settled chan struct{}
+	visible image.Rectangle // the window inside a larger framebuffer; empty is the whole frame
+}
+
+// beginLayout waits for any capture in progress, so no capture reads pixels
+// after a geometry change it did not see begin.
+func (e *frameEngine) beginLayout() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.layout.pending {
+		e.layout.pending, e.layout.settled = true, make(chan struct{})
+	}
+}
+
+// endLayout reopens capture. The visible rectangle is replaced only when the
+// layout's outcome is known.
+func (e *frameEngine) endLayout(visible image.Rectangle, known bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if known {
+		e.layout.visible = visible
+	}
+	if e.layout.pending {
+		e.layout.pending = false
+		close(e.layout.settled)
+	}
+	e.poke()
 }
 
 // poke records that a waiting capture should look again.
@@ -588,8 +632,10 @@ func (e *frameEngine) close() {
 // fails because the screen changed size underneath is retried from a full
 // frame; every other failure is the display becoming unavailable.
 //
-// With a wait, an unchanged answer is held until damage or a new cursor
-// identity, or until the wait runs out. The mutex is released while waiting.
+// With a wait, an unchanged answer is held until damage, a new cursor
+// identity or the end of a pending layout, or until the wait runs out. The
+// mutex is released while waiting, so a layout never waits behind an idle
+// capture.
 func (e *frameEngine) capture(options captureOptions) (result any, err error) {
 	defer func() {
 		if recover() != nil {
@@ -609,15 +655,25 @@ func (e *frameEngine) capture(options captureOptions) (result any, err error) {
 		// Anything that arrives from here on is seen by this pass or wakes
 		// the wait after it.
 		e.drainWake()
-		answer, retry, failure := e.captureOnce(options)
-		if failure != nil {
-			// Whatever was retained may no longer describe the screen.
-			e.pipeline.width, e.pipeline.height = 0, 0
-			if !retry || attempt == 2 {
+		var answer any
+		if e.layout.pending {
+			identity, err := e.identity(options)
+			if err != nil {
 				return nil, unavailable()
 			}
-			attempt++
-			continue
+			answer = unchangedFrame{Cursor: identity}
+		} else {
+			frame, retry, failure := e.captureOnce(options)
+			if failure != nil {
+				// Whatever was retained may no longer describe the screen.
+				e.pipeline.width, e.pipeline.height = 0, 0
+				if !retry || attempt == 2 {
+					return nil, unavailable()
+				}
+				attempt++
+				continue
+			}
+			answer = frame
 		}
 		unchanged, idle := answer.(unchangedFrame)
 		if idle && unchanged.Cursor == nil && e.await(deadline) {
@@ -652,6 +708,10 @@ func (e *frameEngine) await(deadline time.Time) bool {
 	if remaining <= 0 {
 		return false
 	}
+	var settled chan struct{}
+	if e.layout.pending {
+		settled = e.layout.settled
+	}
 	e.mu.Unlock()
 	defer e.mu.Lock()
 	timer := time.NewTimer(remaining)
@@ -660,11 +720,26 @@ func (e *frameEngine) await(deadline time.Time) bool {
 	case <-e.wake:
 		time.Sleep(damageSettle)
 		return true
+	case <-settled:
+		return true
 	case <-e.dead:
 		return true
 	case <-timer.C:
 		return false
 	}
+}
+
+// identity reports the displayed cursor when it differs from the last report,
+// fetching it only after the server announced a new one.
+func (e *frameEngine) identity(options captureOptions) (*cursorIdentity, error) {
+	if !options.identity {
+		return nil, nil
+	}
+	cookie, pending := e.cursor.begin(e.conn)
+	if err := e.cursor.finish(cookie, pending); err != nil {
+		return nil, err
+	}
+	return e.cursor.unreported(), nil
 }
 
 func (e *frameEngine) captureOnce(options captureOptions) (any, bool, error) {
@@ -729,6 +804,9 @@ func (e *frameEngine) captureOnce(options captureOptions) (any, bool, error) {
 		return unchangedFrame{Cursor: identity}, false, nil
 	}
 	frame := capturedFrame{Changed: true, Width: width, Height: height, Encoding: "jpeg", CursorIncluded: options.cursor, Quality: p.quality.quality(), Cursor: identity}
+	if visible := e.layout.visible.Intersect(p.surface()); !visible.Empty() && visible != p.surface() {
+		frame.Visible = &visibleRect{X: visible.Min.X, Y: visible.Min.Y, Width: visible.Dx(), Height: visible.Dy()}
+	}
 	started := time.Now()
 	if damaged {
 		if err := e.fetchBands(); err != nil {
