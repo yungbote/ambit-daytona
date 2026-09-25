@@ -92,8 +92,8 @@ Measure `agent-browser mcp --describe-host-bound` from the actual installed driv
 The same source archive supplies `libs/computer-use/cmd/browser-display` through
 the `browser_display_source` context. It shares the materializer's pinned Go
 1.25.13 builder and compiles only this CGO-free helper with unchanged dependency locks.
-The final image contains the helper beside the driver, with its Daytona, XGB, XGBUtil and
-Go license notices. Its exact binary is measured during image qualification.
+The final image contains the helper beside the driver, with its Daytona, XGB, XGBUtil,
+golang.org/x/sys and Go license notices. Its exact binary is measured during image qualification.
 The launcher selects the actual browser window and this image-owned helper;
 the driver supplies its private display and process identity.
 

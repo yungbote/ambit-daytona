@@ -42,6 +42,8 @@ RUN test "$(go version)" = "go version go1.25.13 linux/amd64" \
  && cp "$module_dir/LICENSE" /out/licenses/browser-display-xgb-LICENSE \
  && module_dir="$(go list -mod=readonly -m -f '{{.Dir}}' github.com/robotn/xgbutil)" \
  && cp "$module_dir/COPYING" /out/licenses/browser-display-xgbutil-COPYING \
+ && module_dir="$(go list -mod=readonly -m -f '{{.Dir}}' golang.org/x/sys)" \
+ && cp "$module_dir/LICENSE" /out/licenses/browser-display-x-sys-LICENSE \
  && cp /usr/local/go/LICENSE /out/licenses/browser-display-Go-LICENSE
 COPY --from=browser_display_source LICENSE /out/licenses/browser-display-LICENSE
 RUN chmod 0444 /out/licenses/browser-display-LICENSE
