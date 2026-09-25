@@ -43,3 +43,27 @@ func TestBrowserActivityRefusesUnidentifiedOrMalformedInput(t *testing.T) {
 		}
 	}
 }
+
+// Executed input carries the capture clock so a viewer can schedule it
+// against the frames it belongs with.
+func TestBrowserActivityCarriesTheCaptureClock(t *testing.T) {
+	for _, input := range []string{
+		`{"type":"pointer","pageGeneration":"p","source":"agent","eventType":"move","x":20,"y":30,"buttons":0,"modifiers":0,"timestamp":12,"ts":912345678}`,
+		`{"type":"activity","pageGeneration":"p","source":"agent","kind":"typing","timestamp":13,"ts":912345679}`,
+	} {
+		body, valid := browserActivity([]byte(input))
+		var value map[string]any
+		if !valid || json.Unmarshal(body, &value) != nil || value["ts"] == nil {
+			t.Fatalf("capture clock was dropped: %s", body)
+		}
+	}
+	for _, input := range []string{
+		`{"type":"pointer","pageGeneration":"p","source":"agent","eventType":"move","x":20,"y":30,"buttons":0,"modifiers":0,"timestamp":12,"ts":-1}`,
+		`{"type":"pointer","pageGeneration":"p","source":"agent","eventType":"move","x":20,"y":30,"buttons":0,"modifiers":0,"timestamp":12,"ts":9007199254740992}`,
+		`{"type":"activity","pageGeneration":"p","source":"agent","kind":"typing","timestamp":13,"ts":"soon"}`,
+	} {
+		if _, valid := browserActivity([]byte(input)); valid {
+			t.Fatalf("unbounded clock admitted: %s", input)
+		}
+	}
+}

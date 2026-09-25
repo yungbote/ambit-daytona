@@ -307,3 +307,73 @@ func FuzzBrowserBinaryFrameNeverPanics(f *testing.F) {
 		_ = browserLegacyBinaryFrame(input)
 	})
 }
+
+// A frame's capture clock, input causality and window rectangle reach the
+// viewer on both frame encodings; nothing else joins them.
+func TestBrowserFramesCarryCaptureClockInputSequenceAndVisibleWindow(t *testing.T) {
+	clock := map[string]any{"ts": 912345678, "inputSeq": 4411, "visible": map[string]any{"x": 0, "y": 0, "width": 600, "height": 480, "private": browserFixtureSecret}}
+	expect := func(t *testing.T, projected []byte) {
+		t.Helper()
+		var value struct {
+			Ts       uint64         `json:"ts"`
+			InputSeq uint64         `json:"inputSeq"`
+			Visible  map[string]any `json:"visible"`
+		}
+		if json.Unmarshal(projected, &value) != nil || value.Ts != 912345678 || value.InputSeq != 4411 ||
+			len(value.Visible) != 4 || value.Visible["width"] != float64(600) || value.Visible["height"] != float64(480) {
+			t.Fatalf("capture clock was not projected: %s", projected)
+		}
+		if bytes.Contains(projected, []byte(browserFixtureSecret)) {
+			t.Fatal("private metadata reached the viewer")
+		}
+	}
+	for _, patched := range []bool{false, true} {
+		header, payload := browserFixtureFrame(patched)
+		for field, value := range clock {
+			header[field] = value
+		}
+		frame, err := parseBrowserBinaryFrame(packBrowserFixtureFrame(header, payload))
+		if err != nil {
+			t.Fatal(err)
+		}
+		expect(t, frame.projected)
+	}
+	text := map[string]any{"type": "frame", "seq": 3, "encoding": "jpeg", "data": "AAAA", "surface": browserFixtureSurface()}
+	for field, value := range clock {
+		text[field] = value
+	}
+	encoded, _ := json.Marshal(text)
+	projected, sequence, kind := browserViewMessage(encoded, false)
+	if kind != browserRecordVisual || sequence != 3 {
+		t.Fatalf("text frame refused: %s", projected)
+	}
+	expect(t, projected)
+}
+
+func TestBrowserFramesRefuseAnUnboundedClockOrAVisibleWindowOutsideTheRaster(t *testing.T) {
+	cases := []struct {
+		field string
+		value any
+	}{
+		{"ts", float64(1 << 53)},
+		{"ts", -1},
+		{"inputSeq", float64(1 << 53)},
+		{"visible", map[string]any{"x": 0, "y": 0, "width": 641, "height": 480}},
+		{"visible", map[string]any{"x": 40, "y": 0, "width": 601, "height": 480}},
+		{"visible", map[string]any{"x": 0, "y": 0, "width": 0, "height": 480}},
+		{"visible", map[string]any{"x": 0, "y": 481, "width": 1, "height": 1}},
+		{"visible", map[string]any{"x": -1, "y": 0, "width": 1, "height": 1}},
+	}
+	for _, test := range cases {
+		header, payload := browserFixtureFrame(false)
+		header[test.field] = test.value
+		if _, err := parseBrowserBinaryFrame(packBrowserFixtureFrame(header, payload)); err == nil {
+			t.Fatalf("admitted binary %s=%v", test.field, test.value)
+		}
+		text := map[string]any{"type": "frame", "seq": 3, "encoding": "jpeg", "data": "AAAA", "surface": browserFixtureSurface(), test.field: test.value}
+		encoded, _ := json.Marshal(text)
+		if _, _, kind := browserViewMessage(encoded, false); kind != browserRecordFailed {
+			t.Fatalf("admitted text %s=%v", test.field, test.value)
+		}
+	}
+}

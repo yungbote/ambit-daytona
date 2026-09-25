@@ -27,6 +27,34 @@ type browserFrameHeader struct {
 	BaseSeq  uint64         `json:"baseSeq,omitempty"`
 	Encoding string         `json:"encoding"`
 	Surface  browserSurface `json:"surface"`
+	browserFrameClock
+}
+
+// browserSafeInteger is the largest integer a JavaScript viewer reads exactly.
+const browserSafeInteger = 1<<53 - 1
+
+// browserFrameClock places a frame in time and causality: ts is the sandbox's
+// monotonic clock at capture in microseconds, inputSeq the last control input
+// applied before the capture, and visible the browser window's rectangle
+// inside the raster. Each is optional and bounded when present.
+type browserFrameClock struct {
+	Ts       uint64          `json:"ts,omitempty"`
+	InputSeq uint64          `json:"inputSeq,omitempty"`
+	Visible  *browserVisible `json:"visible,omitempty"`
+}
+
+type browserVisible struct {
+	X      uint32 `json:"x"`
+	Y      uint32 `json:"y"`
+	Width  uint32 `json:"width"`
+	Height uint32 `json:"height"`
+}
+
+func (c browserFrameClock) valid(surface browserSurface) bool {
+	v := c.Visible
+	return c.Ts <= browserSafeInteger && c.InputSeq <= browserSafeInteger &&
+		(v == nil || (v.Width > 0 && v.Height > 0 && v.X < surface.Width && v.Y < surface.Height &&
+			v.Width <= surface.Width-v.X && v.Height <= surface.Height-v.Y))
 }
 
 type browserBinaryPatch struct {
@@ -74,7 +102,7 @@ func parseBrowserBinaryFrame(message []byte) (browserBinaryFrame, error) {
 		return frame, errBrowserBinaryFrame
 	}
 	h := &frame.header
-	if h.Type != "frame" || h.Seq == 0 || h.Encoding != "jpeg" || !h.Surface.valid() {
+	if h.Type != "frame" || h.Seq == 0 || h.Encoding != "jpeg" || !h.Surface.valid() || !h.browserFrameClock.valid(h.Surface) {
 		return frame, errBrowserBinaryFrame
 	}
 	frame.payload = payload

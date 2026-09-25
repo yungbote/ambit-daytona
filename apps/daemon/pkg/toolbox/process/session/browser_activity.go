@@ -27,6 +27,7 @@ func browserActivity(message []byte) ([]byte, bool) {
 		EventType         string   `json:"eventType"`
 		Kind              string   `json:"kind"`
 		Timestamp         *float64 `json:"timestamp"`
+		Ts                *float64 `json:"ts"`
 		X                 *float64 `json:"x"`
 		Y                 *float64 `json:"y"`
 		Buttons           *int     `json:"buttons"`
@@ -38,6 +39,13 @@ func browserActivity(message []byte) ([]byte, bool) {
 		return nil, false
 	}
 	projected := map[string]any{"type": value.Type, "pageGeneration": value.PageGeneration, "timestamp": *value.Timestamp}
+	// The capture clock (sandbox monotonic microseconds) of the executed input.
+	if value.Ts != nil {
+		if !boundedBrowserNumber(value.Ts, 0, 1<<53-1) || *value.Ts != math.Trunc(*value.Ts) {
+			return nil, false
+		}
+		projected["ts"] = *value.Ts
+	}
 	if value.CoordinateSpace != "" {
 		if value.CoordinateSpace != "viewport-css" && value.CoordinateSpace != "display-pixels" {
 			return nil, false

@@ -472,8 +472,9 @@ func browserViewMessage(message []byte, patches bool) ([]byte, uint64, browserRe
 				BaseSeq  uint64              `json:"baseSeq,omitempty"`
 				Patches  []browserFramePatch `json:"patches,omitempty"`
 				Surface  browserSurface      `json:"surface"`
+				browserFrameClock
 			}
-			if json.Unmarshal(message, &frame) != nil || !frame.Surface.valid() || frame.Encoding != "jpeg" {
+			if json.Unmarshal(message, &frame) != nil || !frame.Surface.valid() || frame.Encoding != "jpeg" || !frame.browserFrameClock.valid(frame.Surface) {
 				return nil, 0, browserRecordFailed
 			}
 			if len(frame.Patches) > 0 {
