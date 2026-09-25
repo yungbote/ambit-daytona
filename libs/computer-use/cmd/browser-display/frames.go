@@ -71,6 +71,8 @@ type capturedFrame struct {
 	// the window is the whole frame.
 	Visible *visibleRect    `json:"visible,omitempty"`
 	Cursor  *cursorIdentity `json:"cursor,omitempty"`
+	// read is when the frame's pixels were read: its capture clock.
+	read time.Time
 }
 type unchangedFrame struct {
 	Changed bool            `json:"changed"`
@@ -685,7 +687,10 @@ func (e *frameEngine) capture(options captureOptions) (result any, err error) {
 		case capturedFrame:
 			e.cursor.delivered(value.Cursor)
 			if options.wait > 0 {
-				value.Timings.WaitUs = micros(started)
+				// The wait ends where the pixels are read, so the request's
+				// time plus the wait is the frame's capture clock; the
+				// stages after it are timed on their own.
+				value.Timings.WaitUs = value.read.Sub(started).Microseconds()
 				answer = value
 			}
 		}
@@ -807,14 +812,14 @@ func (e *frameEngine) captureOnce(options captureOptions) (any, bool, error) {
 	if visible := e.layout.visible.Intersect(p.surface()); !visible.Empty() && visible != p.surface() {
 		frame.Visible = &visibleRect{X: visible.Min.X, Y: visible.Min.Y, Width: visible.Dx(), Height: visible.Dy()}
 	}
-	started := time.Now()
+	frame.read = time.Now()
 	if damaged {
 		if err := e.fetchBands(); err != nil {
 			return nil, true, err
 		}
 	}
-	frame.Timings.FetchUs = micros(started)
-	started = time.Now()
+	frame.Timings.FetchUs = micros(frame.read)
+	started := time.Now()
 	p.convert(e.fetch)
 	frame.Timings.ConvertUs = micros(started)
 	if options.patches && !options.force && !p.fullNeeded && !overflow {

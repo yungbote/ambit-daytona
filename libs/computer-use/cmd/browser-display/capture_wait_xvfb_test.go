@@ -507,6 +507,53 @@ func TestXvfbSizeClassLaysOutOnlyTheModeAndWindow(t *testing.T) {
 	}
 }
 
+// A frame's wait ends where its pixels are read: the request's time plus
+// waitUs is the frame's capture clock, where the driver stamps the frame and
+// the inputs it shows, so the frame's own stages are not part of the wait.
+func TestXvfbCaptureWaitEndsWhereTheFrameIsRead(t *testing.T) {
+	startXvfb(t, 1892, 1888)
+	d, err := openDisplay(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.close()
+	page := newPainter(t)
+	mustCall(t, d, `{"id":1,"op":"capture","cursor":false}`)
+	for index, delay := range []time.Duration{0, 40 * time.Millisecond} {
+		painted := make(chan struct{})
+		go func() {
+			defer close(painted)
+			time.Sleep(delay)
+			page.fill(t, image.Rect(0, 0, 1892, 1888), uint32(0x103050*(index+1)))
+		}()
+		if delay == 0 {
+			<-painted
+		}
+		started := time.Now()
+		frame := mustCall(t, d, `{"id":2,"op":"capture","cursor":false,"waitMs":250}`)
+		elapsed := time.Since(started).Microseconds()
+		<-painted
+		timings, _ := frame["timings"].(map[string]any)
+		if frame["changed"] != true || timings == nil {
+			t.Fatalf("delay %v: no frame", delay)
+		}
+		stage := func(name string) int64 {
+			value, _ := timings[name].(float64)
+			return int64(value)
+		}
+		wait := stage("waitUs")
+		work := stage("fetchUs") + stage("convertUs") + stage("encodeUs") + stage("assembleUs")
+		t.Logf("delay %v: waitUs %d, then %d us of fetch, conversion and encoding, in a %d us request", delay, wait, work, elapsed)
+		// The stages are disjoint spans of one request, so together they fit in it.
+		if wait+work > elapsed {
+			t.Fatalf("delay %v: waitUs %d overlaps the frame's own %d us of fetch, conversion and encoding; the request took %d us", delay, wait, work, elapsed)
+		}
+		if delay > 0 && wait < (delay-5*time.Millisecond).Microseconds() {
+			t.Fatalf("waitUs %d does not cover the %v wait", wait, delay)
+		}
+	}
+}
+
 func itoa(value int) string {
 	encoded, _ := json.Marshal(value)
 	return string(encoded)
