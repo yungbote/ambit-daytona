@@ -24,8 +24,25 @@ type captureOptions struct {
 	budget  int
 	force   bool
 	patches bool
+	// wait bounds how long an unchanged capture waits for damage or a new
+	// cursor identity before answering unchanged.
+	wait time.Duration
+	// identity asks for the displayed cursor's identity whenever it differs
+	// from the one this helper last reported.
+	identity bool
 }
+
+// The capture features the driver may use; see the README.
+var captureFeatures = []string{"captureWait", "cursorIdentity"}
+
+const maximumCaptureWait = 250 * time.Millisecond
+
+// A damage report wakes a waiting capture this long before it reads, so the
+// rectangles of one browser frame are taken together.
+const damageSettle = time.Millisecond
+
 type stageTimings struct {
+	WaitUs     int64 `json:"waitUs,omitempty"`
 	FetchUs    int64 `json:"fetchUs"`
 	ConvertUs  int64 `json:"convertUs"`
 	EncodeUs   int64 `json:"encodeUs"`
@@ -41,18 +58,20 @@ type framePatch struct {
 	Data    []byte `json:"data"`
 }
 type capturedFrame struct {
-	Changed        bool         `json:"changed"`
-	Width          int          `json:"width"`
-	Height         int          `json:"height"`
-	Encoding       string       `json:"encoding"`
-	Data           []byte       `json:"data,omitempty"`
-	Patches        []framePatch `json:"patches,omitempty"`
-	CursorIncluded bool         `json:"cursorIncluded"`
-	Quality        int          `json:"quality"`
-	Timings        stageTimings `json:"timings"`
+	Changed        bool            `json:"changed"`
+	Width          int             `json:"width"`
+	Height         int             `json:"height"`
+	Encoding       string          `json:"encoding"`
+	Data           []byte          `json:"data,omitempty"`
+	Patches        []framePatch    `json:"patches,omitempty"`
+	CursorIncluded bool            `json:"cursorIncluded"`
+	Quality        int             `json:"quality"`
+	Timings        stageTimings    `json:"timings"`
+	Cursor         *cursorIdentity `json:"cursor,omitempty"`
 }
 type unchangedFrame struct {
-	Changed bool `json:"changed"`
+	Changed bool            `json:"changed"`
+	Cursor  *cursorIdentity `json:"cursor,omitempty"`
 }
 
 func micros(since time.Time) int64 { return time.Since(since).Microseconds() }
@@ -421,6 +440,10 @@ type frameEngine struct {
 	markers  chan uint32
 	dead     chan struct{}
 	failOnce sync.Once
+	// wake holds one pending signal that damage, a cursor change or native
+	// pointer input happened since a waiting capture last looked.
+	wake   chan struct{}
+	cursor cursorTracker
 
 	mu       sync.Mutex
 	closed   bool
@@ -430,6 +453,14 @@ type frameEngine struct {
 	encode   []bool
 	rects    []image.Rectangle
 	shared   *sharedImage
+}
+
+// poke records that a waiting capture should look again.
+func (e *frameEngine) poke() {
+	select {
+	case e.wake <- struct{}{}:
+	default:
+	}
 }
 
 func openFrames() (*frameEngine, error) {
@@ -464,7 +495,7 @@ func openFrames() (*frameEngine, error) {
 	if !ok {
 		return nil, unavailable()
 	}
-	e := &frameEngine{conn: c, root: screen.Root, markers: make(chan uint32, 8), dead: make(chan struct{})}
+	e := &frameEngine{conn: c, root: screen.Root, markers: make(chan uint32, 8), dead: make(chan struct{}), wake: make(chan struct{}, 1)}
 	e.pipeline.init(layout, runtime.GOMAXPROCS(0))
 	atom, err := xproto.InternAtom(c, false, uint16(len(markerAtomName)), markerAtomName).Reply()
 	if err != nil {
@@ -487,6 +518,9 @@ func openFrames() (*frameEngine, error) {
 		return nil, err
 	}
 	e.damage = id
+	if err := xfixes.SelectCursorInputChecked(c, e.root, xfixes.CursorNotifyMaskDisplayCursor).Check(); err != nil {
+		return nil, err
+	}
 	if sharedAvailable {
 		e.shared = openSharedImage(c)
 	}
@@ -508,6 +542,10 @@ func (e *frameEngine) observe() {
 		switch value := event.(type) {
 		case damage.NotifyEvent:
 			e.log.mark(image.Rect(int(value.Area.X), int(value.Area.Y), int(value.Area.X)+int(value.Area.Width), int(value.Area.Y)+int(value.Area.Height)))
+			e.poke()
+		case xfixes.CursorNotifyEvent:
+			e.cursor.notify(value.CursorSerial)
+			e.poke()
 		case xproto.ClientMessageEvent:
 			if value.Window == e.window && value.Type == e.marker && value.Format == 32 && len(value.Data.Data32) > 0 {
 				select {
@@ -549,6 +587,9 @@ func (e *frameEngine) close() {
 // capture answers on either channel; the mutex serializes them. A fetch that
 // fails because the screen changed size underneath is retried from a full
 // frame; every other failure is the display becoming unavailable.
+//
+// With a wait, an unchanged answer is held until damage or a new cursor
+// identity, or until the wait runs out. The mutex is released while waiting.
 func (e *frameEngine) capture(options captureOptions) (result any, err error) {
 	defer func() {
 		if recover() != nil {
@@ -556,23 +597,76 @@ func (e *frameEngine) capture(options captureOptions) (result any, err error) {
 			result, err = nil, unavailable()
 		}
 	}()
+	started := time.Now()
+	deadline := started.Add(min(options.wait, maximumCaptureWait))
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	for attempt := 0; ; attempt++ {
+	attempt := 0
+	for {
 		if e.closed || !e.alive() {
 			return nil, unavailable()
 		}
-		frame, retry, failure := e.captureOnce(options)
-		if failure == nil {
-			return frame, nil
+		// Anything that arrives from here on is seen by this pass or wakes
+		// the wait after it.
+		e.drainWake()
+		answer, retry, failure := e.captureOnce(options)
+		if failure != nil {
+			// Whatever was retained may no longer describe the screen.
+			e.pipeline.width, e.pipeline.height = 0, 0
+			if !retry || attempt == 2 {
+				return nil, unavailable()
+			}
+			attempt++
+			continue
 		}
-		// Whatever was retained may no longer describe the screen.
-		e.pipeline.width, e.pipeline.height = 0, 0
-		if !retry || attempt == 2 {
-			return nil, unavailable()
+		unchanged, idle := answer.(unchangedFrame)
+		if idle && unchanged.Cursor == nil && e.await(deadline) {
+			continue
 		}
+		switch value := answer.(type) {
+		case unchangedFrame:
+			e.cursor.delivered(value.Cursor)
+		case capturedFrame:
+			e.cursor.delivered(value.Cursor)
+			if options.wait > 0 {
+				value.Timings.WaitUs = micros(started)
+				answer = value
+			}
+		}
+		return answer, nil
 	}
 }
+
+func (e *frameEngine) drainWake() {
+	select {
+	case <-e.wake:
+	default:
+	}
+}
+
+// await releases the capture mutex until something may have changed, and
+// reports false once the deadline has passed. A wake for damage is followed by
+// a short settle so one browser frame's rectangles are read together.
+func (e *frameEngine) await(deadline time.Time) bool {
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return false
+	}
+	e.mu.Unlock()
+	defer e.mu.Lock()
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case <-e.wake:
+		time.Sleep(damageSettle)
+		return true
+	case <-e.dead:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
 func (e *frameEngine) captureOnce(options captureOptions) (any, bool, error) {
 	p := &e.pipeline
 	// Damage reported before this point is in the log or precedes the marker,
@@ -583,6 +677,11 @@ func (e *frameEngine) captureOnce(options captureOptions) (any, bool, error) {
 	var cursorCookie xfixes.GetCursorImageCookie
 	if options.cursor {
 		cursorCookie = xfixes.GetCursorImage(e.conn)
+	}
+	var identityCookie *xfixes.GetCursorImageAndNameCookie
+	var identityPending uint64
+	if options.identity {
+		identityCookie, identityPending = e.cursor.begin(e.conn)
 	}
 	reply, err := geometry.Reply()
 	if err != nil {
@@ -600,6 +699,13 @@ func (e *frameEngine) captureOnce(options captureOptions) (any, bool, error) {
 		if cursor, err = cursorCookie.Reply(); err != nil {
 			return nil, false, err
 		}
+	}
+	var identity *cursorIdentity
+	if options.identity {
+		if err := e.cursor.finish(identityCookie, identityPending); err != nil {
+			return nil, false, err
+		}
+		identity = e.cursor.unreported()
 	}
 	width, height := int(reply.Width), int(reply.Height)
 	if !validSize(width, height) {
@@ -620,9 +726,9 @@ func (e *frameEngine) captureOnce(options captureOptions) (any, bool, error) {
 		markRows(e.encode, rect.Min.Y, rect.Max.Y)
 	}
 	if !damaged && !cursorChanged && !options.force {
-		return unchangedFrame{}, false, nil
+		return unchangedFrame{Cursor: identity}, false, nil
 	}
-	frame := capturedFrame{Changed: true, Width: width, Height: height, Encoding: "jpeg", CursorIncluded: options.cursor, Quality: p.quality.quality()}
+	frame := capturedFrame{Changed: true, Width: width, Height: height, Encoding: "jpeg", CursorIncluded: options.cursor, Quality: p.quality.quality(), Cursor: identity}
 	started := time.Now()
 	if damaged {
 		if err := e.fetchBands(); err != nil {

@@ -51,6 +51,9 @@ type displayInfo struct {
 	Height      int          `json:"height"`
 	Windows     []windowInfo `json:"windows"`
 	FocusWindow uint32       `json:"focusWindow,omitempty"`
+	// Features lists the protocol extensions this helper serves; only info
+	// answers it.
+	Features []string `json:"features,omitempty"`
 }
 
 func openDisplay(pid int) (*display, error) {
@@ -121,6 +124,11 @@ func (d *display) size() (int, int, error) {
 		return 0, 0, unavailable()
 	}
 	return int(r.Width), int(r.Height), nil
+}
+func (d *display) describe() (displayInfo, error) {
+	result, err := d.info()
+	result.Features = captureFeatures
+	return result, err
 }
 func (d *display) info() (displayInfo, error) {
 	w, h, err := d.size()

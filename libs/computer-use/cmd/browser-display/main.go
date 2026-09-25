@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"time"
 	"unicode/utf8"
 )
 
@@ -40,6 +41,10 @@ type request struct {
 	BudgetBytes int   `json:"budgetBytes,omitempty"`
 	Force       bool  `json:"force,omitempty"`
 	Patches     bool  `json:"patches,omitempty"`
+	// capture only: wait up to this many milliseconds for a change before
+	// answering unchanged, and report the cursor's identity when it changed.
+	WaitMs         int  `json:"waitMs,omitempty"`
+	CursorIdentity bool `json:"cursorIdentity,omitempty"`
 }
 type failure struct {
 	Code               string `json:"code"`
@@ -77,10 +82,11 @@ func decodeRequest(line []byte) (request, error) {
 	if d.Decode(&extra) != io.EOF || value.ID == 0 {
 		return value, invalid()
 	}
-	captureFields := value.Cursor != nil || value.BudgetBytes != 0 || value.Force || value.Patches
+	captureFields := value.Cursor != nil || value.BudgetBytes != 0 || value.Force || value.Patches || value.WaitMs != 0 || value.CursorIdentity
 	switch value.Op {
 	case "capture":
-		if value.Width != 0 || value.Height != 0 || value.WindowID != 0 || value.Events != nil || value.BudgetBytes < 0 {
+		if value.Width != 0 || value.Height != 0 || value.WindowID != 0 || value.Events != nil || value.BudgetBytes < 0 ||
+			value.WaitMs < 0 || value.WaitMs > int(maximumCaptureWait/time.Millisecond) {
 			return value, invalid()
 		}
 	case "info", "copy", "reset", "close":
@@ -174,9 +180,10 @@ func (d *display) serve(in io.Reader, out io.Writer, captureOnly bool) {
 func (d *display) execute(req request) (any, error) {
 	switch req.Op {
 	case "info":
-		return d.info()
+		return d.describe()
 	case "capture":
-		return d.frames.capture(captureOptions{cursor: req.Cursor == nil || *req.Cursor, budget: req.BudgetBytes, force: req.Force, patches: req.Patches})
+		return d.frames.capture(captureOptions{cursor: req.Cursor == nil || *req.Cursor, budget: req.BudgetBytes, force: req.Force, patches: req.Patches,
+			wait: time.Duration(req.WaitMs) * time.Millisecond, identity: req.CursorIdentity})
 	case "resize":
 		return d.resize(req.Width, req.Height, req.WindowID)
 	case "input":

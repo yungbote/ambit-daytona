@@ -452,6 +452,9 @@ func (d *display) input(events []inputEvent) error {
 		if err := d.fake(xproto.MotionNotify, 0, int(event.X), int(event.Y)); err != nil {
 			return unknown()
 		}
+		// A pointer move is no damage; a capture compositing the cursor waits
+		// for it all the same.
+		d.frames.poke()
 		switch event.EventType {
 		case "mousePressed":
 			err = d.button(mouseButton(event.Button), true)

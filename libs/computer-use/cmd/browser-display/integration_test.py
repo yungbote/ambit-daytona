@@ -15,6 +15,7 @@ import struct
 import subprocess
 import tempfile
 import time
+import urllib.parse
 import uuid
 from pathlib import Path
 OUT = Path(os.environ['AMBIT_DISPLAY_TEST_OUTPUT'])
@@ -255,6 +256,43 @@ with tempfile.TemporaryDirectory(prefix='browser-helper-proof-') as temp:
                     key, value = line.split(':', 1)
                     memory[key] = value.strip()
             receipts['captureEnvelope'].append({'width': width, 'height': height, 'samplesMs': samples, 'helperMemory': memory})
+        # Cursor identity: the pinned Chromium draws each CSS cursor keyword from
+        # the X server's cursor font, and cursor.go names those images. Every
+        # keyword is hovered through native input and must answer exactly its
+        # class's keyword; a page's own cursor must travel as its image.
+        keywords = ['auto', 'default', 'none', 'context-menu', 'help', 'pointer', 'progress', 'wait', 'cell', 'crosshair', 'text', 'vertical-text', 'alias', 'copy', 'move', 'no-drop', 'not-allowed', 'grab', 'grabbing', 'all-scroll', 'col-resize', 'row-resize', 'n-resize', 'e-resize', 's-resize', 'w-resize', 'ne-resize', 'nw-resize', 'se-resize', 'sw-resize', 'ew-resize', 'ns-resize', 'nesw-resize', 'nwse-resize', 'zoom-in', 'zoom-out']
+        expected = {'auto': 'default', 'wait': 'progress', 'grabbing': 'pointer', 'all-scroll': 'move', 'col-resize': 'ew-resize', 'row-resize': 'ns-resize'}
+        for keyword in ['context-menu', 'help', 'vertical-text', 'alias', 'copy', 'no-drop', 'not-allowed', 'nesw-resize', 'nwse-resize', 'zoom-in', 'zoom-out']:
+            expected[keyword] = 'default'
+        custom = "url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2224%22 height=%2224%22><circle cx=%2212%22 cy=%2212%22 r=%2210%22 fill=%22red%22/></svg>') 12 12, auto"
+        cells = ''.join(f'<div id="k-{k}" style="cursor:{k};width:100px;height:60px;float:left"></div>' for k in keywords) + f'<div id="k-custom" style="cursor:{custom};width:100px;height:60px;float:left"></div>'
+        cli('open', 'data:text/html;charset=utf-8,' + urllib.parse.quote('<body style="margin:0">' + cells))
+        call('resize', width=1560, height=1200, windowId=window)
+        # The page's own hit test names the cell under the native pointer.
+        cli('eval', "window.over=null;document.addEventListener('mouseover',e=>{over=e.target.id})")
+        centres = cli('eval', "Object.fromEntries([...document.querySelectorAll('[id^=k-]')].map(e=>{const r=e.getBoundingClientRect();return [e.id.slice(2),[Math.round((r.x+r.width/2)*devicePixelRatio),Math.round((outerHeight-innerHeight+r.y+r.height/2)*devicePixelRatio)]]}))")['result']
+        receipts['cursor'] = {}
+        reported = None
+        for keyword in keywords + ['custom']:
+            x, y = centres[keyword]
+            call('input', events=[dict(type='input_mouse', eventType='mouseMoved', x=x, y=y)])
+            want = expected.get(keyword, keyword)
+            def matches():
+                if reported is None:
+                    return False
+                if keyword == 'custom':
+                    image = reported.get('image')
+                    return reported['css'] is None and bool(image) and image['scale'] == 2 and (image['width'], image['height'], image['hotX'], image['hotY']) == (48, 48, 24, 24)
+                return reported['css'] == want
+            for attempt in range(8):
+                reply = call('capture', cursor=False, cursorIdentity=True, waitMs=250)
+                if reply.get('cursor'):
+                    reported = reply['cursor']
+                if matches():
+                    break
+            hovered = cli('eval', 'over')['result']
+            assert hovered == 'k-' + keyword and matches(), {'keyword': keyword, 'hovered': hovered, 'expected': want, 'reported': reported and {k: v for k, v in reported.items() if k != 'image'}}
+            receipts['cursor'][keyword] = {k: v for k, v in reported['image'].items() if k != 'png'} if keyword == 'custom' else reported['css']
         call('close')
         helper.wait(5)
         receipts['helperExit'] = helper.returncode

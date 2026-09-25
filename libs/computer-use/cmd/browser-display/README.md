@@ -16,9 +16,9 @@ The final image pins this binary and driver through the existing full-image qual
 
 Stdio accepts one bounded JSON request per line, with a positive numeric `id` and `op`:
 
-- `info`: actual display size and PID-bound window IDs, geometry, focus and type; no page titles or URLs.
+- `info`: actual display size and PID-bound window IDs, geometry, focus and type; no page titles or URLs. `features` lists the protocol extensions this build serves (`captureWait`, `cursorIdentity`); a driver sends the fields they add only when the feature is listed, so an older helper keeps today's behaviour.
 - `resize`: physical `width`, `height`, and optional exact normal `windowId`. The framebuffer and active output mode change together. X11 window sizing allows native Chromium reflow below CDP's artificial minimum width.
-- `capture`: JPEG bytes as JSON base64, actual physical size, `cursorIncluded:true`.
+- `capture`: JPEG bytes as JSON base64, actual physical size, `cursorIncluded:true`. `waitMs` (1–250) holds an unchanged capture until damage, a pointer move the capture composites or a new cursor identity, then answers `{changed:false}`; a frame's `timings.waitUs` records the wait. `cursorIdentity:true` adds `cursor` to any reply whose displayed cursor differs from the one last reported: `{serial, css}` for a cursor the pinned Chromium draws for a CSS keyword, or `{serial, css:null, image:{hash,width,height,hotX,hotY,scale,png}}` for any other, as a PNG of at most 4 KiB at the display's scale, halved once to scale 1 when it does not fit, and `default` when it still does not.
 - `input`: physical mouse and keyboard events behind the driver's existing controller lease and surface generation. Ordinary batches are at most 64 KiB. Exactly one `insertText` event can carry up to 1 MiB of UTF-8 clipboard text, with bounded JSON expansion.
 - `copy`: one explicit native Copy and bounded UTF-8 result. XFixes selection publication provides fresh Copy evidence; no-selection/password Copy preserves the remote clipboard and returns empty text. The frontend preserves its local clipboard on empty results.
 - `reset`: release only helper-injected held keys and buttons.
@@ -27,6 +27,8 @@ Stdio accepts one bounded JSON request per line, with a positive numeric `id` an
 The helper never replays effects. Validation failures record `operationPerformed:false`; unacknowledged input effects record `unknown`. Oversize clipboard transfer records that native Copy happened while refusing truncated output. Requests, text, clipboard contents and page pixels never enter diagnostics.
 
 Damaged rows are fetched through MIT-SHM into the retained framebuffer when the X server can attach the helper's segment (the helper's private Xvfb shares its IPC namespace and user); otherwise, and after any shared fetch fails, they cross the socket as `GetImage`, with the same pixels.
+
+Chromium on this image names none of its cursors: without an Xcursor theme it builds each one from the X server's cursor font. `cursor.go` therefore maps the images the pinned Chromium draws for CSS cursor keywords to keywords, measured rather than derived, and answers each class's canonical keyword where several keywords share one image (`auto` and `default`; `pointer` and `grabbing`; `progress` and `wait`; `move` and `all-scroll`; each paired resize keyword; and the eleven keywords Chromium shows the server's own `X_cursor` for, answered as `default`). The integration test's cursor section hovers a page with every keyword through native input and requires exactly those answers, so a Chromium or cursor font that draws differently fails qualification instead of mislabelling the pointer. On a host with an Xcursor theme Chromium draws the theme's cursors instead, which the helper reports as images; point `XCURSOR_PATH` at an empty directory to reproduce the image.
 
 The initial native image mode uses Chromium's real startup DPR 2, a maximum 4096×4096 physical display, and actual X11 geometry. This bounded mode does not prove arbitrary display-density or size parity. Activation requires exact driver/image qualification and integrated Product tests.
 
@@ -42,7 +44,7 @@ AMBIT_DISPLAY_TEST_OUTPUT=/absolute/path/test-artifacts \
 python3 cmd/browser-display/integration_test.py
 ```
 
-It verifies actual display/window/page dimensions and DPR across desktop and portrait sizes, native cursor capture, exact 6000-line paste and copy, UTF-8/control-character INCR transfers, the 1 MiB clipboard boundary, password suppression, real omnibox input, and cleanup. Exact-image and Product/production journeys remain separate acceptance requirements.
+It verifies actual display/window/page dimensions and DPR across desktop and portrait sizes, native cursor capture, the cursor identity table over every CSS keyword and a page's own cursor, exact 6000-line paste and copy, UTF-8/control-character INCR transfers, the 1 MiB clipboard boundary, password suppression, real omnibox input, and cleanup. Exact-image and Product/production journeys remain separate acceptance requirements.
 
 Window resize uses the browser's advertised `_NET_WM_SYNC_REQUEST` counter and an XSync alarm before acknowledging the native repaint. The pinned xgb package lacks a generated SYNC binding, so the helper implements only the required standard messages on its existing authenticated connection. It adds no dependency or second event loop. The protocol is documented in [EWMH section 6.2](https://specifications.freedesktop.org/wm/latest-single/)
 and the system X11 `syncproto.h` definitions.
