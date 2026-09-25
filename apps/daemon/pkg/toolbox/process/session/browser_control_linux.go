@@ -177,43 +177,97 @@ func (s *SessionController) dialBrowserControl(ctx context.Context, view browser
 
 // executeBrowserControl sends one validated command on the link and answers
 // exactly as the POST route does. The driver answers one line per command and
-// only after receiving it, so with commands sent one at a time nothing but
-// this command's reply can be waiting on the link.
+// only after receiving it, so with one command sent on the link nothing but
+// this command's reply can be waiting on it. A successful reply is re-proved,
+// because this link carries only this command.
 func (s *SessionController) executeBrowserControl(link *browserControlLink, request browserControlRequest) browserControlOutcome {
+	command, refused := browserControlCommand(request)
+	if refused != nil {
+		return *refused
+	}
+	_ = link.connection.SetDeadline(time.Now().Add(browserControlDeadline))
+	if written, err := link.connection.Write(command); err != nil {
+		link.undelivered = written == 0
+		return link.unknown()
+	}
+	line, err := readBrowserControlReply(bufio.NewReader(link.connection), browserControlResponseLimit(request))
+	if err != nil {
+		return link.unknown()
+	}
+	outcome, succeeded, intact := projectBrowserControlReply(line, request)
+	if !intact {
+		return link.unknown()
+	}
+	if succeeded {
+		if err := s.proveBrowserControlPeer(link.connection, link.view); err != nil {
+			link.lost = true
+			return browserControlFailure(http.StatusConflict, "browser_control_outcome_unknown")
+		}
+	}
+	return outcome
+}
+
+// browserControlCommand encodes one validated command as the driver's socket
+// line, or answers why it cannot be sent.
+func browserControlCommand(request browserControlRequest) ([]byte, *browserControlOutcome) {
 	var command bytes.Buffer
 	commandEncoder := json.NewEncoder(&command)
 	// This is a JSON socket, not HTML. Preserve the already-bounded raw event
 	// strings so pasted markup is not expanded sixfold by HTML escaping.
 	commandEncoder.SetEscapeHTML(false)
+	invalid := browserControlFailure(http.StatusBadRequest, "browser_control_invalid")
 	if err := commandEncoder.Encode(struct {
 		Action string `json:"action"`
 		browserControlRequest
 	}{Action: "ambit_browser_control", browserControlRequest: request}); err != nil {
-		return browserControlFailure(http.StatusBadRequest, "browser_control_invalid")
+		return nil, &invalid
 	}
 	if command.Len() > browserControlRequestLimit(request) {
-		return browserControlFailure(http.StatusBadRequest, "browser_control_invalid")
+		return nil, &invalid
 	}
-	_ = link.connection.SetDeadline(time.Now().Add(browserControlDeadline))
-	if written, err := io.Copy(link.connection, &command); err != nil {
-		link.undelivered = written == 0
-		return link.unknown()
-	}
-	responseLimit := browserControlLimit
+	return command.Bytes(), nil
+}
+
+func browserControlResponseLimit(request browserControlRequest) int {
 	if request.Op == "copy" || request.Op == "files" || request.Op == "downloads" {
-		responseLimit = browserCopyResponseLimit
+		return browserCopyResponseLimit
 	}
-	line, err := bufio.NewReader(io.LimitReader(link.connection, int64(responseLimit+1))).ReadBytes('\n')
-	if err != nil || len(line) > responseLimit {
-		return link.unknown()
+	return browserControlLimit
+}
+
+var errBrowserControlReplyTooLarge = errors.New("browser control reply exceeds its bound")
+
+// readBrowserControlReply reads exactly one reply line of at most limit bytes
+// and leaves any later reply buffered in reader.
+func readBrowserControlReply(reader *bufio.Reader, limit int) ([]byte, error) {
+	var line []byte
+	for {
+		chunk, err := reader.ReadSlice('\n')
+		if len(line)+len(chunk) > limit {
+			return nil, errBrowserControlReplyTooLarge
+		}
+		line = append(line, chunk...)
+		if err == nil {
+			return line, nil
+		}
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			return nil, err
+		}
 	}
+}
+
+// projectBrowserControlReply answers one driver reply line exactly as the POST
+// route states it. succeeded reports that the driver answered success; intact
+// is false when the line is not a reply at all, so the link that carried it
+// is no longer in step.
+func projectBrowserControlReply(line []byte, request browserControlRequest) (outcome browserControlOutcome, succeeded, intact bool) {
 	var response struct {
 		Success bool            `json:"success"`
 		Code    string          `json:"code"`
 		Data    json.RawMessage `json:"data"`
 	}
 	if json.Unmarshal(line, &response) != nil {
-		return link.unknown()
+		return browserControlFailure(http.StatusBadGateway, "browser_control_outcome_unknown"), false, false
 	}
 	if !response.Success {
 		code := response.Code
@@ -222,12 +276,12 @@ func (s *SessionController) executeBrowserControl(link *browserControlLink, requ
 		default:
 			code = "browser_control_unavailable"
 		}
-		return browserControlFailure(http.StatusConflict, code)
+		return browserControlFailure(http.StatusConflict, code), false, true
 	}
-	if err := s.proveBrowserControlPeer(link.connection, link.view); err != nil {
-		link.lost = true
-		return browserControlFailure(http.StatusConflict, "browser_control_outcome_unknown")
-	}
+	return projectBrowserControlSuccess(response.Data, request), true, true
+}
+
+func projectBrowserControlSuccess(raw json.RawMessage, request browserControlRequest) browserControlOutcome {
 	if request.Op == "inspect" || request.Op == "downloads" {
 		var inspection struct {
 			Supported      bool            `json:"supported"`
@@ -235,11 +289,11 @@ func (s *SessionController) executeBrowserControl(link *browserControlLink, requ
 			FilesSupported bool            `json:"filesSupported,omitempty"`
 			Surface        *browserSurface `json:"surface,omitempty"`
 		}
-		if json.Unmarshal(response.Data, &inspection) != nil || !inspection.Supported || (inspection.Surface != nil && !inspection.Surface.valid()) {
+		if json.Unmarshal(raw, &inspection) != nil || !inspection.Supported || (inspection.Surface != nil && !inspection.Surface.valid()) {
 			return browserControlFailure(http.StatusServiceUnavailable, "browser_control_unavailable")
 		}
 		if request.Op == "downloads" {
-			files, ok := browserFileResponse(response.Data, request, "files")
+			files, ok := browserFileResponse(raw, request, "files")
 			if !ok {
 				return browserControlFailure(http.StatusBadGateway, "browser_control_unavailable")
 			}
@@ -249,17 +303,18 @@ func (s *SessionController) executeBrowserControl(link *browserControlLink, requ
 	}
 	// Do not forward upstream error strings, request data or unrelated metadata.
 	var data struct {
-		ControllerID string          `json:"controllerId"`
-		ExpiresAt    int64           `json:"expiresAt"`
-		LastSequence uint64          `json:"lastSequence"`
-		Status       string          `json:"status"`
-		Surface      *browserSurface `json:"surface,omitempty"`
+		ControllerID string                `json:"controllerId"`
+		ExpiresAt    int64                 `json:"expiresAt"`
+		LastSequence uint64                `json:"lastSequence"`
+		Status       string                `json:"status"`
+		Surface      *browserSurface       `json:"surface,omitempty"`
+		Timing       *browserControlTiming `json:"timing,omitempty"`
 	}
-	if json.Unmarshal(response.Data, &data) != nil || data.ControllerID != request.ControllerID || data.LastSequence > 9_007_199_254_740_991 || (data.Surface != nil && !data.Surface.valid()) {
+	if json.Unmarshal(raw, &data) != nil || data.ControllerID != request.ControllerID || data.LastSequence > browserSafeInteger || (data.Surface != nil && !data.Surface.valid()) || !data.Timing.valid() {
 		return browserControlFailure(http.StatusBadGateway, "browser_control_outcome_unknown")
 	}
 	if request.Op == "files" || request.Op == "drop" {
-		files, ok := browserFileResponse(response.Data, request, data.Status)
+		files, ok := browserFileResponse(raw, request, data.Status)
 		if !ok {
 			return browserControlFailure(http.StatusBadGateway, "browser_control_outcome_unknown")
 		}
@@ -278,7 +333,7 @@ func (s *SessionController) executeBrowserControl(link *browserControlLink, requ
 				Complete bool   `json:"complete"`
 			} `json:"clipboard"`
 		}
-		if data.Status != "copied" || json.Unmarshal(response.Data, &copy) != nil || !copy.Clipboard.Complete ||
+		if data.Status != "copied" || json.Unmarshal(raw, &copy) != nil || !copy.Clipboard.Complete ||
 			!utf8.ValidString(copy.Clipboard.Text) || len(copy.Clipboard.Text) > browserCopyTextLimit || copy.Clipboard.Bytes != len(copy.Clipboard.Text) {
 			return browserControlFailure(http.StatusBadGateway, "browser_control_unavailable")
 		}
@@ -295,6 +350,19 @@ func (s *SessionController) executeBrowserControl(link *browserControlLink, requ
 	default:
 		return browserControlFailure(http.StatusBadGateway, "browser_control_outcome_unknown")
 	}
+}
+
+// browserControlTiming is the driver's account of one input's path, in
+// microseconds: queued behind earlier work, then injected until the display
+// acknowledged it. It rides the acknowledgement so a controller can attribute
+// its own round trip.
+type browserControlTiming struct {
+	QueueUs  uint64 `json:"queueUs"`
+	InjectUs uint64 `json:"injectUs"`
+}
+
+func (t *browserControlTiming) valid() bool {
+	return t == nil || (t.QueueUs <= browserSafeInteger && t.InjectUs <= browserSafeInteger)
 }
 
 func browserControlRequestLimit(request browserControlRequest) int {

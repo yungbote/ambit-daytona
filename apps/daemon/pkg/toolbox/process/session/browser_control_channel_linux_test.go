@@ -282,6 +282,68 @@ func TestBrowserControlChannelRetiresALinkLostMidCommand(t *testing.T) {
 	}
 }
 
+// Commands reach the driver as their frames arrive: a command is written
+// while earlier ones are still unanswered, and the replies still come back
+// one per frame, in the frames' order.
+func TestBrowserControlChannelPipelinesCommandsInOrder(t *testing.T) {
+	workspace := newBrowserWorkspace(t)
+	workspace.open(t, "browser-owner")
+	workspace.runDriver(t, "browser-owner", "primary", "channel-slow")
+	id, _ := workspace.only(t, "browser-owner", "primary")
+	channel := workspace.openChannel(t, workspace.serve(t), "browser-owner", id)
+	sequences := []int{1, 3, 4, 5, 6, 8}
+	for _, sequence := range sequences {
+		sendFrame(t, channel, browserInput(sequence))
+	}
+	sendFrame(t, channel, map[string]any{"op": "cdp"}) // refused by the relay, answered in its turn
+	for _, sequence := range sequences {
+		if result := readResult(t, channel, 15*time.Second); result["status"] != "applied" || result["lastSequence"] != float64(sequence) {
+			t.Fatalf("reply for input %d is out of order: %v", sequence, result)
+		}
+	}
+	expectFailure(t, channel, http.StatusBadRequest, "browser_control_invalid")
+	overlapped, err := os.ReadFile(filepath.Join(workspace.socketDir, "primary.overlapped"))
+	if count, _ := strconv.Atoi(strings.TrimSpace(string(overlapped))); err != nil || count == 0 {
+		t.Fatalf("no command reached the driver before the previous reply: %q %v", overlapped, err)
+	}
+}
+
+// The channel proves its driver link when it dials it. Replies are not
+// re-proved one by one; the custody watch re-observes the whole view (the
+// process and its stream listener) every second and ends the channel when
+// the view ends.
+func TestBrowserControlChannelProvesItsLinkOnceAndWatchesTheView(t *testing.T) {
+	workspace := newBrowserWorkspace(t)
+	workspace.open(t, "browser-owner")
+	workspace.runDriver(t, "browser-owner", "primary", "channel")
+	id, _ := workspace.only(t, "browser-owner", "primary")
+	channel := workspace.openChannel(t, workspace.serve(t), "browser-owner", id)
+	applied(t, channel, 1)
+	// The driver closes the view's stream listener while applying this input.
+	applied(t, channel, browserFixtureEndViewSequence)
+	expectClose(t, channel, browserChannelViewEnded, "browser_view_ended", 15*time.Second)
+}
+
+// The driver's account of an input's path (queued, then injected until the
+// display acknowledged it) rides the acknowledgement to the controller. An
+// account outside the controller's integer range makes the outcome unknown
+// rather than a wrong number.
+func TestBrowserControlChannelRelaysTheDriverTiming(t *testing.T) {
+	workspace := newBrowserWorkspace(t)
+	workspace.open(t, "browser-owner")
+	workspace.runDriver(t, "browser-owner", "primary", "channel")
+	id, _ := workspace.only(t, "browser-owner", "primary")
+	channel := workspace.openChannel(t, workspace.serve(t), "browser-owner", id)
+	sendFrame(t, channel, browserInput(browserFixtureTimedSequence))
+	result := readResult(t, channel, 5*time.Second)
+	timing, _ := result["timing"].(map[string]any)
+	if result["status"] != "applied" || timing["queueUs"] != float64(12) || timing["injectUs"] != float64(3) {
+		t.Fatalf("the timing account did not ride the acknowledgement: %v", result)
+	}
+	sendFrame(t, channel, browserInput(browserFixtureUnboundedSequence))
+	expectFailure(t, channel, http.StatusBadGateway, "browser_control_outcome_unknown")
+}
+
 // A frame that is not one text JSON document within the POST body limit ends
 // the channel with 1008 and a reason. A frame of exactly the limit, and a
 // well-formed command the relay refuses, are that command's failure and
@@ -446,8 +508,8 @@ func TestBrowserControlChannelPerCommandLatency(t *testing.T) {
 		applied(t, channel, sequence)
 		relayed = append(relayed, time.Since(started))
 	}
-	// The peer proof after every reply is the channel's one remaining
-	// per-command custody cost; state it beside the totals.
+	// The peer proof is paid once per link by the channel and once per
+	// command by the POST route; state its cost beside the totals.
 	views, err := workspace.controller.browserViews(t.Context(), "browser-owner")
 	if err != nil || len(views) != 1 {
 		t.Fatalf("view observation: %v %v", views, err)
