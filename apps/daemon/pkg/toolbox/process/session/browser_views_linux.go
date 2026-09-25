@@ -535,6 +535,12 @@ func browserViewMessage(message []byte, patches bool) ([]byte, uint64, browserRe
 			return projected, 0, browserRecordVisual
 		}
 		return nil, 0, browserRecordDropped
+	case "cursor":
+		// The remote pointer's state, for a viewer that draws the pointer itself.
+		if projected, valid := browserCursor(message); valid {
+			return projected, 0, browserRecordVisual
+		}
+		return nil, 0, browserRecordDropped
 	case "tabs":
 		// A newly attached viewer receives the driver's current tab snapshot,
 		// not a navigation event. Project only the active location into our
