@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"image"
 	"os"
+	"reflect"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -639,6 +641,47 @@ func TestXvfbCursorIdentityFollowsACursorThatChangedDuringItsFetch(t *testing.T)
 	announced("the text cursor again", func(value uint64) bool { return value == textAnnounced })
 	if reply := mustCall(t, d, identity); cursorCSS(reply) != "text" {
 		t.Fatalf("the cursor shown again was not reported: %v", reply["cursor"])
+	}
+}
+
+// The browser recreates a page's url() cursor, with a new serial, each time
+// the pointer re-enters its element. Its picture is encoded once; every later
+// sighting carries the same picture without encoding it again.
+func TestXvfbARecreatedPageCursorIsEncodedOnce(t *testing.T) {
+	startXvfb(t, 800, 600)
+	d, err := openDisplay(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.close()
+	page := newPainter(t)
+	page.warp(t, 400, 300)
+	pointer := page.cursorFromFont(t, 60)
+	identity := `{"id":1,"op":"capture","cursor":false,"cursorIdentity":true,"waitMs":250}`
+	mustCall(t, d, identity)
+	page.pixmapCursor(t)
+	first, _ := mustCall(t, d, identity)["cursor"].(map[string]any)
+	if first == nil || first["image"] == nil {
+		t.Fatalf("page cursor: %v", first)
+	}
+	for entry := 1; entry <= 3; entry++ {
+		page.useCursor(t, pointer)
+		if reply := mustCall(t, d, identity); cursorCSS(reply) != "pointer" {
+			t.Fatalf("entry %d: left for %v", entry, reply["cursor"])
+		}
+		page.pixmapCursor(t)
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		reply := mustCall(t, d, identity)
+		runtime.ReadMemStats(&after)
+		again, _ := reply["cursor"].(map[string]any)
+		if again == nil || again["serial"] == first["serial"] || !reflect.DeepEqual(again["image"], first["image"]) {
+			t.Fatalf("entry %d: %v, first %v", entry, again, first)
+		}
+		// A PNG encode allocates a compressor of several hundred KiB.
+		if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 256<<10 {
+			t.Fatalf("entry %d encoded the page cursor again: %d bytes allocated", entry, allocated)
+		}
 	}
 }
 

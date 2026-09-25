@@ -114,32 +114,53 @@ func cursorHash(width, height, hotX, hotY int, pixels []uint32) string {
 	return hex.EncodeToString(digest.Sum(nil)[:8])
 }
 
-// describeCursor turns one XFixes cursor into its reported identity.
-func describeCursor(serial uint32, width, height, hotX, hotY int, pixels []uint32) cursorIdentity {
-	identity := cursorIdentity{Serial: serial}
+// maximumCursorPictures bounds the page cursors a tracker keeps by hash.
+const maximumCursorPictures = 32
+
+// describe turns one XFixes cursor into its reported identity. The browser
+// recreates a page's url() cursor, with a new serial, each time the pointer
+// re-enters its element, so a picture is encoded once per hash and every
+// later sighting reuses it.
+func (t *cursorTracker) describe(serial uint32, width, height, hotX, hotY int, pixels []uint32) cursorIdentity {
+	named := func(keyword string) cursorIdentity { return cursorIdentity{Serial: serial, CSS: &keyword} }
 	if width <= 0 || height <= 0 || width > maximumCursorSide || height > maximumCursorSide || len(pixels) != width*height {
-		keyword := "default"
-		identity.CSS = &keyword
-		return identity
+		return named("default")
 	}
 	hash := cursorHash(width, height, hotX, hotY, pixels)
 	if keyword, known := cursorKeywords[hash]; known {
-		identity.CSS = &keyword
-		return identity
+		return named(keyword)
 	}
-	// Chrome rasterizes a page's cursor at the display's scale. One halving
-	// keeps an oversized image a picture of the same cursor at scale 1.
-	source := cursorPixels{width, height, hotX, hotY, pixels}
+	picture, seen := t.pictures[hash]
+	if !seen {
+		picture = drawCursor(hash, cursorPixels{width, height, hotX, hotY, pixels})
+		if t.pictures == nil {
+			t.pictures = make(map[string]*cursorImage)
+		}
+		for evicted := range t.pictures {
+			if len(t.pictures) < maximumCursorPictures {
+				break
+			}
+			delete(t.pictures, evicted)
+		}
+		t.pictures[hash] = picture
+	}
+	if picture == nil {
+		return named("default")
+	}
+	return cursorIdentity{Serial: serial, Image: picture}
+}
+
+// drawCursor is a page cursor's picture within the PNG budget, or nil when it
+// cannot fit. Chrome rasterizes a page's cursor at the display's scale; one
+// halving keeps an oversized image a picture of the same cursor at scale 1.
+func drawCursor(hash string, source cursorPixels) *cursorImage {
 	for scale := 2; scale >= 1; scale-- {
 		if encoded := encodeCursorPNG(source); encoded != nil {
-			identity.Image = &cursorImage{Hash: hash, Width: source.width, Height: source.height, HotX: source.hotX, HotY: source.hotY, Scale: scale, PNG: encoded}
-			return identity
+			return &cursorImage{Hash: hash, Width: source.width, Height: source.height, HotX: source.hotX, HotY: source.hotY, Scale: scale, PNG: encoded}
 		}
 		source = source.halved()
 	}
-	keyword := "default"
-	identity.CSS = &keyword
-	return identity
+	return nil
 }
 
 type cursorPixels struct {
@@ -204,6 +225,9 @@ type cursorTracker struct {
 	known    bool           // a fetch has answered
 	current  cursorIdentity // the cursor the last fetch found displayed
 	reported string         // key of the identity last reported; "" before any
+	// pictures holds each page cursor described so far, by hash; nil for one
+	// that fits no budget. A picture is never changed once described.
+	pictures map[string]*cursorImage
 }
 
 func (t *cursorTracker) notify(serial uint32) { t.notified.Store(uint64(serial) + 1) }
@@ -243,7 +267,7 @@ func (t *cursorTracker) finish(cookie *xfixes.GetCursorImageAndNameCookie) error
 		return nil
 	}
 	t.known = true
-	t.current = describeCursor(reply.CursorSerial, int(reply.Width), int(reply.Height), int(reply.Xhot), int(reply.Yhot), reply.CursorImage)
+	t.current = t.describe(reply.CursorSerial, int(reply.Width), int(reply.Height), int(reply.Xhot), int(reply.Yhot), reply.CursorImage)
 	return nil
 }
 

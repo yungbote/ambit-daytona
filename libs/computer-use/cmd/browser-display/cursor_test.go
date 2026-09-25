@@ -24,11 +24,12 @@ func noisyCursor(side int, seed int64) []uint32 {
 // not fit the budget is halved once to scale 1; one that still does not fit
 // is the default arrow rather than a truncated or missing picture.
 func TestUnknownCursorTravelsAsABoundedPNG(t *testing.T) {
+	var tracker cursorTracker
 	small := make([]uint32, 48*48)
 	for index := range small {
 		small[index] = 0xffff0000
 	}
-	identity := describeCursor(7, 48, 48, 24, 24, small)
+	identity := tracker.describe(7, 48, 48, 24, 24, small)
 	if identity.CSS != nil || identity.Image == nil || identity.Image.Scale != 2 || identity.Image.Width != 48 || identity.Image.HotX != 24 || identity.Serial != 7 {
 		t.Fatalf("small custom cursor: %+v", identity)
 	}
@@ -48,7 +49,7 @@ func TestUnknownCursorTravelsAsABoundedPNG(t *testing.T) {
 		if encodeCursorPNG(cursorPixels{side, side, 3, 5, pixels}) != nil {
 			continue
 		}
-		halved = describeCursor(1, side, side, 3, 5, pixels)
+		halved = tracker.describe(1, side, side, 3, 5, pixels)
 		if halved.Image != nil {
 			if halved.Image.Scale != 1 || halved.Image.Width != side/2 || halved.Image.HotX != 1 || halved.Image.HotY != 2 || len(halved.Image.PNG) > maximumCursorPNG {
 				t.Fatalf("halved cursor: %+v", halved.Image)
@@ -60,11 +61,11 @@ func TestUnknownCursorTravelsAsABoundedPNG(t *testing.T) {
 		t.Fatal("no oversized cursor was halved")
 	}
 
-	huge := describeCursor(2, 256, 256, 0, 0, noisyCursor(256, 9))
+	huge := tracker.describe(2, 256, 256, 0, 0, noisyCursor(256, 9))
 	if huge.CSS == nil || *huge.CSS != "default" || huge.Image != nil {
 		t.Fatalf("incompressible cursor: %+v", huge)
 	}
-	malformed := describeCursor(3, 4, 4, 0, 0, make([]uint32, 3))
+	malformed := tracker.describe(3, 4, 4, 0, 0, make([]uint32, 3))
 	if malformed.CSS == nil || *malformed.CSS != "default" {
 		t.Fatalf("malformed cursor: %+v", malformed)
 	}
@@ -130,5 +131,38 @@ func TestCursorTrackerFetchesNothingForTheCursorItHolds(t *testing.T) {
 	tracker.notify(7)
 	if tracker.begin(nil) != nil {
 		t.Fatal("fetched the cursor held")
+	}
+}
+
+// A page cursor's picture is described once per hash, however often the
+// browser recreates the cursor, including one that fits no budget, and the
+// pictures kept stay bounded.
+func TestPageCursorPicturesAreDescribedOncePerHashWithinABound(t *testing.T) {
+	var tracker cursorTracker
+	solid := func(side int, argb uint32) []uint32 {
+		pixels := make([]uint32, side*side)
+		for index := range pixels {
+			pixels[index] = argb
+		}
+		return pixels
+	}
+	pixels := solid(48, 0xff00ff00)
+	first := tracker.describe(3, 48, 48, 1, 1, pixels)
+	again := tracker.describe(5, 48, 48, 1, 1, pixels)
+	if first.Image == nil || again.Serial != 5 || again.Image != first.Image {
+		t.Fatalf("a recreated cursor was described again: %+v then %+v", first.Image, again.Image)
+	}
+	huge := noisyCursor(256, 9)
+	if unfit := tracker.describe(6, 256, 256, 0, 0, huge); unfit.CSS == nil || *unfit.CSS != "default" {
+		t.Fatalf("unfit cursor: %+v", unfit)
+	}
+	if picture, kept := tracker.pictures[cursorHash(256, 256, 0, 0, huge)]; !kept || picture != nil {
+		t.Fatal("a cursor that fits no budget would be encoded again on every sighting")
+	}
+	for index := 0; index < 3*maximumCursorPictures; index++ {
+		tracker.describe(uint32(10+index), 8, 8, 0, 0, solid(8, 0xff000000|uint32(index)))
+		if len(tracker.pictures) > maximumCursorPictures {
+			t.Fatalf("%d pictures kept", len(tracker.pictures))
+		}
 	}
 }
