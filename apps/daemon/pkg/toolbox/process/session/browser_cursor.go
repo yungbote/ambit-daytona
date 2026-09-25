@@ -43,9 +43,9 @@ type browserCursorImage struct {
 }
 
 // browserCursor projects the remote pointer's state: exactly one CSS keyword,
-// or one page-supplied image with its hotspot, stamped with the capture clock
-// and the display's cursor serial. Anything outside those bounds drops the
-// whole record rather than any part of it.
+// or one page-supplied image with its hotspot and a null keyword, stamped with
+// the capture clock and the display's cursor serial. Anything outside those
+// bounds drops the whole record rather than any part of it.
 func browserCursor(message []byte) ([]byte, bool) {
 	if len(message) > browserCursorRecordLimit {
 		return nil, false
@@ -54,13 +54,13 @@ func browserCursor(message []byte) ([]byte, bool) {
 		Type   string              `json:"type"`
 		Ts     *uint64             `json:"ts"`
 		Serial *uint32             `json:"serial"`
-		CSS    string              `json:"css,omitempty"`
+		CSS    *string             `json:"css"`
 		Image  *browserCursorImage `json:"image,omitempty"`
 	}
 	if json.Unmarshal(message, &value) != nil || value.Type != "cursor" || value.Ts == nil || *value.Ts > browserSafeInteger || value.Serial == nil {
 		return nil, false
 	}
-	if (value.CSS == "") == (value.Image == nil) || (value.CSS != "" && !slices.Contains(browserCursorKeywords, value.CSS)) || (value.Image != nil && !value.Image.valid()) {
+	if (value.CSS == nil) == (value.Image == nil) || (value.CSS != nil && !slices.Contains(browserCursorKeywords, *value.CSS)) || (value.Image != nil && !value.Image.valid()) {
 		return nil, false
 	}
 	body, err := json.Marshal(value)

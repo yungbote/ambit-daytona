@@ -30,6 +30,8 @@ func TestBrowserCursorRecordsProjectTheKeywordOrTheImage(t *testing.T) {
 	for _, input := range []string{
 		`{"type":"cursor","ts":912345678,"serial":17,"css":"text","private":"secret"}`,
 		`{"type":"cursor","ts":912345678,"serial":18,"image":` + image + `}`,
+		// The helper's shape states the null keyword itself.
+		`{"type":"cursor","ts":912345678,"serial":20,"css":null,"image":` + image + `}`,
 		// A viewer that already holds this hash needs only the reference.
 		`{"type":"cursor","ts":912345678,"serial":19,"image":{"hash":"9f8579ba9c44aa01","width":48,"height":48,"hotX":24,"hotY":24,"scale":2}}`,
 	} {
@@ -40,6 +42,12 @@ func TestBrowserCursorRecordsProjectTheKeywordOrTheImage(t *testing.T) {
 		var value map[string]any
 		if json.Unmarshal(projected, &value) != nil || value["type"] != "cursor" || value["ts"] != float64(912345678) || value["serial"] == nil {
 			t.Fatalf("cursor identity lost: %s", projected)
+		}
+		// Exactly one identity, stated as the viewer reads it: a keyword, or
+		// an image beside a null keyword.
+		css, stated := value["css"]
+		if _, image := value["image"]; !stated || (css == nil) != image || (css != nil && css != "text") {
+			t.Fatalf("cursor identity misstated: %s", projected)
 		}
 	}
 	for _, keyword := range browserCursorKeywords {
@@ -65,6 +73,9 @@ func TestBrowserCursorRecordsRefuseAnythingButOneBoundedIdentity(t *testing.T) {
 		`{"type":"cursor","ts":1,"css":"text"}`,
 		`{"type":"cursor","ts":1,"serial":4294967296,"css":"text"}`,
 		`{"type":"cursor","ts":1,"serial":1,"css":"text","image":{` + valid + `}}`,
+		`{"type":"cursor","ts":1,"serial":1,"css":null}`,
+		`{"type":"cursor","ts":1,"serial":1,"css":""}`,
+		`{"type":"cursor","ts":1,"serial":1,"css":"","image":{` + valid + `}}`,
 		image(strings.Replace(valid, `"hash":"9f8579ba9c44aa01"`, `"hash":"xyz"`, 1)),
 		image(strings.Replace(valid, `"hash":"9f8579ba9c44aa01"`, `"hash":"9f85"`, 1)),
 		image(strings.Replace(valid, `"width":48`, `"width":0`, 1)),
