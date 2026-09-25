@@ -37,7 +37,11 @@ func serveBrowserViewChannelFixture(w http.ResponseWriter, r *http.Request, dir,
 	// Only a viewer that declared it draws the pointer reaches the driver with
 	// cursor=viewer, and then exactly so.
 	pointer := mode == "view-channel-pointer"
-	if query.Get("pacing") != "ack" || query.Get("patches") != "1" || !validPresentation || query.Has("cursor") != pointer || (pointer && query.Get("cursor") != "viewer") {
+	// Likewise, only a viewer that declared it draws frames cropped to their
+	// visible window reaches the driver with visible=crop.
+	crop := mode == "view-channel-crop"
+	if query.Get("pacing") != "ack" || query.Get("patches") != "1" || !validPresentation || query.Has("cursor") != pointer || (pointer && query.Get("cursor") != "viewer") ||
+		query.Has("visible") != crop || (crop && query.Get("visible") != "crop") {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -405,6 +409,33 @@ func TestBrowserViewerChannelRelaysThePointerDeclarationDoorbellsAndCursors(t *t
 	}
 	if cursor := readViewerText(t, channel); len(cursor) != 4 || cursor["type"] != "cursor" || cursor["ts"] != float64(1234568) || cursor["serial"] != float64(17) || cursor["css"] != "text" {
 		t.Fatalf("cursor record: %v", cursor)
+	}
+	readViewerFrame(t, channel, false)
+}
+
+// A viewer that draws frames 1:1 from the top-left, cropped to their visible
+// window, declares so on its upgrade (visible=crop), and the declaration
+// reaches the driver as made, so the driver may keep the display at a size
+// class through a resize once every viewer crops; any other value is invalid.
+func TestBrowserViewerChannelRelaysTheCropDeclaration(t *testing.T) {
+	workspace := newBrowserWorkspace(t)
+	workspace.open(t, "viewer-owner")
+	workspace.runDriver(t, "viewer-owner", "primary", "view-channel-crop")
+	id, _ := workspace.only(t, "viewer-owner", "primary")
+	address := browserViewerAddress(workspace.serve(t), "viewer-owner", id) + "?width=320&height=240&frames=binary"
+	headers := http.Header{"X-Ambit-Browser-Viewer": []string{browserFixtureViewer}}
+	for _, declaration := range []string{"&visible=scale", "&visible=", "&visible=crop&visible=crop"} {
+		if _, response, err := websocket.DefaultDialer.Dial(address+declaration, headers); err == nil || response == nil || response.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s was accepted: %v %v", declaration, err, response)
+		}
+	}
+	channel, _, err := websocket.DefaultDialer.Dial(address+"&visible=crop", headers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer channel.Close()
+	if readViewerText(t, channel)["type"] != "status" {
+		t.Fatal("initial state missing")
 	}
 	readViewerFrame(t, channel, false)
 }

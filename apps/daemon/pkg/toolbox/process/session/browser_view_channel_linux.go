@@ -28,9 +28,11 @@ const browserMaximumFrameWindow = 8
 
 // ViewBrowserChannel carries only visual output, painted-frame acknowledgements
 // and presentation sizes. The upgrade binds the viewer identity for its
-// lifetime, and with cursor=viewer declares that this viewer draws the pointer
-// itself, from pointer samples and cursor records, so the driver may leave it
-// out of the frames once every connected viewer says so.
+// lifetime, and declares what this viewer draws itself: with cursor=viewer the
+// pointer, from pointer samples and cursor records, so the driver may leave it
+// out of the frames; with visible=crop frames 1:1 from the top-left cropped to
+// their visible window, so the driver may keep the display at a size class
+// through a resize. Each holds once every connected viewer says so.
 func (s *SessionController) ViewBrowserChannel(c *gin.Context) {
 	if !websocket.IsWebSocketUpgrade(c.Request) {
 		c.Status(http.StatusUpgradeRequired)
@@ -39,8 +41,10 @@ func (s *SessionController) ViewBrowserChannel(c *gin.Context) {
 	presentation, valid := parseBrowserChannelPresentation(c.Request)
 	formats := c.Request.URL.Query()["frames"]
 	pointer := c.Request.URL.Query()["cursor"]
+	crop := c.Request.URL.Query()["visible"]
 	window, windowValid := parseBrowserFrameWindow(c.Request)
-	if !valid || !windowValid || len(formats) > 1 || (len(formats) == 1 && formats[0] != "binary") || len(pointer) > 1 || (len(pointer) == 1 && pointer[0] != "viewer") {
+	if !valid || !windowValid || len(formats) > 1 || (len(formats) == 1 && formats[0] != "binary") || len(pointer) > 1 || (len(pointer) == 1 && pointer[0] != "viewer") ||
+		len(crop) > 1 || (len(crop) == 1 && crop[0] != "crop") {
 		c.JSON(http.StatusBadRequest, gin.H{"code": "browser_view_invalid"})
 		return
 	}
@@ -64,6 +68,9 @@ func (s *SessionController) ViewBrowserChannel(c *gin.Context) {
 	}
 	if len(pointer) == 1 {
 		address += "&cursor=viewer"
+	}
+	if len(crop) == 1 {
+		address += "&visible=crop"
 	}
 	upstream, _, err := (&websocket.Dialer{HandshakeTimeout: browserDriverWriteTimeout}).DialContext(c.Request.Context(), address, headers)
 	if err != nil {
