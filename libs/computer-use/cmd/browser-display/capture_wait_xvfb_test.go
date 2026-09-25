@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -277,6 +278,8 @@ type syncBrowser struct {
 	color   uint32
 	mu      sync.Mutex
 	painted []time.Time
+	// silent stops the acknowledgements, like a browser too busy to paint.
+	silent atomic.Bool
 }
 
 func newSyncBrowser(t *testing.T, width, height int, delay time.Duration, color uint32) *syncBrowser {
@@ -380,6 +383,9 @@ func newSyncBrowser(t *testing.T, width, height int, delay time.Duration, color 
 				}
 				value, target := value, requested
 				requested = 0
+				if b.silent.Load() {
+					continue
+				}
 				time.AfterFunc(b.delay, func() {
 					b.paint(int(value.Width), int(value.Height))
 					_ = request(3, counter, uint32(target>>32), uint32(target)).Check()
@@ -519,6 +525,14 @@ func TestXvfbSizeClassLaysOutOnlyTheModeAndWindow(t *testing.T) {
 	whole := mustCall(t, d, `{"id":3,"op":"capture","cursor":false,"force":true}`)
 	if whole["width"] != float64(1000) || whole["visible"] != nil {
 		t.Fatalf("exact layout frame %vx%v visible %v", whole["width"], whole["height"], whole["visible"])
+	}
+	// A layout without a window names the output's mode.
+	if _, err := d.resize(700, 500, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	mode := mustCall(t, d, `{"id":4,"op":"capture","cursor":false,"force":true}`)
+	if visible, _ := mode["visible"].(map[string]any); mode["width"] != float64(1000) || visible == nil || visible["width"] != float64(700) || visible["height"] != float64(500) {
+		t.Fatalf("mode-only layout frame %vx%v visible %v", mode["width"], mode["height"], mode["visible"])
 	}
 }
 
@@ -682,6 +696,44 @@ func TestXvfbARecreatedPageCursorIsEncodedOnce(t *testing.T) {
 		if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 256<<10 {
 			t.Fatalf("entry %d encoded the page cursor again: %d bytes allocated", entry, allocated)
 		}
+	}
+}
+
+// A layout whose outcome is unknown can still have changed the framebuffer
+// and the window. The frames after it name the window where the display now
+// has it, not where it was before.
+func TestXvfbVisibleFollowsTheWindowAfterALayoutOfUnknownOutcome(t *testing.T) {
+	startXvfb(t, 4096, 4096)
+	d, err := openDisplay(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.close()
+	browser := newSyncBrowser(t, 800, 600, 5*time.Millisecond, 0x2060c0)
+	window := uint32(browser.window)
+	visible := func() any {
+		return mustCall(t, d, `{"id":2,"op":"capture","cursor":false,"force":true}`)["visible"]
+	}
+	rect := func(width, height int) map[string]any {
+		return map[string]any{"x": 0.0, "y": 0.0, "width": float64(width), "height": float64(height)}
+	}
+	if _, err := d.resize(1600, 1200, window, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := visible(); !reflect.DeepEqual(got, rect(1600, 1200)) {
+		t.Fatalf("before: %v", got)
+	}
+	// The browser misses the paint: the framebuffer has grown and the window
+	// has its new size, but the layout's outcome is unknown.
+	browser.silent.Store(true)
+	if _, err := d.resize(1900, 1200, window, true); err == nil {
+		t.Fatal("an unacknowledged layout was reported known")
+	}
+	if w, h := rootSize(t, d); w != 2048 || h != 1280 {
+		t.Fatalf("framebuffer %dx%d", w, h)
+	}
+	if got := visible(); !reflect.DeepEqual(got, rect(1900, 1200)) {
+		t.Fatalf("after the unknown layout the frames name %v, not the window at 1900x1200", got)
 	}
 }
 

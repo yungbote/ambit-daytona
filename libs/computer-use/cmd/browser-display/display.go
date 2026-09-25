@@ -266,27 +266,62 @@ func (d *display) resize(width, height int, windowID uint32, sizeClass bool) (di
 	}
 	d.frames.beginLayout()
 	result, err := d.layout(width, height, framebufferW, framebufferH, oldW, oldH, windowID)
-	visible := image.Rectangle{}
-	if framebufferW != width || framebufferH != height {
-		visible = image.Rect(0, 0, width, height)
-	}
-	d.frames.endLayout(visible, err == nil)
+	// Read back, not assumed: a layout of unknown outcome may have changed the
+	// framebuffer, the mode and the window before it failed.
+	d.frames.endLayout(d.visibleArea(windowID))
 	return result, err
 }
-func (d *display) layout(width, height, framebufferW, framebufferH, oldW, oldH int, windowID uint32) (displayInfo, error) {
+
+// visibleArea is where the browser shows inside the framebuffer, as the
+// display has it now: the window when one is laid out, otherwise the output's
+// scanout. Empty means the whole framebuffer, as does any geometry that cannot
+// be read.
+func (d *display) visibleArea(windowID uint32) image.Rectangle {
+	root := xproto.GetGeometry(d.conn, xproto.Drawable(d.screen.Root))
+	var area image.Rectangle
+	if windowID != 0 {
+		window, err := xproto.GetGeometry(d.conn, xproto.Drawable(windowID)).Reply()
+		if err != nil {
+			_, _ = root.Reply()
+			return image.Rectangle{}
+		}
+		area = image.Rect(int(window.X), int(window.Y), int(window.X)+int(window.Width), int(window.Y)+int(window.Height))
+	} else if _, _, scanout, err := d.scanout(); err == nil && scanout.Mode != 0 {
+		area = image.Rect(int(scanout.X), int(scanout.Y), int(scanout.X)+int(scanout.Width), int(scanout.Y)+int(scanout.Height))
+	}
+	framebuffer, err := root.Reply()
+	if err != nil {
+		return image.Rectangle{}
+	}
+	whole := image.Rect(0, 0, int(framebuffer.Width), int(framebuffer.Height))
+	if area = area.Intersect(whole); area == whole {
+		return image.Rectangle{}
+	}
+	return area
+}
+
+// scanout reads the display's one output and the CRTC that shows it.
+func (d *display) scanout() (randr.Output, randr.Crtc, *randr.GetCrtcInfoReply, error) {
 	resources, err := randr.GetScreenResourcesCurrent(d.conn, d.screen.Root).Reply()
 	if err != nil || len(resources.Outputs) != 1 {
-		return displayInfo{}, unavailable()
+		return 0, 0, nil, unavailable()
 	}
 	output := resources.Outputs[0]
 	oi, err := randr.GetOutputInfo(d.conn, output, resources.ConfigTimestamp).Reply()
 	if err != nil || oi.Crtc == 0 {
-		return displayInfo{}, unavailable()
+		return 0, 0, nil, unavailable()
 	}
-	crtc := oi.Crtc
-	scanout, err := randr.GetCrtcInfo(d.conn, crtc, resources.ConfigTimestamp).Reply()
+	scanout, err := randr.GetCrtcInfo(d.conn, oi.Crtc, resources.ConfigTimestamp).Reply()
 	if err != nil {
-		return displayInfo{}, unavailable()
+		return 0, 0, nil, unavailable()
+	}
+	return output, oi.Crtc, scanout, nil
+}
+
+func (d *display) layout(width, height, framebufferW, framebufferH, oldW, oldH int, windowID uint32) (displayInfo, error) {
+	output, crtc, scanout, err := d.scanout()
+	if err != nil {
+		return displayInfo{}, err
 	}
 	framebufferChanges := framebufferW != oldW || framebufferH != oldH
 	if !framebufferChanges && scanout.Mode != 0 && int(scanout.Width) == width && int(scanout.Height) == height {

@@ -486,14 +486,11 @@ func (e *frameEngine) beginLayout() {
 	}
 }
 
-// endLayout reopens capture. The visible rectangle is replaced only when the
-// layout's outcome is known.
-func (e *frameEngine) endLayout(visible image.Rectangle, known bool) {
+// endLayout reopens capture with the window where the layout left it.
+func (e *frameEngine) endLayout(visible image.Rectangle) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if known {
-		e.layout.visible = visible
-	}
+	e.layout.visible = visible
 	if e.layout.pending {
 		e.layout.pending = false
 		close(e.layout.settled)
