@@ -5,11 +5,14 @@
     "repository": "https://github.com/yungbote/ambit-agent-browser",
     "upstreamRepository": "https://github.com/vercel-labs/agent-browser",
     "upstreamRevision": "72007a6788d863611b23bed0b59d0d659c638d8e",
-    "revision": "cbc5c592e9a72c4d8320cdc337761232d491a051",
-    "sourceTree": "a42f28c0fec5d4b84ec248ea97286e59119eaeee",
+    "revision": "f3ffbf114a376200dd3e7e661c3b00a5ec23d141",
+    "sourceTree": "129620bba138cd62004a7651f77a53c28faf38d3",
     "version": "0.37.1",
     "archiveName": "agent-browser-source.tar.gz",
-    "sha256": "056e77362a25f1d61e466a3e99a211af9db5a43981548eb5a59694eabf812233"
+    "sha256": "d808020266cb4f1af9381c8b050cd930a4aabc6743876d298e828789f31d10e0",
+    "features": [
+      "browser-audio"
+    ]
   },
   "chrome": {
     "version": "152.0.7977.82",
@@ -51,7 +54,8 @@
     "xauth": "1:1.1.2-1.1",
     "libgtk-3-0t64": "3.24.49-3",
     "gnome-themes-extra-data": "3.28-4",
-    "xsettingsd": "1.0.2-1"
+    "xsettingsd": "1.0.2-1",
+    "pulseaudio": "17.0+dfsg1-2+b1"
   },
   "executables": [
     {
@@ -120,5 +124,9 @@
         "sha256": "9f505dda5ac9f0c8309b5e8bd445a8c2bf7246f3ce950121e45ea15bc41d1494"
       }
     ]
+  },
+  "debianBuildPackages": {
+    "libpulse-dev": "17.0+dfsg1-2+b1",
+    "libopus-dev": "1.5.2-2"
   }
 }

@@ -22,6 +22,30 @@ installer = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(installer)
 
 
+class AudioBuildTests(unittest.TestCase):
+    def test_default_driver_does_not_install_or_link_audio(self):
+        with patch.object(installer, "install_debian_packages") as install:
+            self.assertEqual(installer.prepare_driver_features({"agentBrowser": {}}, Path("unused")), [])
+            install.assert_not_called()
+
+    def test_audio_build_uses_only_locked_build_packages_and_explicit_cargo_feature(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            lock = {"agentBrowser": {"features": ["browser-audio"]}, "debianBuildPackages": {"libpulse-dev": "17", "libopus-dev": "1.5"}, "debianPackages": {"pulseaudio": "17"}, "debianSnapshots": ["frozen"]}
+            with patch.object(installer, "install_debian_packages") as install, patch.object(installer.subprocess, "run") as run:
+                self.assertEqual(installer.prepare_driver_features(lock, Path(temporary)), ["--features", "browser-audio"])
+                observed, scratch = install.call_args.args
+                self.assertEqual(observed["debianPackages"], lock["debianBuildPackages"])
+                self.assertEqual(observed["debianSnapshots"], lock["debianSnapshots"])
+                self.assertTrue(scratch.is_dir())
+                run.assert_called_once_with(["pkg-config", "--exists", "libpulse", "opus"], check=True)
+                self.assertEqual(lock["debianPackages"], {"pulseaudio": "17"})
+
+    def test_unqualified_feature_or_absent_native_lock_fails_before_build(self):
+        for lock in [{"agentBrowser": {"features": ["arbitrary"]}}, {"agentBrowser": {"features": ["browser-audio"]}}]:
+            with self.assertRaises(ValueError):
+                installer.prepare_driver_features(lock, Path("unused"))
+
+
 class MaterializerSourceTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()

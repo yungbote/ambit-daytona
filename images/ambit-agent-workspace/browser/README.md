@@ -200,6 +200,48 @@ to another composition, and the image does not select its own expected inputs.
 
 ## Acceptance still required before activation
 
+The Linux image explicitly builds the driver with the locked `browser-audio`
+feature. Its default CLI build does not link PulseAudio or Opus. The image's
+driver stage installs the separately locked `libpulse-dev` and `libopus-dev`
+packages; only the Pulse server and runtime libraries belong in the final
+image. Cargo's committed lock and the normal dependency-license export cover
+the Rust bindings. `pkg-config` must find both system libraries before the
+build, and audio qualification records the binary's actual dynamic bindings.
+
+Each managed native Chrome window owns a private, cookie-authenticated Pulse
+Unix socket and null output sink. No host device, TCP listener, microphone
+permission or autoplay override is added. The device survives the existing
+automation/sign-in relaunch; each transition retires its audio subscriptions.
+Capture starts only for a subscriber, produces 48 kHz stereo in 480-sample
+units, and ends a slow subscriber's epoch instead of accumulating old audio.
+Opus uses measured encoder priming; PCM16 is available only to an explicitly
+selected subscriber. This is output from the whole Chrome session, including
+background tabs. Headless and externally attached browsers do not advertise
+this private device. The view-channel and frontend sound path have separate
+qualification; native capture alone is not a user-audible feature.
+
+Run `conformance/audio-output.py` in a disposable candidate container, as
+`daytona`, with the source-owned native test binary built with `browser-audio`:
+
+```sh
+python3 /checks/audio-output.py \
+  --native-test-binary /checks/agent-browser-audio-tests \
+  --output /evidence/audio \
+  --source-revision FULL_NATIVE_COMMIT \
+  --image-reference EXACT_CANDIDATE_IMAGE
+```
+
+The image must contain its real Chrome and display helper. The probe records
+two independent page tones, decoded WAV files, native-window captures,
+sign-in continuation, codec priming, bounded subscriber overflow, server
+startup/teardown, private modules, owner-EOF exit and loaded library versions.
+Its CPU result includes the fixture's reference decoder, and its clocks do not
+measure a physical speaker or the future viewer's playout latency. Normal
+shutdown removes the private directory. Abrupt daemon death closes the owner
+pipe and stops Pulse; the small private configuration directory can remain
+until the disposable workspace is removed. Qualification timeout is a failure
+and the disposable container must be torn down.
+
 - Source build and all inherited workspace toolchain checks pass against the exact image.
 - Real non-root Chrome launches with its sandbox active under the production Runner, and process cancellation leaves no browser descendants or sockets behind.
 - Open, blocked, and allowlisted egress behave as declared, including redirects, subresources, WebSocket traffic, and current permission withdrawal. Provider proxy and custom CA paths work without disabling TLS verification.
