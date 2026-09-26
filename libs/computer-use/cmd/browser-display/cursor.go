@@ -274,7 +274,15 @@ func (t *cursorTracker) finish(cookie *xfixes.GetCursorImageAndNameCookie) error
 // unreported returns the current identity when it differs from the last one
 // delivered, which is always so before the first delivery.
 func (t *cursorTracker) unreported() *cursorIdentity {
-	if !t.known || t.current.key() == t.reported {
+	if identity := t.displayed(); identity != nil && identity.key() != t.reported {
+		return identity
+	}
+	return nil
+}
+
+// displayed returns the current identity whether or not it was reported.
+func (t *cursorTracker) displayed() *cursorIdentity {
+	if !t.known {
 		return nil
 	}
 	identity := t.current

@@ -780,7 +780,16 @@ func (e *frameEngine) captureOnce(options captureOptions) (any, bool, error) {
 		if err := e.cursor.finish(identityCookie); err != nil {
 			return nil, false, err
 		}
-		identity = e.cursor.unreported()
+		// A forced frame is whole, cursor included: the driver forces one
+		// when it holds nothing of the display, which includes having
+		// dropped a frame taken across a layout together with the identity
+		// that frame carried. Only a frame repeats it; a forced capture
+		// held by a layout still waits for the painted frame.
+		if options.force {
+			identity = e.cursor.displayed()
+		} else {
+			identity = e.cursor.unreported()
+		}
 	}
 	width, height := int(reply.Width), int(reply.Height)
 	if !validSize(width, height) {

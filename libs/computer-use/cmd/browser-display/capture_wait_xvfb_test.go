@@ -658,6 +658,65 @@ func TestXvfbCursorIdentityFollowsACursorThatChangedDuringItsFetch(t *testing.T)
 	}
 }
 
+// The driver drops a frame taken across a layout (a take-control rotates the
+// surface generation) together with the cursor identity that frame carried,
+// then forces a whole frame because it holds none. The forced frame names the
+// displayed cursor again, so the person who took control over a link sees the
+// hand, not the arrow of the frame before. Only a frame repeats it: a forced
+// capture held by a layout still waits for the painted frame.
+func TestXvfbAForcedFrameNamesTheDisplayedCursorAgain(t *testing.T) {
+	startXvfb(t, 1200, 900)
+	d, err := openDisplay(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.close()
+	browser := newSyncBrowser(t, 600, 400, 150*time.Millisecond, 0x2060c0)
+	page := newPainter(t)
+	page.warp(t, 400, 300)
+	if first := mustCall(t, d, `{"id":1,"op":"capture","cursor":false,"cursorIdentity":true}`); cursorCSS(first) != "default" {
+		t.Fatalf("first identity: %v", first["cursor"])
+	}
+	// The pointer reaches a link: the hand and a repaint arrive together.
+	held := uint64(d.frames.cursor.current.Serial) + 1
+	page.fontCursor(t, 60)
+	page.fill(t, image.Rect(1000, 800, 1060, 840), 0x40a040)
+	for deadline := time.Now().Add(2 * time.Second); d.frames.cursor.notified.Load() == held; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the server never announced the hand")
+		}
+	}
+	time.Sleep(20 * time.Millisecond)
+	if dropped := mustCall(t, d, `{"id":2,"op":"capture","cursor":false,"cursorIdentity":true}`); dropped["changed"] != true || cursorCSS(dropped) != "pointer" {
+		t.Fatalf("the frame the driver drops: %v, cursor %v", dropped["changed"], dropped["cursor"])
+	}
+	if forced := mustCall(t, d, `{"id":3,"op":"capture","cursor":false,"cursorIdentity":true,"force":true}`); forced["changed"] != true || cursorCSS(forced) != "pointer" {
+		t.Fatalf("the forced frame after the dropped one names cursor %v", forced["cursor"])
+	}
+	if plain := mustCall(t, d, `{"id":4,"op":"capture","cursor":false,"cursorIdentity":true}`); plain["changed"] != false || plain["cursor"] != nil {
+		t.Fatalf("an unforced capture repeated the identity: %v", plain)
+	}
+	resized := make(chan error, 1)
+	finished := make(chan struct{})
+	// A failed assertion must not close the display under the resize.
+	defer func() { <-finished }()
+	started := time.Now()
+	go func() {
+		defer close(finished)
+		_, err := d.resize(900, 700, uint32(browser.window), false)
+		resized <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	painted := mustCall(t, d, `{"id":5,"op":"capture","cursor":false,"cursorIdentity":true,"force":true,"waitMs":250}`)
+	answered := time.Since(started)
+	if err := <-resized; err != nil {
+		t.Fatal(err)
+	}
+	if painted["changed"] != true || painted["width"] != float64(900) || answered < 140*time.Millisecond || cursorCSS(painted) != "pointer" {
+		t.Fatalf("the forced capture during the layout answered %v (%vx%v) after %v, cursor %v", painted["changed"], painted["width"], painted["height"], answered, painted["cursor"])
+	}
+}
+
 // The browser recreates a page's url() cursor, with a new serial, each time
 // the pointer re-enters its element. Its picture is encoded once; every later
 // sighting carries the same picture without encoding it again.
