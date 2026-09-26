@@ -253,7 +253,7 @@ func TestRealBrowserWindowGeometryInputAndHandoff(t *testing.T) {
 	t.Logf("pipelined control channel: %d one-key commands answered in order in %s", len(pipelined), time.Since(started))
 	_ = channel.Close()
 	control(map[string]any{"op": "release", "controllerId": browserFixtureController}, http.StatusOK)
-	if refresh := cli(false, "get", "title"); refresh["code"] != "browser_observation_required" {
+	if refresh := cli(false, "press", "Enter"); refresh["code"] != "browser_observation_required" {
 		t.Fatalf("missing handoff observation: %v", refresh)
 	}
 	cli(true, "snapshot")

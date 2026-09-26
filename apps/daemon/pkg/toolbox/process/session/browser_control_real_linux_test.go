@@ -127,7 +127,14 @@ func TestRealBrowserControlThroughOwnedSession(t *testing.T) {
 				if kind, ok := record["kind"].(string); ok && (kind == "typing" || kind == "scrolling") {
 					observedActivity[kind] = true
 				}
-				if len(record) != 5 {
+				fields := 5
+				if clock, present := record["ts"]; present {
+					if ts, ok := clock.(float64); !ok || ts <= 0 || ts > browserSafeInteger {
+						t.Fatalf("activity has an invalid capture clock: %v", record)
+					}
+					fields++
+				}
+				if len(record) != fields {
 					t.Fatalf("activity leaked nonvisual fields: %v", record)
 				}
 			}
