@@ -1213,9 +1213,14 @@ function canonicalJson(value: unknown): string {
   if (!value || typeof value !== 'object') {
     throw new ConflictException('Canonical roster JSON contains an unsupported value.')
   }
-  return `{${Object.keys(value)
+  // Same present-value rule as assertExactKeys: a class-transformed DTO
+  // carries its declared optional fields as own properties valued undefined,
+  // which the wire JSON (and the runner's omitzero encoding) omits.
+  const record = value as Record<string, unknown>
+  return `{${Object.keys(record)
+    .filter((key) => record[key] !== undefined)
     .sort()
-    .map((key) => `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`)
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
     .join(',')}}`
 }
 

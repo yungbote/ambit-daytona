@@ -503,6 +503,21 @@ describe(WorkingCopyCaptureService.name, () => {
     ])
   })
 
+  it('re-proves a roster for a class-transformed request whose optional DTO fields are undefined', async () => {
+    // The API's ValidationPipe hands the service a class instance; with ES2022
+    // class fields every declared optional field is an own property valued
+    // undefined. The runner echoes the wire JSON, which omits them, and digests
+    // that same shape.
+    const wire = validRosterRequest()
+    const request = plainToInstance(StoppedWorkingCopyDirectoryRosterRequestDto, wire)
+    expect(Object.keys(request.anchor)).toContain('fileSnapshot')
+    expect(request.anchor.fileSnapshot).toBeUndefined()
+    const receipt = validRosterReceipt(JSON.parse(JSON.stringify(wire)))
+    adapter.stoppedWorkingCopyDirectoryRoster.mockResolvedValue(receipt)
+
+    await expect(service.stoppedDirectoryRoster('daytona-org-1', 'sandbox-1', request)).resolves.toEqual(receipt)
+  })
+
   it('validates roster paths in portable UTF-8 byte order rather than JavaScript UTF-16 order', async () => {
     const request = validRosterRequest()
     const receipt = validRosterReceipt(request)
