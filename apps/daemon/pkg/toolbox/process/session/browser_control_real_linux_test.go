@@ -235,7 +235,13 @@ func TestRealBrowserControlThroughOwnedSession(t *testing.T) {
 			event["url"] = url
 		}
 		control(map[string]any{"op": "input", "controllerId": navigationOwner, "sequence": sequence, "events": []any{event}}, http.StatusOK)
-		return next(func(record map[string]any) bool { return record["type"] == "url" && record["url"] == expected })
+		return next(func(record map[string]any) bool {
+			// A committed URL can precede readable history during a renderer
+			// transition. Readiness must supply both facts within the deadline.
+			_, backKnown := record["canGoBack"].(bool)
+			_, forwardKnown := record["canGoForward"].(bool)
+			return record["type"] == "url" && record["url"] == expected && backKnown && forwardKnown
+		})
 	}
 	location := navigate("navigate", page.URL+"/second", page.URL+"/second")
 	if location["canGoBack"] != true || location["canGoForward"] != false {
