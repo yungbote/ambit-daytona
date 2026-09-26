@@ -726,6 +726,10 @@ export class SandboxStartAction extends SandboxAction {
       // domain restrictions (or be accidentally widened by a metadata-free
       // start path).
       metadata['domainAllowList'] = sandbox.domainAllowList ?? ''
+      // Kernel rules do not survive a runner restart. Always send the saved
+      // policy, including explicit unrestricted values, for ordinary admission.
+      metadata['networkBlockAll'] = String(sandbox.networkBlockAll)
+      metadata['networkAllowList'] = sandbox.networkAllowList ?? ''
 
       // The full desired secret env (env var -> placeholder). The runner diffs this
       // against the container's env on start and recreates the container when secrets
@@ -782,8 +786,12 @@ export class SandboxStartAction extends SandboxAction {
     }
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
+    const organization = await this.organizationService.findOne(sandbox.organizationId)
     await runnerAdapter.startSandbox(sandbox.id, sandbox.authToken, sandbox.secretsToken, {
+      ...organization?.sandboxMetadata,
       domainAllowList: sandbox.domainAllowList ?? '',
+      networkBlockAll: String(sandbox.networkBlockAll),
+      networkAllowList: sandbox.networkAllowList ?? '',
     })
     await this.updateSandboxState(sandbox, SandboxState.RESUMING, lockCode)
     return SYNC_AGAIN
