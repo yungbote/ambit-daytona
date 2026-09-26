@@ -5,11 +5,11 @@
     "repository": "https://github.com/yungbote/ambit-agent-browser",
     "upstreamRepository": "https://github.com/vercel-labs/agent-browser",
     "upstreamRevision": "72007a6788d863611b23bed0b59d0d659c638d8e",
-    "revision": "7c65c2844aaf459c299d74e71d74c3f447eab4e7",
-    "sourceTree": "2d62340fbb3791a08dfd7da8dd7f7d1b0ee80587",
+    "revision": "9e159a9f057fcb50df335f366b1dfe61c84f379b",
+    "sourceTree": "af5d92bec54cd89184b360b84be4715e149d736f",
     "version": "0.37.1",
     "archiveName": "agent-browser-source.tar.gz",
-    "sha256": "db3ab89d103df03a57db544b162f9372f1b9404b641919aae4f7e0a19ec74ab1"
+    "sha256": "5b7cd54fde4bd7d0416635dd241a790f9774198d56f74f0b90ab54618a1d7e4c"
   },
   "chrome": {
     "version": "152.0.7977.82",
@@ -48,7 +48,10 @@
     "libxcomposite1": "1:0.4.6-1",
     "libxdamage1": "1:1.1.6-1+b2",
     "xvfb": "2:21.1.16-1.3+deb13u3",
-    "xauth": "1:1.1.2-1.1"
+    "xauth": "1:1.1.2-1.1",
+    "libgtk-3-0t64": "3.24.49-3",
+    "gnome-themes-extra-data": "3.28-4",
+    "xsettingsd": "1.0.2-1"
   },
   "executables": [
     {

@@ -10,6 +10,9 @@ export AGENT_BROWSER_REQUIRE_SANDBOX=1
 # Show the actual headed Chromium window from this image. The native driver
 # owns its private display; no sandbox-global desktop or DISPLAY is selected.
 export AGENT_BROWSER_WINDOW_STREAM=1
+# This exact image supplies GTK3, both Adwaita assets and the standard private
+# XSettings tools. The driver still requires its own authenticated display.
+export AGENT_BROWSER_SYSTEM_THEME=xsettingsd
 export AGENT_BROWSER_DISPLAY_HELPER=/opt/ambit/browser/bin/browser-display
 export AGENT_BROWSER_PLAYWRIGHT_RUNNER=/opt/ambit/browser/runtime/playwright-runner.mjs
 export AGENT_BROWSER_PLAYWRIGHT_MODULE=/usr/local/nvm/versions/node/v22.14.0/lib/node_modules/playwright-core/index.mjs
