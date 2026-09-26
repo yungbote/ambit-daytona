@@ -149,11 +149,18 @@ with tempfile.TemporaryDirectory(prefix='browser-helper-proof-') as temp:
         # Cursor identity: the pinned Chromium draws each CSS cursor keyword from
         # the X server's cursor font, and cursor.go names those images. Every
         # keyword is hovered through native input and must answer exactly its
-        # class's keyword; a page's own cursor must travel as its image.
+        # class's keyword and the keywords its image stands for; a page's own
+        # cursor must travel as its image and stand for none.
         keywords = ['auto', 'default', 'none', 'context-menu', 'help', 'pointer', 'progress', 'wait', 'cell', 'crosshair', 'text', 'vertical-text', 'alias', 'copy', 'move', 'no-drop', 'not-allowed', 'grab', 'grabbing', 'all-scroll', 'col-resize', 'row-resize', 'n-resize', 'e-resize', 's-resize', 'w-resize', 'ne-resize', 'nw-resize', 'se-resize', 'sw-resize', 'ew-resize', 'ns-resize', 'nesw-resize', 'nwse-resize', 'zoom-in', 'zoom-out']
+        # The server's own X shows for the keywords Chromium sets no cursor for.
+        x_cursor = ['context-menu', 'help', 'vertical-text', 'alias', 'copy', 'no-drop', 'not-allowed', 'nesw-resize', 'nwse-resize', 'zoom-in', 'zoom-out']
         expected = {'auto': 'default', 'wait': 'progress', 'grabbing': 'pointer', 'all-scroll': 'move', 'col-resize': 'ew-resize', 'row-resize': 'ns-resize'}
-        for keyword in ['context-menu', 'help', 'vertical-text', 'alias', 'copy', 'no-drop', 'not-allowed', 'nesw-resize', 'nwse-resize', 'zoom-in', 'zoom-out']:
+        for keyword in x_cursor:
             expected[keyword] = 'default'
+        # A shared image stands for its class; auto computes to default.
+        members = {'auto': ['default']}
+        for group in (['default'], ['pointer', 'grabbing'], ['progress', 'wait'], ['move', 'all-scroll'], ['ew-resize', 'col-resize'], ['ns-resize', 'row-resize'], x_cursor):
+            members.update((keyword, group) for keyword in group)
         custom = "url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2224%22 height=%2224%22><circle cx=%2212%22 cy=%2212%22 r=%2210%22 fill=%22red%22/></svg>') 12 12, auto"
         cells = ''.join(f'<div id="k-{k}" style="cursor:{k};width:100px;height:60px;float:left"></div>' for k in keywords) + f'<div id="k-custom" style="cursor:{custom};width:100px;height:60px;float:left"></div>'
         cli('open', 'data:text/html;charset=utf-8,' + urllib.parse.quote('<body style="margin:0">' + cells))
@@ -171,14 +178,15 @@ with tempfile.TemporaryDirectory(prefix='browser-helper-proof-') as temp:
             moved = time.monotonic()
             call('input', events=[dict(type='input_mouse', eventType='mouseMoved', x=x, y=y)])
             want = expected.get(keyword, keyword)
+            stands_for = members.get(keyword, [keyword])
             identified = None
             def matches():
                 if reported is None:
                     return False
                 if keyword == 'custom':
                     image = reported.get('image')
-                    return reported['css'] is None and bool(image) and image['scale'] == 2 and (image['width'], image['height'], image['hotX'], image['hotY']) == (48, 48, 24, 24)
-                return reported['css'] == want
+                    return reported['css'] is None and 'members' not in reported and bool(image) and image['scale'] == 2 and (image['width'], image['height'], image['hotX'], image['hotY']) == (48, 48, 24, 24)
+                return reported['css'] == want and reported.get('members') == stands_for
             for attempt in range(8):
                 reply = call('capture', cursor=False, cursorIdentity=True, waitMs=250)
                 if reply.get('cursor'):
@@ -187,8 +195,10 @@ with tempfile.TemporaryDirectory(prefix='browser-helper-proof-') as temp:
                 if matches():
                     break
             hovered = cli('eval', 'over')['result']
-            assert hovered == 'k-' + keyword and matches(), {'keyword': keyword, 'hovered': hovered, 'expected': want, 'reported': reported and {k: v for k, v in reported.items() if k != 'image'}}
-            receipts['cursor'][keyword] = {k: v for k, v in reported['image'].items() if k != 'png'} if keyword == 'custom' else reported['css']
+            assert hovered == 'k-' + keyword and matches(), {'keyword': keyword, 'hovered': hovered, 'expected': want, 'members': stands_for, 'reported': reported and {k: v for k, v in reported.items() if k != 'image'}}
+            if keyword != 'custom':
+                assert ('default' if keyword == 'auto' else keyword) in reported['members'], {'keyword': keyword, 'members': reported['members']}
+            receipts['cursor'][keyword] = {k: v for k, v in reported['image'].items() if k != 'png'} if keyword == 'custom' else {'css': reported['css'], 'members': reported['members']}
             if want != previous and identified:
                 receipts['cursorIdentityMs'][keyword] = round((identified - moved) * 1000, 1)
             previous = want
