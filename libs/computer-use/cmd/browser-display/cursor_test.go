@@ -4,8 +4,12 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"image/png"
 	"math/rand"
+	"regexp"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -30,7 +34,7 @@ func TestUnknownCursorTravelsAsABoundedPNG(t *testing.T) {
 		small[index] = 0xffff0000
 	}
 	identity := tracker.describe(7, 48, 48, 24, 24, small)
-	if identity.CSS != nil || identity.Image == nil || identity.Image.Scale != 2 || identity.Image.Width != 48 || identity.Image.HotX != 24 || identity.Serial != 7 {
+	if identity.CSS != nil || identity.Members != nil || identity.Image == nil || identity.Image.Scale != 2 || identity.Image.Width != 48 || identity.Image.HotX != 24 || identity.Serial != 7 {
 		t.Fatalf("small custom cursor: %+v", identity)
 	}
 	decoded, err := png.Decode(bytes.NewReader(identity.Image.PNG))
@@ -62,12 +66,70 @@ func TestUnknownCursorTravelsAsABoundedPNG(t *testing.T) {
 	}
 
 	huge := tracker.describe(2, 256, 256, 0, 0, noisyCursor(256, 9))
-	if huge.CSS == nil || *huge.CSS != "default" || huge.Image != nil {
+	if huge.CSS == nil || *huge.CSS != "default" || !slices.Equal(huge.Members, []string{"default"}) || huge.Image != nil {
 		t.Fatalf("incompressible cursor: %+v", huge)
 	}
 	malformed := tracker.describe(3, 4, 4, 0, 0, make([]uint32, 3))
-	if malformed.CSS == nil || *malformed.CSS != "default" {
+	if malformed.CSS == nil || *malformed.CSS != "default" || !slices.Equal(malformed.Members, []string{"default"}) {
 		t.Fatalf("malformed cursor: %+v", malformed)
+	}
+}
+
+// Every keyword the qualification hovers (auto computes to default) is named
+// by exactly one image's members, within what the driver admits, and each
+// image is answered as one of its members or as default, which stands when
+// the driver can name none of them.
+func TestCursorClassesNameEveryKeywordOnce(t *testing.T) {
+	keywords := strings.Fields("default none context-menu help pointer progress wait cell crosshair text vertical-text alias copy move no-drop not-allowed grab grabbing all-scroll col-resize row-resize n-resize e-resize s-resize w-resize ne-resize nw-resize se-resize sw-resize ew-resize ns-resize nesw-resize nwse-resize zoom-in zoom-out")
+	admitted := regexp.MustCompile(`^[a-z-]{1,32}$`)
+	named := map[string]int{}
+	for hash, class := range cursorClasses {
+		if len(class.members) < 1 || len(class.members) > 64 {
+			t.Errorf("%s: %d members", hash, len(class.members))
+		}
+		for _, member := range class.members {
+			if !admitted.MatchString(member) || !slices.Contains(keywords, member) {
+				t.Errorf("%s: member %q", hash, member)
+			}
+			named[member]++
+		}
+		if !slices.Contains(class.members, class.css) && class.css != "default" {
+			t.Errorf("%s: answered as %q, which its image does not stand for", hash, class.css)
+		}
+	}
+	for _, keyword := range keywords {
+		if named[keyword] != 1 {
+			t.Errorf("%s is named by %d images", keyword, named[keyword])
+		}
+	}
+	if !slices.Equal(arrow.members, []string{"default"}) {
+		t.Errorf("a cursor the helper cannot describe stands for %v", arrow.members)
+	}
+}
+
+// The arrow and the X are both answered as default and stand for different
+// keywords: two identities, each kept across the serials Chrome recreates
+// its cursors under.
+func TestCursorKeyTellsTheArrowFromTheX(t *testing.T) {
+	if arrow.identity(1).key() == xCursor.identity(2).key() {
+		t.Fatal("the arrow and the X are one identity")
+	}
+	if xCursor.identity(3).key() != xCursor.identity(4).key() || arrow.identity(5).key() != arrow.identity(6).key() {
+		t.Fatal("a serial alone changes the identity")
+	}
+}
+
+// On the wire a keyword record names the keywords its image stands for, and
+// an image record names none: the driver admits no other shape.
+func TestCursorRecordsCarryMembersOnlyWithAKeyword(t *testing.T) {
+	keyword, err := json.Marshal(standsFor("pointer", "grabbing").identity(3))
+	if want := `{"serial":3,"css":"pointer","members":["pointer","grabbing"]}`; err != nil || string(keyword) != want {
+		t.Fatalf("keyword record %s", keyword)
+	}
+	var tracker cursorTracker
+	image, err := json.Marshal(tracker.describe(7, 8, 8, 1, 1, make([]uint32, 64)))
+	if err != nil || bytes.Contains(image, []byte("members")) || !bytes.HasPrefix(image, []byte(`{"serial":7,"css":null,"image":{"hash":"`)) {
+		t.Fatalf("image record %s", image)
 	}
 }
 
@@ -94,7 +156,7 @@ func TestCursorIdentityIsReportedOncePerObservableChange(t *testing.T) {
 	}
 	set := func(serial uint32, keyword string) {
 		tracker.known = true
-		tracker.current = cursorIdentity{Serial: serial, CSS: &keyword}
+		tracker.current = standsFor(keyword).identity(serial)
 	}
 	set(1, "default")
 	first := tracker.unreported()

@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"image"
 	"image/png"
+	"strings"
 	"sync/atomic"
 
 	"github.com/robotn/xgb"
@@ -19,55 +20,72 @@ import (
 // as a CSS keyword the viewer's own platform can draw. Chrome on this image
 // names none of its cursors: without an Xcursor theme it builds each one from
 // the X server's cursor font. The image identifies the cursor instead, and
-// cursorKeywords maps those images to keywords. Any other image, such as a
+// cursorClasses maps those images to keywords. Any other image, such as a
 // page's url() cursor, travels once as a small PNG.
 const maximumCursorPNG = 4096
 const maximumCursorSide = 256
 
-// cursorKeywords maps each cursor image the pinned Chrome shows for a CSS
-// cursor keyword to that keyword. It is measured, not derived: image
+// cursorClass names one cursor image: the keyword the helper answers for it,
+// and the keywords the image stands for, as measured. Several keywords share
+// one image when Chrome finds no distinct cursor for them, so the display
+// alone cannot tell them apart; the driver names the member the hovered
+// element's computed cursor asks for, and css stands when it cannot. members
+// is shared by every identity of the class and never written.
+type cursorClass struct {
+	css     string
+	members []string
+}
+
+// standsFor is the class of an image Chrome draws for the given keywords,
+// answered as the first of them.
+func standsFor(keywords ...string) cursorClass {
+	return cursorClass{css: keywords[0], members: keywords}
+}
+
+// identity is the class as the report of one displayed cursor object.
+func (c cursorClass) identity(serial uint32) cursorIdentity {
+	return cursorIdentity{Serial: serial, CSS: &c.css, Members: c.members}
+}
+
+// arrow is the plain pointer's class, and what stands for a cursor the helper
+// cannot describe.
+var arrow = standsFor("default")
+
+// xCursor is the server's own cursor, shown when Chrome sets none: it stands
+// for the eleven keywords Chrome draws no cursor for, and is answered as
+// default, which stands when the driver can name none of them.
+var xCursor = cursorClass{css: "default", members: []string{"context-menu", "help", "vertical-text", "alias", "copy", "no-drop", "not-allowed", "nesw-resize", "nwse-resize", "zoom-in", "zoom-out"}}
+
+// cursorClasses maps each cursor image the pinned Chrome shows for a CSS
+// cursor keyword to its class. It is measured, not derived: image
 // qualification (integration_test.py, cursor section) hovers a page with every
-// keyword through native input and requires exactly these answers, so a new
-// Chrome or cursor font that draws differently fails qualification instead of
-// mislabelling the pointer.
-//
-// Several keywords share one image when Chrome finds no distinct cursor for
-// them, so the keyword answered is the class's most common one:
-//   - left_ptr: auto, default
-//   - hand2: pointer, grabbing
-//   - watch: progress, wait
-//   - fleur: move, all-scroll
-//   - sb_h_double_arrow: ew-resize, col-resize
-//   - sb_v_double_arrow: ns-resize, row-resize
-//   - X_cursor, the server's own cursor that shows when Chrome sets none:
-//     default for context-menu, help, vertical-text, alias, copy, no-drop,
-//     not-allowed, nesw-resize, nwse-resize, zoom-in and zoom-out.
-//
-// A keyword inside a shared class is therefore not recoverable from the
-// display; only the page's computed style names it.
+// keyword through native input and requires exactly these answers and
+// members, so a new Chrome or cursor font that draws differently fails
+// qualification instead of mislabelling the pointer. auto computes to
+// default, so the arrow stands for default alone.
 //
 // Measured with Chrome for Testing 152.0.7977.82 on Xvfb 21.1 at DPR 2.
-var cursorKeywords = map[string]string{
-	"94158445512d4df1": "default",   // left_ptr
-	"341ed0635eb5f0b7": "default",   // X_cursor: Chrome set no cursor
-	"2443085e6d56c5a3": "none",      // 1x1 transparent
-	"161e664684b459d3": "pointer",   // hand2
-	"06efea585b55fe7a": "progress",  // watch
-	"24ef70fd9a6ae9c1": "cell",      // plus
-	"654fecff6f5df623": "crosshair", // crosshair
-	"497c3dc712a52690": "text",      // xterm
-	"f9ef0371514cf529": "move",      // fleur
-	"fe7fc6668a1bbdad": "grab",      // hand1
-	"59ed0f8aa964b39f": "ew-resize", // sb_h_double_arrow
-	"20a5227b8715d419": "ns-resize", // sb_v_double_arrow
-	"db08dd7c54998e65": "n-resize",  // top_side
-	"9f5126b351c2a866": "e-resize",  // right_side
-	"e8b754deb1f5c814": "s-resize",  // bottom_side
-	"3e99daf1bb883067": "w-resize",  // left_side
-	"b05715ab382439d7": "ne-resize", // top_right_corner
-	"a3b6365a43f5b11c": "nw-resize", // top_left_corner
-	"34eb599d9ee27030": "se-resize", // bottom_right_corner
-	"b07fcc769e43c0fb": "sw-resize", // bottom_left_corner
+var cursorClasses = map[string]cursorClass{
+	"94158445512d4df1": arrow,                                // left_ptr
+	"341ed0635eb5f0b7": xCursor,                              // X_cursor: Chrome set no cursor
+	"2443085e6d56c5a3": standsFor("none"),                    // 1x1 transparent
+	"161e664684b459d3": standsFor("pointer", "grabbing"),     // hand2
+	"06efea585b55fe7a": standsFor("progress", "wait"),        // watch
+	"24ef70fd9a6ae9c1": standsFor("cell"),                    // plus
+	"654fecff6f5df623": standsFor("crosshair"),               // crosshair
+	"497c3dc712a52690": standsFor("text"),                    // xterm
+	"f9ef0371514cf529": standsFor("move", "all-scroll"),      // fleur
+	"fe7fc6668a1bbdad": standsFor("grab"),                    // hand1
+	"59ed0f8aa964b39f": standsFor("ew-resize", "col-resize"), // sb_h_double_arrow
+	"20a5227b8715d419": standsFor("ns-resize", "row-resize"), // sb_v_double_arrow
+	"db08dd7c54998e65": standsFor("n-resize"),                // top_side
+	"9f5126b351c2a866": standsFor("e-resize"),                // right_side
+	"e8b754deb1f5c814": standsFor("s-resize"),                // bottom_side
+	"3e99daf1bb883067": standsFor("w-resize"),                // left_side
+	"b05715ab382439d7": standsFor("ne-resize"),               // top_right_corner
+	"a3b6365a43f5b11c": standsFor("nw-resize"),               // top_left_corner
+	"34eb599d9ee27030": standsFor("se-resize"),               // bottom_right_corner
+	"b07fcc769e43c0fb": standsFor("sw-resize"),               // bottom_left_corner
 }
 
 // cursorImage is a cursor the table does not name, in device pixels at the
@@ -83,18 +101,22 @@ type cursorImage struct {
 }
 
 // cursorIdentity is what a capture reply carries when the displayed cursor
-// differs from the one last reported. Exactly one of CSS and Image is set.
+// differs from the one last reported. Exactly one of CSS and Image is set. A
+// keyword's Members are the keywords its image stands for; an image has none.
 type cursorIdentity struct {
-	Serial uint32       `json:"serial"`
-	CSS    *string      `json:"css"`
-	Image  *cursorImage `json:"image,omitempty"`
+	Serial  uint32       `json:"serial"`
+	CSS     *string      `json:"css"`
+	Members []string     `json:"members,omitempty"`
+	Image   *cursorImage `json:"image,omitempty"`
 }
 
 // key is what a viewer can observe of an identity: a change of serial alone
-// (Chrome recreating the same cursor) is not reported.
-func (c *cursorIdentity) key() string {
+// (Chrome recreating the same cursor) is not reported, while the arrow and
+// the X, both answered as default, are two identities since they stand for
+// different keywords.
+func (c cursorIdentity) key() string {
 	if c.CSS != nil {
-		return "css:" + *c.CSS
+		return "css:" + *c.CSS + " " + strings.Join(c.Members, " ")
 	}
 	return "image:" + c.Image.Hash
 }
@@ -122,13 +144,12 @@ const maximumCursorPictures = 32
 // re-enters its element, so a picture is encoded once per hash and every
 // later sighting reuses it.
 func (t *cursorTracker) describe(serial uint32, width, height, hotX, hotY int, pixels []uint32) cursorIdentity {
-	named := func(keyword string) cursorIdentity { return cursorIdentity{Serial: serial, CSS: &keyword} }
 	if width <= 0 || height <= 0 || width > maximumCursorSide || height > maximumCursorSide || len(pixels) != width*height {
-		return named("default")
+		return arrow.identity(serial)
 	}
 	hash := cursorHash(width, height, hotX, hotY, pixels)
-	if keyword, known := cursorKeywords[hash]; known {
-		return named(keyword)
+	if class, known := cursorClasses[hash]; known {
+		return class.identity(serial)
 	}
 	picture, seen := t.pictures[hash]
 	if !seen {
@@ -145,7 +166,7 @@ func (t *cursorTracker) describe(serial uint32, width, height, hotX, hotY int, p
 		t.pictures[hash] = picture
 	}
 	if picture == nil {
-		return named("default")
+		return arrow.identity(serial)
 	}
 	return cursorIdentity{Serial: serial, Image: picture}
 }

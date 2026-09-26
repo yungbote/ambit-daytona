@@ -590,6 +590,10 @@ func cursorCSS(reply map[string]any) any {
 	}
 	return cursor["css"]
 }
+func cursorMembers(reply map[string]any) any {
+	cursor, _ := reply["cursor"].(map[string]any)
+	return cursor["members"]
+}
 
 // The displayed cursor is fetched whenever the newest one the server announced
 // is not the one the helper holds. A cursor that changed while its fetch was
@@ -655,6 +659,50 @@ func TestXvfbCursorIdentityFollowsACursorThatChangedDuringItsFetch(t *testing.T)
 	announced("the text cursor again", func(value uint64) bool { return value == textAnnounced })
 	if reply := mustCall(t, d, identity); cursorCSS(reply) != "text" {
 		t.Fatalf("the cursor shown again was not reported: %v", reply["cursor"])
+	}
+}
+
+// Chrome shows the server's own X when it sets no cursor (help, not-allowed,
+// copy and eight more keywords) and the arrow for default, and both are
+// answered as default. They stand for different keywords, which each record
+// names, so the pointer leaving an element Chrome set no cursor for, for one
+// with the arrow, is a new identity, and so is the return. A page's own cursor
+// stands for no keyword.
+func TestXvfbCursorIdentityTellsTheArrowFromTheX(t *testing.T) {
+	startXvfb(t, 800, 600)
+	d, err := openDisplay(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.close()
+	page := newPainter(t)
+	page.warp(t, 400, 300)
+	identity := `{"id":1,"op":"capture","cursor":false,"cursorIdentity":true,"waitMs":250}`
+	xMembers := []any{"context-menu", "help", "vertical-text", "alias", "copy", "no-drop", "not-allowed", "nesw-resize", "nwse-resize", "zoom-in", "zoom-out"}
+	// Nothing has set a cursor: the root shows the X.
+	x := mustCall(t, d, identity)
+	if cursorCSS(x) != "default" {
+		t.Fatalf("the X: %v", x["cursor"])
+	}
+	page.fontCursor(t, 68) // left_ptr, the arrow
+	arrow := mustCall(t, d, identity)
+	if cursorCSS(arrow) != "default" {
+		t.Fatalf("the move from the X to the arrow was not reported: %v", arrow["cursor"])
+	}
+	if members := cursorMembers(x); !reflect.DeepEqual(members, xMembers) {
+		t.Fatalf("the X stands for %v", members)
+	}
+	if members := cursorMembers(arrow); !reflect.DeepEqual(members, []any{"default"}) {
+		t.Fatalf("the arrow stands for %v", members)
+	}
+	page.useCursor(t, xproto.CursorNone) // the root's own cursor again
+	if back := mustCall(t, d, identity); cursorCSS(back) != "default" || !reflect.DeepEqual(cursorMembers(back), xMembers) {
+		t.Fatalf("the return to the X: %v", back["cursor"])
+	}
+	page.pixmapCursor(t)
+	custom, _ := mustCall(t, d, identity)["cursor"].(map[string]any)
+	if _, named := custom["members"]; custom == nil || custom["css"] != nil || named {
+		t.Fatalf("a page cursor: %v", custom)
 	}
 }
 
