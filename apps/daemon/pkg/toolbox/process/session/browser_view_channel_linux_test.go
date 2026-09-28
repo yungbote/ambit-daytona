@@ -58,6 +58,13 @@ func serveBrowserViewChannelFixture(w http.ResponseWriter, r *http.Request, dir,
 	binaryFrames := query.Get("frames") == "binary"
 	_ = connection.WriteJSON(map[string]any{"type": "status", "connected": true, "screencasting": true, "private": browserFixtureSecret})
 	_ = connection.WriteJSON(map[string]any{"type": "console", "text": browserFixtureSecret})
+	if mode == "view-channel-audio" || mode == "view-channel-audio-race" {
+		if query.Get("audio") != "pcm-s16le" {
+			return
+		}
+		serveAudioFixture(connection, mode == "view-channel-audio-race")
+		return
+	}
 	if pointer {
 		// A files doorbell and a cursor record, each with a field that must
 		// not travel; a doorbell without its clock does not travel at all.

@@ -43,7 +43,8 @@ func (s *SessionController) ViewBrowserChannel(c *gin.Context) {
 	pointer := c.Request.URL.Query()["cursor"]
 	crop := c.Request.URL.Query()["visible"]
 	window, windowValid := parseBrowserFrameWindow(c.Request)
-	if !valid || !windowValid || len(formats) > 1 || (len(formats) == 1 && formats[0] != "binary") || len(pointer) > 1 || (len(pointer) == 1 && pointer[0] != "viewer") ||
+	audioCodec, audioValid := parseBrowserAudioDeclaration(c.Request)
+	if !valid || !windowValid || !audioValid || len(formats) > 1 || (len(formats) == 1 && formats[0] != "binary") || len(pointer) > 1 || (len(pointer) == 1 && pointer[0] != "viewer") ||
 		len(crop) > 1 || (len(crop) == 1 && crop[0] != "crop") {
 		c.JSON(http.StatusBadRequest, gin.H{"code": "browser_view_invalid"})
 		return
@@ -72,6 +73,9 @@ func (s *SessionController) ViewBrowserChannel(c *gin.Context) {
 	if len(crop) == 1 {
 		address += "&visible=crop"
 	}
+	if audioCodec != "" {
+		address += "&audio=" + audioCodec
+	}
 	upstream, _, err := (&websocket.Dialer{HandshakeTimeout: browserDriverWriteTimeout}).DialContext(c.Request.Context(), address, headers)
 	if err != nil {
 		c.Status(http.StatusBadGateway)
@@ -90,7 +94,7 @@ func (s *SessionController) ViewBrowserChannel(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	channel := &browserViewChannel{controller: s, view: *selected, socket: socket, upstream: upstream, binary: binaryFrames, presentation: presentation != nil, pending: browserFrameWindow{limit: window}}
+	channel := &browserViewChannel{controller: s, view: *selected, socket: socket, upstream: upstream, binary: binaryFrames, presentation: presentation != nil, pending: browserFrameWindow{limit: window}, audioCodec: audioCodec}
 	channel.run(c.Request.Context())
 }
 
@@ -135,16 +139,22 @@ func (s *SessionController) browserViewCurrent(view browserView) (ended bool, er
 }
 
 type browserViewChannel struct {
-	controller   *SessionController
-	view         browserView
-	socket       *websocket.Conn
-	upstream     *websocket.Conn
-	binary       bool
-	presentation bool
-	delivery     sync.Mutex
-	pending      browserFrameWindow
-	unanswered   atomic.Int32
-	closeOnce    sync.Once
+	controller      *SessionController
+	view            browserView
+	socket          *websocket.Conn
+	upstream        *websocket.Conn
+	binary          bool
+	presentation    bool
+	audioCodec      string
+	audioOffered    atomic.Bool
+	audioEnabled    atomic.Bool
+	audioGeneration atomic.Uint64
+	// Epoch is owned only by the upstream reader, independently of JPEG state.
+	audioEpoch browserAudioEpoch
+	delivery   sync.Mutex
+	pending    browserFrameWindow
+	unanswered atomic.Int32
+	closeOnce  sync.Once
 	// Only the upstream reader owns the prior frame's geometry and sequence.
 	previous browserFrameHeader
 }
@@ -181,6 +191,13 @@ func (ch *browserViewChannel) run(parent context.Context) {
 			return
 		}
 		if kind == websocket.BinaryMessage {
+			if ch.audioCodec != "" && browserBinaryMedia(message) {
+				if err := ch.deliverAudioPacket(message); err != nil {
+					ch.close(websocket.CloseInternalServerErr, "browser_view_invalid_audio")
+					return
+				}
+				continue
+			}
 			frame, err := parseBrowserBinaryFrame(message)
 			if ch.binary && err != nil && ch.previous.Seq == 0 && browserLegacyBinaryFrame(message) {
 				ch.close(websocket.CloseUnsupportedData, "browser_view_channel_unsupported")
@@ -218,6 +235,13 @@ func (ch *browserViewChannel) run(parent context.Context) {
 		if kind != websocket.TextMessage || !utf8.Valid(message) || json.Unmarshal(message, &envelope) != nil {
 			ch.close(websocket.CloseInternalServerErr, "browser_view_invalid_frame")
 			return
+		}
+		if envelope.Type == "audio" {
+			if err := ch.deliverAudioMetadata(message); err != nil {
+				ch.close(websocket.CloseInternalServerErr, "browser_view_invalid_audio")
+				return
+			}
+			continue
 		}
 		projected, sequence, record := browserViewMessage(message, true)
 		switch record {
@@ -368,6 +392,17 @@ func browserViewerMessage(message []byte) (projected []byte, ack uint64, valid b
 		return decoder.Decode(value) == nil && decoder.Decode(new(any)) == io.EOF
 	}
 	switch envelope.Type {
+	case "audio":
+		var value struct {
+			Type       string `json:"type"`
+			Enabled    *bool  `json:"enabled"`
+			Generation uint64 `json:"generation"`
+		}
+		if !decode(&value) || value.Enabled == nil || value.Generation == 0 || value.Generation > browserSafeInteger {
+			return nil, 0, false
+		}
+		projected, _ = json.Marshal(value)
+		return projected, 0, true
 	case "ack":
 		var value struct {
 			Type string `json:"type"`
@@ -408,9 +443,25 @@ func (ch *browserViewChannel) readViewer() {
 			return
 		}
 		projected, ack, valid := browserViewerMessage(message)
-		if !valid || (ack == 0 && !ch.presentation) {
+		var output struct {
+			Type       string `json:"type"`
+			Enabled    bool   `json:"enabled"`
+			Generation uint64 `json:"generation"`
+		}
+		if valid {
+			_ = json.Unmarshal(projected, &output)
+		}
+		isAudio := output.Type == "audio"
+		if !valid || (isAudio && !ch.audioOffered.Load()) || (!isAudio && ack == 0 && !ch.presentation) {
 			ch.close(websocket.ClosePolicyViolation, "browser_view_invalid_message")
 			return
+		}
+		if isAudio {
+			if output.Generation <= ch.audioGeneration.Load() {
+				continue
+			}
+			ch.audioGeneration.Store(output.Generation)
+			ch.audioEnabled.Store(output.Enabled)
 		}
 		if ack != 0 {
 			forward, valid := ch.acknowledgeFrame(ack)
