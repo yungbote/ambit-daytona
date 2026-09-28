@@ -64,6 +64,8 @@ func runBrowserFixture(args []string) bool {
 					fixture.overlaps = filepath.Join(dir, name+".overlapped")
 				}
 				go fixture.serve(connection)
+			case "agent", "agent-old-driver", "agent-unasked":
+				go serveBrowserAgentFixture(connection, mode, screencast.Close)
 			default:
 				// Discovery reads only the peer credential. The driver's
 				// command channel is never spoken to.
