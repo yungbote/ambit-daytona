@@ -113,6 +113,10 @@ RUN --mount=type=bind,source=build/install-browser.py,target=/checks/install-bro
  && python3 /checks/install-browser.py materializer /opt/ambit/browser/browser.lock.json "${BASE_IMAGE}" \
  && Xvfb -help >/dev/null 2>&1 \
  && xauth -V >/dev/null \
+ && test -x /usr/bin/xsettingsd \
+ && test -x /usr/bin/dump_xsettings \
+ && test -r /usr/share/themes/Adwaita/gtk-3.0/gtk.css \
+ && test -r /usr/share/themes/Adwaita-dark/gtk-3.0/gtk.css \
  && xvfb-run --help >/dev/null \
  && AGENT_BROWSER_DOWNLOAD_PATH=/tmp/browser-version-check/downloads \
     AGENT_BROWSER_SCREENSHOT_DIR=/tmp/browser-version-check/screenshots \
