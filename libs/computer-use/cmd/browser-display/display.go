@@ -158,7 +158,7 @@ func (d *display) size() (int, int, error) {
 }
 func (d *display) describe() (displayInfo, error) {
 	result, err := d.info()
-	result.Features = captureFeatures
+	result.Features = d.frames.features()
 	return result, err
 }
 func (d *display) info() (displayInfo, error) {
