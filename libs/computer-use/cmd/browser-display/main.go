@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"time"
 	"unicode/utf8"
 )
@@ -92,6 +93,11 @@ func decodeRequest(line []byte) (request, error) {
 			value.WaitMs < 0 || value.WaitMs > int(maximumCaptureWait/time.Millisecond) {
 			return value, invalid()
 		}
+	case "picture":
+		if value.Width != 0 || value.Height != 0 || value.WindowID != 0 || value.Events != nil || value.BudgetBytes != 0 || value.Patches || value.SizeClass ||
+			value.WaitMs < 0 || value.WaitMs > int(maximumCaptureWait/time.Millisecond) {
+			return value, invalid()
+		}
 	case "info", "copy", "reset", "close":
 		if value.Width != 0 || value.Height != 0 || value.WindowID != 0 || value.Events != nil || captureFields || value.SizeClass {
 			return value, invalid()
@@ -140,21 +146,53 @@ func main() {
 	defer display.close()
 	if *captureFD != 0 {
 		captures := os.NewFile(uintptr(*captureFD), "capture")
-		go display.serve(captures, captures, true)
+		go display.serve(captures, captures, frameChannel)
 	}
-	display.serve(os.Stdin, os.Stdout, false)
+	if pictures, pixels, ok := pictureChannel(); ok {
+		if slot, err := openPixelSlot(pixels); err == nil {
+			display.frames.attachPixels(slot)
+			go display.serve(pictures, pictures, pictureOnly)
+		}
+	}
+	display.serve(os.Stdin, os.Stdout, controlChannel)
 }
 
+// pictureChannel opens the driver's picture channel and pixel slot, which it
+// names in the environment (BROWSER_DISPLAY_PICTURE_FD, _PIXELS_FD) so that a
+// helper without pictures ignores them. Without both, pictures stay
+// unavailable and `info` does not list them.
+func pictureChannel() (*os.File, int, bool) {
+	descriptor := func(name string) int {
+		value, err := strconv.Atoi(os.Getenv(name))
+		if err != nil || value < 3 {
+			return -1
+		}
+		return value
+	}
+	channel, pixels := descriptor("BROWSER_DISPLAY_PICTURE_FD"), descriptor("BROWSER_DISPLAY_PIXELS_FD")
+	if channel < 0 || pixels < 0 || channel == pixels {
+		return nil, 0, false
+	}
+	return os.NewFile(uintptr(channel), "pictures"), pixels, true
+}
+
+// Which operations a channel serves: the control channel (stdin) everything but
+// pictures, the frame channel only JPEG captures, the picture channel only
+// pictures. A frame or picture in flight thus never delays input on stdin, and
+// the slot is written only on the channel whose replies the driver reads it by.
+func controlChannel(op string) bool { return op != "picture" }
+func frameChannel(op string) bool   { return op == "capture" }
+func pictureOnly(op string) bool    { return op == "picture" }
+
 // serve answers one channel's line-delimited requests in order until the
-// channel ends or a close request succeeds. The capture channel accepts only
-// capture, so a frame in flight never delays input on stdin.
-func (d *display) serve(in io.Reader, out io.Writer, captureOnly bool) {
+// channel ends or a close request succeeds.
+func (d *display) serve(in io.Reader, out io.Writer, serves func(op string) bool) {
 	scanner := bufio.NewScanner(in)
 	scanner.Buffer(make([]byte, 4096), maximumPasteRequest+1)
 	writer := bufio.NewWriter(out)
 	for scanner.Scan() {
 		req, err := decodeRequest(scanner.Bytes())
-		if err == nil && captureOnly && req.Op != "capture" {
+		if err == nil && !serves(req.Op) {
 			err = invalid()
 		}
 		var result any
@@ -186,6 +224,9 @@ func (d *display) execute(req request) (any, error) {
 		return d.describe()
 	case "capture":
 		return d.frames.capture(captureOptions{cursor: req.Cursor == nil || *req.Cursor, budget: req.BudgetBytes, force: req.Force, patches: req.Patches,
+			wait: time.Duration(req.WaitMs) * time.Millisecond, identity: req.CursorIdentity})
+	case "picture":
+		return d.frames.picture(pictureOptions{cursor: req.Cursor != nil && *req.Cursor, force: req.Force,
 			wait: time.Duration(req.WaitMs) * time.Millisecond, identity: req.CursorIdentity})
 	case "resize":
 		return d.resize(req.Width, req.Height, req.WindowID, req.SizeClass)

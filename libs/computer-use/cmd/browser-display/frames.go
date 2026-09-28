@@ -32,7 +32,17 @@ type captureOptions struct {
 	identity bool
 }
 
-// The capture features the driver may use; see the README.
+// pictureOptions is one picture request: composite the cursor, write every row,
+// how long to wait for a change, and whether to report the cursor identity.
+type pictureOptions struct {
+	cursor   bool
+	force    bool
+	wait     time.Duration
+	identity bool
+}
+
+// The capture features the driver may use; see the README. `pictures` is added
+// when the driver handed over a pixel slot (engine.features).
 var captureFeatures = []string{"captureWait", "cursorIdentity", "layoutGate", "sizeClass"}
 
 const maximumCaptureWait = 250 * time.Millisecond
@@ -73,6 +83,27 @@ type capturedFrame struct {
 	Cursor  *cursorIdentity `json:"cursor,omitempty"`
 	// read is when the frame's pixels were read: its capture clock.
 	read time.Time
+}
+
+// pictureFrame answers a picture: the framebuffer's size, its rows' stride in
+// the pixel slot, and the row ranges this picture wrote (ascending, disjoint).
+// Every other row of the slot is as the previous picture left it.
+type pictureFrame struct {
+	Changed        bool            `json:"changed"`
+	Width          int             `json:"width"`
+	Height         int             `json:"height"`
+	Stride         int             `json:"stride"`
+	Rows           [][2]int        `json:"rows"`
+	CursorIncluded bool            `json:"cursorIncluded"`
+	Visible        *visibleRect    `json:"visible,omitempty"`
+	Timings        pictureTimings  `json:"timings"`
+	Cursor         *cursorIdentity `json:"cursor,omitempty"`
+	read           time.Time
+}
+type pictureTimings struct {
+	WaitUs  int64 `json:"waitUs,omitempty"`
+	FetchUs int64 `json:"fetchUs"`
+	CopyUs  int64 `json:"copyUs"`
 }
 type unchangedFrame struct {
 	Changed bool            `json:"changed"`
@@ -437,6 +468,21 @@ func bandRuns(marked []bool, gap int) [][2]int {
 const markerAtomName = "AMB_CAPTURE_MARK"
 const fetchGap = 2
 
+// damageConsumer is one kind of capture: JPEG frames or video pictures. Each
+// has its own X DAMAGE object, log and wake-up, so each sees every change
+// since its own previous capture and never takes the other's damage. The
+// retained framebuffer is shared: a band either fetched is the screen as of
+// that fetch, and every later change is in both logs.
+type damageConsumer struct {
+	damage damage.Damage
+	log    damageLog
+	// wake holds one pending signal that damage, a cursor change or native
+	// pointer input happened since this consumer's waiting capture looked.
+	wake  chan struct{}
+	fetch []bool
+	rects []image.Rectangle
+}
+
 // frameEngine observes the root window over its own connection, so a capture
 // in flight never delays input, geometry or clipboard requests on the display
 // connection. DAMAGE reports mark bands; a capture fetches only those, keeps
@@ -446,25 +492,28 @@ type frameEngine struct {
 	root     xproto.Window
 	window   xproto.Window // receives each capture's ordering marker
 	marker   xproto.Atom
-	damage   damage.Damage
-	log      damageLog
 	markers  chan uint32
 	dead     chan struct{}
 	failOnce sync.Once
-	// wake holds one pending signal that damage, a cursor change or native
-	// pointer input happened since a waiting capture last looked.
-	wake   chan struct{}
-	cursor cursorTracker
+	cursor   cursorTracker
+	// frames and pictures are fixed at open, before the observer runs.
+	frames   damageConsumer
+	pictures damageConsumer
 
 	mu       sync.Mutex
 	closed   bool
 	serial   uint32
 	pipeline framePipeline
-	fetch    []bool
 	encode   []bool
-	rects    []image.Rectangle
 	layout   layoutGate
 	shared   *sharedImage
+	// waiting counts captures blocked in await, which a layout's paint owes
+	// a look at the screen.
+	waiting int
+	// slot receives pictures; nil when the driver asked for none.
+	slot *pixelSlot
+	// pictured is the cursor rectangle last composited into the slot.
+	pictured image.Rectangle
 }
 
 // layoutGate keeps frames of a window configure the browser has not painted
@@ -474,19 +523,41 @@ type layoutGate struct {
 	pending bool
 	settled chan struct{}
 	visible image.Rectangle // the window inside a larger framebuffer; empty is the whole frame
+	// owed is open while a capture that was waiting when the last layout
+	// settled has not looked at the screen yet; it closes when one does.
+	owed chan struct{}
 }
 
+// layoutLook bounds how long a layout waits for a waiting capture to look at
+// the previous layout's paint: two display frames. A drag of many layouts
+// thus shows the browser at each size instead of starving every capture.
+const layoutLook = 34 * time.Millisecond
+
 // beginLayout waits for any capture in progress, so no capture reads pixels
-// after a geometry change it did not see begin.
+// after a geometry change it did not see begin. It first lets a capture that
+// was waiting look at the previous layout's paint, within layoutLook.
 func (e *frameEngine) beginLayout() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if owed := e.layout.owed; owed != nil {
+		e.mu.Unlock()
+		timer := time.NewTimer(layoutLook)
+		select {
+		case <-owed:
+		case <-timer.C:
+		case <-e.dead:
+		}
+		timer.Stop()
+		e.mu.Lock()
+		e.looked()
+	}
 	if !e.layout.pending {
 		e.layout.pending, e.layout.settled = true, make(chan struct{})
 	}
 }
 
-// endLayout reopens capture with the window where the layout left it.
+// endLayout reopens capture with the window where the layout left it. A
+// capture waiting now is owed a look before the next layout begins.
 func (e *frameEngine) endLayout(visible image.Rectangle) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -494,16 +565,48 @@ func (e *frameEngine) endLayout(visible image.Rectangle) {
 	if e.layout.pending {
 		e.layout.pending = false
 		close(e.layout.settled)
+		if e.waiting > 0 && e.layout.owed == nil {
+			e.layout.owed = make(chan struct{})
+		}
 	}
 	e.poke()
 }
 
-// poke records that a waiting capture should look again.
-func (e *frameEngine) poke() {
-	select {
-	case e.wake <- struct{}{}:
-	default:
+// looked records that a capture observed the screen: the look a layout owed.
+func (e *frameEngine) looked() {
+	if e.layout.owed != nil {
+		close(e.layout.owed)
+		e.layout.owed = nil
 	}
+}
+
+// poke records that every waiting capture should look again.
+func (e *frameEngine) poke() {
+	for _, consumer := range []*damageConsumer{&e.frames, &e.pictures} {
+		select {
+		case consumer.wake <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// attachPixels gives pictures their destination; before it, picture requests
+// are unavailable.
+func (e *frameEngine) attachPixels(slot *pixelSlot) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.slot = slot
+}
+
+// features lists the capture extensions this helper serves; see the README.
+func (e *frameEngine) features() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	features := append([]string(nil), captureFeatures...)
+	if e.slot != nil && e.pipeline.layout.fast() {
+		features = append(features, "pictures")
+	}
+	return features
 }
 
 func openFrames() (*frameEngine, error) {
@@ -538,7 +641,7 @@ func openFrames() (*frameEngine, error) {
 	if !ok {
 		return nil, unavailable()
 	}
-	e := &frameEngine{conn: c, root: screen.Root, markers: make(chan uint32, 8), dead: make(chan struct{}), wake: make(chan struct{}, 1)}
+	e := &frameEngine{conn: c, root: screen.Root, markers: make(chan uint32, 8), dead: make(chan struct{})}
 	e.pipeline.init(layout, runtime.GOMAXPROCS(0))
 	atom, err := xproto.InternAtom(c, false, uint16(len(markerAtomName)), markerAtomName).Reply()
 	if err != nil {
@@ -553,14 +656,16 @@ func openFrames() (*frameEngine, error) {
 		return nil, err
 	}
 	e.window = window
-	id, err := damage.NewDamageId(c)
-	if err != nil {
-		return nil, err
+	for _, consumer := range []*damageConsumer{&e.frames, &e.pictures} {
+		id, err := damage.NewDamageId(c)
+		if err != nil {
+			return nil, err
+		}
+		if err := damage.CreateChecked(c, id, xproto.Drawable(e.root), damage.ReportLevelRawRectangles).Check(); err != nil {
+			return nil, err
+		}
+		consumer.damage, consumer.wake = id, make(chan struct{}, 1)
 	}
-	if err := damage.CreateChecked(c, id, xproto.Drawable(e.root), damage.ReportLevelRawRectangles).Check(); err != nil {
-		return nil, err
-	}
-	e.damage = id
 	if err := xfixes.SelectCursorInputChecked(c, e.root, xfixes.CursorNotifyMaskDisplayCursor).Check(); err != nil {
 		return nil, err
 	}
@@ -584,8 +689,16 @@ func (e *frameEngine) observe() {
 		}
 		switch value := event.(type) {
 		case damage.NotifyEvent:
-			e.log.mark(image.Rect(int(value.Area.X), int(value.Area.Y), int(value.Area.X)+int(value.Area.Width), int(value.Area.Y)+int(value.Area.Height)))
-			e.poke()
+			area := image.Rect(int(value.Area.X), int(value.Area.Y), int(value.Area.X)+int(value.Area.Width), int(value.Area.Y)+int(value.Area.Height))
+			for _, consumer := range []*damageConsumer{&e.frames, &e.pictures} {
+				if value.Damage == consumer.damage {
+					consumer.log.mark(area)
+					select {
+					case consumer.wake <- struct{}{}:
+					default:
+					}
+				}
+			}
 		case xfixes.CursorNotifyEvent:
 			e.cursor.notify(value.CursorSerial)
 			e.poke()
@@ -620,22 +733,54 @@ func (e *frameEngine) close() {
 	e.closed = true
 	if e.alive() {
 		e.shared.release(e.conn)
-		_ = damage.DestroyChecked(e.conn, e.damage).Check()
+		_ = damage.DestroyChecked(e.conn, e.frames.damage).Check()
+		_ = damage.DestroyChecked(e.conn, e.pictures.damage).Check()
 		_ = xproto.DestroyWindowChecked(e.conn, e.window).Check()
 		e.conn.Close()
 		<-e.dead
 	}
 }
 
-// capture answers on either channel; the mutex serializes them. A fetch that
-// fails because the screen changed size underneath is retried from a full
-// frame; every other failure is the display becoming unavailable.
+// capture answers a JPEG frame; picture answers a video picture. Both wait the
+// same way (waitFor) and read the screen the same way (observe); the mutex
+// serializes them.
+func (e *frameEngine) capture(options captureOptions) (any, error) {
+	return e.waitFor(&e.frames, options.wait, options.identity, func() (any, bool, error) { return e.captureOnce(options) })
+}
+
+// picture copies what changed since the previous picture into the pixel slot
+// and names the rows it wrote; the driver converts and encodes them.
+func (e *frameEngine) picture(options pictureOptions) (any, error) {
+	return e.waitFor(&e.pictures, options.wait, options.identity, func() (any, bool, error) { return e.pictureOnce(options) })
+}
+
+// An answer that read the screen stamps how long its capture waited for it.
+type readAnswer interface {
+	reported() *cursorIdentity
+	waited(started time.Time) any
+}
+
+func (f unchangedFrame) reported() *cursorIdentity { return f.Cursor }
+func (f unchangedFrame) waited(time.Time) any      { return f }
+func (f capturedFrame) reported() *cursorIdentity  { return f.Cursor }
+func (f capturedFrame) waited(started time.Time) any {
+	f.Timings.WaitUs = f.read.Sub(started).Microseconds()
+	return f
+}
+func (f pictureFrame) reported() *cursorIdentity { return f.Cursor }
+func (f pictureFrame) waited(started time.Time) any {
+	f.Timings.WaitUs = f.read.Sub(started).Microseconds()
+	return f
+}
+
+// waitFor answers one consumer's capture. A fetch that fails because the screen
+// changed size underneath is retried from a full frame; every other failure is
+// the display becoming unavailable.
 //
-// With a wait, an unchanged answer is held until damage, a new cursor
-// identity or the end of a pending layout, or until the wait runs out. The
-// mutex is released while waiting, so a layout never waits behind an idle
-// capture.
-func (e *frameEngine) capture(options captureOptions) (result any, err error) {
+// With a wait, an unchanged answer is held until damage, a new cursor identity
+// or the end of a pending layout, or until the wait runs out. The mutex is
+// released while waiting, so a layout never waits behind an idle capture.
+func (e *frameEngine) waitFor(consumer *damageConsumer, wait time.Duration, identity bool, once func() (any, bool, error)) (result any, err error) {
 	defer func() {
 		if recover() != nil {
 			e.fail()
@@ -643,7 +788,7 @@ func (e *frameEngine) capture(options captureOptions) (result any, err error) {
 		}
 	}()
 	started := time.Now()
-	deadline := started.Add(min(options.wait, maximumCaptureWait))
+	deadline := started.Add(min(wait, maximumCaptureWait))
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	attempt := 0
@@ -653,21 +798,21 @@ func (e *frameEngine) capture(options captureOptions) (result any, err error) {
 		}
 		// Anything that arrives from here on is seen by this pass or wakes
 		// the wait after it.
-		e.drainWake()
+		drain(consumer.wake)
 		var answer any
 		if e.layout.pending {
-			identity, err := e.identity(options)
+			current, err := e.identity(identity)
 			if err != nil {
 				return nil, unavailable()
 			}
-			answer = unchangedFrame{Cursor: identity}
+			answer = unchangedFrame{Cursor: current}
 		} else {
-			frame, retry, failure := e.captureOnce(options)
+			frame, retry, failure := once()
 			if failure != nil {
 				// Whatever was retained may no longer describe the screen.
 				e.pipeline.width, e.pipeline.height = 0, 0
 				if !retry || attempt == 2 {
-					return nil, unavailable()
+					return nil, failure
 				}
 				attempt++
 				continue
@@ -675,29 +820,24 @@ func (e *frameEngine) capture(options captureOptions) (result any, err error) {
 			answer = frame
 		}
 		unchanged, idle := answer.(unchangedFrame)
-		if idle && unchanged.Cursor == nil && e.await(deadline) {
+		if idle && unchanged.Cursor == nil && e.await(consumer, deadline) {
 			continue
 		}
-		switch value := answer.(type) {
-		case unchangedFrame:
-			e.cursor.delivered(value.Cursor)
-		case capturedFrame:
-			e.cursor.delivered(value.Cursor)
-			if options.wait > 0 {
-				// The wait ends where the pixels are read, so the request's
-				// time plus the wait is the frame's capture clock; the
-				// stages after it are timed on their own.
-				value.Timings.WaitUs = value.read.Sub(started).Microseconds()
-				answer = value
-			}
+		value := answer.(readAnswer)
+		e.cursor.delivered(value.reported())
+		if wait > 0 {
+			// The wait ends where the pixels are read, so the request's time
+			// plus the wait is the frame's capture clock; the stages after it
+			// are timed on their own.
+			return value.waited(started), nil
 		}
 		return answer, nil
 	}
 }
 
-func (e *frameEngine) drainWake() {
+func drain(wake chan struct{}) {
 	select {
-	case <-e.wake:
+	case <-wake:
 	default:
 	}
 }
@@ -705,7 +845,7 @@ func (e *frameEngine) drainWake() {
 // await releases the capture mutex until something may have changed, and
 // reports false once the deadline has passed. A wake for damage is followed by
 // a short settle so one browser frame's rectangles are read together.
-func (e *frameEngine) await(deadline time.Time) bool {
+func (e *frameEngine) await(consumer *damageConsumer, deadline time.Time) bool {
 	remaining := time.Until(deadline)
 	if remaining <= 0 {
 		return false
@@ -714,12 +854,16 @@ func (e *frameEngine) await(deadline time.Time) bool {
 	if e.layout.pending {
 		settled = e.layout.settled
 	}
+	e.waiting++
 	e.mu.Unlock()
-	defer e.mu.Lock()
+	defer func() {
+		e.mu.Lock()
+		e.waiting--
+	}()
 	timer := time.NewTimer(remaining)
 	defer timer.Stop()
 	select {
-	case <-e.wake:
+	case <-consumer.wake:
 		time.Sleep(damageSettle)
 		return true
 	case <-settled:
@@ -733,8 +877,8 @@ func (e *frameEngine) await(deadline time.Time) bool {
 
 // identity reports the displayed cursor when it differs from the last report,
 // fetching it only after the server announced a new one.
-func (e *frameEngine) identity(options captureOptions) (*cursorIdentity, error) {
-	if !options.identity {
+func (e *frameEngine) identity(asked bool) (*cursorIdentity, error) {
+	if !asked {
 		return nil, nil
 	}
 	if err := e.cursor.finish(e.cursor.begin(e.conn)); err != nil {
@@ -743,90 +887,114 @@ func (e *frameEngine) identity(options captureOptions) (*cursorIdentity, error) 
 	return e.cursor.unreported(), nil
 }
 
-func (e *frameEngine) captureOnce(options captureOptions) (any, bool, error) {
+// screen is what one capture learned about the display: its size, the bands
+// the consumer must fetch (in consumer.fetch), and the cursor replies asked for.
+type screen struct {
+	width, height int
+	overflow      bool
+	damaged       bool
+	cursor        *xfixes.GetCursorImageReply
+	identity      *cursorIdentity
+}
+
+// observeScreen brings one consumer's view up to date: every damage report before
+// this point is in its log or precedes the marker, which the observer answers
+// only after applying everything before it. A changed framebuffer size makes
+// every band of every consumer damaged.
+func (e *frameEngine) observeScreen(consumer *damageConsumer, cursor, identity, force bool) (screen, bool, error) {
 	p := &e.pipeline
-	// Damage reported before this point is in the log or precedes the marker,
-	// which the observer answers only after applying everything before it.
-	subtract := damage.SubtractChecked(e.conn, e.damage, xfixes.RegionNone, xfixes.RegionNone)
+	subtract := damage.SubtractChecked(e.conn, consumer.damage, xfixes.RegionNone, xfixes.RegionNone)
 	geometry := xproto.GetGeometry(e.conn, xproto.Drawable(e.root))
 	serial := e.sendMarker()
 	var cursorCookie xfixes.GetCursorImageCookie
-	if options.cursor {
+	if cursor {
 		cursorCookie = xfixes.GetCursorImage(e.conn)
 	}
 	var identityCookie *xfixes.GetCursorImageAndNameCookie
-	if options.identity {
+	if identity {
 		identityCookie = e.cursor.begin(e.conn)
 	}
 	reply, err := geometry.Reply()
 	if err != nil {
-		return nil, false, err
+		return screen{}, false, err
 	}
 	if err := subtract.Check(); err != nil {
 		e.fail()
-		return nil, false, err
+		return screen{}, false, err
 	}
 	if !e.awaitMarker(serial) {
-		return nil, false, unavailable()
+		return screen{}, false, unavailable()
 	}
-	var cursor *xfixes.GetCursorImageReply
-	if options.cursor {
-		if cursor, err = cursorCookie.Reply(); err != nil {
-			return nil, false, err
+	e.looked()
+	var seen screen
+	if cursor {
+		if seen.cursor, err = cursorCookie.Reply(); err != nil {
+			return screen{}, false, err
 		}
 	}
-	var identity *cursorIdentity
-	if options.identity {
+	if identity {
 		if err := e.cursor.finish(identityCookie); err != nil {
-			return nil, false, err
+			return screen{}, false, err
 		}
 		// A forced frame is whole, cursor included: the driver forces one
 		// when it holds nothing of the display, which includes having
 		// dropped a frame taken across a layout together with the identity
-		// that frame carried. Only a frame repeats it; a forced capture
-		// held by a layout still waits for the painted frame.
-		if options.force {
-			identity = e.cursor.displayed()
+		// that frame carried. Only a frame repeats it; a forced capture held
+		// by a layout still waits for the painted frame.
+		if force {
+			seen.identity = e.cursor.displayed()
 		} else {
-			identity = e.cursor.unreported()
+			seen.identity = e.cursor.unreported()
 		}
 	}
-	width, height := int(reply.Width), int(reply.Height)
-	if !validSize(width, height) {
-		return nil, false, unavailable()
+	seen.width, seen.height = int(reply.Width), int(reply.Height)
+	if !validSize(seen.width, seen.height) {
+		return screen{}, false, unavailable()
 	}
-	if width != p.width || height != p.height {
-		p.retained = e.shared.buffer(e.conn, p.layout.stride(width)*height, p.retained)
-		p.resize(width, height)
-		bands := bandCount(height)
-		e.fetch, e.encode = make([]bool, bands), make([]bool, bands)
-		e.log.reset(bands)
+	if seen.width != p.width || seen.height != p.height {
+		p.retained = e.shared.buffer(e.conn, p.layout.stride(seen.width)*seen.height, p.retained)
+		p.resize(seen.width, seen.height)
+		bands := bandCount(seen.height)
+		e.encode = make([]bool, bands)
+		for _, each := range []*damageConsumer{&e.frames, &e.pictures} {
+			each.fetch = make([]bool, bands)
+			each.log.reset(bands)
+		}
 	}
-	rects, overflow, damaged := e.log.take(e.fetch, e.rects[:0])
-	e.rects = rects
-	copy(e.encode, e.fetch)
-	cursorChanged, cursorRects := p.trackCursor(options.cursor, cursor)
+	consumer.rects, seen.overflow, seen.damaged = consumer.log.take(consumer.fetch, consumer.rects[:0])
+	return seen, false, nil
+}
+
+func (e *frameEngine) captureOnce(options captureOptions) (any, bool, error) {
+	p := &e.pipeline
+	seen, retry, err := e.observeScreen(&e.frames, options.cursor, options.identity, options.force)
+	if err != nil {
+		return nil, retry, err
+	}
+	rects := e.frames.rects
+	copy(e.encode, e.frames.fetch)
+	cursorChanged, cursorRects := p.trackCursor(options.cursor, seen.cursor)
 	for _, rect := range cursorRects {
 		markRows(e.encode, rect.Min.Y, rect.Max.Y)
 	}
-	if !damaged && !cursorChanged && !options.force {
-		return unchangedFrame{Cursor: identity}, false, nil
+	if !seen.damaged && !cursorChanged && !options.force {
+		return unchangedFrame{Cursor: seen.identity}, false, nil
 	}
-	frame := capturedFrame{Changed: true, Width: width, Height: height, Encoding: "jpeg", CursorIncluded: options.cursor, Quality: p.quality.quality(), Cursor: identity}
+	frame := capturedFrame{Changed: true, Width: seen.width, Height: seen.height, Encoding: "jpeg", CursorIncluded: options.cursor, Quality: p.quality.quality(), Cursor: seen.identity}
 	if visible := e.layout.visible.Intersect(p.surface()); !visible.Empty() && visible != p.surface() {
 		frame.Visible = &visibleRect{X: visible.Min.X, Y: visible.Min.Y, Width: visible.Dx(), Height: visible.Dy()}
 	}
 	frame.read = time.Now()
-	if damaged {
-		if err := e.fetchBands(); err != nil {
+	if seen.damaged {
+		if err := e.fetchBands(e.frames.fetch); err != nil {
 			return nil, true, err
 		}
 	}
 	frame.Timings.FetchUs = micros(frame.read)
 	started := time.Now()
-	p.convert(e.fetch)
+	p.convert(e.frames.fetch)
 	frame.Timings.ConvertUs = micros(started)
-	if options.patches && !options.force && !p.fullNeeded && !overflow {
+	if options.patches && !options.force && !p.fullNeeded && !seen.overflow {
 		if layout, ok := patchLayout(append(rects, cursorRects...), p.surface()); ok {
 			if frame.Patches, err = p.encodePatches(layout, &frame.Timings); err != nil {
 				return nil, false, err
@@ -841,6 +1009,67 @@ func (e *frameEngine) captureOnce(options captureOptions) (any, bool, error) {
 		p.mosaic.invalidateAll()
 		p.fullNeeded = true
 	}
+	return frame, false, nil
+}
+
+// pictureOnce copies the rows that changed since the previous picture (every
+// row when forced) from the retained framebuffer into the pixel slot, with the
+// cursor composited when asked. The rows under the cursor it composited last
+// time are written again, so a moved or hidden cursor leaves nothing behind.
+func (e *frameEngine) pictureOnce(options pictureOptions) (any, bool, error) {
+	p := &e.pipeline
+	if e.slot == nil || !p.layout.fast() {
+		return nil, false, unavailable()
+	}
+	seen, retry, err := e.observeScreen(&e.pictures, options.cursor, options.identity, options.force)
+	if err != nil {
+		return nil, retry, err
+	}
+	if !e.slot.holds(seen.width, seen.height) {
+		return nil, false, unavailable()
+	}
+	rows := append([]bool(nil), e.pictures.fetch...)
+	var drawn image.Rectangle
+	if options.cursor && seen.cursor != nil && len(seen.cursor.CursorImage) == int(seen.cursor.Width)*int(seen.cursor.Height) {
+		left, top := int(seen.cursor.X)-int(seen.cursor.Xhot), int(seen.cursor.Y)-int(seen.cursor.Yhot)
+		drawn = image.Rect(left, top, left+int(seen.cursor.Width), top+int(seen.cursor.Height)).Intersect(p.surface())
+	}
+	moved := drawn != e.pictured
+	for _, rect := range []image.Rectangle{e.pictured, drawn} {
+		if moved && !rect.Empty() {
+			markRows(rows, rect.Min.Y, rect.Max.Y)
+		}
+	}
+	if !seen.damaged && !moved && !options.force {
+		return unchangedFrame{Cursor: seen.identity}, false, nil
+	}
+	if options.force {
+		for band := range rows {
+			rows[band] = true
+		}
+	}
+	frame := pictureFrame{Changed: true, Width: seen.width, Height: seen.height, Stride: seen.width * 4, CursorIncluded: options.cursor, Cursor: seen.identity}
+	if visible := e.layout.visible.Intersect(p.surface()); !visible.Empty() && visible != p.surface() {
+		frame.Visible = &visibleRect{X: visible.Min.X, Y: visible.Min.Y, Width: visible.Dx(), Height: visible.Dy()}
+	}
+	frame.read = time.Now()
+	if seen.damaged {
+		if err := e.fetchBands(e.pictures.fetch); err != nil {
+			return nil, true, err
+		}
+	}
+	frame.Timings.FetchUs = micros(frame.read)
+	started := time.Now()
+	for _, run := range bandRuns(rows, 0) {
+		top, bottom := bandRect(run[0], seen.width, seen.height).Min.Y, bandRect(run[1], seen.width, seen.height).Max.Y
+		e.slot.copyRows(p.retained, p.stride, seen.width, top, bottom)
+		frame.Rows = append(frame.Rows, [2]int{top, bottom})
+	}
+	e.pictured = image.Rectangle{}
+	if !drawn.Empty() {
+		e.pictured = e.slot.composite(seen.cursor, seen.width, seen.height)
+	}
+	frame.Timings.CopyUs = micros(started)
 	return frame, false, nil
 }
 
@@ -875,9 +1104,9 @@ func (e *frameEngine) awaitMarker(serial uint32) bool {
 // fetchBands reads every marked band into the retained framebuffer, one
 // pipelined request per run. With shared memory the server writes the rows
 // into the retained framebuffer itself; otherwise they cross the socket.
-func (e *frameEngine) fetchBands() error {
+func (e *frameEngine) fetchBands(marked []bool) error {
 	p := &e.pipeline
-	runs := bandRuns(e.fetch, fetchGap)
+	runs := bandRuns(marked, fetchGap)
 	if e.shared.holds(p.retained) {
 		cookies := make([]shm.GetImageCookie, len(runs))
 		for index, run := range runs {
