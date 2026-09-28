@@ -360,19 +360,41 @@ class WorkspaceUpdateTests(unittest.TestCase):
         self.assertEqual((self.lineage / "toolchains.lock.json").read_bytes(), prior)
         self.assertFalse((self.lineage / "parent-toolchains").exists())
 
-    def test_component_only_update_preserves_existing_toolchain_history(self):
+    def component_only(self, roster):
+        """A browser-component update: the toolchain lock stays the parent's, with prior history."""
         current = self.source.read_bytes()
         (self.lineage / "toolchains.lock.json").write_bytes(current)
         history = self.lineage / "parent-toolchains"
         history.mkdir()
         (history / "prior").write_text("retained history")
         def query(command, *, text):
-            return self.target["debian"]["packages"][command[-1]]
+            if len(command) == 4:
+                return self.target["debian"]["packages"][command[-1]]
+            return roster
         with patch.object(installer.subprocess, "check_output", side_effect=query):
             installer.record_toolchain_update(self.source, self.target, self.lineage)
+        return current
+
+    def test_component_only_update_without_package_changes_preserves_receipts_and_history(self):
+        current = self.component_only("parent observation\n")
         self.assertEqual((self.lineage / "toolchains.lock.json").read_bytes(), current)
         self.assertEqual((self.lineage / "installed-dpkg.lock").read_text(), "parent observation\n")
-        self.assertEqual((history / "prior").read_text(), "retained history")
+        self.assertEqual((self.lineage / "parent-toolchains/prior").read_text(), "retained history")
+        self.assertEqual(sorted(path.name for path in self.lineage.iterdir()), ["installed-dpkg.lock", "parent-toolchains", "toolchains.lock.json"])
+
+    def test_component_packages_rerecord_the_roster_and_push_parent_receipts_down(self):
+        # The browser composition installed packages while keeping the parent's
+        # toolchain lock: the receipt must describe this image, not its parent.
+        current = self.component_only("parent observation\ngtk=3\n")
+        self.assertEqual((self.lineage / "installed-dpkg.lock").read_text(), "gtk=3\nparent observation\n")
+        self.assertEqual((self.lineage / "toolchains.lock.json").read_bytes(), current)
+        history = self.lineage / "parent-toolchains"
+        self.assertEqual((history / "installed-dpkg.lock").read_text(), "parent observation\n")
+        self.assertEqual((history / "toolchains.lock.json").read_bytes(), current)
+        self.assertEqual((history / "parent-toolchains/prior").read_text(), "retained history")
+        for name in ("toolchains.lock.json", "installed-dpkg.lock"):
+            self.assertEqual((self.lineage / name).stat().st_mode & 0o777, 0o444)
+        self.assertFalse((self.lineage / ".parent-toolchains").exists())
 
 
 class NpmInstallationTests(unittest.TestCase):

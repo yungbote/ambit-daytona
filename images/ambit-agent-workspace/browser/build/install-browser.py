@@ -324,23 +324,39 @@ def install_python(lock, scratch, source, inputs=Path("/inputs")):
     return requirements
 
 
+def preserve_parent_receipts(lineage):
+    """Move the parent's receipts to parent-toolchains/, its own history one level further down."""
+    history = lineage / "parent-toolchains"
+    staged = lineage / ".parent-toolchains"
+    staged.mkdir()
+    for name in ("toolchains.lock.json", "installed-dpkg.lock"):
+        shutil.copy2(lineage / name, staged / name)
+    if history.exists():
+        history.rename(staged / "parent-toolchains")
+    staged.rename(history)
+
+
 def record_toolchain_update(source, target, lineage=TOOLCHAIN_LINEAGE):
     for name, expected in target["debian"]["packages"].items():
         observed = subprocess.check_output(["dpkg-query", "-W", "-f=${Version}", name], text=True)
         if observed != expected:
             raise ValueError(f"Workspace package version mismatch: {name}")
-    if source.read_bytes() == (lineage / "toolchains.lock.json").read_bytes():
-        # A browser-component update can retain its already qualified parent
-        # toolchain verbatim. Preserve that parent's history and observation.
-        return
-    # Preserve the parent's observation with the parent's exact input lock.
-    historical = lineage / "parent-toolchains"
-    historical.mkdir()
-    for name in ("toolchains.lock.json", "installed-dpkg.lock"):
-        shutil.copy2(lineage / name, historical / name)
-    shutil.copyfile(source, lineage / "toolchains.lock.json")
     observed = subprocess.check_output(["dpkg-query", "-W", "-f=${binary:Package}=${Version}\n"], text=True)
-    (lineage / "installed-dpkg.lock").write_text("\n".join(sorted(observed.splitlines())) + "\n")
+    roster = "\n".join(sorted(observed.splitlines())) + "\n"
+    toolchain_kept = source.read_bytes() == (lineage / "toolchains.lock.json").read_bytes()
+    if toolchain_kept and (lineage / "installed-dpkg.lock").read_text() == roster:
+        # A browser-component update that installed nothing retains its already
+        # qualified parent's receipts and history verbatim.
+        return
+    # This image's toolchain lock or installed packages differ from its parent's:
+    # preserve the parent's observation with its exact input lock, then record this
+    # image's own, so the receipt always describes the image it is in.
+    preserve_parent_receipts(lineage)
+    if not toolchain_kept:
+        (lineage / "toolchains.lock.json").unlink()
+        shutil.copyfile(source, lineage / "toolchains.lock.json")
+    (lineage / "installed-dpkg.lock").unlink()
+    (lineage / "installed-dpkg.lock").write_text(roster)
     for name in ("toolchains.lock.json", "installed-dpkg.lock"):
         (lineage / name).chmod(0o444)
 
