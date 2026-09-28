@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,7 +33,9 @@ const browserMaximumFrameWindow = 8
 // pointer, from pointer samples and cursor records, so the driver may leave it
 // out of the frames; with visible=crop frames 1:1 from the top-left cropped to
 // their visible window, so the driver may keep the display at a size class
-// through a resize. Each holds once every connected viewer says so.
+// through a resize. Each holds once every connected viewer says so. With
+// audio=<codec> and video=<codecs> the viewer names what it can play; the
+// driver offers a track, and only an offered track can be subscribed.
 func (s *SessionController) ViewBrowserChannel(c *gin.Context) {
 	if !websocket.IsWebSocketUpgrade(c.Request) {
 		c.Status(http.StatusUpgradeRequired)
@@ -44,7 +47,8 @@ func (s *SessionController) ViewBrowserChannel(c *gin.Context) {
 	crop := c.Request.URL.Query()["visible"]
 	window, windowValid := parseBrowserFrameWindow(c.Request)
 	audioCodec, audioValid := parseBrowserAudioDeclaration(c.Request)
-	if !valid || !windowValid || !audioValid || len(formats) > 1 || (len(formats) == 1 && formats[0] != "binary") || len(pointer) > 1 || (len(pointer) == 1 && pointer[0] != "viewer") ||
+	videoCodecs, videoValid := parseBrowserVideoDeclaration(c.Request)
+	if !valid || !windowValid || !audioValid || !videoValid || len(formats) > 1 || (len(formats) == 1 && formats[0] != "binary") || len(pointer) > 1 || (len(pointer) == 1 && pointer[0] != "viewer") ||
 		len(crop) > 1 || (len(crop) == 1 && crop[0] != "crop") {
 		c.JSON(http.StatusBadRequest, gin.H{"code": "browser_view_invalid"})
 		return
@@ -76,6 +80,9 @@ func (s *SessionController) ViewBrowserChannel(c *gin.Context) {
 	if audioCodec != "" {
 		address += "&audio=" + audioCodec
 	}
+	if len(videoCodecs) != 0 {
+		address += "&video=" + strings.Join(videoCodecs, ",")
+	}
 	upstream, _, err := (&websocket.Dialer{HandshakeTimeout: browserDriverWriteTimeout}).DialContext(c.Request.Context(), address, headers)
 	if err != nil {
 		c.Status(http.StatusBadGateway)
@@ -94,7 +101,7 @@ func (s *SessionController) ViewBrowserChannel(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	channel := &browserViewChannel{controller: s, view: *selected, socket: socket, upstream: upstream, binary: binaryFrames, presentation: presentation != nil, pending: browserFrameWindow{limit: window}, audioCodec: audioCodec}
+	channel := &browserViewChannel{controller: s, view: *selected, socket: socket, upstream: upstream, binary: binaryFrames, presentation: presentation != nil, pending: browserFrameWindow{limit: window}, audioCodec: audioCodec, videoCodecs: videoCodecs}
 	channel.run(c.Request.Context())
 }
 
@@ -151,10 +158,17 @@ type browserViewChannel struct {
 	audioGeneration atomic.Uint64
 	// Epoch is owned only by the upstream reader, independently of JPEG state.
 	audioEpoch browserAudioEpoch
-	delivery   sync.Mutex
-	pending    browserFrameWindow
-	unanswered atomic.Int32
-	closeOnce  sync.Once
+	// What the viewer declared, and the one codec the driver offered from it.
+	videoCodecs     []string
+	videoCodec      string
+	videoOffered    atomic.Bool
+	videoEnabled    atomic.Bool
+	videoGeneration atomic.Uint64
+	videoEpoch      browserVideoEpoch
+	delivery        sync.Mutex
+	pending         browserFrameWindow
+	unanswered      atomic.Int32
+	closeOnce       sync.Once
 	// Only the upstream reader owns the prior frame's geometry and sequence.
 	previous browserFrameHeader
 }
@@ -191,7 +205,13 @@ func (ch *browserViewChannel) run(parent context.Context) {
 			return
 		}
 		if kind == websocket.BinaryMessage {
-			if ch.audioCodec != "" && browserBinaryMedia(message) {
+			if track, media := browserBinaryMediaTrack(message); media && track == "video" && len(ch.videoCodecs) != 0 {
+				if err := ch.deliverVideoUnit(message); err != nil {
+					ch.close(websocket.CloseInternalServerErr, "browser_view_invalid_video")
+					return
+				}
+				continue
+			} else if media && ch.audioCodec != "" {
 				if err := ch.deliverAudioPacket(message); err != nil {
 					ch.close(websocket.CloseInternalServerErr, "browser_view_invalid_audio")
 					return
@@ -239,6 +259,13 @@ func (ch *browserViewChannel) run(parent context.Context) {
 		if envelope.Type == "audio" {
 			if err := ch.deliverAudioMetadata(message); err != nil {
 				ch.close(websocket.CloseInternalServerErr, "browser_view_invalid_audio")
+				return
+			}
+			continue
+		}
+		if envelope.Type == "video" {
+			if err := ch.deliverVideoMetadata(message); err != nil {
+				ch.close(websocket.CloseInternalServerErr, "browser_view_invalid_video")
 				return
 			}
 			continue
@@ -442,6 +469,25 @@ func (ch *browserViewChannel) readViewer() {
 		if err != nil {
 			return
 		}
+		var picture struct {
+			Type  string `json:"type"`
+			Track string `json:"track"`
+		}
+		if json.Unmarshal(message, &picture) == nil && (picture.Type == "video" || (picture.Type == "ack" && picture.Track != "")) {
+			value, projected, valid := browserViewerVideoMessage(message)
+			forward := false
+			if valid {
+				forward, valid = ch.admitViewerVideo(value)
+			}
+			if !valid {
+				ch.close(websocket.ClosePolicyViolation, "browser_view_invalid_message")
+				return
+			}
+			if forward && !ch.writeUpstream(projected) {
+				return
+			}
+			continue
+		}
 		projected, ack, valid := browserViewerMessage(message)
 		var output struct {
 			Type       string `json:"type"`
@@ -473,12 +519,20 @@ func (ch *browserViewChannel) readViewer() {
 				continue
 			}
 		}
-		_ = ch.upstream.SetWriteDeadline(time.Now().Add(browserDriverWriteTimeout))
-		if ch.upstream.WriteMessage(websocket.TextMessage, projected) != nil {
-			ch.close(websocket.CloseInternalServerErr, "screencast_failed")
+		if !ch.writeUpstream(projected) {
 			return
 		}
 	}
+}
+
+// Only the viewer's reader writes to the driver.
+func (ch *browserViewChannel) writeUpstream(projected []byte) bool {
+	_ = ch.upstream.SetWriteDeadline(time.Now().Add(browserDriverWriteTimeout))
+	if ch.upstream.WriteMessage(websocket.TextMessage, projected) != nil {
+		ch.close(websocket.CloseInternalServerErr, "screencast_failed")
+		return false
+	}
+	return true
 }
 
 func (ch *browserViewChannel) watch(ctx context.Context) {

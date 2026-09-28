@@ -91,14 +91,6 @@ func parseBrowserAudioPacket(message []byte) (browserAudioHeader, []byte, bool) 
 	return value, wire, true
 }
 
-func browserBinaryMedia(message []byte) bool {
-	header, _, valid := browserBinaryParts(message)
-	var value struct {
-		Type string `json:"type"`
-	}
-	return valid && json.Unmarshal(header, &value) == nil && value.Type == "media"
-}
-
 type browserAudioEpoch struct {
 	generation uint64
 	id         string

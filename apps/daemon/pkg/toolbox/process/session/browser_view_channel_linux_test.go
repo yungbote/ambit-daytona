@@ -58,6 +58,13 @@ func serveBrowserViewChannelFixture(w http.ResponseWriter, r *http.Request, dir,
 	binaryFrames := query.Get("frames") == "binary"
 	_ = connection.WriteJSON(map[string]any{"type": "status", "connected": true, "screencasting": true, "private": browserFixtureSecret})
 	_ = connection.WriteJSON(map[string]any{"type": "console", "text": browserFixtureSecret})
+	if mode == "view-channel-video" || mode == "view-channel-video-race" || mode == "view-channel-video-gap" {
+		if query.Get("video") != "av1-444,av1" {
+			return
+		}
+		serveVideoFixture(connection, mode)
+		return
+	}
 	if mode == "view-channel-audio" || mode == "view-channel-audio-race" {
 		if query.Get("audio") != "pcm-s16le" {
 			return
