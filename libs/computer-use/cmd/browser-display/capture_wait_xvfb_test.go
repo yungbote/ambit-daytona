@@ -511,12 +511,12 @@ func TestXvfbSizeClassLaysOutOnlyTheModeAndWindow(t *testing.T) {
 	}
 	layout(900, 1000)
 	if w, h := rootSize(t, d); w != 1792 || h != 2048 {
-		t.Fatalf("shrank before settling: %dx%d", w, h)
+		t.Fatalf("shrank before the smaller need held: %dx%d", w, h)
 	}
-	d.framebufferChanged = time.Now().Add(-sizeClassSettle)
+	d.shrink.since = time.Now().Add(-sizeClassSettle)
 	layout(900, 1000)
 	if w, h := rootSize(t, d); w != 1024 || h != 1024 {
-		t.Fatalf("settled shrink: %dx%d", w, h)
+		t.Fatalf("held-smaller shrink: %dx%d", w, h)
 	}
 	// The exact layout still owns the whole framebuffer and names no window.
 	if _, err := d.resize(1000, 800, window, false); err != nil {

@@ -38,6 +38,9 @@ type display struct {
 	// framebufferChanged is when this helper last changed the framebuffer
 	// size; zero before it ever has.
 	framebufferChanged time.Time
+	// shrink times how long size-class layouts have found the framebuffer
+	// larger than the window needs.
+	shrink shrinkClock
 }
 type windowInfo struct {
 	ID               uint32 `json:"id"`
@@ -63,10 +66,12 @@ type displayInfo struct {
 
 // A size-class framebuffer is the window rounded up to whole steps, so a dock
 // resize inside the class changes only the output mode and the window. It
-// grows at once when the window no longer fits and shrinks only when a resize
-// finds it at least two steps larger than needed and unchanged for
-// sizeClassSettle, so a drag never reallocates it on every step. A framebuffer
-// that holds the window stays, whether or not it is a whole class.
+// grows at once when the window no longer fits, and shrinks only once the
+// window has needed a class at least two steps smaller for sizeClassSettle
+// (the driver's coded video size follows the same rule), so a drag back and
+// forth never reallocates it. A framebuffer that holds the window stays,
+// whether or not it is a whole class; one this helper never laid out (the
+// launch size) takes its class at once.
 const sizeClassStep = 256
 const sizeClassSettle = 10 * time.Second
 
@@ -75,17 +80,45 @@ func sizeClass(value, limit int) int {
 }
 
 // framebufferFor is the framebuffer a window of width x height needs, given
-// the current one.
-func framebufferFor(width, height, currentWidth, currentHeight, limitWidth, limitHeight int, settled bool) (int, int) {
+// the current one and whether a larger class may shrink now.
+func framebufferFor(width, height, currentWidth, currentHeight, limitWidth, limitHeight int, shrink bool) (int, int) {
 	pick := func(value, current, limit int) int {
 		class := sizeClass(value, limit)
-		if value > current || (settled && current-class >= 2*sizeClassStep) {
+		if value > current || (shrink && current-class >= 2*sizeClassStep) {
 			return class
 		}
 		return min(current, limit)
 	}
 	return pick(width, currentWidth, limitWidth), pick(height, currentHeight, limitHeight)
 }
+
+// oversized reports whether the current framebuffer is at least two steps
+// larger than a window of width x height needs in either dimension.
+func oversized(width, height, currentWidth, currentHeight, limitWidth, limitHeight int) bool {
+	return currentWidth-sizeClass(width, limitWidth) >= 2*sizeClassStep ||
+		currentHeight-sizeClass(height, limitHeight) >= 2*sizeClassStep
+}
+
+// shrinkClock times how long the window has needed a smaller class: from the
+// first layout that found the framebuffer oversized, through every one that
+// still did. Any layout that needed the class, and any change of the
+// framebuffer, starts it over.
+type shrinkClock struct{ since time.Time }
+
+// allows reports whether a class may shrink at now, given whether the window
+// needs one at least two steps smaller.
+func (c *shrinkClock) allows(needsSmaller bool, now time.Time) bool {
+	if !needsSmaller {
+		c.since = time.Time{}
+		return false
+	}
+	if c.since.IsZero() {
+		c.since = now
+	}
+	return now.Sub(c.since) >= sizeClassSettle
+}
+
+func (c *shrinkClock) reset() { c.since = time.Time{} }
 
 func openDisplay(pid int) (*display, error) {
 	c, err := xgb.NewConn()
@@ -261,8 +294,10 @@ func (d *display) resize(width, height int, windowID uint32, sizeClass bool) (di
 	}
 	framebufferW, framebufferH := width, height
 	if sizeClass {
-		settled := d.framebufferChanged.IsZero() || time.Since(d.framebufferChanged) >= sizeClassSettle
-		framebufferW, framebufferH = framebufferFor(width, height, oldW, oldH, int(limits.MaxWidth), int(limits.MaxHeight), settled)
+		limitW, limitH := int(limits.MaxWidth), int(limits.MaxHeight)
+		needsSmaller := oversized(width, height, oldW, oldH, limitW, limitH)
+		shrink := d.shrink.allows(needsSmaller, time.Now()) || d.framebufferChanged.IsZero()
+		framebufferW, framebufferH = framebufferFor(width, height, oldW, oldH, limitW, limitH, shrink)
 	}
 	d.frames.beginLayout()
 	result, err := d.layout(width, height, framebufferW, framebufferH, oldW, oldH, windowID)
@@ -355,6 +390,7 @@ func (d *display) layout(width, height, framebufferW, framebufferH, oldW, oldH i
 	}
 	if framebufferChanges {
 		d.framebufferChanged = time.Now()
+		d.shrink.reset()
 		if err := randr.SetScreenSizeChecked(d.conn, d.screen.Root, uint16(framebufferW), uint16(framebufferH), uint32(max(1, framebufferW*254/960)), uint32(max(1, framebufferH*254/960))).Check(); err != nil {
 			return displayInfo{}, unknown()
 		}
