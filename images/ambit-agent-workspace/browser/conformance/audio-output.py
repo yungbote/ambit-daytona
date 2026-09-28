@@ -35,6 +35,8 @@ def main():
     args = parser.parse_args()
     binary = args.native_test_binary.resolve(strict=True)
     args.output.mkdir(mode=0o700, parents=True, exist_ok=False)
+    sockets = args.output / "sockets"
+    sockets.mkdir(mode=0o700)
     environment = dict(os.environ)
     for key in ("DISPLAY", "WAYLAND_DISPLAY", "WAYLAND_SOCKET", "PULSE_SERVER", "PULSE_COOKIE", "PULSE_SOURCE", "PULSE_SINK", "PULSE_CLIENTCONFIG"):
         environment.pop(key, None)
@@ -43,13 +45,16 @@ def main():
         "AGENT_BROWSER_HEADED": "true",
         "AGENT_BROWSER_EXECUTABLE_PATH": "/opt/ambit/browser/chrome/chrome",
         "AGENT_BROWSER_DISPLAY_HELPER": "/opt/ambit/browser/bin/browser-display",
+        "AGENT_BROWSER_SOCKET_DIR": str(sockets),
         "AUDIO_EVIDENCE_DIR": str(args.output),
     })
     before = time.monotonic()
     code, log = run_case(binary, "native::audio::e2e::e2e_audio_two_sessions_page_output_and_sign_in", args.output / "native-audio.log", environment)
     lifecycle_code, lifecycle = run_case(binary, "native::audio::server::tests::e2e_private_output_lifetime_and_startup", args.output / "native-lifetime.log", environment)
+    channel_code, channel = run_case(binary, "native::stream::audio_e2e::e2e_audio_generation_and_independent_image_flow", args.output / "native-channel.log", environment)
     rows = [json.loads(line.split("AUDIO_PROOF ", 1)[1]) for line in log.splitlines() if "AUDIO_PROOF " in line]
     lifetimes = [json.loads(line.split("AUDIO_LIFETIME_PROOF ", 1)[1]) for line in lifecycle.splitlines() if "AUDIO_LIFETIME_PROOF " in line]
+    channels = [json.loads(line.split("AUDIO_CHANNEL_PROOF ", 1)[1]) for line in channel.splitlines() if "AUDIO_CHANNEL_PROOF " in line]
     libraries = subprocess.check_output(["ldd", str(binary)], text=True)
     audio_libraries = [line.strip() for line in libraries.splitlines() if "libpulse.so" in line or "libopus.so" in line]
     runtime_packages = subprocess.check_output(["dpkg-query", "-W", "-f=${Package}=${Version}\n", "pulseaudio", "libpulse0", "libopus0"], text=True).splitlines()
@@ -59,17 +64,18 @@ def main():
             with path.open("rb") as source:
                 artifacts[path.name] = hashlib.file_digest(source, "sha256").hexdigest()
     report = {
-        "status": "passed" if code == 0 and lifecycle_code == 0 and len(rows) == 1 and rows[0].get("status") == "passed" and len(lifetimes) == 1 and lifetimes[0].get("status") == "passed" and len(audio_libraries) == 2 and "not found" not in libraries else "failed",
+        "status": "passed" if code == 0 and lifecycle_code == 0 and channel_code == 0 and len(rows) == 1 and rows[0].get("status") == "passed" and len(lifetimes) == 1 and lifetimes[0].get("status") == "passed" and len(channels) == 1 and channels[0].get("status") == "passed" and len(audio_libraries) == 2 and "not found" not in libraries else "failed",
         "nativeSourceRevision": args.source_revision,
         "imageReference": args.image_reference,
         "nativeTestBinarySha256": hashlib.file_digest(binary.open("rb"), "sha256").hexdigest(),
         "elapsedSeconds": time.monotonic() - before,
         "result": rows[0] if len(rows) == 1 else None,
         "lifetime": lifetimes[0] if len(lifetimes) == 1 else None,
+        "channel": channels[0] if len(channels) == 1 else None,
         "runtimePackages": runtime_packages,
         "dynamicAudioLibraries": audio_libraries,
         "artifacts": artifacts,
-        "limits": "Private output routing/codec/lifetime proof. No viewer relay, physical speaker latency, microphone or production acceptance.",
+        "limits": "Private output routing/codec/lifetime and native viewer channel proof. No backend/Go relay, physical speaker latency, microphone or production acceptance.",
     }
     (args.output / "audio-output.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report))
