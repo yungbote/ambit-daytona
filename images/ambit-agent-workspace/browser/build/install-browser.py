@@ -371,6 +371,24 @@ def prepare_browser_component(root, mode, lock):
     return reuse_chrome
 
 
+def prepare_driver_features(lock, scratch):
+    """Native audio is an explicit image feature; build dependencies stay in the driver stage."""
+    features = lock["agentBrowser"].get("features", [])
+    if features not in ([], ["browser-audio"]):
+        raise ValueError("Browser build features must match the qualified audio contract")
+    if not features:
+        return []
+    packages = lock.get("debianBuildPackages")
+    if not packages:
+        raise ValueError("Audio build requires locked native development libraries")
+    build_scratch = scratch / "build-packages"
+    build_scratch.mkdir()
+    install_debian_packages({**lock, "debianPackages": packages}, build_scratch)
+    # Prevent the binding's optional bundled-codec path from hiding a missing runtime ABI.
+    subprocess.run(["pkg-config", "--exists", "libpulse", "opus"], check=True)
+    return ["--features", "browser-audio"]
+
+
 def main():
     mode, lock_path, base_image = sys.argv[1:]
     lock = json.loads(Path(lock_path).read_text())
@@ -390,6 +408,7 @@ def main():
         scratch = Path(temporary)
         if mode == "driver":
             source = lock["agentBrowser"]
+            cargo_features = prepare_driver_features(lock, scratch)
             archive = verify_input(source)
             extracted = scratch / "source"
             extracted.mkdir()
@@ -397,7 +416,7 @@ def main():
                 bundle.extractall(extracted, filter="data")
             source_root, = extracted.iterdir()
             manifest = source_root / "cli/Cargo.toml"
-            subprocess.run(["cargo", "build", "--release", "--locked", "--manifest-path", str(manifest)], check=True)
+            subprocess.run(["cargo", "build", "--release", "--locked", *cargo_features, "--manifest-path", str(manifest)], check=True)
             (root / "bin").mkdir()
             shutil.copy2(source_root / "cli/target/release/agent-browser", root / "bin/agent-browser")
             runtime_root = root / "runtime"
@@ -409,7 +428,7 @@ def main():
             for license_file in (source_root / "cli/src/native/a11y").glob("LICENSE*"):
                 shutil.copy2(license_file, license_root / license_file.name)
             cargo = json.loads(subprocess.check_output([
-                "cargo", "metadata", "--locked", "--format-version", "1",
+                "cargo", "metadata", "--locked", *cargo_features, "--format-version", "1",
                 "--manifest-path", str(manifest),
             ], text=True))
             notices = []
