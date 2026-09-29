@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/json"
 	"image"
+	"math"
 	"os"
 	"reflect"
 	"runtime"
@@ -427,6 +428,27 @@ func scanoutSize(t *testing.T, d *display) (int, int) {
 	return int(crtc.Width), int(crtc.Height)
 }
 
+// scanoutRefresh is the refresh rate of the output's current mode as the
+// browser computes it: the dot clock over the total raster.
+func scanoutRefresh(t *testing.T, d *display) float64 {
+	t.Helper()
+	resources, err := randr.GetScreenResourcesCurrent(d.conn, d.screen.Root).Reply()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, scanout, err := d.scanout()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range resources.Modes {
+		if randr.Mode(mode.Id) == scanout.Mode {
+			return float64(mode.DotClock) / (float64(mode.Htotal) * float64(mode.Vtotal))
+		}
+	}
+	t.Fatalf("the output's mode %d is not listed", scanout.Mode)
+	return 0
+}
+
 // No frame shows a configure the browser has not painted: captures during the
 // layout answer unchanged, a waiting capture answers with the painted frame.
 func TestXvfbLayoutGateHoldsFramesUntilTheBrowserPaints(t *testing.T) {
@@ -533,6 +555,36 @@ func TestXvfbSizeClassLaysOutOnlyTheModeAndWindow(t *testing.T) {
 	mode := mustCall(t, d, `{"id":4,"op":"capture","cursor":false,"force":true}`)
 	if visible, _ := mode["visible"].(map[string]any); mode["width"] != float64(1000) || visible == nil || visible["width"] != float64(700) || visible["height"] != float64(500) {
 		t.Fatalf("mode-only layout frame %vx%v visible %v", mode["width"], mode["height"], mode["visible"])
+	}
+}
+
+// Chrome paces its frames on the refresh rate of the output's mode, its dot
+// clock over the total raster: every mode a layout sets advertises
+// advertisedRefresh, with a window or without, up to the largest display.
+func TestXvfbLayoutsAdvertiseTheRefreshTheBrowserPacesOn(t *testing.T) {
+	startXvfb(t, 4096, 4096)
+	d, err := openDisplay(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.close()
+	browser := newSyncBrowser(t, 800, 600, 5*time.Millisecond, 0x2060c0)
+	for _, layout := range []struct {
+		width, height int
+		window        uint32
+		sizeClass     bool
+	}{
+		{1418, 1888, uint32(browser.window), true},
+		{1300, 1700, uint32(browser.window), true},
+		{4096, 4096, uint32(browser.window), false},
+		{700, 500, 0, true},
+	} {
+		if _, err := d.resize(layout.width, layout.height, layout.window, layout.sizeClass); err != nil {
+			t.Fatalf("layout %dx%d: %v", layout.width, layout.height, err)
+		}
+		if refresh := scanoutRefresh(t, d); math.Abs(refresh-advertisedRefresh) > 0.01 {
+			t.Fatalf("a %dx%d layout advertises %.3f Hz, want %d", layout.width, layout.height, refresh, advertisedRefresh)
+		}
 	}
 }
 
