@@ -27,6 +27,10 @@ const (
 	handshakeTimeout = 10 * time.Second
 	// routeWrites bounds one viewer message to the route.
 	routeWrites = 10 * time.Second
+	// retainedReadBytes is the largest read buffer a route keeps between
+	// messages: every usual unit fits it, while a rare large one (up to
+	// view.MaxMessageBytes) is not held for the rest of the view.
+	retainedReadBytes = 1 << 20
 )
 
 // Upstream dials view routes through one toolbox proxy.
@@ -94,14 +98,18 @@ func (u *Upstream) DialView(ctx context.Context, target session.Target, viewerID
 	return &route{conn: conn}, nil
 }
 
-// route is one open view route. Its read buffer is reused: a message is
-// valid until the next Read, and a 200 KB frame costs no allocation.
+// route is one open view route. Its read buffer is reused up to
+// retainedReadBytes: a message is valid until the next Read, and a 200 KB
+// frame costs no allocation.
 type route struct {
 	conn   *websocket.Conn
 	buffer bytes.Buffer
 }
 
 func (r *route) Read() (bool, []byte, error) {
+	if r.buffer.Cap() > retainedReadBytes {
+		r.buffer = bytes.Buffer{}
+	}
 	kind, reader, err := r.conn.NextReader()
 	if err == nil {
 		r.buffer.Reset()
