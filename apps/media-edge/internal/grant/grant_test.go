@@ -408,6 +408,33 @@ func TestRepeatedGrantDoesNotGrowAuthority(t *testing.T) {
 	}
 }
 
+func TestTiedControllersStayAmbiguousUntilALaterProof(t *testing.T) {
+	first := Grant{Binding: vectorBinding, Scope: ScopeControl, ControllerID: "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", IssuedAt: 1000, ExpiresAt: 60000}
+	second := first
+	second.ControllerID, second.ExpiresAt = "4f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", 5000
+	for _, order := range [][]Grant{{first, second}, {second, first}} {
+		a := NewAuthority(order[0])
+		_ = a.Add(order[1], 2000)
+		if _, ok := a.Control(2000); ok {
+			t.Fatal("arrival order chose a tied controller")
+		}
+		a.Prune(5000)
+		_ = a.Add(first, 5001)
+		if _, ok := a.Control(5001); ok {
+			t.Fatal("expiry/pruning/replay resolved an ambiguous controller")
+		}
+		if _, ok := a.ViewUntil(5001); !ok {
+			t.Fatal("ambiguous control ended viewing")
+		}
+		fresh := second
+		fresh.IssuedAt, fresh.ExpiresAt = 6000, 10000
+		_ = a.Add(fresh, 6000)
+		if g, ok := a.Control(6000); !ok || g.ControllerID != second.ControllerID {
+			t.Fatal("a later proof did not restore unambiguous control")
+		}
+	}
+}
+
 func TestPublicKeyFiles(t *testing.T) {
 	block := func(key ed25519.PrivateKey) string {
 		der, _ := x509.MarshalPKIXPublicKey(key.Public())
