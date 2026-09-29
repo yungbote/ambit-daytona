@@ -79,16 +79,12 @@ func (s *Session) add(g grant.Grant) (bool, error) {
 	return now < g.ExpiresAt, nil
 }
 
-// revoke withdraws what the revocation covers and ends the session when no
-// grant is left. It answers whether it ended the session.
-func (s *Session) revoke(r grant.Revocation) bool {
+// withdraw removes the grants the revocation covers and reports whether none
+// is left, so that the session must end.
+func (s *Session) withdraw(r grant.Revocation) bool {
 	s.mu.Lock()
-	viewing := s.authority.Revoke(r)
-	s.mu.Unlock()
-	if viewing {
-		return false
-	}
-	return s.end(r.Code, grant.RevocationReasons[r.Code], causeRevoked)
+	defer s.mu.Unlock()
+	return !s.authority.Revoke(r)
 }
 
 // armLocked sets the timer for the moment viewing lapses without renewal.

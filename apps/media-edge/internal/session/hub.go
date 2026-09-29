@@ -61,14 +61,21 @@ func (h *Hub) remove(s *Session) {
 // It answers how many sessions it closed.
 func (h *Hub) Revoke(r grant.Revocation) int {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	h.prune()
 	if r.IssuedAt+(grant.MaxLifetime+grant.ClockSkew).Milliseconds() > h.now().UnixMilli() {
 		h.revocations = append(h.revocations, r)
 	}
-	closed := 0
+	var emptied []*Session
 	for s := range h.sessions {
-		if s.revoke(r) {
+		if s.withdraw(r) {
+			emptied = append(emptied, s)
+		}
+	}
+	h.mu.Unlock()
+	// Closing writes to viewers, which may be slow: never under the lock.
+	closed := 0
+	for _, s := range emptied {
+		if s.end(r.Code, grant.RevocationReasons[r.Code], causeRevoked) {
 			closed++
 		}
 	}
