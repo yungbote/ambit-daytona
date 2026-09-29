@@ -50,6 +50,21 @@ The image's build finishes by running that launcher's `--version` through the or
 
 Refreshing Debian inputs means selecting snapshots that contain the entire requested roster, updating their release hashes and any deliberately changed package versions together, then rebuilding and qualifying the resulting image. Updating a package version without its repository snapshot can make it unavailable; selecting current mirrors would make the next rebuild depend on repository rotation again. Snapshot availability remains an external build dependency. This follows [Debian's snapshot instructions](https://snapshot.debian.org/#usage) and the source-scoped `Signed-By` and `Check-Valid-Until` options in [APT's sources.list contract](https://manpages.debian.org/trixie/apt/sources.list.5.en.html).
 
+The layer has two source inputs, the driver revision (agent-browser) and the helper revision (the backend
+revision that carries the atomic materializer), and nothing else changes between driver releases. One command
+derives everything the lock records about them from the two repositories:
+
+```
+python3 build/source-inputs.py pin --driver <agent-browser revision> --driver-repo <agent-browser clone> \
+  --helper <backend revision> --helper-repo <backend clone>
+```
+
+It writes the revision, source tree, driver version, archive name and digest, and the helper's build-lock digest.
+It refuses a revision that the repository's `origin/main` does not contain. `source-inputs.py export` writes the two
+archives a build context carries, and refuses unless each one has the digest the lock records. An archive is an
+uncompressed `git archive` tar, so its digest depends only on the revision's tree. A gzip stream would also
+depend on the compressing machine's zlib: the same revision gave different digests on two build machines.
+
 Cargo consumes the fork's committed lock with `--locked`. The final image records the browser lock, Cargo dependency lock, license notices, and installed Debian roster under `/opt/ambit/browser`. Source changes require a new lock and image digest. No installation or browser download occurs during a Run.
 
 The atomic materializer is built from the backend source archive named by the
