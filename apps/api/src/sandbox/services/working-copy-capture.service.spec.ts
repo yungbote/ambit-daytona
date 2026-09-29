@@ -203,6 +203,97 @@ describe(WorkingCopyCaptureService.name, () => {
     expect(adapter.captureWorkingCopy).not.toHaveBeenCalled()
   })
 
+  function statedComponent() {
+    const { roleRef, protocol, helper } = validBinding().authority
+    return { roleRef, protocol, helper }
+  }
+
+  it('admits absent authority in discovery DTOs while refusing an explicit null', () => {
+    const request = capabilityRequest()
+    delete request.authority
+    expect(validateSync(plainToInstance(WorkingCopyCaptureCapabilitiesRequestDto, request))).toEqual([])
+    expect(validateSync(plainToInstance(WorkingCopyCaptureCapabilitiesDto, { component: statedComponent() }))).toEqual(
+      [],
+    )
+    expect(
+      validateSync(plainToInstance(WorkingCopyCaptureCapabilitiesRequestDto, { ...request, authority: null })),
+    ).not.toEqual([])
+    expect(validateSync(plainToInstance(WorkingCopyCaptureCapabilitiesDto, { component: null }))).not.toEqual([])
+  })
+
+  it('refuses an unsolicited authority echo when the caller supplied no authority', async () => {
+    const request = capabilityRequest()
+    const response = { ...capabilities(request), component: statedComponent() }
+    delete request.authority
+    adapter.workingCopyCaptureCapabilities.mockResolvedValue(response)
+    await expect(service.capabilities('daytona-org-1', 'sandbox-1', request)).rejects.toThrow(ConflictException)
+  })
+
+  it('accepts an exact echo of the expected authority and measured component', async () => {
+    const request = capabilityRequest()
+    const response = { ...capabilities(request), component: statedComponent() }
+    adapter.workingCopyCaptureCapabilities.mockResolvedValue(response)
+    await expect(service.capabilities('daytona-org-1', 'sandbox-1', request)).resolves.toEqual(response)
+  })
+
+  it.each([true, false])(
+    'accepts a Runner component statement with expected authority present=%s',
+    async (expected) => {
+      const request = capabilityRequest()
+      if (!expected) delete (request as Partial<WorkingCopyCaptureCapabilitiesRequestDto>).authority
+      const response = {
+        component: statedComponent(),
+        stoppedWorkingTreeInventory: capabilities(request).stoppedWorkingTreeInventory,
+      }
+      adapter.workingCopyCaptureCapabilities.mockResolvedValue(response as unknown as WorkingCopyCaptureCapabilitiesDto)
+      await expect(service.capabilities('daytona-org-1', 'sandbox-1', request)).resolves.toEqual(response)
+      expect(adapter.captureWorkingCopy).not.toHaveBeenCalled()
+      expect(adapter.prepareWorkingTreeInventory).not.toHaveBeenCalled()
+    },
+  )
+
+  it('accepts a new measured Runner component without adopting the old image component', async () => {
+    const request = capabilityRequest()
+    const component = statedComponent()
+    component.helper = {
+      digest: `sha256:${'d'.repeat(64)}`,
+      ref: `runtime-component-artifact:sha256:${'d'.repeat(64)}`,
+    }
+    const response = { component, stoppedWorkingTreeInventory: capabilities(request).stoppedWorkingTreeInventory }
+    adapter.workingCopyCaptureCapabilities.mockResolvedValue(response as unknown as WorkingCopyCaptureCapabilitiesDto)
+    await expect(service.capabilities('daytona-org-1', 'sandbox-1', request)).resolves.toEqual(response)
+  })
+
+  it('requires the echoed authority to name the stated component', async () => {
+    const request = capabilityRequest()
+    const component = statedComponent()
+    component.helper = {
+      digest: `sha256:${'d'.repeat(64)}`,
+      ref: `runtime-component-artifact:sha256:${'d'.repeat(64)}`,
+    }
+    const response = { ...capabilities(request), component }
+    adapter.workingCopyCaptureCapabilities.mockResolvedValue(response)
+    await expect(service.capabilities('daytona-org-1', 'sandbox-1', request)).rejects.toThrow(ConflictException)
+  })
+
+  it.each(['missing', 'null', 'role', 'protocol', 'helper', 'extra', 'nested-extra'])(
+    'rejects a %s Runner statement',
+    async (fault) => {
+      const request = capabilityRequest()
+      const response: Record<string, unknown> = { component: statedComponent() }
+      const component = response.component as ReturnType<typeof statedComponent>
+      if (fault === 'missing') delete response.component
+      if (fault === 'null') response.component = null
+      if (fault === 'role') component.roleRef = 'other' as typeof component.roleRef
+      if (fault === 'protocol') component.protocol = { ...component.protocol, ref: 'other' }
+      if (fault === 'helper') component.helper = { ...component.helper, ref: 'other' }
+      if (fault === 'extra') Object.assign(component, { unexpected: true })
+      if (fault === 'nested-extra') Object.assign(component.helper, { unexpected: true })
+      adapter.workingCopyCaptureCapabilities.mockResolvedValue(response as unknown as WorkingCopyCaptureCapabilitiesDto)
+      await expect(service.capabilities('daytona-org-1', 'sandbox-1', request)).rejects.toThrow(ConflictException)
+    },
+  )
+
   it('rejects foreign owners before contacting the Runner', async () => {
     const request = capabilityRequest()
     request.owner.tenantId = OTHER_ID

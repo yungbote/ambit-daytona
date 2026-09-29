@@ -32,5 +32,5 @@ export interface WorkingCopyCaptureGeneration {
     'authority': WorkingCopyCaptureAuthority;
     'source': SandboxExecutionSource;
     'owner': SandboxExecutionOwner;
-    'stopAuthority': SandboxGenerationStopAuthority;
+    'stopAuthority'?: SandboxGenerationStopAuthority;
 }

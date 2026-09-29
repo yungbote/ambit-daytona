@@ -82,9 +82,7 @@ import {
   assertSandboxFileDeleteReceipt,
 } from '../dto/sandbox-file-capture.contract'
 import { SandboxExecutionAuthorityService } from './sandbox-execution-authority.service'
-
-const CAPTURE_ROLE_REF = 'ambit.runtime-component/working-copy-capture@2'
-const CAPTURE_PROTOCOL_REF = 'ambit.runtime-interface/working-copy-capture@2'
+import { assertWorkingCopyCaptureComponent } from '../dto/working-copy-capture-component.contract'
 
 @Injectable()
 export class WorkingCopyCaptureService {
@@ -189,11 +187,11 @@ export class WorkingCopyCaptureService {
     signal?.throwIfAborted()
     assertExactKeys(
       request,
-      ['authority', 'source', 'owner', 'fence'],
+      ['source', 'owner', 'fence', ...(request?.authority !== undefined ? ['authority'] : [])],
       'capture capability request',
       BadRequestException,
     )
-    assertAuthority(request.authority)
+    if (request.authority !== undefined) assertAuthority(request.authority)
     try {
       assertGenerationObservationRequest({ source: request.source, owner: request.owner, fence: request.fence })
     } catch {
@@ -209,18 +207,39 @@ export class WorkingCopyCaptureService {
     try {
       const response = await adapter.workingCopyCaptureCapabilities(sandbox.id, request, signal)
       const tree = response.stoppedWorkingTreeInventory
+      const component = response.component
+      const authority = response.authority
+      const snapshot = response.fileSnapshot
       assertExactKeys(
         response,
         [
-          'authority',
+          ...(authority !== undefined ? ['authority'] : []),
+          ...(component !== undefined ? ['component'] : []),
           ...(tree !== undefined ? ['stoppedWorkingTreeInventory'] : []),
           ...(response.fileSnapshot !== undefined ? ['fileSnapshot'] : []),
         ],
         'capture capabilities',
         ConflictException,
       )
-      if (canonicalJson(response.authority) !== canonicalJson(request.authority))
-        throw new ConflictException('Runner capture capabilities name another helper authority.')
+      if (component === undefined && authority === undefined)
+        throw new ConflictException('Runner capture capabilities do not name their implementation.')
+      if (component !== undefined)
+        nativeCaptureValidation(() => assertWorkingCopyCaptureComponent(component), ConflictException)
+      if (authority !== undefined) {
+        nativeCaptureValidation(() => assertAuthority(authority), ConflictException)
+        if (request.authority === undefined || canonicalJson(authority) !== canonicalJson(request.authority))
+          throw new ConflictException('Runner capture capabilities name another helper authority.')
+        if (
+          component !== undefined &&
+          canonicalJson(component) !==
+            canonicalJson({
+              roleRef: authority.roleRef,
+              protocol: authority.protocol,
+              helper: authority.helper,
+            })
+        )
+          throw new ConflictException('Runner capture capability authority names another implementation.')
+      }
       if (tree !== undefined) {
         const bounds = [
           'maximumDepth',
@@ -244,17 +263,12 @@ export class WorkingCopyCaptureService {
             throw new ConflictException('Runner working-tree inventory capability bound is invalid.')
         }
       }
-      if (response.fileSnapshot !== undefined) {
-        assertExactKeys(
-          response.fileSnapshot,
-          ['contract', 'maximumBytes'],
-          'file snapshot capability',
-          ConflictException,
-        )
+      if (snapshot !== undefined) {
+        assertExactKeys(snapshot, ['contract', 'maximumBytes'], 'file snapshot capability', ConflictException)
         if (
-          response.fileSnapshot.contract !== FILE_SNAPSHOT_CONTRACT ||
-          !Number.isSafeInteger(response.fileSnapshot.maximumBytes) ||
-          response.fileSnapshot.maximumBytes < 1
+          snapshot.contract !== FILE_SNAPSHOT_CONTRACT ||
+          !Number.isSafeInteger(snapshot.maximumBytes) ||
+          snapshot.maximumBytes < 1
         )
           throw new ConflictException('Runner file snapshot capability is invalid.')
       }
@@ -902,16 +916,16 @@ function assertAuthority(authority: WorkingCopyCaptureAuthorityDto): void {
     'capture authority',
     BadRequestException,
   )
-  assertExactKeys(authority.protocol, ['digest', 'ref'], 'capture protocol', BadRequestException)
-  assertExactKeys(authority.helper, ['digest', 'ref'], 'capture helper', BadRequestException)
-  if (
-    authority.roleRef !== CAPTURE_ROLE_REF ||
-    !boundedRef(authority.lineageRef, 512) ||
-    authority.protocol.ref !== CAPTURE_PROTOCOL_REF ||
-    !/^sha256:[0-9a-f]{64}$/.test(authority.protocol.digest) ||
-    !/^sha256:[0-9a-f]{64}$/.test(authority.helper.digest) ||
-    authority.helper.ref !== `runtime-component-artifact:${authority.helper.digest}`
-  ) {
+  nativeCaptureValidation(
+    () =>
+      assertWorkingCopyCaptureComponent({
+        roleRef: authority.roleRef,
+        protocol: authority.protocol,
+        helper: authority.helper,
+      }),
+    BadRequestException,
+  )
+  if (!boundedRef(authority.lineageRef, 512)) {
     throw new BadRequestException('Working-copy capture authority lineage is invalid.')
   }
   const preimage = ['ambit.working-copy-capture-authority/v2', authority.lineageRef].join('\n')

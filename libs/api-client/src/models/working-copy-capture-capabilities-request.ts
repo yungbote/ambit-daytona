@@ -30,5 +30,5 @@ export interface WorkingCopyCaptureCapabilitiesRequest {
     'source': SandboxExecutionSource;
     'owner': SandboxExecutionOwner;
     'fence': SandboxGenerationFence;
-    'authority': WorkingCopyCaptureAuthority;
+    'authority'?: WorkingCopyCaptureAuthority;
 }

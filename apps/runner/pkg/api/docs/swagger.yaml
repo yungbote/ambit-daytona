@@ -1136,12 +1136,14 @@ definitions:
     properties:
       authority:
         $ref: '#/definitions/workingcopy.CaptureAuthority'
+      component:
+        $ref: '#/definitions/workingcopy.CaptureComponent'
       fileSnapshot:
         $ref: '#/definitions/workingcopy.FileSnapshotCapability'
       stoppedWorkingTreeInventory:
         $ref: '#/definitions/workingcopy.WorkingTreeInventoryCapability'
     required:
-      - authority
+      - component
       - stoppedWorkingTreeInventory
     type: object
   workingcopy.CaptureCapabilitiesRequest:
@@ -1155,7 +1157,6 @@ definitions:
       source:
         $ref: '#/definitions/workingcopy.SourceAddress'
     required:
-      - authority
       - fence
       - owner
       - source
@@ -2997,6 +2998,10 @@ paths:
           description: Conflict
           schema:
             $ref: '#/definitions/ErrorResponse'
+        '500':
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/ErrorResponse'
         '503':
           description: Service Unavailable
           schema:
@@ -3008,9 +3013,10 @@ paths:
     post:
       consumes:
         - application/json
-      description: Read-only discovery checked against the Runner's measured capture
-        component and physical source generation. Measurement does not replace image
-        publication or conformance qualification.
+      description: Read-only discovery checked against the physical source generation.
+        The answer states the Runner's measured capture component and echoes a requested
+        authority only when it names exactly that component. A build outside its deployment's
+        pin refuses with 500.
       operationId: WorkingCopyCaptureCapabilities
       parameters:
         - description: Sandbox ID
@@ -3018,7 +3024,7 @@ paths:
           name: sandboxId
           required: true
           type: string
-        - description: Current capture authority
+        - description: Discovery request; authority optionally names the expected component
           in: body
           name: request
           required: true
@@ -3037,6 +3043,10 @@ paths:
             $ref: '#/definitions/ErrorResponse'
         '409':
           description: Conflict
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '500':
+          description: Internal Server Error
           schema:
             $ref: '#/definitions/ErrorResponse'
         '503':
@@ -3248,6 +3258,10 @@ paths:
           description: Conflict
           schema:
             $ref: '#/definitions/ErrorResponse'
+        '500':
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/ErrorResponse'
         '503':
           description: Service Unavailable
           schema:
@@ -3431,6 +3445,10 @@ paths:
           description: Conflict
           schema:
             $ref: '#/definitions/ErrorResponse'
+        '500':
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/ErrorResponse'
         '503':
           description: Service Unavailable
           schema:
@@ -3468,6 +3486,10 @@ paths:
             $ref: '#/definitions/ErrorResponse'
         '409':
           description: Conflict
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        '500':
+          description: Internal Server Error
           schema:
             $ref: '#/definitions/ErrorResponse'
         '503':

@@ -27,7 +27,7 @@ import type { WorkingcopyCaptureOwner } from './workingcopy-capture-owner';
 import type { WorkingcopySourceAddress } from './workingcopy-source-address';
 
 export interface WorkingcopyCaptureCapabilitiesRequest {
-    'authority': WorkingcopyCaptureAuthority;
+    'authority'?: WorkingcopyCaptureAuthority;
     'fence': GenerationstopFence;
     'owner': WorkingcopyCaptureOwner;
     'source': WorkingcopySourceAddress;

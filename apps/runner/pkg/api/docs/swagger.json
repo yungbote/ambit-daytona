@@ -1532,6 +1532,12 @@
               "$ref": "#/definitions/ErrorResponse"
             }
           },
+          "500": {
+            "description": "Internal Server Error",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
           "503": {
             "description": "Service Unavailable",
             "schema": {
@@ -1543,7 +1549,7 @@
     },
     "/sandboxes/{sandboxId}/working-copy-captures/capabilities": {
       "post": {
-        "description": "Read-only discovery checked against the Runner's measured capture component and physical source generation. Measurement does not replace image publication or conformance qualification.",
+        "description": "Read-only discovery checked against the physical source generation. The answer states the Runner's measured capture component and echoes a requested authority only when it names exactly that component. A build outside its deployment's pin refuses with 500.",
         "consumes": [
           "application/json"
         ],
@@ -1564,7 +1570,7 @@
             "required": true
           },
           {
-            "description": "Current capture authority",
+            "description": "Discovery request; authority optionally names the expected component",
             "name": "request",
             "in": "body",
             "required": true,
@@ -1588,6 +1594,12 @@
           },
           "409": {
             "description": "Conflict",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
             "schema": {
               "$ref": "#/definitions/ErrorResponse"
             }
@@ -1905,6 +1917,12 @@
               "$ref": "#/definitions/ErrorResponse"
             }
           },
+          "500": {
+            "description": "Internal Server Error",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
           "503": {
             "description": "Service Unavailable",
             "schema": {
@@ -2168,6 +2186,12 @@
               "$ref": "#/definitions/ErrorResponse"
             }
           },
+          "500": {
+            "description": "Internal Server Error",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
           "503": {
             "description": "Service Unavailable",
             "schema": {
@@ -2223,6 +2247,12 @@
           },
           "409": {
             "description": "Conflict",
+            "schema": {
+              "$ref": "#/definitions/ErrorResponse"
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
             "schema": {
               "$ref": "#/definitions/ErrorResponse"
             }
@@ -4507,12 +4537,15 @@
     "workingcopy.CaptureCapabilities": {
       "type": "object",
       "required": [
-        "authority",
+        "component",
         "stoppedWorkingTreeInventory"
       ],
       "properties": {
         "authority": {
           "$ref": "#/definitions/workingcopy.CaptureAuthority"
+        },
+        "component": {
+          "$ref": "#/definitions/workingcopy.CaptureComponent"
         },
         "fileSnapshot": {
           "$ref": "#/definitions/workingcopy.FileSnapshotCapability"
@@ -4525,7 +4558,6 @@
     "workingcopy.CaptureCapabilitiesRequest": {
       "type": "object",
       "required": [
-        "authority",
         "fence",
         "owner",
         "source"

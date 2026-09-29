@@ -47,6 +47,10 @@ func (s *Service) CaptureSandboxFile(ctx context.Context, sandboxID string, requ
 		}
 		binding = intent.Binding
 	} else {
+		component, err := s.currentComponent()
+		if err != nil {
+			return SandboxFileReceipt{}, err
+		}
 		observer, ok := s.fileSnapshots.(sandboxFileObserver)
 		if !ok {
 			return SandboxFileReceipt{}, fmt.Errorf("%w: native sandbox capture is unavailable", ErrUnavailable)
@@ -60,7 +64,7 @@ func (s *Service) CaptureSandboxFile(ctx context.Context, sandboxID string, requ
 		}
 		binding = CaptureBinding{Selector: selector, SandboxFile: SandboxFileSource{
 			Contract: SandboxFileCaptureContract, OrganizationID: request.OrganizationID, SandboxID: sandboxID,
-			OperationID: request.OperationID, Generation: observed.Generation.ExpectedGeneration, Component: s.component,
+			OperationID: request.OperationID, Generation: observed.Generation.ExpectedGeneration, Component: component,
 		}}
 	}
 	zonePath, err := s.validateBinding(sandboxID, binding)
@@ -290,7 +294,11 @@ func (s *Service) requireBindingComponent(binding CaptureBinding) error {
 	if binding.SandboxFile == (SandboxFileSource{}) {
 		return s.requireCurrentComponent(binding.Authority)
 	}
-	if binding.SandboxFile.Component != s.component {
+	current, err := s.currentComponent()
+	if err != nil {
+		return err
+	}
+	if binding.SandboxFile.Component != current {
 		return fmt.Errorf("%w: recorded capture component is not implemented by this Runner", ErrUnavailable)
 	}
 	return nil

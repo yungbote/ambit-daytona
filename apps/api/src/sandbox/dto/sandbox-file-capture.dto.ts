@@ -17,7 +17,7 @@ import {
 } from 'class-validator'
 import { SandboxExecutionGenerationDto } from './sandbox-generation-stop.dto'
 import {
-  WorkingCopyCaptureAuthorityArtifactDto,
+  WorkingCopyCaptureComponentDto,
   MAXIMUM_USER_FILE_CAPTURE_BYTES,
   MAXIMUM_USER_FILE_READ_BYTES,
 } from './working-copy-capture.dto'
@@ -64,21 +64,7 @@ export class SandboxFileCaptureObserveRequestDto {
 export type SandboxFileCaptureRunnerObserveRequest = SandboxFileCaptureObserveRequestDto & { organizationId: string }
 
 @ApiSchema({ name: 'SandboxFileCaptureComponent' })
-export class SandboxFileCaptureComponentDto {
-  @ApiProperty({ enum: ['ambit.runtime-component/working-copy-capture@2'] })
-  @Equals('ambit.runtime-component/working-copy-capture@2')
-  roleRef: string
-
-  @ApiProperty({ type: WorkingCopyCaptureAuthorityArtifactDto })
-  @ValidateNested()
-  @Type(() => WorkingCopyCaptureAuthorityArtifactDto)
-  protocol: WorkingCopyCaptureAuthorityArtifactDto
-
-  @ApiProperty({ type: WorkingCopyCaptureAuthorityArtifactDto })
-  @ValidateNested()
-  @Type(() => WorkingCopyCaptureAuthorityArtifactDto)
-  helper: WorkingCopyCaptureAuthorityArtifactDto
-}
+export class SandboxFileCaptureComponentDto extends WorkingCopyCaptureComponentDto {}
 
 @ApiSchema({ name: 'SandboxFileCaptureReceipt' })
 export class SandboxFileCaptureReceiptDto extends SandboxFileCaptureRequestDto {

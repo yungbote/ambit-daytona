@@ -84,7 +84,7 @@ s.close()
 	}
 	objects := newFakeObjectStore()
 	objects.directory = t.TempDir()
-	service, err := NewService(docker, objects, dockerTestStoppedAuthority{docker}, testCaptureComponent(binding.Authority), nil)
+	service, err := NewService(docker, objects, dockerTestStoppedAuthority{docker}, binding.Authority.component(), Pin{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

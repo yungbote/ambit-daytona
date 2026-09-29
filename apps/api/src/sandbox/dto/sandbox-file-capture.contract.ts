@@ -16,6 +16,7 @@ import {
 } from './sandbox-file-capture.dto'
 import { assertExpectedGeneration } from './sandbox-generation-stop.contract'
 import { MAXIMUM_USER_FILE_CAPTURE_BYTES, MAXIMUM_USER_FILE_READ_BYTES } from './working-copy-capture.dto'
+import { assertWorkingCopyCaptureComponent } from './working-copy-capture-component.contract'
 
 const digest = /^sha256:[0-9a-f]{64}$/
 const captureId = /^daytona-sandbox-file-capture:v1:sha256:[0-9a-f]{64}$/
@@ -112,17 +113,7 @@ export function assertSandboxFileReceipt(
   )
     throw new Error('Native capture receipt authority or bounds differ.')
   assertExpectedGeneration(value.generation)
-  exact(value.component, ['roleRef', 'protocol', 'helper'])
-  exact(value.component.protocol, ['ref', 'digest'])
-  exact(value.component.helper, ['ref', 'digest'])
-  if (
-    value.component.roleRef !== 'ambit.runtime-component/working-copy-capture@2' ||
-    value.component.protocol.ref !== 'ambit.runtime-interface/working-copy-capture@2' ||
-    !digest.test(value.component.protocol.digest) ||
-    !digest.test(value.component.helper.digest) ||
-    value.component.helper.ref !== `runtime-component-artifact:${value.component.helper.digest}`
-  )
-    throw new Error('Native capture component measurement is invalid.')
+  assertWorkingCopyCaptureComponent(value.component)
 }
 
 export function assertSandboxFileObservation(

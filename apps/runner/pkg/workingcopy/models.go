@@ -37,15 +37,22 @@ type CaptureSelector struct {
 	ZoneRelativePath string `json:"zoneRelativePath" validate:"required"`
 }
 
+// CaptureCapabilitiesRequest asks the assigned Runner which capture component
+// it implements. Authority is optional: it names the component the caller
+// expects, and the answer echoes it only when this Runner implements exactly it.
 type CaptureCapabilitiesRequest struct {
-	Authority CaptureAuthority     `json:"authority" validate:"required"`
+	Authority CaptureAuthority     `json:"authority,omitzero"`
 	Source    SourceAddress        `json:"source" validate:"required"`
 	Owner     CaptureOwner         `json:"owner" validate:"required"`
 	Fence     generationstop.Fence `json:"fence" validate:"required"`
 }
 
+// CaptureCapabilities states the capture component this Runner implements and
+// the surface it serves under it. Authority is the request's, echoed only when
+// it names exactly Component.
 type CaptureCapabilities struct {
-	Authority                   CaptureAuthority               `json:"authority" validate:"required"`
+	Authority                   CaptureAuthority               `json:"authority,omitzero"`
+	Component                   CaptureComponent               `json:"component" validate:"required"`
 	StoppedWorkingTreeInventory WorkingTreeInventoryCapability `json:"stoppedWorkingTreeInventory" validate:"required"`
 	FileSnapshot                *FileSnapshotCapability        `json:"fileSnapshot,omitempty"`
 }

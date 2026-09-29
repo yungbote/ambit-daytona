@@ -17,10 +17,6 @@ import (
 	containertypes "github.com/docker/docker/api/types/container"
 )
 
-func testCaptureComponent(authority CaptureAuthority) CaptureComponent {
-	return CaptureComponent{RoleRef: authority.RoleRef, Protocol: authority.Protocol, Helper: authority.Helper}
-}
-
 func nextCaptureComponent(component CaptureComponent) CaptureComponent {
 	component.Helper.Digest = "sha256:" + strings.Repeat("a", 64)
 	component.Helper.Ref = "runtime-component-artifact:" + component.Helper.Digest
@@ -299,4 +295,126 @@ func TestCaptureComponentRolloutPreservesIncompleteInventoryWithoutSourceRead(t 
 	if containers.copyCalls != copies || containers.inspectCalls != inspections {
 		t.Fatal("partial custody reconciliation reread source")
 	}
+}
+
+const pinnedRevision = "a30d1e7323b3fbc41a4bb47df1c56afe1c60d18e"
+
+func TestCapturePinComparesTheBuildWithItsRevisionExactly(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		pin   Pin
+		state PinState
+	}{
+		{"no revision", Pin{Build: "v0.0.0-dev"}, PinUnbound},
+		{"the pinned build", Pin{Build: pinnedRevision, Revision: pinnedRevision}, PinBound},
+		{"another build", Pin{Build: "v0.0.0-dev", Revision: pinnedRevision}, PinMismatch},
+		{"a revision prefix", Pin{Build: pinnedRevision, Revision: pinnedRevision[:7]}, PinMismatch},
+		{"a build prefix", Pin{Build: pinnedRevision[:7], Revision: pinnedRevision}, PinMismatch},
+		{"surrounding whitespace", Pin{Build: pinnedRevision, Revision: pinnedRevision + "\n"}, PinMismatch},
+		{"another case", Pin{Build: pinnedRevision, Revision: strings.ToUpper(pinnedRevision)}, PinMismatch},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			refusal := test.pin.refusal()
+			if state := test.pin.State(); state != test.state || (refusal != nil) != (state == PinMismatch) {
+				t.Fatalf("pin state %q with refusal %v, want %q", state, refusal, test.state)
+			}
+			if refusal != nil && (!errors.Is(refusal, ErrPinMismatch) || refusal.Error() !=
+				"working-copy capture pin mismatch: runner build "+test.pin.Build+" is not its pin's source revision "+test.pin.Revision) {
+				t.Fatalf("refusal does not name both revisions: %v", refusal)
+			}
+		})
+	}
+}
+
+func mismatchedPin() Pin {
+	return Pin{Build: "v0.0.0-dev", Revision: pinnedRevision}
+}
+
+func requirePinRefusal(t *testing.T, operation string, err error) {
+	t.Helper()
+	if !errors.Is(err, ErrPinMismatch) || !strings.HasSuffix(err.Error(), "runner build v0.0.0-dev is not its pin's source revision "+pinnedRevision) {
+		t.Fatalf("%s was not refused by the pin: %v", operation, err)
+	}
+}
+
+func TestCapturePinMismatchRefusesFreshWorkAndKeepsStoredCustody(t *testing.T) {
+	ctx := context.Background()
+	t.Run("discovery and a fresh inventory", func(t *testing.T) {
+		service, containers, objects, request := workingTreeFixture(t)
+		service.pin = mismatchedPin()
+		discovery := capabilityRequest(request.Generation)
+		observer := captureTestObserver(discovery)
+		service.generations = observer
+		_, err := service.Capabilities(ctx, discovery.Source.ProviderResourceID, discovery)
+		requirePinRefusal(t, "discovery", err)
+		discovery.Authority = CaptureAuthority{}
+		_, err = service.Capabilities(ctx, discovery.Source.ProviderResourceID, discovery)
+		requirePinRefusal(t, "discovery without an expectation", err)
+		_, err = service.PrepareWorkingTreeInventory(ctx, request.Generation.Source.ProviderResourceID, request)
+		requirePinRefusal(t, "a fresh inventory", err)
+		if observer.calls != 0 || containers.inspectCalls != 0 || containers.copyCalls != 0 || len(objects.objects) != 0 {
+			t.Fatal("a refused build observed or read the source")
+		}
+	})
+	t.Run("a fresh capture and roster, and stored capture custody", func(t *testing.T) {
+		binding := validBinding()
+		containers, objects := newFakeContainer([]byte("captured while unbound")), newFakeObjectStore()
+		receipt, err := mustService(t, containers, objects, binding.Authority).Capture(ctx, binding.Source.ProviderResourceID, binding)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The same executable restarts under a deployment that pins another revision.
+		current := mustService(t, containers, objects, binding.Authority)
+		current.pin = mismatchedPin()
+		copies, inspections := containers.copyCalls, containers.inspectCalls
+		fresh := binding
+		fresh.ProviderName += "-fresh"
+		_, err = current.Capture(ctx, fresh.Source.ProviderResourceID, fresh)
+		requirePinRefusal(t, "a fresh capture", err)
+		roster := validStoppedDirectoryRosterRequest()
+		_, err = current.StoppedDirectoryRoster(ctx, roster.Anchor.Source.ProviderResourceID, roster)
+		requirePinRefusal(t, "a directory roster", err)
+		replayed, err := current.Capture(ctx, binding.Source.ProviderResourceID, binding)
+		if err != nil || replayed != receipt {
+			t.Fatalf("stored capture was refused with the pin: %v", err)
+		}
+		observed, err := current.Observe(ctx, binding.Source.ProviderResourceID, binding)
+		if err != nil || observed.Status != "complete" || *observed.Receipt != receipt {
+			t.Fatalf("stored capture observation failed: %v", err)
+		}
+		read, err := current.Read(ctx, binding.Source.ProviderResourceID, CaptureReadRequest{CaptureIdentity: receipt.CaptureIdentity, ExpectedTotalByteLength: receipt.TotalByteLength, ExpectedProviderSHA256Digest: receipt.ProviderSHA256Digest, MaximumBytes: MaximumReadBytes})
+		content, _ := base64.StdEncoding.DecodeString(read.BytesBase64)
+		if err != nil || !bytes.Equal(content, containers.content) {
+			t.Fatalf("stored capture read failed: %v", err)
+		}
+		if exists, err := current.Exists(ctx, binding.Source.ProviderResourceID, receipt.CaptureIdentity); err != nil || !exists.Exists {
+			t.Fatalf("stored capture existence failed: %v", err)
+		}
+		if containers.copyCalls != copies || containers.inspectCalls != inspections {
+			t.Fatal("a refused build read the source")
+		}
+	})
+	t.Run("a fresh native file, and stored native custody", func(t *testing.T) {
+		service, _, physical, request := nativeFixture(t)
+		receipt, err := service.CaptureSandboxFile(ctx, nativeSandboxID, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		service.pin = mismatchedPin()
+		inspections, captures := physical.inspectCalls, physical.captureCalls
+		replayed, err := service.CaptureSandboxFile(ctx, nativeSandboxID, request)
+		if err != nil || replayed != receipt {
+			t.Fatalf("stored native capture was refused with the pin: %v", err)
+		}
+		if _, err := service.ReadSandboxFile(ctx, nativeSandboxID, SandboxFileReadRequest{Receipt: receipt, MaximumBytes: 7}); err != nil {
+			t.Fatalf("stored native capture read failed: %v", err)
+		}
+		next := request
+		next.OperationID = "download-2"
+		_, err = service.CaptureSandboxFile(ctx, nativeSandboxID, next)
+		requirePinRefusal(t, "a fresh native capture", err)
+		if physical.inspectCalls != inspections || physical.captureCalls != captures {
+			t.Fatal("a refused build observed or read the sandbox")
+		}
+	})
 }

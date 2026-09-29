@@ -22,7 +22,7 @@ import {
   ValidateIf,
   ValidateNested,
 } from 'class-validator'
-import { ApiProperty, ApiPropertyOptional, ApiSchema, OmitType } from '@nestjs/swagger'
+import { ApiProperty, ApiPropertyOptional, ApiSchema, OmitType, PickType } from '@nestjs/swagger'
 import {
   SandboxExecutionOwnerDto as WorkingCopyCaptureOwnerDto,
   SandboxExecutionSourceDto as WorkingCopyCaptureSourceDto,
@@ -96,11 +96,19 @@ export class WorkingCopyCaptureAuthorityDto {
 
 @ApiSchema({ name: 'WorkingCopyCaptureCapabilitiesRequest' })
 export class WorkingCopyCaptureCapabilitiesRequestDto extends SandboxGenerationObservationRequestDto {
-  @ApiProperty({ type: WorkingCopyCaptureAuthorityDto })
+  @ApiPropertyOptional({ type: WorkingCopyCaptureAuthorityDto })
+  @ValidateIf((_, value) => value !== undefined)
   @ValidateNested()
   @Type(() => WorkingCopyCaptureAuthorityDto)
-  authority: WorkingCopyCaptureAuthorityDto
+  authority?: WorkingCopyCaptureAuthorityDto
 }
+
+@ApiSchema({ name: 'WorkingCopyCaptureComponent' })
+export class WorkingCopyCaptureComponentDto extends PickType(WorkingCopyCaptureAuthorityDto, [
+  'roleRef',
+  'protocol',
+  'helper',
+] as const) {}
 
 @ApiSchema({ name: 'WorkingTreeInventoryCapability' })
 export class WorkingTreeInventoryCapabilityDto {
@@ -181,10 +189,20 @@ export class WorkingCopyFileSnapshotCapabilityDto {
 
 @ApiSchema({ name: 'WorkingCopyCaptureCapabilities' })
 export class WorkingCopyCaptureCapabilitiesDto {
-  @ApiProperty({ type: WorkingCopyCaptureAuthorityDto })
+  @ApiPropertyOptional({ type: WorkingCopyCaptureAuthorityDto })
+  @ValidateIf((_, value) => value !== undefined)
   @ValidateNested()
   @Type(() => WorkingCopyCaptureAuthorityDto)
-  authority: WorkingCopyCaptureAuthorityDto
+  authority?: WorkingCopyCaptureAuthorityDto
+
+  @ApiPropertyOptional({
+    type: WorkingCopyCaptureComponentDto,
+    description: 'Measured Runner implementation; legacy Runners return the matched authority instead.',
+  })
+  @ValidateIf((_, value) => value !== undefined)
+  @ValidateNested()
+  @Type(() => WorkingCopyCaptureComponentDto)
+  component?: WorkingCopyCaptureComponentDto
 
   @ApiPropertyOptional({ type: WorkingTreeInventoryCapabilityDto })
   @IsOptional()

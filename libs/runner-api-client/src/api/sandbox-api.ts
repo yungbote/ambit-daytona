@@ -1458,10 +1458,10 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * Read-only discovery checked against the Runner\'s measured capture component and physical source generation. Measurement does not replace image publication or conformance qualification.
+         * Read-only discovery checked against the physical source generation. The answer states the Runner\'s measured capture component and echoes a requested authority only when it names exactly that component. A build outside its deployment\'s pin refuses with 500.
          * @summary Discover the assigned Runner capture surface before stopping a generation
          * @param {string} sandboxId Sandbox ID
-         * @param {WorkingcopyCaptureCapabilitiesRequest} request Current capture authority
+         * @param {WorkingcopyCaptureCapabilitiesRequest} request Discovery request; authority optionally names the expected component
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -1997,10 +1997,10 @@ export const SandboxApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * Read-only discovery checked against the Runner\'s measured capture component and physical source generation. Measurement does not replace image publication or conformance qualification.
+         * Read-only discovery checked against the physical source generation. The answer states the Runner\'s measured capture component and echoes a requested authority only when it names exactly that component. A build outside its deployment\'s pin refuses with 500.
          * @summary Discover the assigned Runner capture surface before stopping a generation
          * @param {string} sandboxId Sandbox ID
-         * @param {WorkingcopyCaptureCapabilitiesRequest} request Current capture authority
+         * @param {WorkingcopyCaptureCapabilitiesRequest} request Discovery request; authority optionally names the expected component
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -2384,10 +2384,10 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.updateSandboxSecrets(sandboxId, sandbox, options).then((request) => request(axios, basePath));
         },
         /**
-         * Read-only discovery checked against the Runner\'s measured capture component and physical source generation. Measurement does not replace image publication or conformance qualification.
+         * Read-only discovery checked against the physical source generation. The answer states the Runner\'s measured capture component and echoes a requested authority only when it names exactly that component. A build outside its deployment\'s pin refuses with 500.
          * @summary Discover the assigned Runner capture surface before stopping a generation
          * @param {string} sandboxId Sandbox ID
-         * @param {WorkingcopyCaptureCapabilitiesRequest} request Current capture authority
+         * @param {WorkingcopyCaptureCapabilitiesRequest} request Discovery request; authority optionally names the expected component
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
@@ -2795,10 +2795,10 @@ export class SandboxApi extends BaseAPI {
     }
 
     /**
-     * Read-only discovery checked against the Runner\'s measured capture component and physical source generation. Measurement does not replace image publication or conformance qualification.
+     * Read-only discovery checked against the physical source generation. The answer states the Runner\'s measured capture component and echoes a requested authority only when it names exactly that component. A build outside its deployment\'s pin refuses with 500.
      * @summary Discover the assigned Runner capture surface before stopping a generation
      * @param {string} sandboxId Sandbox ID
-     * @param {WorkingcopyCaptureCapabilitiesRequest} request Current capture authority
+     * @param {WorkingcopyCaptureCapabilitiesRequest} request Discovery request; authority optionally names the expected component
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */

@@ -18,13 +18,17 @@
 import type { WorkingcopyCaptureAuthority } from './workingcopy-capture-authority';
 // May contain unused imports in some cases
 // @ts-ignore
+import type { WorkingcopyCaptureComponent } from './workingcopy-capture-component';
+// May contain unused imports in some cases
+// @ts-ignore
 import type { WorkingcopyFileSnapshotCapability } from './workingcopy-file-snapshot-capability';
 // May contain unused imports in some cases
 // @ts-ignore
 import type { WorkingcopyWorkingTreeInventoryCapability } from './workingcopy-working-tree-inventory-capability';
 
 export interface WorkingcopyCaptureCapabilities {
-    'authority': WorkingcopyCaptureAuthority;
+    'authority'?: WorkingcopyCaptureAuthority;
+    'component': WorkingcopyCaptureComponent;
     'fileSnapshot'?: WorkingcopyFileSnapshotCapability;
     'stoppedWorkingTreeInventory': WorkingcopyWorkingTreeInventoryCapability;
 }

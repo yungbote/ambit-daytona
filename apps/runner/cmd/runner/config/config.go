@@ -42,6 +42,7 @@ type Config struct {
 	AWSDefaultBucket                   string        `envconfig:"AWS_DEFAULT_BUCKET"`
 	SpecialistRenderPolicyPath         string        `envconfig:"AMBIT_SPECIALIST_RENDER_POLICY_PATH"`
 	SpecialistRenderMaximumConcurrent  int           `envconfig:"AMBIT_SPECIALIST_RENDER_MAXIMUM_CONCURRENT" default:"1" validate:"min=1,max=64"`
+	SourceRevision                     string        `envconfig:"AMBIT_RUNNER_SOURCE_REVISION"`
 	ResourceLimitsDisabled             bool          `envconfig:"RESOURCE_LIMITS_DISABLED"`
 	WorkspaceSecurityProfile           string        `envconfig:"WORKSPACE_SECURITY_PROFILE" default:"legacy" validate:"oneof=legacy restricted-v1"`
 	DaemonStartTimeoutSec              int           `envconfig:"DAEMON_START_TIMEOUT_SEC"`

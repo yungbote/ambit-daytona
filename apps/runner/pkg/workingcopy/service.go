@@ -52,6 +52,10 @@ var (
 	ErrConflict       = errors.New("working-copy capture conflict")
 	ErrUnavailable    = errors.New("working-copy capture unavailable")
 	ErrOutcomeUnknown = errors.New("working-copy capture outcome is unknown")
+	// ErrPinMismatch refuses fresh capture work on a Runner whose build is not
+	// the source revision its deployment pins. It lasts until the deployment is
+	// corrected: neither a conflict with one request nor a passing outage.
+	ErrPinMismatch = errors.New("working-copy capture pin mismatch")
 )
 
 type ContainerClient interface {
@@ -82,6 +86,7 @@ type Service struct {
 	objects       storage.PrivateObjectStreamStorageClient
 	stops         StoppedGenerationAuthority
 	component     CaptureComponent
+	pin           Pin
 	generations   CaptureGenerationObserver
 	now           clock
 	locks         keyedLocks
@@ -129,6 +134,7 @@ func NewService(
 	objects storage.PrivateObjectStorageClient,
 	stops StoppedGenerationAuthority,
 	component CaptureComponent,
+	pin Pin,
 	generations CaptureGenerationObserver,
 	fileSnapshots ...FileSnapshotReader,
 ) (*Service, error) {
@@ -153,6 +159,7 @@ func NewService(
 		objects:     streamObjects,
 		stops:       stops,
 		component:   component,
+		pin:         pin,
 		generations: generations,
 		now:         time.Now,
 		locks:       keyedLocks{items: make(map[string]*keyedLock)},
