@@ -40,8 +40,9 @@ type Upstream interface {
 
 // Conn is one open view route.
 type Conn interface {
-	// Read blocks for the route's next message. When the route closed with
-	// a close frame the error is a *Closed.
+	// Read blocks for the route's next message, which stays valid until the
+	// next Read (a route may reuse its buffer). When the route closed with a
+	// close frame the error is a *Closed.
 	Read() (text bool, message []byte, err error)
 	// Write sends one text message to the route.
 	Write(message []byte) error

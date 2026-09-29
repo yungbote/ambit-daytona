@@ -7,6 +7,7 @@
 package daytona
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -93,13 +94,19 @@ func (u *Upstream) DialView(ctx context.Context, target session.Target, viewerID
 	return &route{conn: conn}, nil
 }
 
-// route is one open view route.
+// route is one open view route. Its read buffer is reused: a message is
+// valid until the next Read, and a 200 KB frame costs no allocation.
 type route struct {
-	conn *websocket.Conn
+	conn   *websocket.Conn
+	buffer bytes.Buffer
 }
 
 func (r *route) Read() (bool, []byte, error) {
-	kind, message, err := r.conn.ReadMessage()
+	kind, reader, err := r.conn.NextReader()
+	if err == nil {
+		r.buffer.Reset()
+		_, err = r.buffer.ReadFrom(reader)
+	}
 	if err != nil {
 		var closed *websocket.CloseError
 		if errors.As(err, &closed) {
@@ -107,7 +114,7 @@ func (r *route) Read() (bool, []byte, error) {
 		}
 		return false, nil, err
 	}
-	return kind == websocket.TextMessage, message, nil
+	return kind == websocket.TextMessage, r.buffer.Bytes(), nil
 }
 
 func (r *route) Write(message []byte) error {
