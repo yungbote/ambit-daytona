@@ -8,8 +8,8 @@
     "revision": "3728dd9ad14352724f488a968f1fd3b8a568ffad",
     "sourceTree": "371887aeb318aab01d3a04a9386c3791f699a2fd",
     "version": "0.37.1",
-    "archiveName": "agent-browser-source.tar.gz",
-    "sha256": "a8fcb6f9472e2dfa8f650b679d8ade57dc14bdc85fc3312f99049eaea603afb0",
+    "archiveName": "agent-browser-source.tar",
+    "sha256": "83f41fbc35d7a2c4604973839f35e11b7ec04c9e157c1ae3d8cec099989be3c3",
     "features": [
       "browser-audio"
     ]
@@ -81,11 +81,11 @@
   ],
   "materializer": {
     "repository": "https://github.com/yungbote/m-backend",
-    "revision": "7863e0f6351b0995351dc34414e1a98d68226cdd",
+    "revision": "e022b984ea946a257cd1d94c587a456cf4bf18fe",
     "sourceTree": "a9e546be90ea1e16d2728ddf19af13e4d722a855",
     "sourcePath": "runtime/agent-workspace-atomic-materializer",
-    "archiveName": "atomic-materializer-source.tar.gz",
-    "sha256": "b7f2e3c1c0bf451727854ca62b0851609449de912fb8f65317a2f4e06cc28a24",
+    "archiveName": "atomic-materializer-source.tar",
+    "sha256": "7939a88fb952642741604eeb21cca1330fb6ce8bc39909c2dc36330e82cbc494",
     "buildLockSha256": "4648877e3408f215960c99a1f5dd971cb08290202c59389cd4157f52133b87ec"
   },
   "toolchains": {
