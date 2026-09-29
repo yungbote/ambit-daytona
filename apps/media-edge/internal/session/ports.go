@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/daytonaio/media-edge/internal/rate"
 	"github.com/daytonaio/media-edge/internal/view"
 )
 
@@ -25,6 +26,14 @@ type Carrier interface {
 	// drops the transport without one. It is safe to call more than once.
 	Close(code int, reason string)
 }
+
+// MeasuredCarrier reports its own network boundary. Paint ACKs supplement it
+// at the session, so a proxied socket cannot masquerade as the consumer path.
+type MeasuredCarrier interface{ Network() rate.Network }
+
+// RateUpstream declares the negotiated byte-pipe capability of this route.
+// Legacy toolbox validators must not receive a message they cannot admit.
+type RateUpstream interface{ RateInput() bool }
 
 // Target is the view a grant names, in terms any sandbox provider has.
 type Target struct {

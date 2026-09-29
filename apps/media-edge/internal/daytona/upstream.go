@@ -118,16 +118,19 @@ func (u *Upstream) DialView(ctx context.Context, target session.Target, viewerID
 		return nil, fmt.Errorf("daytona: dial: %w", err)
 	}
 	conn.SetReadLimit(view.MaxMessageBytes)
-	return &route{conn: conn}, nil
+	return &route{conn: conn, rateInput: response != nil && response.Header.Get("X-Ambit-Browser-View-Pipe") == "1"}, nil
 }
 
 // route is one open view route. Its read buffer is reused up to
 // retainedReadBytes: a message is valid until the next Read, and a 200 KB
 // frame costs no allocation.
 type route struct {
-	conn   *websocket.Conn
-	buffer bytes.Buffer
+	conn      *websocket.Conn
+	buffer    bytes.Buffer
+	rateInput bool
 }
+
+func (r *route) RateInput() bool { return r.rateInput }
 
 func (r *route) Read() (bool, []byte, error) {
 	if r.buffer.Cap() > retainedReadBytes {

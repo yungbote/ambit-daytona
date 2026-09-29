@@ -30,7 +30,7 @@ import (
 
 // pair exercises the actual HTTP/3 CONNECT and QUIC flow control. Its TLS key
 // is generated in memory for this test and never stored or printed.
-func pair(t *testing.T, action func(*carrier)) (*wt.Session, *wt.Stream, context.Context, string, string) {
+func pair(t *testing.T, action func(*carrier), registries ...*metricsRegistry) (*wt.Session, *wt.Stream, context.Context, string, string) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -52,13 +52,16 @@ func pair(t *testing.T, action func(*carrier)) (*wt.Session, *wt.Stream, context
 	}
 	t.Cleanup(func() { _ = listener.Close() })
 	server := &wt.Server{H3: http3.Server{TLSConfig: &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}}, QUICConfig: &quic.Config{EnableDatagrams: true}}, CheckOrigin: func(*http.Request) bool { return true }}
+	if len(registries) > 0 {
+		server.H3.QUICConfig.Tracer = registries[0].tracer
+	}
 	server.H3.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s, err := server.Upgrade(w, r)
 		if err != nil {
 			t.Error(err)
 			return
 		}
-		c, err := newCarrier(s)
+		c, err := newCarrier(s, registries...)
 		if err != nil {
 			t.Error(err)
 			return

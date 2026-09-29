@@ -88,16 +88,19 @@ func (c *fakeCarrier) delivered() []*view.Delivery {
 
 // fakeRoute is the view route: tests feed it and read what it was sent.
 type fakeRoute struct {
-	out     chan inbound
-	end     chan error
-	mu      sync.Mutex
-	written []string
-	gate    chan struct{} // when set, each Write waits for a token
-	entered chan struct{} // a Write began
-	wrote   chan struct{}
-	once    sync.Once
-	closed  chan struct{}
+	out       chan inbound
+	end       chan error
+	mu        sync.Mutex
+	written   []string
+	gate      chan struct{} // when set, each Write waits for a token
+	entered   chan struct{} // a Write began
+	wrote     chan struct{}
+	once      sync.Once
+	closed    chan struct{}
+	rateInput bool
 }
+
+func (r *fakeRoute) RateInput() bool { return r.rateInput }
 
 func newFakeRoute() *fakeRoute {
 	return &fakeRoute{out: make(chan inbound, 64), end: make(chan error, 1), entered: make(chan struct{}, 64), wrote: make(chan struct{}, 64), closed: make(chan struct{})}

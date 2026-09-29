@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/daytonaio/media-edge/internal/control"
+	"github.com/daytonaio/media-edge/internal/rate"
 	"github.com/daytonaio/media-edge/internal/view"
 	"github.com/quic-go/quic-go"
 	wt "github.com/quic-go/webtransport-go"
@@ -35,13 +36,15 @@ type carrier struct {
 	// Eight decoder units and 12MiB are the existing view's bounds. Picture
 	// writes run independently so a blocked picture never holds a record/audio
 	// write behind it; pressure beyond the bound still reaches the producer.
-	writes  chan struct{}
-	mu      sync.Mutex
-	bytes   int
-	changed chan struct{}
+	writes         chan struct{}
+	mu             sync.Mutex
+	bytes          int
+	changed        chan struct{}
+	metrics        *connectionMetrics
+	releaseMetrics func()
 }
 
-func newCarrier(session *wt.Session) (*carrier, error) {
+func newCarrier(session *wt.Session, registries ...*metricsRegistry) (*carrier, error) {
 	control, err := session.OpenStreamSync(session.Context())
 	if err != nil {
 		return nil, err
@@ -50,8 +53,14 @@ func newCarrier(session *wt.Session) (*carrier, error) {
 	if _, err := io.WriteString(control, Magic); err != nil {
 		return nil, err
 	}
-	return &carrier{session: session, control: control, writes: make(chan struct{}, 8), changed: make(chan struct{})}, nil
+	c := &carrier{session: session, control: control, writes: make(chan struct{}, 8), changed: make(chan struct{})}
+	if len(registries) > 0 {
+		c.metrics, c.releaseMetrics = registries[0].attach(session.Context())
+	}
+	return c, nil
 }
+
+func (c *carrier) Network() rate.Network { return c.metrics.snapshot(time.Now()) }
 
 func (c *carrier) Receive() (bool, []byte, error) {
 	var prefix [4]byte
@@ -182,6 +191,9 @@ func (c *carrier) release(size int) {
 
 func (c *carrier) Close(code int, reason string) {
 	c.once.Do(func() {
+		if c.releaseMetrics != nil {
+			c.releaseMetrics()
+		}
 		c.control.CancelRead(0)
 		c.control.CancelWrite(0)
 		_ = c.session.CloseWithError(wt.SessionErrorCode(code), reason)

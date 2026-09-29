@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/daytonaio/media-edge/internal/session"
+	"github.com/quic-go/quic-go"
 	wt "github.com/quic-go/webtransport-go"
 )
 
@@ -16,7 +17,9 @@ const Path = "/v1/channel"
 // NewServer uses the same authority and session core as the WebSocket adapter.
 // The caller owns its listener and TLS configuration.
 func NewServer(edge *session.Edge) *wt.Server {
+	metrics := newMetricsRegistry()
 	server := &wt.Server{CheckOrigin: func(*http.Request) bool { return true }}
+	server.H3.QUICConfig = &quic.Config{EnableDatagrams: true, Tracer: metrics.tracer}
 	server.H3.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != Path {
 			http.NotFound(w, r)
@@ -44,7 +47,7 @@ func NewServer(edge *session.Edge) *wt.Server {
 			}
 			return
 		}
-		viewer, err := newCarrier(transport)
+		viewer, err := newCarrier(transport, metrics)
 		if err != nil {
 			if s != nil {
 				s.Abort()

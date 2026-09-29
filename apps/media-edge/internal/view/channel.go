@@ -43,6 +43,13 @@ type Delivery struct {
 	Text    []byte
 	Header  []byte
 	Payload []byte
+	// Paint identifies a picture measured on the edge's own send/ACK clock.
+	Paint PictureIdentity
+}
+
+type PictureIdentity struct {
+	Sequence uint64
+	StreamID string
 }
 
 // Size is the delivery's size on the wire.
@@ -73,8 +80,10 @@ var (
 
 // Forward is a viewer message for the view route, in its coalescing slot.
 type Forward struct {
-	Slot    Slot
-	Message []byte
+	Slot       Slot
+	Message    []byte
+	Generation uint64
+	Paint      PictureIdentity
 }
 
 // track is one output track's negotiation state and current epoch.
@@ -142,7 +151,7 @@ func (c *Channel) binary(message []byte) (*Delivery, *Close) {
 	if !c.frames.accept(frame.header.frameHeader, frame.wireSize()) {
 		return nil, closeInvalidFrame
 	}
-	return &Delivery{Kind: Frame, Header: frame.projected, Payload: frame.payload}, nil
+	return &Delivery{Kind: Frame, Header: frame.projected, Payload: frame.payload, Paint: PictureIdentity{Sequence: frame.header.Seq}}, nil
 }
 
 func (c *Channel) text(message []byte) (*Delivery, *Close) {
@@ -283,7 +292,7 @@ func (c *Channel) videoUnit(message []byte) (*Delivery, *Close) {
 		return nil, closeInvalidVideo
 	}
 	e.sequence, e.timestamp, e.coded = value.Seq, *value.Ts, value.Coded
-	return &Delivery{Kind: Video, Header: projected, Payload: payload}, nil
+	return &Delivery{Kind: Video, Header: projected, Payload: payload, Paint: PictureIdentity{Sequence: value.Seq, StreamID: value.StreamID}}, nil
 }
 
 // Viewer takes one message from the page. It answers the normalized message
@@ -319,7 +328,7 @@ func (c *Channel) Viewer(text bool, message []byte) (*Forward, *Close) {
 			return nil, nil
 		}
 		c.video.generation, c.video.enabled = m.generation, m.enabled
-		return &Forward{Slot: SlotVideo, Message: m.encode()}, nil
+		return &Forward{Slot: SlotVideo, Message: m.encode(), Generation: m.generation}, nil
 	case viewerKeyframe:
 		if !c.video.offered {
 			return nil, closeInvalidViewer
@@ -340,7 +349,7 @@ func (c *Channel) Viewer(text bool, message []byte) (*Forward, *Close) {
 			return nil, closeInvalidViewer // a picture never sent
 		}
 		e.acknowledged = m.seq
-		return &Forward{Slot: SlotVideoAck, Message: m.encode()}, nil
+		return &Forward{Slot: SlotVideoAck, Message: m.encode(), Paint: PictureIdentity{Sequence: m.seq, StreamID: m.streamID}}, nil
 	default: // viewerFrameAck
 		forward, valid := c.frames.window.acknowledge(m.seq)
 		if !valid {
@@ -349,6 +358,34 @@ func (c *Channel) Viewer(text bool, message []byte) (*Forward, *Close) {
 		if !forward {
 			return nil, nil
 		}
-		return &Forward{Slot: SlotFrameAck, Message: m.encode()}, nil
+		return &Forward{Slot: SlotFrameAck, Message: m.encode(), Paint: PictureIdentity{Sequence: m.seq}}, nil
 	}
+}
+
+// Rate is host-authored feedback for the current enabled video generation.
+// The viewer cannot create this message through Viewer; no second pacing
+// authority is introduced on the client side.
+func (c *Channel) Rate(generation, bitsPerSecond, burstBytes uint64) *Forward {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.video.offered || !c.video.enabled || generation == 0 || c.video.generation != generation || bitsPerSecond < 1000 || bitsPerSecond > 4294967295 || burstBytes < 1 || burstBytes > 12<<20 {
+		return nil
+	}
+	value := struct {
+		Type          string `json:"type"`
+		Generation    uint64 `json:"generation"`
+		BitsPerSecond uint64 `json:"bitsPerSecond"`
+		BurstBytes    uint64 `json:"burstBytes"`
+	}{"rate", generation, bitsPerSecond, burstBytes}
+	message, _ := json.Marshal(value)
+	return &Forward{Slot: SlotRate, Message: message, Generation: generation}
+}
+
+func (c *Channel) VideoGeneration() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.video.offered || !c.video.enabled {
+		return 0
+	}
+	return c.video.generation
 }
