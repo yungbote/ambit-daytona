@@ -13,14 +13,13 @@ import (
 
 	"github.com/daytonaio/media-edge/internal/grant"
 	"github.com/daytonaio/media-edge/internal/session"
-	"github.com/quic-go/quic-go/http3"
 )
 
 func TestWebTransportRefusesAuthorityBeforeUpgradeOrUpstreamDial(t *testing.T) {
 	// No upstream is configured: any dial before refusal would panic rather
 	// than make a failed authority case look like a refused connection.
 	edge := &session.Edge{Verifier: grant.Verifier{Audience: "edge-a"}, Hub: session.NewHub(nil), Origins: []string{"https://ambit.test"}, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	server := NewServer(edge, http3.Server{})
+	server := NewServer(edge)
 	for _, item := range []struct {
 		method, path, origin string
 		status               int

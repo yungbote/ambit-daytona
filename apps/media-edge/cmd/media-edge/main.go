@@ -29,7 +29,6 @@ import (
 	"github.com/daytonaio/media-edge/internal/websocket"
 	edgewt "github.com/daytonaio/media-edge/internal/webtransport"
 	"github.com/quic-go/quic-go"
-	"github.com/quic-go/quic-go/http3"
 )
 
 const (
@@ -160,13 +159,12 @@ func run(log *slog.Logger) error {
 				return fmt.Errorf("QUIC certificate: %w", err)
 			}
 		}
-		server := edgewt.NewServer(edge, http3.Server{
-			Addr: c.quicListen,
-			TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13, GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-				return certificate.Load(), nil
-			}},
-			QUICConfig: &quic.Config{EnableDatagrams: true, MaxIncomingStreams: 4, MaxIncomingUniStreams: 0, MaxIdleTimeout: 60 * time.Second},
-		})
+		server := edgewt.NewServer(edge)
+		server.H3.Addr = c.quicListen
+		server.H3.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS13, GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return certificate.Load(), nil
+		}}
+		server.H3.QUICConfig = &quic.Config{EnableDatagrams: true, MaxIncomingStreams: 4, MaxIncomingUniStreams: 0, MaxIdleTimeout: 60 * time.Second}
 		quicServer = server
 		defer server.Close()
 		go func() {
