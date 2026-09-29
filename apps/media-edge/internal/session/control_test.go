@@ -148,3 +148,26 @@ func TestControlFailureKeepsViewingAndNeverRetriesSentInput(t *testing.T) {
 		t.Fatal("unknown input retried")
 	}
 }
+
+func TestWebSocketNeverAdvertisesSharedInput(t *testing.T) {
+	route := newFakeRoute()
+	edge := testEdge(&fakeUpstream{route: route})
+	edge.Controls = &fakeControlUpstream{route: newFakeRoute()}
+	admission := admit(t, edge, "grant="+token(t, nil)+"&frames=binary&patches=1&control=1")
+	s, err := edge.Open(context.Background(), admission, "websocket")
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewer := newFakeCarrier()
+	done := make(chan struct{})
+	go func() { s.Run(viewer); close(done) }()
+	defer func() { viewer.Close(0, ""); <-done }()
+	await(t, "capability record", func() bool { return len(viewer.delivered()) > 0 })
+	var capability struct {
+		Type    string
+		Control bool
+	}
+	if json.Unmarshal(viewer.delivered()[0].Text, &capability) != nil || capability.Type != "edge" || capability.Control {
+		t.Fatalf("shared WS control advertised: %s", viewer.delivered()[0].Text)
+	}
+}

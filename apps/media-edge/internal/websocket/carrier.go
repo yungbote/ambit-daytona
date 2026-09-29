@@ -7,14 +7,12 @@ package websocket
 
 import (
 	"encoding/binary"
-	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
 
-	"github.com/daytonaio/media-edge/internal/control"
 	"github.com/daytonaio/media-edge/internal/view"
 )
 
@@ -42,7 +40,7 @@ type carrier struct {
 
 func newCarrier(conn *websocket.Conn, keepalive time.Duration) *carrier {
 	c := &carrier{conn: conn, stop: make(chan struct{})}
-	conn.SetReadLimit(control.MaxRequestBytes)
+	conn.SetReadLimit(view.MaxViewerMessageBytes)
 	conn.SetPongHandler(func(string) error { c.unanswered.Store(0); return nil })
 	go c.keepalive(keepalive)
 	return c
@@ -55,10 +53,6 @@ func (c *carrier) Receive() (bool, []byte, error) {
 			_ = c.conn.Close()
 		}
 		return false, nil, err
-	}
-	if len(message) > view.MaxViewerMessageBytes && !control.IsFrame(message) {
-		c.Close(1009, "")
-		return false, nil, errors.New("viewer message exceeds its bound")
 	}
 	return kind == websocket.TextMessage, message, nil
 }

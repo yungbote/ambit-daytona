@@ -133,7 +133,9 @@ func (e *Edge) Open(ctx context.Context, admission Admission, carrier string) (*
 		done:             make(chan struct{}),
 		controlRequested: admission.Control,
 	}
-	s.control = newControlLine(s, Target{SandboxID: g.SandboxID, SessionID: g.SessionID, ViewID: g.NativeViewID})
+	if carrier != "websocket" {
+		s.control = newControlLine(s, Target{SandboxID: g.SandboxID, SessionID: g.SessionID, ViewID: g.NativeViewID})
+	}
 	s.counters.lastAt = s.opened
 	s.log = e.Log.With(slog.Group("session", "id", s.id, "carrier", carrier, "fallback", admission.Fallback,
 		"tenantId", g.TenantID, "userId", g.UserID, "viewerId", g.ViewerID, "sandboxId", g.SandboxID,

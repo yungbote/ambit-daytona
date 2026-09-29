@@ -119,6 +119,13 @@ func TestAPictureWhoseReaderStopsCannotHoldControlOrAudio(t *testing.T) {
 				return
 			}
 		}
+		if _, _, err := c.Receive(); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := c.Send(&view.Delivery{Kind: view.Record, Text: []byte(`{"type":"control","ok":true}`)}); err != nil {
+			t.Error(err)
+		}
 	})
 	if got := record(t, control); got != `{"type":"status"}` {
 		t.Fatal(got)
@@ -127,6 +134,15 @@ func TestAPictureWhoseReaderStopsCannotHoldControlOrAudio(t *testing.T) {
 	// full. These unrelated lanes must still make progress before it drains.
 	if got := record(t, control); got != `{"type":"cursor"}` {
 		t.Fatal(got)
+	}
+	input := []byte(`{"type":"control","op":"input"}`)
+	var inputPrefix [4]byte
+	binary.BigEndian.PutUint32(inputPrefix[:], uint32(len(input)))
+	if _, err := control.Write(append(inputPrefix[:], input...)); err != nil {
+		t.Fatal(err)
+	}
+	if got := record(t, control); got != `{"type":"control","ok":true}` {
+		t.Fatalf("input reply blocked by picture: %s", got)
 	}
 	packet, err := s.ReceiveDatagram(ctx)
 	if err != nil {

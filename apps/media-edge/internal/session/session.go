@@ -160,16 +160,23 @@ func (s *Session) Run(viewer Carrier) {
 	s.mu.Unlock()
 	s.log.Info("session.opened", "dialMs", s.dialed.Milliseconds())
 	if s.controlRequested {
-		if err := viewer.Send(&view.Delivery{Kind: view.Record, Text: []byte(`{"type":"edge","control":true}`)}); err != nil {
+		capability := []byte(`{"type":"edge","control":false}`)
+		if s.control != nil && s.edge.Controls != nil {
+			capability = []byte(`{"type":"edge","control":true}`)
+		}
+		if err := viewer.Send(&view.Delivery{Kind: view.Record, Text: capability}); err != nil {
 			s.end(1011, reasonUnavailable, causeWrite)
 		}
 	}
 	var flows sync.WaitGroup
-	flows.Add(4)
+	flows.Add(3)
 	go func() { defer flows.Done(); s.pump(viewer) }()
 	go func() { defer flows.Done(); s.forward() }()
 	go func() { defer flows.Done(); s.periodicReports() }()
-	go func() { defer flows.Done(); s.control.run() }()
+	if s.control != nil {
+		flows.Add(1)
+		go func() { defer flows.Done(); s.control.run() }()
+	}
 	s.read(viewer)
 	flows.Wait()
 	s.report("session.closed")
@@ -266,6 +273,10 @@ func (s *Session) read(viewer Carrier) {
 			continue
 		}
 		if text && isControl(message) {
+			if s.control == nil {
+				s.end(1008, reasonInvalid, causeProtocol)
+				continue
+			}
 			s.control.receive(message)
 			continue
 		}
