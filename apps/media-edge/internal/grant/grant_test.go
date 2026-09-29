@@ -357,6 +357,57 @@ func TestAuthorityIsASetWhoseOrderNeverMatters(t *testing.T) {
 	}
 }
 
+func TestControlAuthorityNeverReturnsToAnOlderController(t *testing.T) {
+	older := Grant{Binding: vectorBinding, Scope: ScopeControl, ControllerID: "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", IssuedAt: 1000, ExpiresAt: 60000}
+	newer := older
+	newer.ControllerID, newer.IssuedAt, newer.ExpiresAt = "4f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", 2000, 5000
+	for _, order := range [][]Grant{{older, newer}, {newer, older}} {
+		a := NewAuthority(order[0])
+		if err := a.Add(order[1], 3000); err != nil {
+			t.Fatal(err)
+		}
+		if g, ok := a.Control(4999); !ok || g.ControllerID != newer.ControllerID {
+			t.Fatalf("newest controller before expiry: %+v %v", g, ok)
+		}
+		if g, ok := a.Control(5000); ok {
+			t.Fatalf("expired newest grant restored old control: %+v", g)
+		}
+		a.Prune(5000)
+		// Replaying a still-valid older grant cannot restore custody after
+		// pruning the newest one; viewing may continue on that grant.
+		if err := a.Add(older, 5001); err != nil {
+			t.Fatal(err)
+		}
+		if g, ok := a.Control(5001); ok {
+			t.Fatalf("replayed older grant restored old control: %+v", g)
+		}
+		if _, ok := a.ViewUntil(5001); !ok {
+			t.Fatal("control expiry must not end valid viewing authority")
+		}
+		fresh := newer
+		fresh.IssuedAt, fresh.ExpiresAt = 6000, 10000
+		if err := a.Add(fresh, 6000); err != nil {
+			t.Fatal(err)
+		}
+		if g, ok := a.Control(6000); !ok || g != fresh {
+			t.Fatalf("freshly proven controller was not admitted: %+v %v", g, ok)
+		}
+	}
+}
+
+func TestRepeatedGrantDoesNotGrowAuthority(t *testing.T) {
+	g := Grant{Binding: vectorBinding, Scope: ScopeView, IssuedAt: 1000, ExpiresAt: 60000}
+	a := NewAuthority(g)
+	for range 10000 {
+		if err := a.Add(g, 2000); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(a.grants) != 1 {
+		t.Fatalf("repeated grant retained %d copies", len(a.grants))
+	}
+}
+
 func TestPublicKeyFiles(t *testing.T) {
 	block := func(key ed25519.PrivateKey) string {
 		der, _ := x509.MarshalPKIXPublicKey(key.Public())

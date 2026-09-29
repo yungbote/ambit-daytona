@@ -11,11 +11,17 @@ package grant
 type Authority struct {
 	binding Binding
 	grants  []Grant
+	// Expiry or pruning cannot restore a grant for an older controller.
+	controlIssued int64
 }
 
 // NewAuthority starts a session's authority from the grant that admitted it.
 func NewAuthority(first Grant) *Authority {
-	return &Authority{binding: first.Binding, grants: []Grant{first}}
+	a := &Authority{binding: first.Binding, grants: []Grant{first}}
+	if first.Scope == ScopeControl {
+		a.controlIssued = first.IssuedAt
+	}
+	return a
 }
 
 // Binding is the session every grant of this authority names.
@@ -29,6 +35,14 @@ func (a *Authority) Add(g Grant, now int64) error {
 	}
 	a.Prune(now)
 	if now < g.ExpiresAt {
+		if g.Scope == ScopeControl && g.IssuedAt > a.controlIssued {
+			a.controlIssued = g.IssuedAt
+		}
+		for _, held := range a.grants {
+			if held == g {
+				return nil
+			}
+		}
 		a.grants = append(a.grants, g)
 	}
 	return nil
@@ -69,12 +83,13 @@ func (a *Authority) ViewUntil(now int64) (until int64, ok bool) {
 	return until, ok
 }
 
-// Control is the newest unexpired control grant, if any.
+// Control is the newest control grant while it is unexpired. Older grants
+// may still permit viewing, but never become control authority again.
 func (a *Authority) Control(now int64) (Grant, bool) {
 	var newest Grant
 	found := false
 	for _, g := range a.grants {
-		if g.Scope == ScopeControl && now < g.ExpiresAt && (!found || g.IssuedAt >= newest.IssuedAt) {
+		if g.Scope == ScopeControl && g.IssuedAt >= a.controlIssued && now < g.ExpiresAt && (!found || g.IssuedAt >= newest.IssuedAt) {
 			newest, found = g, true
 		}
 	}
