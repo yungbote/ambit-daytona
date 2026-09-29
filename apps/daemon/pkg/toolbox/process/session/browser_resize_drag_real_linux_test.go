@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -26,9 +27,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// A document that re-lays out with its width, which records every width it
-// painted (per animation frame) on its own clock.
-const resizeDragPage = `<!doctype html><meta charset=utf-8><title>Resize</title>
+// A document that re-lays out with its width: 120 cards of text in a grid.
+const resizeDocument = `<!doctype html><meta charset=utf-8><title>Resize</title>
 <style>body{margin:0;font:15px/1.5 system-ui,sans-serif;color:#1d1d1f;background:#fff}
 header{position:sticky;top:0;height:48px;background:#0a66c2;color:#fff;display:flex;align-items:center;padding:0 16px}
 main{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;padding:12px}
@@ -37,9 +37,20 @@ article{border:1px solid #d0d7de;border-radius:6px;padding:8px}</style>
 <script>let seed=11;const rnd=()=>(seed=(seed*1103515245+12345)%2147483648)/2147483648;
 const words='the of and to in is that for it as was with be by on not this are or from at which but have an they you were one all we their has would when been if more will who no out so can said what up its about into them than some could time these two may then do first any now such like other how our over also back after use well way even new want because day most us service window pointer video frame picture encoder stream viewer display render layout scroll'.split(' ');
 let html='';for(let a=0;a<120;a++){html+='<article><b>Card '+a+'</b><p>'+Array.from({length:60},()=>words[Math.floor(rnd()*words.length)]).join(' ')+'</p></article>'}
-doc.innerHTML=html;window.painted=[];let last=0;
+doc.innerHTML=html;
+</script>`
+
+// The document, recording every width it painted (per animation frame) on
+// its own clock.
+const resizeDragPage = resizeDocument + `<script>window.painted=[];let last=0;
 (function frame(){if(innerWidth!==last){last=innerWidth;painted.push([performance.now(),innerWidth])}requestAnimationFrame(frame)})();
 </script>`
+
+// The document with a spinner that turns forever, as a loading page or an
+// advertisement does: the browser draws it on every frame the display paces.
+const resizeSpinnerPage = resizeDocument + `<style>@keyframes turn{to{transform:rotate(1turn)}}
+#spin{position:fixed;right:24px;bottom:24px;width:32px;height:32px;border:4px solid #d0d7de;border-top-color:#0a66c2;border-radius:50%;animation:turn 1s linear infinite}</style>
+<div id=spin></div>`
 
 // One drag of the dock's divider: the presented width moves from one value
 // to another at a steady rate for two seconds.
@@ -83,7 +94,8 @@ func TestRealBrowserResizeUnderDrag(t *testing.T) {
 	if os.Getenv("AMBIT_TEST_BROWSER_RESIZE") != "1" {
 		t.Skip("set AMBIT_TEST_BROWSER_RESIZE=1 and the real driver, Chrome and display helper paths")
 	}
-	base, cli := startResizeSession(t, resizeDragPage)
+	session := startResizeSession(t, map[string]string{"/": resizeDragPage})
+	base, cli := session.views, session.cli
 	// The page's clock against this one: the widths it painted are stamped on it.
 	pageClock := func() (time.Time, float64) {
 		before := time.Now()
@@ -222,11 +234,121 @@ func TestRealBrowserResizeUnderDrag(t *testing.T) {
 	cli("close")
 }
 
-// startResizeSession runs the real driver for one page in a toolbox session
-// and returns the view's channel base address and the driver's command line.
-// AMBIT_TEST_CHROME_ARGS, when set, is passed to the driver as Chrome's
-// launch arguments (AGENT_BROWSER_ARGS).
-func startResizeSession(t *testing.T, html string) (string, func(...string) map[string]any) {
+// TestRealBrowserPaintPacing measures what the display's pacing of the
+// browser costs and buys, for one variant of the stack per run (the display
+// helper's advertised refresh rate, or Chrome's arguments in
+// AMBIT_TEST_CHROME_ARGS): ten single layouts from rest and 2 s drags at 60
+// presentations a second on the frame track and on the video track, beside
+// the processor time each part of the stack uses in the drags and in an idle
+// minute on a still page and on a page with a spinner. Every layout and drag
+// carries its window on the monotonic clock, so a display helper built with
+// its resize trace gives the time from each configure to the browser's
+// paint. A measurement, not a guard; it runs as
+// TestRealBrowserResizeUnderDrag does, and AMBIT_TEST_RESIZE_REPORT, when
+// set, receives the report as JSON.
+func TestRealBrowserPaintPacing(t *testing.T) {
+	if os.Getenv("AMBIT_TEST_BROWSER_RESIZE") != "1" {
+		t.Skip("set AMBIT_TEST_BROWSER_RESIZE=1 and the real driver, Chrome and display helper paths")
+	}
+	session := startResizeSession(t, map[string]string{"/": resizeDocument, "/spinner": resizeSpinnerPage})
+	report := map[string]any{"chromeArgs": os.Getenv("AMBIT_TEST_CHROME_ARGS")}
+	t.Cleanup(func() {
+		encoded, _ := json.MarshalIndent(report, "", "  ")
+		t.Logf("PAINT %s", encoded)
+		if path := os.Getenv("AMBIT_TEST_RESIZE_REPORT"); path != "" {
+			_ = os.WriteFile(path, encoded, 0644)
+		}
+	})
+	// One dock, reopened on the track each phase measures: the same viewer,
+	// so it presents at once.
+	dial := func(track string) *resizeViewer {
+		declaration := "frames=binary&patches=1&cursor=viewer&visible=crop&frameWindow=8"
+		if track == "video" {
+			declaration += "&video=av1-444,av1"
+		}
+		viewer := dialResizeViewer(t, fmt.Sprintf("%s/channel?%s&width=920&height=%d", session.views, declaration, resizeHeight), "baaaaabb-cccc-4ddd-8eee-ffff00000600")
+		if track == "video" {
+			viewer.awaitRecord(t, 10*time.Second, func(record map[string]any) bool { return record["type"] == "video" && record["state"] == "available" })
+			viewer.send(t, map[string]any{"type": "video", "enabled": true, "generation": 1})
+		}
+		viewer.awaitPicture(t, 0, 20*time.Second, "the first "+track+" picture", func(p resizePicture) bool { return p.visibleWidth == 1840 })
+		time.Sleep(2 * time.Second)
+		return viewer
+	}
+	finish := func(viewer *resizeViewer) {
+		if ended := viewer.endedWith(); ended != nil {
+			t.Fatalf("the viewer's channel ended: %v", ended)
+		}
+		viewer.close()
+	}
+	idle := func(viewer *resizeViewer, name string) {
+		time.Sleep(3 * time.Second)
+		mark, from := viewer.pictureCount(), readResizeCPU()
+		time.Sleep(time.Minute)
+		use := resizeCPUUse(from, readResizeCPU())
+		use["picturesPerSecond"] = float64(viewer.pictureCount()-mark) / use["seconds"].(float64)
+		report[name] = use
+	}
+	drag := func(viewer *resizeViewer, name string) {
+		drags := map[string]any{}
+		for _, sweep := range []resizeSweep{{"shrink", 920, 620}, {"grow", 620, 920}} {
+			mark := viewer.pictureCount()
+			window := []uint64{monotonicMicros()}
+			from := readResizeCPU()
+			presented := dragResize(t, viewer, sweep, 60)
+			last := presented[len(presented)-1]
+			shown := viewer.awaitPicture(t, mark, 10*time.Second, fmt.Sprintf("%s: the last width %d", sweep.name, last.width),
+				func(p resizePicture) bool { return p.at.After(last.at) && p.visibleWidth == uint32(2*last.width) })
+			cpu := resizeCPUUse(from, readResizeCPU())
+			summary := summarizeResizeSweep(presented, viewer.picturesSince(mark), shown.at)
+			summary["cpu"], summary["monotonicMicros"] = cpu, append(window, monotonicMicros())
+			drags[sweep.name] = summary
+			time.Sleep(2 * time.Second)
+		}
+		report[name] = drags
+	}
+
+	viewer := dial("frames")
+	// One layout at a time from rest, as a dock opening or a window resized
+	// once: the browser has stopped drawing between them.
+	var steps []time.Duration
+	stepsFrom := monotonicMicros()
+	for step := 0; step < 10; step++ {
+		width := 900 + 20*(step%2)
+		mark := viewer.pictureCount()
+		sent := time.Now()
+		viewer.send(t, map[string]any{"type": "presentation", "width": width, "height": resizeHeight})
+		shown := viewer.awaitPicture(t, mark, 10*time.Second, fmt.Sprintf("the step to %d", width),
+			func(p resizePicture) bool { return p.visibleWidth == uint32(2*width) })
+		steps = append(steps, shown.at.Sub(sent))
+		time.Sleep(600 * time.Millisecond)
+	}
+	report["steps"] = map[string]any{"presentationToPictureMs": resizeStats(steps), "monotonicMicros": []uint64{stepsFrom, monotonicMicros()}}
+	idle(viewer, "idleStill")
+	drag(viewer, "drags")
+	finish(viewer)
+	viewer = dial("video")
+	drag(viewer, "videoDrags")
+	finish(viewer)
+	viewer = dial("frames")
+	session.cli("open", session.pages+"/spinner")
+	idle(viewer, "idleSpinner")
+	finish(viewer)
+	session.cli("close")
+}
+
+// A toolbox session running the real driver.
+type resizeSession struct {
+	// The view's channel base address and the address of the page server.
+	views, pages string
+	// cli runs one driver command and returns its answer.
+	cli func(...string) map[string]any
+}
+
+// startResizeSession runs the real driver in a toolbox session, serving the
+// pages by path and opening "/". AMBIT_TEST_CHROME_ARGS, when set, is passed
+// to the driver as Chrome's launch arguments (AGENT_BROWSER_ARGS).
+func startResizeSession(t *testing.T, pages map[string]string) resizeSession {
 	t.Helper()
 	driver, chrome, helper := os.Getenv("AMBIT_TEST_BROWSER_EXECUTABLE"), os.Getenv("AMBIT_TEST_CHROME_EXECUTABLE"), os.Getenv("AMBIT_TEST_BROWSER_DISPLAY_HELPER")
 	if driver == "" || chrome == "" || helper == "" {
@@ -245,6 +367,11 @@ func startResizeSession(t *testing.T, html string) (string, func(...string) map[
 	workspace := &browserWorkspace{engine: engine, socketDir: scratch}
 	workspace.open(t, "resize-owner")
 	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		html, ok := pages[r.URL.Path]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
 		w.Header().Set("Content-Type", "text/html")
 		fmt.Fprint(w, html)
 	}))
@@ -286,11 +413,11 @@ func startResizeSession(t *testing.T, html string) (string, func(...string) map[
 		t.Fatalf("native owner start: %d %s", status, body)
 	}
 	awaitPath(t, filepath.Join(scratch, "primary.sock"))
-	cli("open", page.URL)
+	cli("open", page.URL+"/")
 	view, _ := workspace.only(t, "resize-owner", "primary")
 	server := httptest.NewServer(engine)
 	t.Cleanup(server.Close)
-	return "ws" + strings.TrimPrefix(server.URL, "http") + "/process/session/resize-owner/browser-views/" + view, cli
+	return resizeSession{views: "ws" + strings.TrimPrefix(server.URL, "http") + "/process/session/resize-owner/browser-views/" + view, pages: page.URL, cli: cli}
 }
 
 // One presentation as the dock sent it.
@@ -666,6 +793,125 @@ func blankResizePicture(picture resizePicture) bool {
 		}
 	}
 	return false
+}
+
+// One process's processor time so far.
+type resizeProcess struct {
+	// The part of the stack it belongs to.
+	part string
+	// Its start, in clock ticks since boot, which tells a reused pid apart.
+	started uint64
+	// User and system time, all its threads.
+	used time.Duration
+}
+
+// A reading of the processor time of every process this pid namespace holds
+// (the container's, when the stack runs in one), and of the cgroup as a
+// whole when it can be read.
+type resizeCPUReading struct {
+	at        time.Time
+	processes map[int]resizeProcess
+	cgroup    time.Duration
+}
+
+func readResizeCPU() resizeCPUReading {
+	reading := resizeCPUReading{at: time.Now(), processes: map[int]resizeProcess{}}
+	entries, _ := os.ReadDir("/proc")
+	for _, entry := range entries {
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil {
+			continue
+		}
+		stat, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "stat"))
+		if err != nil {
+			continue
+		}
+		// The command name is in parentheses and may hold anything; after it
+		// come space-separated fields from the state on, so utime, stime and
+		// starttime (fields 14, 15 and 22 in proc(5)) are the 12th, 13th and
+		// 20th, in ticks of 1/100 s.
+		open, end := bytes.IndexByte(stat, '('), bytes.LastIndexByte(stat, ')')
+		if open < 0 || end < open {
+			continue
+		}
+		fields := strings.Fields(string(stat[end+1:]))
+		if len(fields) < 20 {
+			continue
+		}
+		user, _ := strconv.ParseUint(fields[11], 10, 64)
+		system, _ := strconv.ParseUint(fields[12], 10, 64)
+		started, _ := strconv.ParseUint(fields[19], 10, 64)
+		reading.processes[pid] = resizeProcess{part: resizeStackPart(pid, string(stat[open+1:end])), started: started, used: time.Duration(user+system) * 10 * time.Millisecond}
+	}
+	if stat, err := os.ReadFile("/sys/fs/cgroup/cpu.stat"); err == nil {
+		for _, line := range strings.Split(string(stat), "\n") {
+			if value, ok := strings.CutPrefix(line, "usage_usec "); ok {
+				micros, _ := strconv.ParseInt(value, 10, 64)
+				reading.cgroup = time.Duration(micros) * time.Microsecond
+			}
+		}
+	}
+	return reading
+}
+
+// resizeStackPart names the part of the stack a process is by its command
+// name (at most 15 bytes) and, for Chrome, its process type.
+func resizeStackPart(pid int, command string) string {
+	switch {
+	case pid == os.Getpid():
+		return "toolbox"
+	case strings.HasPrefix(command, "chrome"):
+		arguments, _ := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cmdline"))
+		// Chrome retitles its children: the type may share one string with
+		// the rest of the command line.
+		for _, argument := range strings.Fields(strings.ReplaceAll(string(arguments), "\x00", " ")) {
+			if kind, ok := strings.CutPrefix(argument, "--type="); ok {
+				return "chrome " + kind
+			}
+		}
+		return "chrome browser"
+	case strings.HasPrefix(command, "agent-browser"):
+		return "driver"
+	case strings.HasPrefix(command, "browser-display"):
+		return "display helper"
+	case command == "Xvfb":
+		return "Xvfb"
+	}
+	return "other"
+}
+
+// resizeCPUUse states the processor time each part of the stack used
+// between two readings, and all of them together, in percent of one core;
+// the cgroup's when it could be read; and how many processes ended between
+// the readings, whose time in the interval is not counted.
+func resizeCPUUse(from, to resizeCPUReading) map[string]any {
+	wall := to.at.Sub(from.at).Seconds()
+	used := map[string]time.Duration{}
+	for pid, now := range to.processes {
+		if before, ok := from.processes[pid]; ok && before.started == now.started {
+			used[now.part] += now.used - before.used
+		} else {
+			used[now.part] += now.used
+		}
+	}
+	ended := 0
+	for pid, before := range from.processes {
+		if now, ok := to.processes[pid]; !ok || now.started != before.started {
+			ended++
+		}
+	}
+	percent := func(value time.Duration) float64 { return float64(int(1000*value.Seconds()/wall+0.5)) / 10 }
+	use := map[string]any{"seconds": wall, "ended": ended}
+	var total time.Duration
+	for part, value := range used {
+		use[part] = percent(value)
+		total += value
+	}
+	use["total"] = percent(total)
+	if from.cgroup > 0 && to.cgroup > 0 {
+		use["cgroup"] = percent(to.cgroup - from.cgroup)
+	}
+	return use
 }
 
 func resizeStats(values []time.Duration) map[string]any {
