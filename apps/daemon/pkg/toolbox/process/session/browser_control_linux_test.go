@@ -28,6 +28,11 @@ const (
 	browserFixtureUnknownSequence = 2 // answers browser_control_outcome_unknown
 	browserFixtureHangUpSequence  = 7 // hangs up without answering
 	browserFixtureRefuseSequence  = 9 // stops accepting connections, then hangs up
+	// answers with the driver's timing account; the second one out of range
+	browserFixtureTimedSequence     = 901
+	browserFixtureUnboundedSequence = 902
+	// closes the view's stream listener, then applies the input
+	browserFixtureEndViewSequence = 1000
 )
 
 // browserFixtureConnections counts the command-carrying connections the
@@ -50,18 +55,32 @@ func (c *browserFixtureConnections) finished() {
 // Transport stand-in only. The real Rust driver tests own input semantics;
 // this fixture proves our relays reach the exact observed Unix peer and
 // project its public reply without forwarding private data. Like the real
-// driver it answers one line per command line. Persistent, it keeps answering
-// on the connection; otherwise it hangs up after one command, like a driver
-// that closed the connection under the relay.
-func serveBrowserControlFixture(connection net.Conn, persistent bool, finished *browserFixtureConnections, stop func() error) {
+// driver it answers one line per command line, in order, and leaves commands
+// that arrive meanwhile queued on the connection. Persistent, it keeps
+// answering on the connection; otherwise it hangs up after one command, like a
+// driver that closed the connection under the relay.
+type browserControlFixture struct {
+	persistent    bool
+	finished      *browserFixtureConnections
+	stopAccepting func() error
+	// endView closes the view's stream listener while the process lives on.
+	endView func() error
+	// replyDelay holds each reply; overlaps then counts, in a file, the
+	// replies sent while a later command was already waiting.
+	replyDelay time.Duration
+	overlaps   string
+}
+
+func (f browserControlFixture) serve(connection net.Conn) {
 	carried := false
 	defer func() {
 		_ = connection.Close()
 		if carried {
-			finished.finished()
+			f.finished.finished()
 		}
 	}()
 	reader := bufio.NewReader(connection)
+	overlapped := 0
 	for {
 		_ = connection.SetDeadline(time.Now().Add(5 * time.Second))
 		line, err := reader.ReadBytes('\n')
@@ -69,15 +88,22 @@ func serveBrowserControlFixture(connection net.Conn, persistent bool, finished *
 			return // ordinary view discovery only reads the peer credential
 		}
 		carried = true
-		reply := browserControlFixtureReply(line, stop)
-		if reply == nil || json.NewEncoder(connection).Encode(reply) != nil || !persistent {
+		reply := browserControlFixtureReply(line, f.stopAccepting, f.endView)
+		if f.replyDelay > 0 {
+			time.Sleep(f.replyDelay)
+			if reader.Buffered() > 0 {
+				overlapped++
+				_ = os.WriteFile(f.overlaps, []byte(strconv.Itoa(overlapped)), 0600)
+			}
+		}
+		if reply == nil || json.NewEncoder(connection).Encode(reply) != nil || !f.persistent {
 			return
 		}
 	}
 }
 
 // browserControlFixtureReply answers one command line; nil hangs up.
-func browserControlFixtureReply(line []byte, stop func() error) map[string]any {
+func browserControlFixtureReply(line []byte, stop, endView func() error) map[string]any {
 	if len(line) > browserControlLimit {
 		return map[string]any{"success": false, "code": "browser_control_invalid"}
 	}
@@ -98,6 +124,7 @@ func browserControlFixtureReply(line []byte, stop func() error) map[string]any {
 	if command.Op == "release" {
 		status = "released"
 	}
+	var timing map[string]any
 	if command.Op == "input" {
 		switch command.Sequence {
 		case browserFixtureUnknownSequence:
@@ -107,10 +134,20 @@ func browserControlFixtureReply(line []byte, stop func() error) map[string]any {
 		case browserFixtureRefuseSequence:
 			_ = stop()
 			return nil
+		case browserFixtureTimedSequence:
+			timing = map[string]any{"queueUs": 12, "injectUs": 3}
+		case browserFixtureUnboundedSequence:
+			timing = map[string]any{"queueUs": uint64(1) << 53, "injectUs": 3}
+		case browserFixtureEndViewSequence:
+			_ = endView()
 		}
 		status = "applied"
 	}
-	return map[string]any{"success": true, "data": map[string]any{"controllerId": command.ControllerID, "expiresAt": command.ExpiresAt, "lastSequence": command.Sequence, "status": status, "secret": browserFixtureSecret}}
+	data := map[string]any{"controllerId": command.ControllerID, "expiresAt": command.ExpiresAt, "lastSequence": command.Sequence, "status": status, "secret": browserFixtureSecret}
+	if timing != nil {
+		data["timing"] = timing
+	}
+	return map[string]any{"success": true, "data": data}
 }
 
 func TestBrowserControlRelayUsesTheObservedSessionAndProjectsReplies(t *testing.T) {

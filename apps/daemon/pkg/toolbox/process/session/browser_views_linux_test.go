@@ -46,6 +46,10 @@ func runBrowserFixture(args []string) bool {
 		panic(err)
 	}
 	finished := &browserFixtureConnections{path: filepath.Join(dir, name+".connections")}
+	screencast, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		panic(err)
+	}
 	go func() {
 		for {
 			connection, err := control.Accept()
@@ -53,8 +57,13 @@ func runBrowserFixture(args []string) bool {
 				return
 			}
 			switch mode {
-			case "control", "channel":
-				go serveBrowserControlFixture(connection, mode == "channel", finished, control.Close)
+			case "control", "channel", "channel-slow":
+				fixture := browserControlFixture{persistent: mode != "control", finished: finished, stopAccepting: control.Close, endView: screencast.Close}
+				if mode == "channel-slow" {
+					fixture.replyDelay = 20 * time.Millisecond
+					fixture.overlaps = filepath.Join(dir, name+".overlapped")
+				}
+				go fixture.serve(connection)
 			default:
 				// Discovery reads only the peer credential. The driver's
 				// command channel is never spoken to.
@@ -62,10 +71,6 @@ func runBrowserFixture(args []string) bool {
 			}
 		}
 	}()
-	screencast, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		panic(err)
-	}
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(mode, "view-channel") {
 			serveBrowserViewChannelFixture(w, r, dir, name, mode, screencast.Close)
