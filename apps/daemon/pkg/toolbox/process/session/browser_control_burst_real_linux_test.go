@@ -93,15 +93,20 @@ func TestRealBrowserControlBurstThroughTheToolbox(t *testing.T) {
 	environment = append(environment, "DISPLAY=", "AGENT_BROWSER_SOCKET_DIR="+scratch, "AGENT_BROWSER_EXECUTABLE_PATH="+chrome,
 		"AGENT_BROWSER_WINDOW_STREAM=1", "AGENT_BROWSER_DISPLAY_HELPER="+helper, "NO_COLOR=1")
 	args := []string{"--config", config, "--session", "primary", "--json"}
-	cli := func(command ...string) map[string]any {
-		t.Helper()
+	attempt := func(command ...string) (map[string]any, []byte) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		process := exec.CommandContext(ctx, driver, append(append([]string{}, args...), command...)...)
 		process.Env = environment
 		output, _ := process.CombinedOutput()
 		var value map[string]any
-		if json.Unmarshal(output, &value) != nil || value["success"] != true {
+		_ = json.Unmarshal(output, &value)
+		return value, output
+	}
+	cli := func(command ...string) map[string]any {
+		t.Helper()
+		value, output := attempt(command...)
+		if value["success"] != true {
 			t.Fatalf("CLI %v: %s", command, output)
 		}
 		return value
@@ -211,9 +216,28 @@ func TestRealBrowserControlBurstThroughTheToolbox(t *testing.T) {
 			}
 		}
 	}
-	notes := func() string {
+	// The agent observes the page again after a person's control. Chrome may
+	// still be taking keys the display already acknowledged, and until it
+	// answers the driver cannot tell which page is in front: how long that
+	// lasts is reported, never waited out silently.
+	observe := func(result map[string]any) {
 		t.Helper()
-		cli("snapshot")
+		released := time.Now()
+		for {
+			value, output := attempt("snapshot")
+			if value["success"] == true {
+				result["agentObservedAfterReleaseMs"] = time.Since(released).Milliseconds()
+				return
+			}
+			if value["code"] != "browser_active_page_ambiguous" || time.Since(released) > 30*time.Second {
+				t.Fatalf("CLI snapshot %v after release: %s", time.Since(released), output)
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+	}
+	notes := func(result map[string]any) string {
+		t.Helper()
+		observe(result)
 		value, _ := cli("get", "value", "#notes")["data"].(map[string]any)["value"].(string)
 		return value
 	}
@@ -228,7 +252,7 @@ func TestRealBrowserControlBurstThroughTheToolbox(t *testing.T) {
 		result := summarizeBurst(sent, 180*time.Second)
 		result["viewer"] = summarizeBurstViewer(viewer.since(mark))
 		result["release"] = release(lease)
-		arrived := notes()
+		arrived := notes(result)
 		result["typedCharacters"], result["arrivedCharacters"] = len([]rune(text)), len([]rune(arrived))
 		result["exact"], result["firstDifference"] = arrived == text, firstDifference(text, arrived)
 		scenarios[name] = result
@@ -323,7 +347,7 @@ func TestRealBrowserControlBurstThroughTheToolbox(t *testing.T) {
 		time.Sleep(2 * time.Second)
 		result["viewer"] = summarizeBurstViewer(viewer.since(mark))
 		result["release"] = release(lease)
-		cli("snapshot")
+		observe(result)
 		arrived := evaluate("decodeURIComponent(location.href)")
 		result["typedCharacters"], result["arrivedCharacters"] = len(address), len(arrived)
 		result["exact"], result["firstDifference"] = arrived == address, firstDifference(address, arrived)
