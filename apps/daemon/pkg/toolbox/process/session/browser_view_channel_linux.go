@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,32 +24,34 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const browserViewerMessageLimit = 4096
-const browserMaximumFrameWindow = 8
+const (
+	// One viewer message: an acknowledgement, a presentation size or a
+	// subscription, and whatever small message the view contract adds next.
+	browserViewerMessageLimit = 4096
+	// The whole upgrade query. With the route's own members and headers the
+	// driver's upgrade stays far inside the one read in which it parses it.
+	browserViewDeclarationLimit = 1024
+)
 
-// ViewBrowserChannel carries only visual output, painted-frame acknowledgements
-// and presentation sizes. The upgrade binds the viewer identity for its
-// lifetime, and declares what this viewer draws itself: with cursor=viewer the
-// pointer, from pointer samples and cursor records, so the driver may leave it
-// out of the frames; with visible=crop frames 1:1 from the top-left cropped to
-// their visible window, so the driver may keep the display at a size class
-// through a resize. Each holds once every connected viewer says so. With
-// audio=<codec> and video=<codecs> the viewer names what it can play; the
-// driver offers a track, and only an offered track can be subscribed.
+// ViewBrowserChannel carries one native view between a viewer and the driver
+// that owns it. This route owns which process is the view, the viewer's
+// identity and presentation authority, the custody watch, liveness and the
+// bounds. The driver and the viewer own the picture and sound contract
+// between them: pictures, sound and their records pass as the driver sends
+// them, and what the viewer sends reaches the driver as it was sent, so a new
+// codec, header member or viewer message needs neither side of this route.
+//
+// The upgrade binds the viewer identity for its lifetime, and a size makes the
+// viewer the presenter. Every other member of the upgrade is the viewer's
+// declaration of what it draws and plays, which reaches the driver as made.
 func (s *SessionController) ViewBrowserChannel(c *gin.Context) {
 	if !websocket.IsWebSocketUpgrade(c.Request) {
 		c.Status(http.StatusUpgradeRequired)
 		return
 	}
 	presentation, valid := parseBrowserChannelPresentation(c.Request)
-	formats := c.Request.URL.Query()["frames"]
-	pointer := c.Request.URL.Query()["cursor"]
-	crop := c.Request.URL.Query()["visible"]
-	window, windowValid := parseBrowserFrameWindow(c.Request)
-	audioCodec, audioValid := parseBrowserAudioDeclaration(c.Request)
-	videoCodecs, videoValid := parseBrowserVideoDeclaration(c.Request)
-	if !valid || !windowValid || !audioValid || !videoValid || len(formats) > 1 || (len(formats) == 1 && formats[0] != "binary") || len(pointer) > 1 || (len(pointer) == 1 && pointer[0] != "viewer") ||
-		len(crop) > 1 || (len(crop) == 1 && crop[0] != "crop") {
+	declaration, declared := parseBrowserViewDeclaration(c.Request.URL.RawQuery)
+	if !valid || !declared {
 		c.JSON(http.StatusBadRequest, gin.H{"code": "browser_view_invalid"})
 		return
 	}
@@ -57,32 +59,7 @@ func (s *SessionController) ViewBrowserChannel(c *gin.Context) {
 	if !ok {
 		return
 	}
-	binaryFrames := len(formats) == 1
-	maxFps := 10
-	var headers http.Header
-	if presentation != nil {
-		maxFps = 60
-		headers = http.Header{"X-Ambit-Browser-Viewer": []string{presentation.Viewer}}
-	}
-	address := fmt.Sprintf("ws://127.0.0.1:%d/?pacing=ack&maxFps=%d&patches=1&frameWindow=%d", selected.port, maxFps, window)
-	if presentation != nil {
-		address += fmt.Sprintf("&width=%d&height=%d", presentation.Width, presentation.Height)
-	}
-	if binaryFrames {
-		address += "&frames=binary"
-	}
-	if len(pointer) == 1 {
-		address += "&cursor=viewer"
-	}
-	if len(crop) == 1 {
-		address += "&visible=crop"
-	}
-	if audioCodec != "" {
-		address += "&audio=" + audioCodec
-	}
-	if len(videoCodecs) != 0 {
-		address += "&video=" + strings.Join(videoCodecs, ",")
-	}
+	address, headers := browserViewDriverUpgrade(selected.port, presentation, declaration)
 	upstream, _, err := (&websocket.Dialer{HandshakeTimeout: browserDriverWriteTimeout}).DialContext(c.Request.Context(), address, headers)
 	if err != nil {
 		c.Status(http.StatusBadGateway)
@@ -101,7 +78,7 @@ func (s *SessionController) ViewBrowserChannel(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	channel := &browserViewChannel{controller: s, view: *selected, socket: socket, upstream: upstream, binary: binaryFrames, presentation: presentation != nil, pending: browserFrameWindow{limit: window}, audioCodec: audioCodec, videoCodecs: videoCodecs}
+	channel := &browserViewChannel{controller: s, view: *selected, socket: socket, upstream: upstream}
 	channel.run(c.Request.Context())
 }
 
@@ -116,16 +93,81 @@ func parseBrowserChannelPresentation(request *http.Request) (*browserPresentatio
 	return parseBrowserPresentation(request)
 }
 
-func parseBrowserFrameWindow(request *http.Request) (int, bool) {
-	values := request.URL.Query()["frameWindow"]
-	if len(values) == 0 {
-		return 1, true
+// The members of the driver's upgrade that belong to this route: ack pacing,
+// the presenter's rate, patch compositing and the presentation size. A viewer
+// cannot declare them; the route sets them.
+func browserViewRouteMember(key string) bool {
+	switch key {
+	case "pacing", "maxFps", "patches", "width", "height":
+		return true
 	}
-	if len(values) != 1 {
-		return 0, false
+	return false
+}
+
+// parseBrowserViewDeclaration returns the viewer's declaration: every member
+// of its upgrade query the route does not own, in the order it was made, and
+// spelled as the driver reads it. The driver splits its request line on '&'
+// and '=' and decodes nothing, so each name and value must be one that reads
+// the same in both spellings; one that does not, or a query past the bound,
+// is refused rather than forwarded as something else.
+func parseBrowserViewDeclaration(query string) (string, bool) {
+	if len(query) > browserViewDeclarationLimit {
+		return "", false
 	}
-	window, err := strconv.Atoi(values[0])
-	return window, err == nil && window >= 1 && window <= browserMaximumFrameWindow
+	var members []string
+	for _, member := range strings.Split(query, "&") {
+		if member == "" {
+			continue
+		}
+		key, value, assigned := strings.Cut(member, "=")
+		key, keyErr := url.QueryUnescape(key)
+		value, valueErr := url.QueryUnescape(value)
+		if keyErr != nil || valueErr != nil || key == "" || !browserViewDeclarationText(key) || !browserViewDeclarationText(value) {
+			return "", false
+		}
+		if browserViewRouteMember(key) {
+			continue
+		}
+		if assigned {
+			key += "=" + value
+		}
+		members = append(members, key)
+	}
+	return strings.Join(members, "&"), true
+}
+
+// The characters a declaration member may use: those that mean the same
+// escaped or not, and that the driver's query splitting never reads as a
+// separator.
+func browserViewDeclarationText(text string) bool {
+	for _, character := range []byte(text) {
+		switch {
+		case 'a' <= character && character <= 'z', 'A' <= character && character <= 'Z', '0' <= character && character <= '9':
+		case character == '-', character == '.', character == '_', character == '~', character == ',', character == ':':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// The driver's upgrade: the route's own members, then the viewer's
+// declaration. Only a presenter names itself to the driver.
+func browserViewDriverUpgrade(port uint16, presentation *browserPresentation, declaration string) (string, http.Header) {
+	maxFps := 10
+	var headers http.Header
+	if presentation != nil {
+		maxFps = 60
+		headers = http.Header{"X-Ambit-Browser-Viewer": []string{presentation.Viewer}}
+	}
+	address := fmt.Sprintf("ws://127.0.0.1:%d/?pacing=ack&maxFps=%d&patches=1", port, maxFps)
+	if presentation != nil {
+		address += fmt.Sprintf("&width=%d&height=%d", presentation.Width, presentation.Height)
+	}
+	if declaration != "" {
+		address += "&" + declaration
+	}
+	return address, headers
 }
 
 // Reuse the process and listener identities that define the selected view;
@@ -146,31 +188,15 @@ func (s *SessionController) browserViewCurrent(view browserView) (ended bool, er
 }
 
 type browserViewChannel struct {
-	controller      *SessionController
-	view            browserView
-	socket          *websocket.Conn
-	upstream        *websocket.Conn
-	binary          bool
-	presentation    bool
-	audioCodec      string
-	audioOffered    atomic.Bool
-	audioEnabled    atomic.Bool
-	audioGeneration atomic.Uint64
-	// Epoch is owned only by the upstream reader, independently of JPEG state.
-	audioEpoch browserAudioEpoch
-	// What the viewer declared, and the one codec the driver offered from it.
-	videoCodecs     []string
-	videoCodec      string
-	videoOffered    atomic.Bool
-	videoEnabled    atomic.Bool
-	videoGeneration atomic.Uint64
-	videoEpoch      browserVideoEpoch
-	delivery        sync.Mutex
-	pending         browserFrameWindow
-	unanswered      atomic.Int32
-	closeOnce       sync.Once
-	// Only the upstream reader owns the prior frame's geometry and sequence.
-	previous browserFrameHeader
+	controller *SessionController
+	view       browserView
+	socket     *websocket.Conn
+	upstream   *websocket.Conn
+	unanswered atomic.Int32
+	closeOnce  sync.Once
+	// Whether a picture has reached the viewer. Only the upstream reader,
+	// which is also the viewer's only writer, reads and sets it.
+	pictured bool
 }
 
 func (ch *browserViewChannel) run(parent context.Context) {
@@ -192,6 +218,9 @@ func (ch *browserViewChannel) run(parent context.Context) {
 	workers.Add(2)
 	go func() { defer workers.Done(); defer cancel(); ch.readViewer() }()
 	go func() { defer workers.Done(); ch.watch(ctx) }()
+	// Store and forward, one message at a time: the next message is read only
+	// once the viewer took the last, so a slow viewer holds the driver back
+	// through the transport and nothing queues here.
 	for {
 		kind, message, err := ch.upstream.ReadMessage()
 		if err != nil {
@@ -204,255 +233,97 @@ func (ch *browserViewChannel) run(parent context.Context) {
 			}
 			return
 		}
-		if kind == websocket.BinaryMessage {
-			if track, media := browserBinaryMediaTrack(message); media && track == "video" && len(ch.videoCodecs) != 0 {
-				if err := ch.deliverVideoUnit(message); err != nil {
-					ch.close(websocket.CloseInternalServerErr, "browser_view_invalid_video")
-					return
-				}
-				continue
-			} else if media && ch.audioCodec != "" {
-				if err := ch.deliverAudioPacket(message); err != nil {
-					ch.close(websocket.CloseInternalServerErr, "browser_view_invalid_audio")
-					return
-				}
-				continue
-			}
-			frame, err := parseBrowserBinaryFrame(message)
-			if ch.binary && err != nil && ch.previous.Seq == 0 && browserLegacyBinaryFrame(message) {
+		if !ch.deliver(kind, message) {
+			return
+		}
+	}
+}
+
+// deliver passes one driver message to the viewer, and reports whether the
+// channel goes on. Binary messages are pictures and sound and pass as sent;
+// the records of the sound and picture tracks pass as sent. The route keeps
+// what is its own: a view that cannot speak this channel is sent to the
+// compatible reader, and the driver's other records are projected to the
+// view's own vocabulary, which is also what keeps its command, result and
+// console records, and its failure text, out of every viewer's stream.
+func (ch *browserViewChannel) deliver(kind int, message []byte) bool {
+	if kind == websocket.BinaryMessage {
+		if !ch.pictured {
+			if browserLegacyBinaryFrame(message) {
 				ch.close(websocket.CloseUnsupportedData, "browser_view_channel_unsupported")
-				return
+				return false
 			}
-			if !ch.binary || err != nil {
-				ch.close(websocket.CloseInternalServerErr, "browser_view_invalid_frame")
-				return
-			}
-			accepted, err := ch.deliverFrame(frame.header.browserFrameHeader, frame.wireSize(), func() error {
-				_ = ch.socket.SetWriteDeadline(time.Now().Add(browserViewerWriteTimeout))
-				writer, err := ch.socket.NextWriter(websocket.BinaryMessage)
-				if err != nil {
-					return err
-				}
-				writeErr := frame.writeTo(writer)
-				closeErr := writer.Close()
-				if writeErr != nil {
-					return writeErr
-				}
-				return closeErr
-			})
-			if !accepted {
-				ch.close(websocket.CloseInternalServerErr, "browser_view_invalid_frame")
-			}
-			if !accepted || err != nil {
-				return
-			}
-			continue
+			ch.pictured = true
 		}
-		var envelope struct {
-			Type    string          `json:"type"`
-			Surface json.RawMessage `json:"surface"`
-		}
-		if kind != websocket.TextMessage || !utf8.Valid(message) || json.Unmarshal(message, &envelope) != nil {
-			ch.close(websocket.CloseInternalServerErr, "browser_view_invalid_frame")
-			return
-		}
-		if envelope.Type == "audio" {
-			if err := ch.deliverAudioMetadata(message); err != nil {
-				ch.close(websocket.CloseInternalServerErr, "browser_view_invalid_audio")
-				return
-			}
-			continue
-		}
-		if envelope.Type == "video" {
-			if err := ch.deliverVideoMetadata(message); err != nil {
-				ch.close(websocket.CloseInternalServerErr, "browser_view_invalid_video")
-				return
-			}
-			continue
-		}
-		projected, sequence, record := browserViewMessage(message, true)
-		switch record {
-		case browserRecordDropped:
-			if envelope.Type == "frame" {
-				ch.close(websocket.CloseInternalServerErr, "browser_view_invalid_frame")
-				return
-			}
-			continue
-		case browserRecordFinished:
-			_ = ch.writeText(bytes.TrimSpace(browserFinishedRecord))
-			ch.close(browserChannelViewEnded, "browser_view_ended")
-			return
-		case browserRecordFailed:
-			_ = ch.writeText(bytes.TrimSpace(browserUnavailableRecord))
-			ch.close(websocket.CloseInternalServerErr, "screencast_failed")
-			return
-		}
-		if sequence != 0 {
-			var frame browserFrameHeader
-			if ch.previous.Seq == 0 && (ch.binary || envelope.Surface == nil) && browserTextFrameHasJPEG(projected) {
-				ch.close(websocket.CloseUnsupportedData, "browser_view_channel_unsupported")
-				return
-			}
-			if ch.binary || json.Unmarshal(projected, &frame) != nil {
-				ch.close(websocket.CloseInternalServerErr, "browser_view_invalid_frame")
-				return
-			}
-			accepted, err := ch.deliverFrame(frame, len(projected), func() error { return ch.writeText(projected) })
-			if !accepted {
-				ch.close(websocket.CloseInternalServerErr, "browser_view_invalid_frame")
-			}
-			if !accepted || err != nil {
-				return
-			}
-			continue
-		}
-		if ch.writeText(projected) != nil {
-			return
-		}
-	}
-}
-
-// ACK credit cannot be consumed until the frame's WebSocket write completes.
-// Waiting for completion also avoids rejecting a legitimate fast peer's ACK.
-func (ch *browserViewChannel) deliverFrame(frame browserFrameHeader, size int, write func() error) (bool, error) {
-	ch.delivery.Lock()
-	defer ch.delivery.Unlock()
-	if !ch.acceptFrame(frame, size) {
-		return false, nil
-	}
-	err := write()
-	if err != nil {
-		// A failed write cannot release usable credit for an undelivered frame.
-		// Close the upstream before allowing a waiting ACK to proceed.
-		ch.close(websocket.CloseInternalServerErr, "screencast_failed")
-	}
-	return true, err
-}
-
-func (ch *browserViewChannel) acknowledgeFrame(sequence uint64) (forward, valid bool) {
-	ch.delivery.Lock()
-	defer ch.delivery.Unlock()
-	return ch.pending.acknowledge(sequence)
-}
-
-func (ch *browserViewChannel) acceptFrame(frame browserFrameHeader, bytes int) bool {
-	if !frame.Surface.valid() || frame.Seq <= ch.previous.Seq || (frame.BaseSeq != 0 &&
-		(frame.BaseSeq != ch.previous.Seq || frame.Surface.Generation != ch.previous.Surface.Generation ||
-			frame.Surface.Width != ch.previous.Surface.Width || frame.Surface.Height != ch.previous.Surface.Height)) {
-		return false
-	}
-	if !ch.pending.reserve(frame.Seq, bytes) {
-		return false
-	}
-	ch.previous = frame
-	return true
-}
-
-// Only sequence and byte counts are retained after a write, never JPEG payloads.
-// The small negotiated window hides network RTT without an unbounded frame queue.
-type browserFrameWindow struct {
-	mu           sync.Mutex
-	limit        int
-	bytes        int
-	acknowledged uint64
-	frames       []browserSentFrame
-}
-
-type browserSentFrame struct {
-	sequence uint64
-	bytes    int
-}
-
-func (w *browserFrameWindow) reserve(sequence uint64, bytes int) bool {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if len(w.frames) >= w.limit || bytes <= 0 || bytes > browserBinaryFrameLimit-w.bytes {
-		return false
-	}
-	w.frames = append(w.frames, browserSentFrame{sequence, bytes})
-	w.bytes += bytes
-	return true
-}
-
-// A painted sequence cumulatively acknowledges only a prefix ending at an
-// actually sent frame. A stale duplicate is harmless and is not sent upstream.
-func (w *browserFrameWindow) acknowledge(sequence uint64) (forward, valid bool) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if sequence <= w.acknowledged {
-		return false, true
-	}
-	for index, frame := range w.frames {
-		if frame.sequence != sequence {
-			continue
-		}
-		for _, acknowledged := range w.frames[:index+1] {
-			w.bytes -= acknowledged.bytes
-		}
-		w.frames = w.frames[:copy(w.frames, w.frames[index+1:])]
-		w.acknowledged = sequence
-		return true, true
-	}
-	return false, false
-}
-
-func (ch *browserViewChannel) writeText(message []byte) error {
-	_ = ch.socket.SetWriteDeadline(time.Now().Add(browserViewerWriteTimeout))
-	return ch.socket.WriteMessage(websocket.TextMessage, message)
-}
-
-// The two accepted messages have separate closed schemas. In particular a
-// presentation update cannot include a viewer identity, input or a CDP command.
-func browserViewerMessage(message []byte) (projected []byte, ack uint64, valid bool) {
-	if len(message) > browserViewerMessageLimit || !utf8.Valid(message) {
-		return nil, 0, false
+		return ch.write(websocket.BinaryMessage, message)
 	}
 	var envelope struct {
 		Type string `json:"type"`
 	}
-	if json.Unmarshal(message, &envelope) != nil {
-		return nil, 0, false
+	if kind != websocket.TextMessage || !utf8.Valid(message) || json.Unmarshal(message, &envelope) != nil {
+		ch.close(websocket.CloseInternalServerErr, "browser_view_invalid_frame")
+		return false
 	}
-	decode := func(value any) bool {
-		decoder := json.NewDecoder(bytes.NewReader(message))
-		decoder.DisallowUnknownFields()
-		return decoder.Decode(value) == nil && decoder.Decode(new(any)) == io.EOF
+	if envelope.Type == "audio" || envelope.Type == "video" {
+		return ch.write(websocket.TextMessage, message)
 	}
-	switch envelope.Type {
-	case "audio":
-		var value struct {
-			Type       string `json:"type"`
-			Enabled    *bool  `json:"enabled"`
-			Generation uint64 `json:"generation"`
+	projected, sequence, record := browserViewMessage(message, true)
+	switch record {
+	case browserRecordDropped:
+		if envelope.Type == "frame" {
+			ch.close(websocket.CloseInternalServerErr, "browser_view_invalid_frame")
+			return false
 		}
-		if !decode(&value) || value.Enabled == nil || value.Generation == 0 || value.Generation > browserSafeInteger {
-			return nil, 0, false
-		}
-		projected, _ = json.Marshal(value)
-		return projected, 0, true
-	case "ack":
-		var value struct {
-			Type string `json:"type"`
-			Seq  uint64 `json:"seq"`
-		}
-		if !decode(&value) || value.Seq == 0 {
-			return nil, 0, false
-		}
-		projected, _ = json.Marshal(value)
-		return projected, value.Seq, true
-	case "presentation":
-		var value struct {
-			Type   string `json:"type"`
-			Width  uint32 `json:"width"`
-			Height uint32 `json:"height"`
-		}
-		if !decode(&value) || value.Width == 0 || value.Width > 2048 || value.Height == 0 || value.Height > 2048 {
-			return nil, 0, false
-		}
-		projected, _ = json.Marshal(value)
-		return projected, 0, true
+		return true
+	case browserRecordFinished:
+		_ = ch.write(websocket.TextMessage, bytes.TrimSpace(browserFinishedRecord))
+		ch.close(browserChannelViewEnded, "browser_view_ended")
+		return false
+	case browserRecordFailed:
+		_ = ch.write(websocket.TextMessage, bytes.TrimSpace(browserUnavailableRecord))
+		ch.close(websocket.CloseInternalServerErr, "screencast_failed")
+		return false
 	}
-	return nil, 0, false
+	if sequence != 0 {
+		// This channel carries pictures only as binary messages. A driver
+		// whose first picture is a text record cannot serve it, and the
+		// viewer takes the compatible reader instead.
+		if !ch.pictured && browserTextFrameHasJPEG(projected) {
+			ch.close(websocket.CloseUnsupportedData, "browser_view_channel_unsupported")
+		} else {
+			ch.close(websocket.CloseInternalServerErr, "browser_view_invalid_frame")
+		}
+		return false
+	}
+	return ch.write(websocket.TextMessage, projected)
+}
+
+// Only the upstream reader writes messages to the viewer.
+func (ch *browserViewChannel) write(kind int, message []byte) bool {
+	_ = ch.socket.SetWriteDeadline(time.Now().Add(browserViewerWriteTimeout))
+	return ch.socket.WriteMessage(kind, message) == nil
+}
+
+// browserViewMessageAdmitted reports whether a viewer message may travel to
+// the driver: one bounded JSON object, which is how every message of the view
+// contract is spelled. Its shape and meaning belong to the viewer and the
+// driver. The one thing this route decides is its own authority: it is the
+// view route, so the driver's input vocabulary never travels on it, even to a
+// driver that would inject it without a controller. Input has its own route.
+// The type is read by its exact name, as the driver reads it.
+func browserViewMessageAdmitted(message []byte) bool {
+	if len(message) > browserViewerMessageLimit || !utf8.Valid(message) {
+		return false
+	}
+	var members map[string]json.RawMessage
+	if json.Unmarshal(message, &members) != nil || members == nil {
+		return false
+	}
+	var kind string
+	if raw, found := members["type"]; found && json.Unmarshal(raw, &kind) == nil {
+		return !strings.HasPrefix(kind, "input_")
+	}
+	return true
 }
 
 func (ch *browserViewChannel) readViewer() {
@@ -469,66 +340,20 @@ func (ch *browserViewChannel) readViewer() {
 		if err != nil {
 			return
 		}
-		var picture struct {
-			Type  string `json:"type"`
-			Track string `json:"track"`
-		}
-		if json.Unmarshal(message, &picture) == nil && (picture.Type == "video" || (picture.Type == "ack" && picture.Track != "")) {
-			value, projected, valid := browserViewerVideoMessage(message)
-			forward := false
-			if valid {
-				forward, valid = ch.admitViewerVideo(value)
-			}
-			if !valid {
-				ch.close(websocket.ClosePolicyViolation, "browser_view_invalid_message")
-				return
-			}
-			if forward && !ch.writeUpstream(projected) {
-				return
-			}
-			continue
-		}
-		projected, ack, valid := browserViewerMessage(message)
-		var output struct {
-			Type       string `json:"type"`
-			Enabled    bool   `json:"enabled"`
-			Generation uint64 `json:"generation"`
-		}
-		if valid {
-			_ = json.Unmarshal(projected, &output)
-		}
-		isAudio := output.Type == "audio"
-		if !valid || (isAudio && !ch.audioOffered.Load()) || (!isAudio && ack == 0 && !ch.presentation) {
+		if !browserViewMessageAdmitted(message) {
 			ch.close(websocket.ClosePolicyViolation, "browser_view_invalid_message")
 			return
 		}
-		if isAudio {
-			if output.Generation <= ch.audioGeneration.Load() {
-				continue
-			}
-			ch.audioGeneration.Store(output.Generation)
-			ch.audioEnabled.Store(output.Enabled)
-		}
-		if ack != 0 {
-			forward, valid := ch.acknowledgeFrame(ack)
-			if !valid {
-				ch.close(websocket.ClosePolicyViolation, "browser_view_invalid_message")
-				return
-			}
-			if !forward {
-				continue
-			}
-		}
-		if !ch.writeUpstream(projected) {
+		if !ch.writeUpstream(message) {
 			return
 		}
 	}
 }
 
 // Only the viewer's reader writes to the driver.
-func (ch *browserViewChannel) writeUpstream(projected []byte) bool {
+func (ch *browserViewChannel) writeUpstream(message []byte) bool {
 	_ = ch.upstream.SetWriteDeadline(time.Now().Add(browserDriverWriteTimeout))
-	if ch.upstream.WriteMessage(websocket.TextMessage, projected) != nil {
+	if ch.upstream.WriteMessage(websocket.TextMessage, message) != nil {
 		ch.close(websocket.CloseInternalServerErr, "screencast_failed")
 		return false
 	}
