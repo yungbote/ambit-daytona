@@ -1,9 +1,11 @@
 import copy
 import difflib
+import errno
 import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import stat
@@ -361,17 +363,27 @@ class WorkspaceUpdateTests(unittest.TestCase):
         self.assertFalse((self.lineage / "parent-toolchains").exists())
 
     def component_only(self, roster):
-        """A browser-component update: the toolchain lock stays the parent's, with prior history."""
+        """A browser-component update: the toolchain lock stays the parent's, with prior history.
+
+        It runs on the filesystem an image build writes to: an overlay, which refuses to
+        rename a directory of a lower layer (EXDEV). Every directory present before the
+        update is the parent image's."""
         current = self.source.read_bytes()
         (self.lineage / "toolchains.lock.json").write_bytes(current)
         history = self.lineage / "parent-toolchains"
         history.mkdir()
         (history / "prior").write_text("retained history")
+        lower = {path.resolve() for path in (self.lineage, *self.lineage.rglob("*")) if path.is_dir()}
+        rename = os.rename
+        def overlay_rename(source, target, *rest, **options):
+            if Path(source).resolve() in lower:
+                raise OSError(errno.EXDEV, os.strerror(errno.EXDEV), str(source))
+            return rename(source, target, *rest, **options)
         def query(command, *, text):
             if len(command) == 4:
                 return self.target["debian"]["packages"][command[-1]]
             return roster
-        with patch.object(installer.subprocess, "check_output", side_effect=query):
+        with patch.object(installer.subprocess, "check_output", side_effect=query), patch.object(os, "rename", overlay_rename):
             installer.record_toolchain_update(self.source, self.target, self.lineage)
         return current
 

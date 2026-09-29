@@ -325,14 +325,19 @@ def install_python(lock, scratch, source, inputs=Path("/inputs")):
 
 
 def preserve_parent_receipts(lineage):
-    """Move the parent's receipts to parent-toolchains/, its own history one level further down."""
+    """Move the parent's receipts to parent-toolchains/, its own history one level further down.
+
+    The parent's history is copied, never renamed: it is a directory of a lower image layer,
+    and the overlay filesystem an image build writes to refuses to rename those (EXDEV). Only
+    the staging directory, which this layer creates, is renamed."""
     history = lineage / "parent-toolchains"
     staged = lineage / ".parent-toolchains"
     staged.mkdir()
     for name in ("toolchains.lock.json", "installed-dpkg.lock"):
         shutil.copy2(lineage / name, staged / name)
     if history.exists():
-        history.rename(staged / "parent-toolchains")
+        shutil.copytree(history, staged / "parent-toolchains", symlinks=True)
+        shutil.rmtree(history)
     staged.rename(history)
 
 
