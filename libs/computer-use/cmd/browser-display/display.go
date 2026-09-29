@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"image"
+	"math"
 	"time"
 
 	"github.com/robotn/xgb"
@@ -74,6 +75,16 @@ type displayInfo struct {
 // launch size) takes its class at once.
 const sizeClassStep = 256
 const sizeClassSettle = 10 * time.Second
+
+// The refresh rate every mode this helper sets advertises. Chrome paces its
+// frames on the output's mode (dot clock over total raster), which bounds
+// how soon it paints a resized window: measured through the toolbox under a
+// drag at 60 presentations a second, 120 Hz takes configure-to-paint from
+// 24 to 15 ms (p50; p90 35 to 20), and a still page costs no more. A page
+// that animates is drawn twice as often, frames the stream samples at its
+// own rate: a turning spinner cost 1.9% of a core more (media-producer
+// paint/).
+const advertisedRefresh = 120
 
 func sizeClass(value, limit int) int {
 	return max(value, min(limit, (value+sizeClassStep-1)/sizeClassStep*sizeClassStep))
@@ -366,9 +377,13 @@ func (d *display) layout(width, height, framebufferW, framebufferH, oldW, oldH i
 	mode, exists := d.modes[name]
 	if !exists {
 		// Xvfb uses timing only as an output mode descriptor. A valid bounded
-		// blanking interval lets every dock size follow the same RandR operation.
+		// blanking interval lets every dock size follow the same RandR operation;
+		// the dot clock makes it advertise advertisedRefresh (a 4096x4096 mode
+		// still fits the field, and a larger one would advertise less, never a
+		// wrapped rate).
 		ht, vt := width+160, height+45
-		created, e := randr.CreateMode(d.conn, d.screen.Root, randr.ModeInfo{Width: uint16(width), Height: uint16(height), DotClock: uint32(ht * vt * 60), HsyncStart: uint16(width + 48), HsyncEnd: uint16(width + 80), Htotal: uint16(ht), VsyncStart: uint16(height + 3), VsyncEnd: uint16(height + 6), Vtotal: uint16(vt), NameLen: uint16(len(name))}, name).Reply()
+		dotClock := uint32(min(ht*vt*advertisedRefresh, math.MaxUint32))
+		created, e := randr.CreateMode(d.conn, d.screen.Root, randr.ModeInfo{Width: uint16(width), Height: uint16(height), DotClock: dotClock, HsyncStart: uint16(width + 48), HsyncEnd: uint16(width + 80), Htotal: uint16(ht), VsyncStart: uint16(height + 3), VsyncEnd: uint16(height + 6), Vtotal: uint16(vt), NameLen: uint16(len(name))}, name).Reply()
 		if e != nil {
 			return displayInfo{}, unavailable()
 		}
