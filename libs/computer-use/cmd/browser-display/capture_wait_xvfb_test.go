@@ -9,6 +9,8 @@ import (
 	"os"
 	"reflect"
 	"runtime"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -586,6 +588,72 @@ func TestXvfbLayoutsAdvertiseTheRefreshTheBrowserPacesOn(t *testing.T) {
 			t.Fatalf("a %dx%d layout advertises %.3f Hz, want %d", layout.width, layout.height, refresh, advertisedRefresh)
 		}
 	}
+}
+
+// A relaunched browser gets a helper of its own on the display the one before
+// it laid out. The modes that helper generated stay on the server with the
+// display, and RandR refuses a second mode of a name it holds, so the new
+// helper lays out with them: at the exact size of the size class's mode, then
+// at a size of its own, after which the display holds one generated mode.
+func TestXvfbAHelperLaysOutWithTheModesAnEarlierHelperLeftOnItsDisplay(t *testing.T) {
+	startXvfb(t, 4096, 4096)
+	browser := newSyncBrowser(t, 800, 600, 5*time.Millisecond, 0x2060c0)
+	window := itoa(int(browser.window))
+	earlier, err := openDisplay(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The dock presents at a size class: the mode is the window's size and the
+	// framebuffer a class larger.
+	mustCall(t, earlier, `{"id":1,"op":"resize","sizeClass":true,"windowId":`+window+`,"width":1078,"height":1888}`)
+	if w, h := rootSize(t, earlier); w == 1078 && h == 1888 {
+		t.Fatalf("the size class did not keep a larger framebuffer: %dx%d", w, h)
+	}
+	earlier.close()
+
+	later, err := openDisplay(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer later.close()
+	// The relaunched browser's own layout is exact at the same size.
+	if _, err := call(t, later, `{"id":2,"op":"resize","windowId":`+window+`,"width":1078,"height":1888}`); err != nil {
+		t.Fatalf("exact layout at the size the earlier helper laid out: %v", err)
+	}
+	if w, h := rootSize(t, later); w != 1078 || h != 1888 {
+		t.Fatalf("framebuffer %dx%d", w, h)
+	}
+	if w, h := scanoutSize(t, later); w != 1078 || h != 1888 {
+		t.Fatalf("scanout %dx%d", w, h)
+	}
+	if refresh := scanoutRefresh(t, later); math.Abs(refresh-advertisedRefresh) > 0.01 {
+		t.Fatalf("the earlier helper's mode advertises %.3f Hz, want %d", refresh, advertisedRefresh)
+	}
+	mustCall(t, later, `{"id":3,"op":"resize","windowId":`+window+`,"width":1000,"height":800}`)
+	if names := serverModeNames(t, later, "ambit-"); !reflect.DeepEqual(names, []string{"ambit-1000x800"}) {
+		t.Fatalf("generated modes on the display: %v", names)
+	}
+}
+
+// serverModeNames lists the display's modes whose names start with prefix,
+// as the server holds them.
+func serverModeNames(t *testing.T, d *display, prefix string) []string {
+	t.Helper()
+	resources, err := randr.GetScreenResourcesCurrent(d.conn, d.screen.Root).Reply()
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := []string{}
+	offset := 0
+	for _, mode := range resources.Modes {
+		name := string(resources.Names[offset : offset+int(mode.NameLen)])
+		offset += int(mode.NameLen)
+		if strings.HasPrefix(name, prefix) {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 // A frame's wait ends where its pixels are read: the request's time plus
