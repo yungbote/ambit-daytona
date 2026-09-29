@@ -314,13 +314,14 @@ func TestRelayCarriesTheRouteToTheViewerAndCoalescesTheViewer(t *testing.T) {
 	for size := 101; size <= 140; size++ {
 		viewer.send(`{"type":"presentation","width":` + strconv.Itoa(size) + `,"height":100}`)
 	}
-	await(t, "every presentation read", func() bool { return s.counters.received.Load() == 41 })
-	if superseded := s.counters.superseded.Load(); superseded != 39 {
-		t.Fatalf("%d superseded, want 39", superseded)
+	// Received advances before channel admission and Pending.Put. Wait for
+	// the effect being tested so the last mailbox update has completed.
+	await(t, "every presentation coalesced", func() bool { return s.counters.superseded.Load() == 39 })
+	if received := s.counters.received.Load(); received != 41 {
+		t.Fatalf("%d received, want41", received)
 	}
 	close(route.gate)
 	awaitWrites(t, route, 2)
-	time.Sleep(50 * time.Millisecond) // nothing else follows
 	if written := route.messages(); len(written) != 2 || written[0] != `{"type":"presentation","width":100,"height":100}` || written[1] != `{"type":"presentation","width":140,"height":100}` {
 		t.Fatalf("the route got %v", written)
 	}

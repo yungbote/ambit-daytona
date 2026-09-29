@@ -78,7 +78,7 @@ func (e *Estimator) Update(now time.Time, generation uint64, network Network, pa
 		return Budget{}, false
 	}
 	shares := network.Shares
-	if shares == 0 || network.ProxyHop || !network.Known {
+	if shares == 0 || network.ProxyHop {
 		shares = 1
 	}
 	if e.shares == 0 {

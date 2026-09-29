@@ -123,6 +123,14 @@ func TestAppLimitedViewersShareTheInitialBudgetAndJoiningCapacity(t *testing.T) 
 	}
 }
 
+func TestSharedViewersDivideTheGuessBeforeTheFirstRTTSample(t *testing.T) {
+	e := New()
+	budget, _ := e.Update(time.Unix(100, 0), 1, Network{Shares: 2}, Paint{})
+	if budget.BitsPerSecond != InitialBitsPerSecond/2 {
+		t.Fatalf("connection sharing waited for RTT and duplicated the initial keys: %+v", budget)
+	}
+}
+
 func TestFuturePaintAndBackwardObservationCannotChangeCapacity(t *testing.T) {
 	now := time.Unix(100, 0)
 	e := New()
