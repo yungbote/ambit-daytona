@@ -14,7 +14,8 @@ SPEC = importlib.util.spec_from_file_location("source_inputs", Path(__file__).wi
 source_inputs = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(source_inputs)
 
-HELPER_PATH = "runtime/agent-workspace-atomic-materializer"
+HELPER_PATHS = ["LICENSE", "libs/computer-use/go.mod", "libs/computer-use/go.sum", "libs/computer-use/cmd/browser-display"]
+MATERIALIZER_PATH = "runtime/agent-workspace-atomic-materializer"
 
 
 def run(repo, *args):
@@ -31,95 +32,135 @@ def commit(repo, files, message):
     return run(repo, "rev-parse", "HEAD")
 
 
-def repository(root, origin):
+def repository(root, origin, files):
     root.mkdir()
     run(root, "init", "-q", "-b", "main")
     run(root, "remote", "add", "origin", origin)
-    return root
+    head = commit(root, files, "initial")
+    run(root, "update-ref", source_inputs.MAIN, head)
+    return root, head
+
+
+def tar(repo, *args):
+    return subprocess.run(["git", "-C", str(repo), "archive", "--format=tar", *args], check=True, capture_output=True).stdout
+
+
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
 
 
 class SourceInputs(unittest.TestCase):
     def setUp(self):
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        self.driver = repository(self.root / "driver", "git@github.com:example/agent-browser.git")
-        self.upstream = commit(self.driver, {"cli/Cargo.toml": '[package]\nname = "agent-browser"\nversion = "0.1.0"\n'}, "upstream")
+        self.driver, self.upstream = repository(self.root / "driver", "git@github.com:example/agent-browser.git",
+                                                {"cli/Cargo.toml": '[package]\nname = "agent-browser"\nversion = "0.1.0"\n'})
         self.driver_rev = commit(self.driver, {"cli/Cargo.toml": '[package]\nname = "agent-browser"\nversion = "0.2.0"\n',
                                                "cli/src/main.rs": "fn main() {}\n"}, "driver")
         run(self.driver, "update-ref", source_inputs.MAIN, self.driver_rev)
-        self.helper = repository(self.root / "helper", "https://github.com/example/backend")
+        self.helper, self.helper_rev = repository(self.root / "helper", "https://github.com/example/daytona", {
+            "LICENSE": "license\n", "libs/computer-use/go.mod": "module x\n", "libs/computer-use/go.sum": "",
+            "libs/computer-use/cmd/browser-display/main.go": "package main\n", "apps/runner/main.go": "package main\n"})
         self.build_lock = '{"schema": "ambit.atomic-materializer-build-lock/v1"}\n'
-        self.helper_rev = commit(self.helper, {f"{HELPER_PATH}/materializer.lock.json": self.build_lock,
-                                               f"{HELPER_PATH}/main.go": "package main\n", "src/other.ts": "export {}\n"}, "helper")
-        run(self.helper, "update-ref", source_inputs.MAIN, self.helper_rev)
+        self.backend, self.backend_rev = repository(self.root / "backend", "git@github.com:example/backend.git", {
+            f"{MATERIALIZER_PATH}/materializer.lock.json": self.build_lock, f"{MATERIALIZER_PATH}/main.go": "package main\n",
+            "src/other.ts": "export {}\n"})
         self.lock = self.root / "browser.lock.json"
         self.lock.write_text(json.dumps({
             "schema": "ambit.workspace-browser-lock/v1",
             "agentBrowser": {"repository": "https://github.com/example/agent-browser", "upstreamRepository": "https://github.com/up/agent-browser",
-                             "upstreamRevision": self.upstream, "revision": "0" * 40, "sourceTree": "0" * 40, "version": "0.0.0",
-                             "archiveName": "agent-browser-source.tar.gz", "sha256": "0" * 64, "features": ["browser-audio"]},
+                             "upstreamRevision": self.upstream, "revision": "", "sourceTree": "", "version": "", "archiveName": "",
+                             "sha256": "", "features": ["browser-audio"]},
+            "displayHelper": {"repository": "https://github.com/example/daytona", "revision": "", "paths": HELPER_PATHS,
+                              "archiveName": "", "sha256": ""},
             "chrome": {"version": "1", "sha256": "1" * 64},
-            "materializer": {"repository": "https://github.com/example/backend", "revision": "0" * 40, "sourceTree": "0" * 40,
-                             "sourcePath": HELPER_PATH, "archiveName": "atomic-materializer-source.tar.gz", "sha256": "0" * 64,
-                             "buildLockSha256": "0" * 64},
+            "materializer": {"repository": "https://github.com/example/backend", "revision": "", "sourceTree": "", "sourcePath": MATERIALIZER_PATH,
+                             "archiveName": "", "sha256": "", "buildLockSha256": ""},
         }, indent=2) + "\n")
 
     def invoke(self, *argv):
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            source_inputs.main([*argv, "--driver-repo", str(self.driver), "--helper-repo", str(self.helper), "--lock", str(self.lock)])
+            source_inputs.main([*argv, "--lock", str(self.lock)])
         return output.getvalue()
 
     def pin(self, driver=None, helper=None):
-        return self.invoke("pin", "--driver", driver or self.driver_rev, "--helper", helper or self.helper_rev)
+        return self.invoke("pin", "--driver", driver or self.driver_rev, "--driver-repo", str(self.driver),
+                           "--helper", helper or self.helper_rev, "--helper-repo", str(self.helper))
 
-    def test_pin_derives_every_recorded_field_from_the_two_revisions(self):
+    def pin_materializer(self):
+        return self.invoke("pin-materializer", "--backend", self.backend_rev, "--backend-repo", str(self.backend))
+
+    def export(self, out):
+        return self.invoke("export", "--driver-repo", str(self.driver), "--helper-repo", str(self.helper), "--backend-repo", str(self.backend),
+                           "--out", str(out))
+
+    def test_pin_derives_the_driver_and_helper_bindings_from_their_two_revisions(self):
         before = json.loads(self.lock.read_text())
         self.pin(driver="main", helper=self.helper_rev[:12])
         lock = json.loads(self.lock.read_text())
-        self.assertEqual(lock["chrome"], before["chrome"])
+        self.assertEqual({key: lock[key] for key in ("chrome", "materializer")}, {key: before[key] for key in ("chrome", "materializer")})
         self.assertEqual(lock["agentBrowser"], {
-            **before["agentBrowser"], "revision": self.driver_rev, "sourceTree": run(self.driver, "rev-parse", "HEAD^{tree}"),
-            "version": "0.2.0", "archiveName": "agent-browser-source.tar",
-            "sha256": hashlib.sha256(subprocess.run(["git", "-C", str(self.driver), "archive", "--format=tar", "--prefix=agent-browser/",
-                                                     self.driver_rev], check=True, capture_output=True).stdout).hexdigest()})
-        self.assertEqual(lock["materializer"], {
-            **before["materializer"], "revision": self.helper_rev, "sourceTree": run(self.helper, "rev-parse", f"HEAD:{HELPER_PATH}"),
-            "archiveName": "atomic-materializer-source.tar",
-            "sha256": hashlib.sha256(subprocess.run(["git", "-C", str(self.helper), "archive", "--format=tar", self.helper_rev, HELPER_PATH],
-                                                    check=True, capture_output=True).stdout).hexdigest(),
-            "buildLockSha256": hashlib.sha256(self.build_lock.encode()).hexdigest()})
+            **before["agentBrowser"], "revision": self.driver_rev, "sourceTree": run(self.driver, "rev-parse", "HEAD^{tree}"), "version": "0.2.0",
+            "archiveName": "agent-browser-source.tar", "sha256": digest(tar(self.driver, "--prefix=agent-browser/", self.driver_rev))})
+        self.assertEqual(lock["displayHelper"], {
+            **before["displayHelper"], "revision": self.helper_rev, "archiveName": "browser-display-source.tar",
+            "sha256": digest(tar(self.helper, self.helper_rev, *HELPER_PATHS))})
 
-    def test_export_writes_the_archives_the_installer_reads_with_the_pinned_digests(self):
+    def test_an_image_is_never_pinned_from_one_revision(self):
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            self.invoke("pin", "--driver", self.driver_rev, "--driver-repo", str(self.driver))
+        self.assertEqual(json.loads(self.lock.read_text())["agentBrowser"]["revision"], "")
+
+    def test_pin_materializer_derives_its_binding_from_the_backend_revision(self):
+        self.pin_materializer()
+        self.assertEqual(json.loads(self.lock.read_text())["materializer"], {
+            "repository": "https://github.com/example/backend", "revision": self.backend_rev,
+            "sourceTree": run(self.backend, "rev-parse", f"HEAD:{MATERIALIZER_PATH}"), "sourcePath": MATERIALIZER_PATH,
+            "archiveName": "atomic-materializer-source.tar", "sha256": digest(tar(self.backend, self.backend_rev, MATERIALIZER_PATH)),
+            "buildLockSha256": digest(self.build_lock.encode())})
+
+    def test_export_writes_the_three_archives_the_installer_reads_with_the_pinned_digests(self):
         self.pin()
+        self.pin_materializer()
         out = self.root / "inputs"
-        self.invoke("export", "--out", str(out))
+        self.export(out)
         lock = json.loads(self.lock.read_text())
-        for binding in (lock["agentBrowser"], lock["materializer"]):
-            self.assertEqual(hashlib.sha256((out / binding["archiveName"]).read_bytes()).hexdigest(), binding["sha256"])
+        for key in ("agentBrowser", "displayHelper", "materializer"):
+            self.assertEqual(digest((out / lock[key]["archiveName"]).read_bytes()), lock[key]["sha256"])
         with tarfile.open(out / "agent-browser-source.tar") as driver:
             self.assertEqual({name.split("/")[0] for name in driver.getnames()}, {"agent-browser"})
-            self.assertIn("agent-browser/cli/Cargo.toml", driver.getnames())
-        with tarfile.open(out / "atomic-materializer-source.tar") as helper:
-            self.assertIn(f"{HELPER_PATH}/materializer.lock.json", helper.getnames())
-            self.assertNotIn("src/other.ts", helper.getnames())
+        with tarfile.open(out / "browser-display-source.tar") as helper:
+            files = {member.name for member in helper.getmembers() if member.isfile()}
+            self.assertEqual(files, {"LICENSE", "libs/computer-use/go.mod", "libs/computer-use/go.sum", "libs/computer-use/cmd/browser-display/main.go"})
+        with tarfile.open(out / "atomic-materializer-source.tar") as materializer:
+            self.assertIn(f"{MATERIALIZER_PATH}/materializer.lock.json", materializer.getnames())
+            self.assertNotIn("src/other.ts", materializer.getnames())
+
+    def test_an_archive_does_not_depend_on_the_clones_tar_umask(self):
+        self.pin()
+        pinned = json.loads(self.lock.read_text())["displayHelper"]["sha256"]
+        run(self.helper, "config", "tar.umask", "0022")
+        self.pin()
+        self.assertEqual(json.loads(self.lock.read_text())["displayHelper"]["sha256"], pinned)
 
     def test_export_refuses_a_lock_whose_digest_is_not_the_revisions_archive(self):
         self.pin()
+        self.pin_materializer()
         lock = json.loads(self.lock.read_text())
-        lock["agentBrowser"]["sha256"] = "f" * 64
+        lock["displayHelper"]["sha256"] = "f" * 64
         self.lock.write_text(json.dumps(lock, indent=2) + "\n")
-        with self.assertRaisesRegex(SystemExit, "agent-browser-source.tar at .* is not the archive the lock records"):
-            self.invoke("export", "--out", str(self.root / "inputs"))
-        self.assertFalse((self.root / "inputs" / "agent-browser-source.tar").exists())
+        with self.assertRaisesRegex(SystemExit, "browser-display-source.tar at .* is not the archive the lock records"):
+            self.export(self.root / "inputs")
+        self.assertFalse((self.root / "inputs").exists())
 
     def test_pin_refuses_a_revision_main_does_not_contain(self):
-        branch = commit(self.driver, {"cli/src/lib.rs": "\n"}, "unmerged")
-        with self.assertRaisesRegex(SystemExit, f"{branch} is not on https://github.com/example/agent-browser main"):
-            self.pin(driver=branch)
+        branch = commit(self.helper, {"libs/computer-use/cmd/browser-display/wake.go": "package main\n"}, "unmerged")
+        with self.assertRaisesRegex(SystemExit, f"{branch} is not on https://github.com/example/daytona main"):
+            self.pin(helper=branch)
 
-    def test_pin_refuses_a_repository_other_than_the_one_the_lock_names(self):
+    def test_pin_refuses_a_clone_of_another_repository(self):
         run(self.helper, "remote", "set-url", "origin", "git@github.com:someone/else.git")
-        with self.assertRaisesRegex(SystemExit, "is git@github.com:someone/else.git, not https://github.com/example/backend"):
+        with self.assertRaisesRegex(SystemExit, "is git@github.com:someone/else.git, not https://github.com/example/daytona"):
             self.pin()
 
     def test_pin_refuses_a_driver_that_does_not_contain_the_recorded_upstream(self):

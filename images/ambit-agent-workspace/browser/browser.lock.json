@@ -14,6 +14,18 @@
       "browser-audio"
     ]
   },
+  "displayHelper": {
+    "repository": "https://github.com/yungbote/ambit-daytona",
+    "revision": "03b6e585821805b64050552a8e6b018b844bfbd8",
+    "paths": [
+      "LICENSE",
+      "libs/computer-use/go.mod",
+      "libs/computer-use/go.sum",
+      "libs/computer-use/cmd/browser-display"
+    ],
+    "archiveName": "browser-display-source.tar",
+    "sha256": "32bc8f015b22abd8af0319d27dc2410d36ae4c7e283046c48d8ea304c257085f"
+  },
   "chrome": {
     "version": "152.0.7977.82",
     "url": "https://storage.googleapis.com/chrome-for-testing-public/152.0.7977.82/linux64/chrome-linux64.zip",
