@@ -13,6 +13,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -445,6 +447,40 @@ func TestBrowserViewerChannelWaitsForPaintAndResizesWithoutRedial(t *testing.T) 
 	}
 	expectClose(t, channel, browserChannelViewEnded, "browser_view_ended", 5*time.Second)
 	awaitFile(t, filepath.Join(workspace.socketDir, "primary.view-closed"))
+}
+
+func TestActualBytePipeAdvertisesItsCapabilityThroughTheUpgrade(t *testing.T) {
+	workspace := newBrowserWorkspace(t)
+	workspace.open(t, "viewer-owner")
+	workspace.runDriver(t, "viewer-owner", "primary", "view-channel-finished")
+	id, _ := workspace.only(t, "viewer-owner", "primary")
+	conn, response, err := websocket.DefaultDialer.Dial(browserViewerAddress(workspace.serve(t), "viewer-owner", id)+"?width=320&height=240&frames=binary&patches=1", http.Header{"X-Ambit-Browser-Viewer": {browserFixtureViewer}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if response.Header.Get("X-Ambit-Browser-View-Pipe") != "1" {
+		t.Fatalf("actual pipe header missing: %v", response.Header)
+	}
+}
+
+func TestPipeCapabilitySurvivesTheReverseProxyUpgrade(t *testing.T) {
+	workspace := newBrowserWorkspace(t)
+	workspace.open(t, "viewer-owner")
+	workspace.runDriver(t, "viewer-owner", "primary", "view-channel-finished")
+	id, _ := workspace.only(t, "viewer-owner", "primary")
+	toolbox := workspace.serve(t)
+	target, _ := url.Parse(toolbox.URL)
+	proxy := httptest.NewServer(httputil.NewSingleHostReverseProxy(target))
+	defer proxy.Close()
+	conn, response, err := websocket.DefaultDialer.Dial(browserViewerAddress(proxy, "viewer-owner", id)+"?width=320&height=240&frames=binary&patches=1", http.Header{"X-Ambit-Browser-Viewer": {browserFixtureViewer}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if response.Header.Get("X-Ambit-Browser-View-Pipe") != "1" {
+		t.Fatal("proxy stripped byte-pipe capability")
+	}
 }
 
 // This channel carries pictures only as binary messages: a viewer that did

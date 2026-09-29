@@ -74,7 +74,7 @@ func (s *SessionController) ViewBrowserChannel(c *gin.Context) {
 		}
 		return
 	}
-	socket, err := util.UpgradeToWebSocket(c.Writer, c.Request)
+	socket, err := util.UpgradeToWebSocket(c.Writer, c.Request, http.Header{"X-Ambit-Browser-View-Pipe": {"1"}})
 	if err != nil {
 		return
 	}
