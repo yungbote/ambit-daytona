@@ -102,6 +102,9 @@ func TestRealBrowserWindowGeometryInputAndHandoff(t *testing.T) {
 	}()
 	var records chan string
 	var surface map[string]any
+	// The first window's surface generation: every later resize makes it stale, whether or not taking
+	// control also starts a new generation (the driver pinned at 3728dd9 keeps the current one).
+	var firstGeneration any
 	const viewer = "baaaaabb-cccc-4ddd-8eee-ffff00000001"
 	for _, size := range [][2]int{{780, 600}, {390, 844}, {1440, 900}, {800, 1200}} {
 		if stream != nil {
@@ -153,6 +156,9 @@ func TestRealBrowserWindowGeometryInputAndHandoff(t *testing.T) {
 				t.Fatalf("first resized frame has unpainted page pixels at %v: %d,%d,%d", size, r>>8, g>>8, b>>8)
 			}
 			surface = current
+			if firstGeneration == nil {
+				firstGeneration = current["generation"]
+			}
 			break
 		}
 		cli(true, "snapshot")
@@ -206,7 +212,7 @@ func TestRealBrowserWindowGeometryInputAndHandoff(t *testing.T) {
 		t.Fatalf("missing custody gate: %v", denied)
 	}
 	paste := strings.Repeat("Unicode café 漢字 ✓\n", 6000)
-	input := map[string]any{"op": "input", "controllerId": browserFixtureController, "sequence": 1, "expectedSurfaceGeneration": surface["generation"], "events": []map[string]any{{"type": "input_keyboard", "eventType": "insertText", "text": paste}}}
+	input := map[string]any{"op": "input", "controllerId": browserFixtureController, "sequence": 1, "expectedSurfaceGeneration": firstGeneration, "events": []map[string]any{{"type": "input_keyboard", "eventType": "insertText", "text": paste}}}
 	if stale := control(input, http.StatusConflict); stale["code"] != "browser_control_surface_stale" {
 		t.Fatalf("old window generation was not refused: %v", stale)
 	}
