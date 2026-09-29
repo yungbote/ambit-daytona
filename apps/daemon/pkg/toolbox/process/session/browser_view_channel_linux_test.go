@@ -135,9 +135,7 @@ func serveBrowserViewChannelFixture(w http.ResponseWriter, r *http.Request, dir,
 		return
 	case "view-channel-oversize":
 		for _, size := range []int{browserBinaryFrameLimit, browserBinaryFrameLimit + 1} {
-			message := make([]byte, size)
-			message[0] = 0xff
-			if !driver.sendBinary(message) {
+			if !driver.sendBinary(browserFixtureFrameOfSize(size)) {
 				return
 			}
 		}
@@ -383,10 +381,51 @@ func readViewerMessage(t *testing.T, connection *websocket.Conn, want browserFix
 	}
 }
 
+// readViewerFrame reads the next message and fails unless it is the driver's
+// picture: the same header members and values, and the same image bytes. It
+// holds on every revision of the route; the tests of the pipe itself state
+// byte identity with readViewerMessage.
 func readViewerFrame(t *testing.T, connection *websocket.Conn, patched bool) {
 	t.Helper()
 	header, payload := browserFixtureFrame(patched)
-	readViewerMessage(t, connection, browserFixtureMessage{binary: true, data: packBrowserFixtureFrame(header, payload)})
+	_ = connection.SetReadDeadline(time.Now().Add(10 * time.Second))
+	kind, message, err := connection.ReadMessage()
+	if err != nil || kind != websocket.BinaryMessage {
+		t.Fatalf("picture: kind=%d err=%v", kind, err)
+	}
+	if !browserViewSamePicture(message, packBrowserFixtureFrame(header, payload)) {
+		t.Fatalf("the viewer's picture of %d bytes is not the driver's", len(message))
+	}
+}
+
+// browserViewSamePicture reports whether two binary messages carry the same
+// JSON header and the same bytes after it.
+func browserViewSamePicture(a, b []byte) bool {
+	aHeader, aPayload, aValid := browserBinaryParts(a)
+	bHeader, bPayload, bValid := browserBinaryParts(b)
+	return aValid && bValid && bytes.Equal(aPayload, bPayload) && browserViewJSONEqual(aHeader, bHeader)
+}
+
+// browserFixtureFrameOfSize is a whole picture whose message is exactly size
+// bytes: the image, then padding a JPEG reader never reaches.
+func browserFixtureFrameOfSize(size int) []byte {
+	header, image := browserFixtureFrame(false)
+	// The header states the payload's length, so its own length depends on
+	// that number's digits: settle both together.
+	length := size
+	for {
+		header["byteLength"] = length
+		encoded, err := json.Marshal(header)
+		if err != nil {
+			panic(err)
+		}
+		next := size - 4 - len(encoded)
+		if next == length {
+			break
+		}
+		length = next
+	}
+	return packBrowserFixtureFrame(header, append(image, make([]byte, length-len(image))...))
 }
 
 // awaitDriverReceived waits until the driver has received at least count
@@ -523,8 +562,9 @@ func TestBrowserViewerChannelForwardsTheDeclarationAsMade(t *testing.T) {
 }
 
 // An observer's upgrade names no presenter, so the driver holds it to the
-// secondary rate and no size. What it sends reaches the driver as sent: the
-// driver answers a size only from the presenter its upgrade named.
+// secondary rate and no size (the fixture refuses any other upgrade). What it
+// sends reaches the driver as sent: the driver answers a size only from the
+// presenter its upgrade named.
 func TestBrowserViewerChannelObserverUpgradeNamesNoPresenter(t *testing.T) {
 	workspace := newBrowserWorkspace(t)
 	workspace.open(t, "viewer-owner")
@@ -532,9 +572,6 @@ func TestBrowserViewerChannelObserverUpgradeNamesNoPresenter(t *testing.T) {
 	id, _ := workspace.only(t, "viewer-owner", "primary")
 	channel := openBrowserViewerWith(t, workspace.serve(t), "viewer-owner", id, "?frames=binary&frameWindow=8")
 	readViewerFrame(t, channel, false)
-	if upgrade := driverUpgrade(t, workspace, "primary"); upgrade != "/?pacing=ack&maxFps=10&patches=1&frames=binary&frameWindow=8" {
-		t.Fatalf("observer upgrade: %s", upgrade)
-	}
 	sendFrame(t, channel, map[string]any{"type": "presentation", "width": 400, "height": 300})
 	received := awaitDriverReceived(t, workspace, "primary", 1)
 	if string(received[0]) != `{"height":300,"type":"presentation","width":400}` {
@@ -648,6 +685,21 @@ func TestBrowserViewerChannelLeavesPicturesToTheViewer(t *testing.T) {
 	}
 }
 
+// Pictures pass byte for byte: the driver's own header, in its own spelling,
+// and its image bytes. The previous route rewrote every picture's header.
+func TestBrowserViewerChannelPassesPicturesByteForByte(t *testing.T) {
+	workspace := newBrowserWorkspace(t)
+	workspace.open(t, "viewer-owner")
+	workspace.runDriver(t, "viewer-owner", "primary", "view-channel")
+	id, _ := workspace.only(t, "viewer-owner", "primary")
+	channel := openBrowserViewer(t, workspace.serve(t), "viewer-owner", id, true)
+	for _, patched := range []bool{false, true} {
+		header, payload := browserFixtureFrame(patched)
+		readViewerMessage(t, channel, browserFixtureMessage{binary: true, data: packBrowserFixtureFrame(header, payload)})
+		sendFrame(t, channel, map[string]any{"type": "ack", "seq": header["seq"]})
+	}
+}
+
 // Sound, pictures and their records pass as the driver sends them, byte for
 // byte, including what the previous route refused or dropped: a codec it did
 // not know, a record state and members it did not know, a stream that starts
@@ -745,7 +797,7 @@ func TestBrowserViewerChannelBoundsTheDriversMessages(t *testing.T) {
 	connection.SetReadLimit(64 << 20)
 	_ = connection.SetReadDeadline(time.Now().Add(10 * time.Second))
 	kind, message, err := connection.ReadMessage()
-	if err != nil || kind != websocket.BinaryMessage || len(message) != browserBinaryFrameLimit {
+	if err != nil || kind != websocket.BinaryMessage || !browserViewSamePicture(message, browserFixtureFrameOfSize(browserBinaryFrameLimit)) {
 		t.Fatalf("a message at the bound: kind=%d %d bytes err=%v", kind, len(message), err)
 	}
 	expectClose(t, connection, websocket.CloseInternalServerErr, "screencast_failed", 10*time.Second)
@@ -764,7 +816,7 @@ func TestBrowserViewerChannelBoundsADriverThatStopsReading(t *testing.T) {
 	}
 	defer connection.Close()
 	readViewerFrame(t, connection, false)
-	message := []byte(browserViewerMessageOf(browserViewerMessageLimit))
+	message := []byte(`{"type":"presentation","width":400,"height":300}`)
 	started := time.Now()
 	// The viewer writes until its own transport backs up behind the route,
 	// or the channel ends.

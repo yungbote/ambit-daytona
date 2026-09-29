@@ -501,13 +501,12 @@ func TestBrowserViewTranscriptReplayRoundTrip(t *testing.T) {
 	t.Setenv("AMBIT_TEST_BROWSER_TRANSCRIPT_BASELINE", "")
 	TestBrowserViewTranscriptReplay(t)
 	result := readBrowserViewReplay(t, filepath.Join(scratch, "out"))
-	want := []browserViewTranscriptLine{
-		{Direction: "down", Data: []byte(`{"type":"status","connected":true,"screencasting":true}`)},
-		{Direction: "down", Binary: true, Data: frame(10)},
-		{Direction: "down", Binary: true, Data: frame(12)},
-	}
-	if !reflect.DeepEqual(result.Viewer, want) {
-		t.Fatalf("the viewer received %d messages: %v", len(result.Viewer), result.Viewer)
+	// Pictures are compared by what they say: this test is about the replay,
+	// which every revision of the route must carry the same way.
+	if len(result.Viewer) != 3 || string(result.Viewer[0].Data) != `{"type":"status","connected":true,"screencasting":true}` ||
+		!result.Viewer[1].Binary || !browserViewSamePicture(result.Viewer[1].Data, frame(10)) ||
+		!result.Viewer[2].Binary || !browserViewSamePicture(result.Viewer[2].Data, frame(12)) {
+		t.Fatalf("the viewer received %d messages", len(result.Viewer))
 	}
 	driver := []string{`{"type":"ack","seq":10}`, string(browserViewReplayBarrier), `{"type":"presentation","width":400,"height":300}`, `{"type":"ack","seq":12}`, string(browserViewReplayBarrier), string(browserViewReplayBarrier)}
 	if len(result.Driver) != len(driver) {
