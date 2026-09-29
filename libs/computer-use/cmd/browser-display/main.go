@@ -98,7 +98,7 @@ func decodeRequest(line []byte) (request, error) {
 			value.WaitMs < 0 || value.WaitMs > int(maximumCaptureWait/time.Millisecond) {
 			return value, invalid()
 		}
-	case "info", "copy", "reset", "close":
+	case "info", "copy", "reset", "close", "close_windows":
 		if value.Width != 0 || value.Height != 0 || value.WindowID != 0 || value.Events != nil || captureFields || value.SizeClass {
 			return value, invalid()
 		}
@@ -236,6 +236,8 @@ func (d *display) execute(req request) (any, error) {
 		return d.copy()
 	case "reset", "close":
 		return map[string]any{}, d.reset()
+	case "close_windows":
+		return map[string]any{}, d.closeWindows()
 	}
 	return nil, invalid()
 }
