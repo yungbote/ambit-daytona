@@ -14,7 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"net/url"
-	"strings"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -93,13 +93,14 @@ type fakeRoute struct {
 	mu      sync.Mutex
 	written []string
 	gate    chan struct{} // when set, each Write waits for a token
+	entered chan struct{} // a Write began
 	wrote   chan struct{}
 	once    sync.Once
 	closed  chan struct{}
 }
 
 func newFakeRoute() *fakeRoute {
-	return &fakeRoute{out: make(chan inbound, 64), end: make(chan error, 1), wrote: make(chan struct{}, 64), closed: make(chan struct{})}
+	return &fakeRoute{out: make(chan inbound, 64), end: make(chan error, 1), entered: make(chan struct{}, 64), wrote: make(chan struct{}, 64), closed: make(chan struct{})}
 }
 
 func (r *fakeRoute) Read() (bool, []byte, error) {
@@ -114,6 +115,10 @@ func (r *fakeRoute) Read() (bool, []byte, error) {
 }
 
 func (r *fakeRoute) Write(message []byte) error {
+	select {
+	case r.entered <- struct{}{}:
+	default:
+	}
 	if r.gate != nil {
 		select {
 		case <-r.gate:
@@ -291,36 +296,42 @@ func TestAdmissionRefusals(t *testing.T) {
 }
 
 func TestRelayCarriesTheRouteToTheViewerAndCoalescesTheViewer(t *testing.T) {
-	_, _, viewer, route, _ := open(t, nil)
+	_, s, viewer, route, _ := open(t, nil)
 	route.gate = make(chan struct{})
 	status := []byte(`{"type":"status","connected":true}`)
 	route.out <- inbound{true, status}
-	deadline := time.Now().Add(3 * time.Second)
-	for len(viewer.delivered()) == 0 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if got := viewer.delivered(); len(got) != 1 || !bytes.Equal(got[0].Text, status) {
+	await(t, "the status record", func() bool { return len(viewer.delivered()) == 1 })
+	if got := viewer.delivered(); !bytes.Equal(got[0].Text, status) || got[0].Kind != view.Record {
 		t.Fatalf("delivered %v", got)
 	}
 	// The first presentation leaves and its write blocks; everything after
 	// it waits in its slot, and only the newest of each slot goes.
 	viewer.send(`{"type":"presentation","width":100,"height":100}`)
-	time.Sleep(20 * time.Millisecond)
+	<-route.entered
 	for size := 101; size <= 140; size++ {
-		viewer.send(`{"type":"presentation","width":` + strings.Repeat("1", 0) + itoa(size) + `,"height":100}`)
+		viewer.send(`{"type":"presentation","width":` + strconv.Itoa(size) + `,"height":100}`)
 	}
-	time.Sleep(20 * time.Millisecond)
+	await(t, "every presentation read", func() bool { return s.counters.received.Load() == 41 })
+	if superseded := s.counters.superseded.Load(); superseded != 39 {
+		t.Fatalf("%d superseded, want 39", superseded)
+	}
 	close(route.gate)
-	written := awaitWrites(t, route, 2)
-	time.Sleep(20 * time.Millisecond)
-	written = route.messages()
-	if len(written) != 2 || written[0] != `{"type":"presentation","width":100,"height":100}` || written[1] != `{"type":"presentation","width":140,"height":100}` {
+	awaitWrites(t, route, 2)
+	time.Sleep(50 * time.Millisecond) // nothing else follows
+	if written := route.messages(); len(written) != 2 || written[0] != `{"type":"presentation","width":100,"height":100}` || written[1] != `{"type":"presentation","width":140,"height":100}` {
 		t.Fatalf("the route got %v", written)
 	}
 }
 
-func itoa(n int) string {
-	return strings.TrimSpace(strings.Repeat(" ", 0) + func() string { b, _ := json.Marshal(n); return string(b) }())
+func await(t *testing.T, what string, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for !condition() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 func TestRevocationClosesWithItsCodeAndOutlivesTheSession(t *testing.T) {
@@ -389,13 +400,7 @@ func TestRenewalsThatNameAnotherSessionEndIt(t *testing.T) {
 	// An expired renewal adds nothing and ends nothing.
 	_, s, viewer, _, _ := open(t, nil)
 	viewer.send(`{"type":"grant","token":"` + token(t, map[string]any{"issuedAt": time.Now().UnixMilli() - 50000, "expiresAt": time.Now().UnixMilli() - 1}) + `"}`)
-	deadline := time.Now().Add(time.Second)
-	for s.counters.renewalsIgnored.Load() == 0 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if s.counters.renewalsIgnored.Load() != 1 {
-		t.Fatal("an expired renewal was not ignored")
-	}
+	await(t, "the expired renewal ignored", func() bool { return s.counters.renewalsIgnored.Load() == 1 })
 }
 
 func TestTheViewRoutesEndMapsToWhatThePageUnderstands(t *testing.T) {
