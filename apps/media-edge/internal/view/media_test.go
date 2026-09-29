@@ -56,6 +56,17 @@ func TestVideoUnitProjectionAndBounds(t *testing.T) {
 			t.Fatalf("accepted %v on a dependent picture", change)
 		}
 	}
+	fixture := videoHeaderFixture(1, true, len(payload))
+	delete(fixture, "private")
+	delete(fixture["surface"].(map[string]any), "private")
+	encoded := jsonOf(fixture)
+	atLimit := append(encoded, bytes.Repeat([]byte(" "), videoHeaderLimit-len(encoded))...)
+	if _, _, _, valid := parseVideoUnit(packHeader(atLimit, payload)); !valid {
+		t.Fatal("a header at the bound was refused")
+	}
+	if _, _, _, valid := parseVideoUnit(packHeader(append(atLimit, ' '), payload)); valid {
+		t.Fatal("a header past the bound was accepted")
+	}
 	for _, input := range [][]byte{nil, {0xff, 0xff, 0xff, 0xff}, packHeader(bytes.Repeat([]byte(" "), videoHeaderLimit+1), payload),
 		pack(videoHeaderFixture(1, true, videoPayloadLimit+1), make([]byte, videoPayloadLimit+1)),
 		pack(videoHeaderFixture(1, true, 0), nil)} {
@@ -113,6 +124,16 @@ func TestAudioPacketProjectionAndBounds(t *testing.T) {
 		if _, _, _, valid := parseAudioPacket(input); valid {
 			t.Fatal("accepted invalid audio envelope")
 		}
+	}
+	// The header bound itself: a valid header at exactly the limit is taken,
+	// one byte more is refused.
+	encoded := jsonOf(audioHeaderFixture("opus"))
+	atLimit := append(encoded, bytes.Repeat([]byte(" "), audioHeaderLimit-len(encoded))...)
+	if _, _, _, valid := parseAudioPacket(packHeader(atLimit, payload)); !valid {
+		t.Fatal("a header at the bound was refused")
+	}
+	if _, _, _, valid := parseAudioPacket(packHeader(append(atLimit, ' '), payload)); valid {
+		t.Fatal("a header past the bound was accepted")
 	}
 	header := audioHeaderFixture("pcm-s16le")
 	header["byteLength"] = 1919
