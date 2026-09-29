@@ -13,6 +13,11 @@ export AGENT_BROWSER_WINDOW_STREAM=1
 # This exact image supplies GTK3, both Adwaita assets and the standard private
 # XSettings tools. The driver still requires its own authenticated display.
 export AGENT_BROWSER_SYSTEM_THEME=xsettingsd
+# No D-Bus session bus runs in this image. dbus-x11 is installed only as the
+# provider GTK3's settings backend depends on, and it ships dbus-launch, which
+# libdbus and GLib use to start a bus on their own when no address is set and
+# DISPLAY is. An address that cannot exist makes them fail the connection at once.
+export DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/ambit-no-session-bus
 export AGENT_BROWSER_DISPLAY_HELPER=/opt/ambit/browser/bin/browser-display
 export AGENT_BROWSER_PLAYWRIGHT_RUNNER=/opt/ambit/browser/runtime/playwright-runner.mjs
 export AGENT_BROWSER_PLAYWRIGHT_MODULE=/usr/local/nvm/versions/node/v22.14.0/lib/node_modules/playwright-core/index.mjs

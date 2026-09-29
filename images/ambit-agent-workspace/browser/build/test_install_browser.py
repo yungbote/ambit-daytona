@@ -397,6 +397,14 @@ class WorkspaceUpdateTests(unittest.TestCase):
         self.assertFalse((self.lineage / ".parent-toolchains").exists())
 
 
+class LauncherTests(unittest.TestCase):
+    def test_launcher_names_an_unreachable_session_bus_so_nothing_autolaunches_one(self):
+        launcher = (Path(__file__).resolve().parents[1] / "runtime/agent-browser").read_text()
+        exports = [line for line in launcher.splitlines() if line.startswith("export DBUS_SESSION_BUS_ADDRESS=")]
+        self.assertEqual(exports, ["export DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent/ambit-no-session-bus"])
+        self.assertLess(launcher.index(exports[0]), launcher.index("exec /opt/ambit/browser/bin/agent-browser"))
+
+
 class CommittedRosterTests(unittest.TestCase):
     """The composition-owned roster is what verify.sh compares the image's lineage receipt with."""
 

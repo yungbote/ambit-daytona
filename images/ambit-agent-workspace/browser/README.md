@@ -214,7 +214,9 @@ run time), `libopus0` and `libpulse0`. The parent carried them only as
 dependencies of other packages. GTK3's settings backend needs a D-Bus session
 bus provider; `dbus-x11` is pinned so that apt does not choose
 `dbus-user-session`, which would bring systemd, `systemd-sysv` and
-`libpam-systemd`. Nothing in the image starts a system bus. Whenever the
+`libpam-systemd`. Nothing in the image starts a system bus, and no session bus
+runs either: the launcher sets `DBUS_SESSION_BUS_ADDRESS` to a unix path that
+cannot exist, so libdbus and GLib never start one through `dbus-launch`. Whenever the
 composition changes the installed packages, `locks/installed-dpkg.lock` is
 regenerated from the locked snapshots and committed with the lock; the build
 records the same roster in the image's lineage.
