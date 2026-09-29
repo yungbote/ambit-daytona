@@ -397,6 +397,27 @@ class WorkspaceUpdateTests(unittest.TestCase):
         self.assertFalse((self.lineage / ".parent-toolchains").exists())
 
 
+class CommittedRosterTests(unittest.TestCase):
+    """The composition-owned roster is what verify.sh compares the image's lineage receipt with."""
+
+    def setUp(self):
+        browser = Path(__file__).resolve().parents[1]
+        self.lock = json.loads((browser / "browser.lock.json").read_text())
+        self.text = (browser / "locks/installed-dpkg.lock").read_text()
+        self.roster = {}
+        for line in self.text.splitlines():
+            package, _, version = line.partition("=")
+            self.roster[package.split(":", 1)[0]] = version
+
+    def test_roster_holds_every_locked_browser_package_at_its_version(self):
+        missing = {name: (version, self.roster.get(name)) for name, version in self.lock["debianPackages"].items()
+                   if self.roster.get(name) != version}
+        self.assertEqual(missing, {}, "regenerate locks/installed-dpkg.lock from the locked snapshots")
+
+    def test_roster_is_in_the_form_the_installer_records(self):
+        self.assertEqual(self.text, "\n".join(sorted(self.text.splitlines())) + "\n")
+
+
 class NpmInstallationTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()

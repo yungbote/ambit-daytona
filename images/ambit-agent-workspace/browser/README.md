@@ -208,6 +208,17 @@ image. Cargo's committed lock and the normal dependency-license export cover
 the Rust bindings. `pkg-config` must find both system libraries before the
 build, and audio qualification records the binary's actual dynamic bindings.
 
+The runtime libraries the media producers load are pinned by name, at the
+versions the parent already installs: `libaom3` (the AV1 encoder, loaded at
+run time), `libopus0` and `libpulse0`. The parent carried them only as
+dependencies of other packages. GTK3's settings backend needs a D-Bus session
+bus provider; `dbus-x11` is pinned so that apt does not choose
+`dbus-user-session`, which would bring systemd, `systemd-sysv` and
+`libpam-systemd`. Nothing in the image starts a system bus. Whenever the
+composition changes the installed packages, `locks/installed-dpkg.lock` is
+regenerated from the locked snapshots and committed with the lock; the build
+records the same roster in the image's lineage.
+
 Each managed native Chrome window owns a private, cookie-authenticated Pulse
 Unix socket and null output sink. No host device, TCP listener, microphone
 permission or autoplay override is added. The device survives the existing
