@@ -17,6 +17,7 @@ import (
 	"time"
 
 	common_errors "github.com/daytonaio/common-go/pkg/errors"
+	"github.com/daytonaio/runner/internal"
 	"github.com/daytonaio/runner/pkg/api/docs"
 	"github.com/daytonaio/runner/pkg/common"
 	"github.com/daytonaio/runner/pkg/generationstop"
@@ -29,6 +30,18 @@ import (
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
+
+func TestCompiledRunnerVersionMatchesDeploymentPin(t *testing.T) {
+	revision := os.Getenv("AMBIT_RUNNER_SOURCE_REVISION")
+	if revision == "" {
+		t.Skip("requires the explicit release source pin and matching linker VERSION")
+	}
+	pin := workingcopy.Pin{Build: internal.Version, Revision: revision}
+	if pin.State() != workingcopy.PinBound {
+		t.Fatalf("compiled Runner version %q does not match deployment pin %q", internal.Version, revision)
+	}
+	t.Logf("compiled Runner version equals exact deployment source pin: %s", internal.Version)
+}
 
 // Opt-in composition gate: generated TypeScript clients and the actual API
 // service call real Runner controllers, Docker generations and immutable S3.
@@ -125,7 +138,7 @@ func TestWorkingCopyCaptureRealHTTPDockerMinIO(t *testing.T) {
 		t.Fatal(err)
 	}
 	binding := workingcopy.CaptureBinding{ProviderName: "ambit-private-working-copy-capture", RequestFingerprint: strings.Repeat("a", 64), Authority: authority, Source: source, Owner: owner, StopAuthority: generationstop.StopAuthority{OperationID: stopRequest.OperationID, ReceiptRef: stopReceipt.ReceiptRef, ReceiptDigest: stopReceipt.ReceiptDigest, TerminalGeneration: stopReceipt.TerminalGeneration, Fence: fence}, Selector: workingcopy.CaptureSelector{SemanticZoneRef: "ambit.workspace-zone/work@1", ZoneRelativePath: "report.txt"}}
-	service, err := workingcopy.NewService(docker, objects, stops, component, workingcopy.Pin{}, observer)
+	service, err := workingcopy.NewService(docker, objects, stops, component, workingcopy.Pin{Build: internal.Version, Revision: os.Getenv("AMBIT_RUNNER_SOURCE_REVISION")}, observer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +156,7 @@ func TestWorkingCopyCaptureRealHTTPDockerMinIO(t *testing.T) {
 	server := httptest.NewServer(router)
 	defer server.Close()
 	fixture := filepath.Join(t.TempDir(), "fixture.json")
-	data, _ := json.Marshal(map[string]any{"url": server.URL, "sandbox": map[string]any{"id": name, "organizationId": "daytona-org-1", "runnerId": "runner-1", "labels": labels}, "request": workingcopy.CaptureCapabilitiesRequest{Source: source, Owner: owner, Fence: fence, Authority: legacyAuthority}, "binding": binding, "component": component, "legacy": false, "staleAuthority": legacyAuthority})
+	data, _ := json.Marshal(map[string]any{"url": server.URL, "sandbox": map[string]any{"id": name, "organizationId": "daytona-org-1", "runnerId": "runner-1", "labels": labels}, "request": workingcopy.CaptureCapabilitiesRequest{Source: source, Owner: owner, Fence: fence, Authority: legacyAuthority}, "binding": binding, "component": component, "legacy": false, "staleAuthority": legacyAuthority, "compiledVersion": internal.Version})
 	if err := os.WriteFile(fixture, data, 0600); err != nil {
 		t.Fatal(err)
 	}
