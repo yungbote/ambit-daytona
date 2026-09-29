@@ -102,9 +102,6 @@ func TestRealBrowserWindowGeometryInputAndHandoff(t *testing.T) {
 	}()
 	var records chan string
 	var surface map[string]any
-	// The first window's surface generation: every later resize makes it stale, whether or not taking
-	// control also starts a new generation (the driver pinned at 3728dd9 keeps the current one).
-	var firstGeneration any
 	const viewer = "baaaaabb-cccc-4ddd-8eee-ffff00000001"
 	for _, size := range [][2]int{{780, 600}, {390, 844}, {1440, 900}, {800, 1200}} {
 		if stream != nil {
@@ -156,9 +153,6 @@ func TestRealBrowserWindowGeometryInputAndHandoff(t *testing.T) {
 				t.Fatalf("first resized frame has unpainted page pixels at %v: %d,%d,%d", size, r>>8, g>>8, b>>8)
 			}
 			surface = current
-			if firstGeneration == nil {
-				firstGeneration = current["generation"]
-			}
 			break
 		}
 		cli(true, "snapshot")
@@ -212,9 +206,12 @@ func TestRealBrowserWindowGeometryInputAndHandoff(t *testing.T) {
 		t.Fatalf("missing custody gate: %v", denied)
 	}
 	paste := strings.Repeat("Unicode café 漢字 ✓\n", 6000)
-	input := map[string]any{"op": "input", "controllerId": browserFixtureController, "sequence": 1, "expectedSurfaceGeneration": firstGeneration, "events": []map[string]any{{"type": "input_keyboard", "eventType": "insertText", "text": paste}}}
+	// A generation no window of this display has had: the driver names the window by its display client, and
+	// neither a resize nor taking control starts a new one (3728dd9), so no generation of this journey is stale.
+	const otherWindow = "5f0c2d1e-8a3b-4c7d-9e6f-0a1b2c3d4e5f"
+	input := map[string]any{"op": "input", "controllerId": browserFixtureController, "sequence": 1, "expectedSurfaceGeneration": otherWindow, "events": []map[string]any{{"type": "input_keyboard", "eventType": "insertText", "text": paste}}}
 	if stale := control(input, http.StatusConflict); stale["code"] != "browser_control_surface_stale" {
-		t.Fatalf("old window generation was not refused: %v", stale)
+		t.Fatalf("another window's generation was not refused: %v", stale)
 	}
 	input["expectedSurfaceGeneration"] = lease["surface"].(map[string]any)["generation"]
 	var keyboard []map[string]any
