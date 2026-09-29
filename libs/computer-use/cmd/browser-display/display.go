@@ -162,7 +162,7 @@ func openDisplay(pid int) (*display, error) {
 		return nil, err
 	}
 	d := &display{conn: c, screen: screen, chromePID: uint32(pid), atoms: map[string]xproto.Atom{}, keys: map[byte]bool{}, buttons: map[byte]bool{}, modes: modes}
-	for _, name := range []string{"_NET_WM_PID", "WM_PROTOCOLS", "_NET_WM_SYNC_REQUEST", "_NET_WM_SYNC_REQUEST_COUNTER", "_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_NORMAL", "_NET_WM_WINDOW_TYPE_DIALOG", "CLIPBOARD", "UTF8_STRING", "TARGETS", "TEXT", "INCR", "AMB_BROWSER_SELECTION"} {
+	for _, name := range []string{"_NET_WM_PID", "WM_PROTOCOLS", "WM_DELETE_WINDOW", "_NET_WM_SYNC_REQUEST", "_NET_WM_SYNC_REQUEST_COUNTER", "_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_NORMAL", "_NET_WM_WINDOW_TYPE_DIALOG", "CLIPBOARD", "UTF8_STRING", "TARGETS", "TEXT", "INCR", "AMB_BROWSER_SELECTION"} {
 		a, err := xproto.InternAtom(c, false, uint16(len(name)), name).Reply()
 		if err != nil {
 			return nil, err
@@ -209,7 +209,7 @@ func (d *display) size() (int, int, error) {
 }
 func (d *display) describe() (displayInfo, error) {
 	result, err := d.info()
-	result.Features = d.frames.features()
+	result.Features = append(d.frames.features(), "closeWindows")
 	return result, err
 }
 func (d *display) info() (displayInfo, error) {
