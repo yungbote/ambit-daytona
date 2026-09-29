@@ -143,7 +143,7 @@ func TestWorkingCopyCaptureRealHTTPDockerMinIO(t *testing.T) {
 	server := httptest.NewServer(router)
 	defer server.Close()
 	fixture := filepath.Join(t.TempDir(), "fixture.json")
-	data, _ := json.Marshal(map[string]any{"url": server.URL, "sandbox": map[string]any{"id": name, "organizationId": "daytona-org-1", "runnerId": "runner-1", "labels": labels}, "request": workingcopy.CaptureCapabilitiesRequest{Source: source, Owner: owner, Fence: fence, Authority: legacyAuthority}, "binding": binding, "component": component})
+	data, _ := json.Marshal(map[string]any{"url": server.URL, "sandbox": map[string]any{"id": name, "organizationId": "daytona-org-1", "runnerId": "runner-1", "labels": labels}, "request": workingcopy.CaptureCapabilitiesRequest{Source: source, Owner: owner, Fence: fence, Authority: legacyAuthority}, "binding": binding, "component": component, "legacy": false, "staleAuthority": legacyAuthority})
 	if err := os.WriteFile(fixture, data, 0600); err != nil {
 		t.Fatal(err)
 	}

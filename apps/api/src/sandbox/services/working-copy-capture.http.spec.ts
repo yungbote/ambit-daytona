@@ -16,6 +16,7 @@ import {
   WorkingCopyCaptureBindingDto,
   WorkingCopyCaptureCapabilitiesRequestDto,
   WorkingCopyCaptureComponentDto,
+  WorkingCopyCaptureAuthorityDto,
   MAXIMUM_WORKING_COPY_CAPTURE_READ_BYTES,
 } from '../dto/working-copy-capture.dto'
 import { SandboxExecutionAuthorityService } from './sandbox-execution-authority.service'
@@ -36,6 +37,8 @@ realBoundary('working copy capture through real Runner HTTP, Docker and MinIO', 
     request: WorkingCopyCaptureCapabilitiesRequestDto
     binding: WorkingCopyCaptureBindingDto
     component: WorkingCopyCaptureComponentDto
+    legacy: boolean
+    staleAuthority: WorkingCopyCaptureAuthorityDto
   }
 
   beforeAll(() => {
@@ -66,13 +69,19 @@ realBoundary('working copy capture through real Runner HTTP, Docker and MinIO', 
     )
     const service = new WorkingCopyCaptureService(authority)
     const discovered = await service.capabilities(sandbox.organizationId, sandbox.id, fixture.request)
-    expect(discovered.component).toEqual(fixture.component)
-    expect(discovered).not.toHaveProperty('authority')
     const noExpected = structuredClone(fixture.request)
     delete noExpected.authority
-    expect((await service.capabilities(sandbox.organizationId, sandbox.id, noExpected)).component).toEqual(
-      fixture.component,
-    )
+    if (fixture.legacy) {
+      expect(discovered).not.toHaveProperty('component')
+      expect(discovered.authority).toEqual(fixture.binding.authority)
+      await expect(service.capabilities(sandbox.organizationId, sandbox.id, noExpected)).rejects.toThrow()
+    } else {
+      expect(discovered.component).toEqual(fixture.component)
+      expect(discovered).not.toHaveProperty('authority')
+      expect((await service.capabilities(sandbox.organizationId, sandbox.id, noExpected)).component).toEqual(
+        fixture.component,
+      )
+    }
     const matching = { ...fixture.request, authority: fixture.binding.authority }
     expect((await service.capabilities(sandbox.organizationId, sandbox.id, matching)).authority).toEqual(
       fixture.binding.authority,
@@ -112,8 +121,7 @@ realBoundary('working copy capture through real Runner HTTP, Docker and MinIO', 
     expect(Buffer.from(read.bytesBase64, 'base64').toString()).toBe('immutable HTTP custody')
     const stale = structuredClone(fixture.binding)
     stale.requestFingerprint = 'b'.repeat(64)
-    if (!fixture.request.authority) throw new Error('Expected legacy component is required.')
-    stale.authority = fixture.request.authority
+    stale.authority = fixture.staleAuthority
     await expect(service.capture(sandbox.organizationId, sandbox.id, stale)).rejects.toThrow()
   })
 })
