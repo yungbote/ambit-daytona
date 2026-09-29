@@ -65,6 +65,7 @@ func newSessionEngine(t *testing.T, configDir string, configure func(*SessionCon
 	sessions.POST("/:sessionId/browser-views/:viewId/control", controller.ControlBrowserView)
 	sessions.GET("/:sessionId/browser-views/:viewId/control/channel", controller.ControlBrowserViewChannel)
 	sessions.GET("/:sessionId/browser-views/:viewId/agent/channel", controller.AgentBrowserViewChannel)
+	sessions.GET("/:sessionId/browser-views/:viewId/program/:programId/channel", controller.ProgramBrowserViewChannel)
 	return engine, service
 }
 

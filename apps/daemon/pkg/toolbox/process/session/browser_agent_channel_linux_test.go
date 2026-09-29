@@ -33,6 +33,8 @@ const (
 func serveBrowserAgentFixture(connection net.Conn, mode string, endView func() error) {
 	defer connection.Close()
 	reader := bufio.NewReaderSize(connection, 64<<10)
+	var paused uint64
+	var custodySession bool
 	if mode == "agent-unasked" {
 		_, _ = connection.Write([]byte("{\"id\":1,\"success\":true}\n"))
 	}
@@ -45,11 +47,28 @@ func serveBrowserAgentFixture(connection net.Conn, mode string, endView func() e
 		var frame struct {
 			Action string `json:"action"`
 			ID     uint64 `json:"id"`
+			Type   string `json:"type"`
 		}
 		if json.Unmarshal(line, &frame) != nil || frame.Action != browserAgentAction {
 			return
 		}
 		reply := map[string]any{"id": frame.ID, "success": true, "data": map[string]any{"received": base64.StdEncoding.EncodeToString(line)}}
+		if frame.Type == "program.status" {
+			reply["data"] = programFixtureStatus(line)
+		}
+		if browserAgentCustodyFrame(line) {
+			custodySession = true
+		}
+		if custodySession {
+			if frame.Type == "sequence" {
+				paused = frame.ID
+				_ = json.NewEncoder(connection).Encode(map[string]any{"type": "site_session.need", "requestId": "10000000-0000-4000-8000-000000000001", "site": "https://example.com", "pageGeneration": "page-1"})
+				continue
+			}
+			if frame.Type == "site_session.export" {
+				reply["data"] = map[string]any{"states": []any{map[string]any{"fixture": strings.Repeat("x", browserAgentReplyLimit+128)}}}
+			}
+		}
 		if mode == "agent-old-driver" {
 			// A driver without the endpoint answers an unknown command, without the id.
 			reply = map[string]any{"success": false, "error": "Unknown action"}
@@ -70,13 +89,115 @@ func serveBrowserAgentFixture(connection net.Conn, mode string, endView func() e
 		if json.NewEncoder(connection).Encode(reply) != nil {
 			return
 		}
+		if custodySession && frame.Type == "site_session.attach" && paused != 0 {
+			if json.NewEncoder(connection).Encode(map[string]any{"id": paused, "success": true, "data": map[string]any{"resumed": true}}) != nil {
+				return
+			}
+			paused = 0
+		}
+	}
+}
+
+func TestBrowserAgentSiteNeedAndAttachDoNotWaitBehindPausedSequence(t *testing.T) {
+	_, channel := openBrowserAgentChannel(t, "agent")
+	if err := channel.WriteMessage(websocket.TextMessage, []byte(`{"type":"site_sessions.offer","id":1,"sites":[{"site":"https://example.com","mode":"act"}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	readBrowserAgentReply(t, channel)
+	if err := channel.WriteMessage(websocket.TextMessage, []byte(`{"type":"sequence","id":2,"steps":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	need, _ := readBrowserAgentReply(t, channel)
+	if need["type"] != "site_session.need" || need["id"] != nil {
+		t.Fatalf("unexpected site need: %v", need)
+	}
+	if err := channel.WriteMessage(websocket.TextMessage, []byte(`{"type":"site_session.attach","id":3,"requestId":"10000000-0000-4000-8000-000000000001","site":"https://example.com"}`)); err != nil {
+		t.Fatal(err)
+	}
+	attached, _ := readBrowserAgentReply(t, channel)
+	resumed, _ := readBrowserAgentReply(t, channel)
+	if attached["id"] != float64(3) || resumed["id"] != float64(2) {
+		t.Fatalf("custody/sequence ids: %v %v", attached["id"], resumed["id"])
+	}
+}
+
+func TestBrowserAgentProgramStatusOvertakesSequenceWithNormalBounds(t *testing.T) {
+	_, channel := openBrowserAgentChannelWithPing(t, "agent", browserAgentPingInterval)
+	if channel.WriteMessage(websocket.TextMessage, []byte(`{"type":"site_sessions.offer","id":1,"sites":[]}`)) != nil {
+		t.Fatal("offer write failed")
+	}
+	readBrowserAgentReply(t, channel)
+	if channel.WriteMessage(websocket.TextMessage, []byte(`{"type":"sequence","id":2,"steps":[]}`)) != nil {
+		t.Fatal("sequence write failed")
+	}
+	readBrowserAgentReply(t, channel)
+	if channel.WriteJSON(map[string]any{"type": "program.status", "id": 3, "programId": programFixtureID, "actionId": programFixtureAction, "ownerGeneration": "41"}) != nil {
+		t.Fatal("status write failed")
+	}
+	status, _ := readBrowserAgentReply(t, channel)
+	if status["id"] != float64(3) {
+		t.Fatal("program status waited behind sequence")
+	}
+	if channel.WriteMessage(websocket.TextMessage, []byte(`{"type":"site_session.attach","id":4,"site":"https://example.com"}`)) != nil {
+		t.Fatal("attach write failed")
+	}
+	attached, _ := readBrowserAgentReply(t, channel)
+	sequence, _ := readBrowserAgentReply(t, channel)
+	if attached["id"] != float64(4) || sequence["id"] != float64(2) {
+		t.Fatal("programme metadata changed ordinary sequence ownership")
+	}
+	large := []byte(`{"type":"program.status","id":5,"extra":"` + strings.Repeat("x", browserAgentRequestLimit) + `"}`)
+	if channel.WriteMessage(websocket.TextMessage, large) != nil {
+		t.Fatal("large status write failed")
+	}
+	expectBrowserAgentClose(t, channel, websocket.ClosePolicyViolation, "frame_too_large")
+}
+
+func TestBrowserAgentCustodyHasItsOwnBoundWithoutWideningNormalFrames(t *testing.T) {
+	// This transfers multi-megabyte native JSON. Use the protocol heartbeat;
+	// other tests shorten it to exercise absence quickly, unlike production.
+	_, channel := openBrowserAgentChannelWithPing(t, "agent", browserAgentPingInterval)
+	frame := []byte(`{"type":"site_session.attach","id":1,"state":"` + strings.Repeat("a", browserAgentRequestLimit+128) + `"}`)
+	if err := channel.WriteMessage(websocket.TextMessage, frame); err != nil {
+		t.Fatal(err)
+	}
+	reply, _ := readBrowserAgentReply(t, channel)
+	if reply["id"] != float64(1) {
+		t.Fatal("large custody request lost its identity")
+	}
+	if err := channel.WriteMessage(websocket.TextMessage, []byte(`{"type":"site_session.export","id":2,"sites":["https://example.com"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	_, raw := readBrowserAgentReply(t, channel)
+	if len(raw) <= browserAgentReplyLimit || len(raw) > browserAgentCustodyLimit {
+		t.Fatalf("custody reply size: %d", len(raw))
+	}
+	if err := channel.WriteMessage(websocket.TextMessage, []byte(`{"type":"site_session.attach","id":3,"state":"`+strings.Repeat("a", browserAgentCustodyLimit)+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	expectBrowserAgentClose(t, channel, websocket.ClosePolicyViolation, "frame_too_large")
+}
+
+func TestBrowserAgentNeedEventHasOnlyItsBoundedNativeContract(t *testing.T) {
+	valid := `{"type":"site_session.need","requestId":"10000000-0000-4000-8000-000000000001","site":"https://example.com","pageGeneration":"page-1"}`
+	if !browserAgentSiteNeed([]byte(valid)) {
+		t.Fatal("valid native need refused")
+	}
+	for _, bad := range []string{strings.Replace(valid, `"pageGeneration"`, `"id"`, 1), strings.Replace(valid, "10000000-0000-4000-8000-000000000001", "INVALID", 1), strings.Replace(valid, "https://example.com", "file:///etc/passwd", 1), strings.Replace(valid, "page-1", strings.Repeat("x", 257), 1), strings.Replace(valid, `}`, `,"extra":true}`, 1)} {
+		if browserAgentSiteNeed([]byte(bad)) {
+			t.Fatal("malformed native need admitted")
+		}
 	}
 }
 
 func openBrowserAgentChannel(t *testing.T, mode string) (*browserWorkspace, *websocket.Conn) {
+	return openBrowserAgentChannelWithPing(t, mode, 200*time.Millisecond)
+}
+
+func openBrowserAgentChannelWithPing(t *testing.T, mode string, interval time.Duration) (*browserWorkspace, *websocket.Conn) {
 	t.Helper()
 	workspace := newBrowserWorkspace(t)
-	workspace.controller.browserPingInterval = 200 * time.Millisecond
+	workspace.controller.browserPingInterval = interval
 	workspace.open(t, "browser-owner")
 	workspace.runDriver(t, "browser-owner", "primary", mode)
 	id, _ := workspace.only(t, "browser-owner", "primary")
