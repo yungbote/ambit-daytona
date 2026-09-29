@@ -17,17 +17,19 @@ import (
 )
 
 type display struct {
-	conn        *xgb.Conn
-	screen      *xproto.ScreenInfo
-	chromePID   uint32
-	atoms       map[string]xproto.Atom
-	clipboard   *clipboard
-	keys        map[byte]bool
-	buttons     map[byte]bool
-	keysyms     map[string]byte
-	textKeys    map[rune][]textKey
-	heldCodes   map[string]byte
-	keyboard    *xgbutil.XUtil
+	conn      *xgb.Conn
+	screen    *xproto.ScreenInfo
+	chromePID uint32
+	atoms     map[string]xproto.Atom
+	clipboard *clipboard
+	keys      map[byte]bool
+	buttons   map[byte]bool
+	keysyms   map[string]byte
+	textKeys  map[rune][]textKey
+	heldCodes map[string]byte
+	keyboard  *xgbutil.XUtil
+	// modes are the output modes generated on this display, by name: the
+	// ones this helper created and the ones earlier helpers left on it.
 	modes       map[string]randr.Mode
 	wheelX      float64
 	wheelY      float64
@@ -154,7 +156,12 @@ func openDisplay(pid int) (*display, error) {
 	if _, err := xfixes.QueryVersion(c, 5, 0).Reply(); err != nil {
 		return nil, err
 	}
-	d := &display{conn: c, screen: xproto.Setup(c).DefaultScreen(c), chromePID: uint32(pid), atoms: map[string]xproto.Atom{}, keys: map[byte]bool{}, buttons: map[byte]bool{}, modes: map[string]randr.Mode{}}
+	screen := xproto.Setup(c).DefaultScreen(c)
+	modes, err := generatedModes(c, screen.Root)
+	if err != nil {
+		return nil, err
+	}
+	d := &display{conn: c, screen: screen, chromePID: uint32(pid), atoms: map[string]xproto.Atom{}, keys: map[byte]bool{}, buttons: map[byte]bool{}, modes: modes}
 	for _, name := range []string{"_NET_WM_PID", "WM_PROTOCOLS", "_NET_WM_SYNC_REQUEST", "_NET_WM_SYNC_REQUEST_COUNTER", "_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_NORMAL", "_NET_WM_WINDOW_TYPE_DIALOG", "CLIPBOARD", "UTF8_STRING", "TARGETS", "TEXT", "INCR", "AMB_BROWSER_SELECTION"} {
 		a, err := xproto.InternAtom(c, false, uint16(len(name)), name).Reply()
 		if err != nil {
@@ -364,6 +371,35 @@ func (d *display) scanout() (randr.Output, randr.Crtc, *randr.GetCrtcInfoReply, 
 	return output, oi.Crtc, scanout, nil
 }
 
+// modeName names the output mode a layout of one width and height generates.
+const modeName = "ambit-%dx%d"
+
+// generatedModes are the output modes layouts generated on the display, as
+// the server holds them (modeName). The display outlives any one helper: a
+// browser relaunched into it gets a helper of its own, and the server refuses
+// a second mode of a name it holds, so a helper takes up the modes the ones
+// before it left and its layouts use and remove them like its own.
+func generatedModes(c *xgb.Conn, root xproto.Window) (map[string]randr.Mode, error) {
+	resources, err := randr.GetScreenResourcesCurrent(c, root).Reply()
+	if err != nil {
+		return nil, err
+	}
+	modes := map[string]randr.Mode{}
+	names := resources.Names
+	for _, info := range resources.Modes {
+		if int(info.NameLen) > len(names) {
+			return nil, unavailable()
+		}
+		name := string(names[:info.NameLen])
+		names = names[info.NameLen:]
+		var width, height int
+		if _, err := fmt.Sscanf(name, modeName, &width, &height); err == nil && name == fmt.Sprintf(modeName, width, height) {
+			modes[name] = randr.Mode(info.Id)
+		}
+	}
+	return modes, nil
+}
+
 func (d *display) layout(width, height, framebufferW, framebufferH, oldW, oldH int, windowID uint32) (displayInfo, error) {
 	output, crtc, scanout, err := d.scanout()
 	if err != nil {
@@ -373,7 +409,7 @@ func (d *display) layout(width, height, framebufferW, framebufferH, oldW, oldH i
 	if !framebufferChanges && scanout.Mode != 0 && int(scanout.Width) == width && int(scanout.Height) == height {
 		return d.resizeWindow(width, height, framebufferW, framebufferH, windowID)
 	}
-	name := fmt.Sprintf("ambit-%dx%d", width, height)
+	name := fmt.Sprintf(modeName, width, height)
 	mode, exists := d.modes[name]
 	if !exists {
 		// Xvfb uses timing only as an output mode descriptor. A valid bounded
@@ -388,10 +424,12 @@ func (d *display) layout(width, height, framebufferW, framebufferH, oldW, oldH i
 			return displayInfo{}, unavailable()
 		}
 		mode = created.Mode
-		if e := randr.AddOutputModeChecked(d.conn, output, mode).Check(); e != nil {
-			return displayInfo{}, unavailable()
-		}
 		d.modes[name] = mode
+	}
+	// The output lists a mode once however often it is added, so a mode an
+	// earlier helper created is listed here rather than assumed to be.
+	if e := randr.AddOutputModeChecked(d.conn, output, mode).Check(); e != nil {
+		return displayInfo{}, unavailable()
 	}
 	// Disable the old scanout before shrinking the framebuffer; grow first
 	// when needed. Each request is checked. Any failure after scanout mutation
@@ -414,8 +452,9 @@ func (d *display) layout(width, height, framebufferW, framebufferH, oldW, oldH i
 	if err != nil || r.Status != 0 {
 		return displayInfo{}, unknown()
 	}
-	// Only keep one dynamically generated mode; a long resize gesture cannot
-	// grow server state indefinitely.
+	// Keep one generated mode on the display, whichever helper made the
+	// others: neither a long resize gesture nor a run of relaunched browsers
+	// grows server state.
 	for oldName, oldMode := range d.modes {
 		if oldMode != mode {
 			_ = randr.DeleteOutputModeChecked(d.conn, output, oldMode).Check()
