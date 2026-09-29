@@ -407,6 +407,7 @@ func TestPendingKeepsTheNewestOfEachSlotInSubscriptionOrder(t *testing.T) {
 		t.Fatal("an empty mailbox yields nothing")
 	}
 	put := func(slot Slot, message string) bool { return p.Put(Forward{Slot: slot, Message: []byte(message)}) }
+	put(SlotVideo, `sub1`)
 	put(SlotFrameAck, `a1`)
 	if !put(SlotFrameAck, `a2`) {
 		t.Fatal("a superseded message is reported")
@@ -425,7 +426,7 @@ func TestPendingKeepsTheNewestOfEachSlotInSubscriptionOrder(t *testing.T) {
 	for message, ok := p.Next(); ok; message, ok = p.Next() {
 		order = append(order, string(message))
 	}
-	if strings.Join(order, ",") != "s1,k1,p2,v1,a2" {
+	if strings.Join(order, ",") != "s1,sub1,k1,p2,v1,a2" {
 		t.Fatalf("order %v", order)
 	}
 	// A new subscription retires what named the old one.
