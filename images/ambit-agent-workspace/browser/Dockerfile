@@ -30,11 +30,19 @@ RUN --network=none sha256sum -c source.sha256 \
  && chmod 0755 /out/licenses /out/lineage \
  && chmod 0444 /out/licenses/* /out/lineage/*
 
+FROM ${BASE_IMAGE} AS display-helper-source
+ARG BASE_IMAGE
+USER root
+RUN --mount=type=bind,source=browser.lock.json,target=/source/browser.lock.json,ro \
+    --mount=type=bind,source=build/install-browser.py,target=/source/install-browser.py,ro \
+    --mount=type=bind,from=browser_inputs,source=.,target=/inputs,ro \
+    python3 /source/install-browser.py display-helper-source /source/browser.lock.json "${BASE_IMAGE}"
+
 FROM docker.io/library/golang@sha256:40dfc169bd5ad8a8617e49c8ead7fe16c6873e79d6937539e9c2e5947b7984ef AS browser-display
 WORKDIR /source
 ENV GOTOOLCHAIN=local GOWORK=off CGO_ENABLED=0
-COPY --from=browser_display_source libs/computer-use/go.mod libs/computer-use/go.sum ./
-COPY --from=browser_display_source libs/computer-use/cmd/browser-display ./cmd/browser-display
+COPY --from=display-helper-source /display-helper-source/libs/computer-use/go.mod /display-helper-source/libs/computer-use/go.sum ./
+COPY --from=display-helper-source /display-helper-source/libs/computer-use/cmd/browser-display ./cmd/browser-display
 RUN test "$(go version)" = "go version go1.25.13 linux/amd64" \
  && go build -mod=readonly -trimpath -buildvcs=false -o /out/bin/browser-display ./cmd/browser-display \
  && mkdir -p /out/licenses \
@@ -45,7 +53,7 @@ RUN test "$(go version)" = "go version go1.25.13 linux/amd64" \
  && module_dir="$(go list -mod=readonly -m -f '{{.Dir}}' golang.org/x/sys)" \
  && cp "$module_dir/LICENSE" /out/licenses/browser-display-x-sys-LICENSE \
  && cp /usr/local/go/LICENSE /out/licenses/browser-display-Go-LICENSE
-COPY --from=browser_display_source LICENSE /out/licenses/browser-display-LICENSE
+COPY --from=display-helper-source /display-helper-source/LICENSE /out/licenses/browser-display-LICENSE
 RUN chmod 0444 /out/licenses/browser-display-LICENSE
 
 FROM ${BASE_IMAGE} AS driver
