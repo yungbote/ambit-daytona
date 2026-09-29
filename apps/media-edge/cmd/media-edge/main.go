@@ -135,6 +135,7 @@ func run(log *slog.Logger) error {
 		Verifier: grant.Verifier{Keys: &keys, Audience: c.edgeID},
 		Hub:      hub,
 		Upstream: upstream,
+		Controls: upstream,
 		Origins:  c.origins,
 		Log:      log,
 	}

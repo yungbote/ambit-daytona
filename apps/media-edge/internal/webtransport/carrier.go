@@ -10,8 +10,10 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/daytonaio/media-edge/internal/control"
 	"github.com/daytonaio/media-edge/internal/view"
 	"github.com/quic-go/quic-go"
 	wt "github.com/quic-go/webtransport-go"
@@ -19,15 +21,17 @@ import (
 
 const (
 	Magic                 = "AMBWT001"
-	MaxViewerMessageBytes = 4 << 10
+	MaxViewerMessageBytes = control.MaxRequestBytes
 	writeTimeout          = 30 * time.Second
 )
 
 type carrier struct {
-	session            *wt.Session
-	control            *wt.Stream
-	controls, pictures uint64
-	once               sync.Once
+	session  *wt.Session
+	control  *wt.Stream
+	controls atomic.Uint64
+	pictures uint64
+	records  sync.Mutex
+	once     sync.Once
 	// Eight decoder units and 12MiB are the existing view's bounds. Picture
 	// writes run independently so a blocked picture never holds a record/audio
 	// write behind it; pressure beyond the bound still reaches the producer.
@@ -80,6 +84,8 @@ func (c *carrier) Send(d *view.Delivery) error {
 		return errors.New("view delivery exceeds its bound")
 	}
 	if d.Kind == view.Record {
+		c.records.Lock()
+		defer c.records.Unlock()
 		_ = c.control.SetWriteDeadline(time.Now().Add(writeTimeout))
 		var prefix [4]byte
 		binary.BigEndian.PutUint32(prefix[:], uint32(len(d.Text)))
@@ -89,14 +95,14 @@ func (c *carrier) Send(d *view.Delivery) error {
 		if _, err := c.control.Write(d.Text); err != nil {
 			return err
 		}
-		c.controls++
+		c.controls.Add(1)
 		return nil
 	}
 	if d.Kind == view.Audio {
 		// The common Opus packet fits one datagram. QUIC's actual path limit,
 		// not an assumed MTU, decides when a packet needs its own stream.
 		data := make([]byte, 8+d.Size())
-		binary.BigEndian.PutUint64(data, c.controls)
+		binary.BigEndian.PutUint64(data, c.controls.Load())
 		binary.BigEndian.PutUint32(data[8:], uint32(len(d.Header)))
 		copy(data[12:], d.Header)
 		copy(data[12+len(d.Header):], d.Payload)
@@ -143,7 +149,7 @@ func (c *carrier) Send(d *view.Delivery) error {
 	} else {
 		c.pictures++
 	}
-	binary.BigEndian.PutUint64(prefix[1:9], c.controls)
+	binary.BigEndian.PutUint64(prefix[1:9], c.controls.Load())
 	if d.Kind != view.Audio {
 		binary.BigEndian.PutUint64(prefix[9:], c.pictures)
 	}

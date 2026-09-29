@@ -18,6 +18,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/daytonaio/media-edge/internal/control"
 	"github.com/daytonaio/media-edge/internal/session"
 	"github.com/daytonaio/media-edge/internal/view"
 )
@@ -68,11 +69,33 @@ func New(proxy, credential, organization string) (*Upstream, error) {
 
 // Address is the view route for a target and a declaration.
 func (u *Upstream) Address(target session.Target, declaration view.Declaration) string {
-	segments := []string{target.SandboxID, "process", "session", target.SessionID, "browser-views", target.ViewID, "channel"}
+	return u.address(target, "channel") + "?" + declaration.Query()
+}
+
+func (u *Upstream) address(target session.Target, route string) string {
+	segments := []string{target.SandboxID, "process", "session", target.SessionID, "browser-views", target.ViewID}
 	for index, segment := range segments {
 		segments[index] = encodeURIComponent(segment)
 	}
-	return u.proxy.String() + strings.Join(segments, "/") + "?" + declaration.Query()
+	return u.proxy.String() + strings.Join(segments, "/") + "/" + route
+}
+
+// DialControl carries only input to the unchanged toolbox control route.
+// The backend remains the writer of acquire/renew/release commands.
+func (u *Upstream) DialControl(ctx context.Context, target session.Target) (session.Conn, error) {
+	headers := http.Header{"Accept": {"application/json"}, "Content-Type": {"application/json"}, "Authorization": {"Bearer " + u.credential}, "X-Daytona-Source": {"ambit-media-edge"}}
+	if u.organization != "" {
+		headers.Set("X-Daytona-Organization-ID", u.organization)
+	}
+	conn, response, err := u.dialer.DialContext(ctx, u.address(target, "control/channel"), headers)
+	if err != nil {
+		if response != nil {
+			return nil, fmt.Errorf("daytona: the control route answered %d", response.StatusCode)
+		}
+		return nil, fmt.Errorf("daytona: control dial: %w", err)
+	}
+	conn.SetReadLimit(control.MaxReplyBytes)
+	return &route{conn: conn}, nil
 }
 
 // DialView opens the view route with the backend's headers.

@@ -7,12 +7,14 @@ package websocket
 
 import (
 	"encoding/binary"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
 
+	"github.com/daytonaio/media-edge/internal/control"
 	"github.com/daytonaio/media-edge/internal/view"
 )
 
@@ -35,11 +37,12 @@ type carrier struct {
 	closing    atomic.Bool
 	once       sync.Once
 	stop       chan struct{}
+	writing    sync.Mutex
 }
 
 func newCarrier(conn *websocket.Conn, keepalive time.Duration) *carrier {
 	c := &carrier{conn: conn, stop: make(chan struct{})}
-	conn.SetReadLimit(view.MaxViewerMessageBytes)
+	conn.SetReadLimit(control.MaxRequestBytes)
 	conn.SetPongHandler(func(string) error { c.unanswered.Store(0); return nil })
 	go c.keepalive(keepalive)
 	return c
@@ -53,6 +56,10 @@ func (c *carrier) Receive() (bool, []byte, error) {
 		}
 		return false, nil, err
 	}
+	if len(message) > view.MaxViewerMessageBytes && !control.IsFrame(message) {
+		c.Close(1009, "")
+		return false, nil, errors.New("viewer message exceeds its bound")
+	}
 	return kind == websocket.TextMessage, message, nil
 }
 
@@ -60,6 +67,8 @@ func (c *carrier) Receive() (bool, []byte, error) {
 // message: the length prefix, the header and the payload, without copying
 // the payload.
 func (c *carrier) Send(d *view.Delivery) error {
+	c.writing.Lock()
+	defer c.writing.Unlock()
 	if d.Kind == view.Record {
 		return c.conn.WriteMessage(websocket.TextMessage, d.Text)
 	}

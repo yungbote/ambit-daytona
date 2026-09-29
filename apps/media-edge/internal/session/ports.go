@@ -38,6 +38,12 @@ type Upstream interface {
 	DialView(ctx context.Context, target Target, viewerID string, declaration view.Declaration) (Conn, error)
 }
 
+// ControlUpstream reaches the existing toolbox control route. The backend
+// still acquires, renews and releases the driver's lease.
+type ControlUpstream interface {
+	DialControl(ctx context.Context, target Target) (Conn, error)
+}
+
 // Conn is one open view route.
 type Conn interface {
 	// Read blocks for the route's next message, which stays valid until the

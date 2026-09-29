@@ -63,7 +63,9 @@ type Session struct {
 		code          int
 		reason, cause string
 	}
-	done chan struct{}
+	done             chan struct{}
+	control          *controlLine
+	controlRequested bool
 }
 
 // add takes a verified renewal. A grant for another binding is a violation;
@@ -130,6 +132,9 @@ func (s *Session) end(code int, reason, cause string) bool {
 	viewer, upstream := s.viewer, s.upstream
 	s.mu.Unlock()
 	close(s.done)
+	if s.control != nil {
+		s.control.close()
+	}
 	if viewer != nil {
 		viewer.Close(code, reason)
 	}
@@ -154,11 +159,17 @@ func (s *Session) Run(viewer Carrier) {
 	s.viewer = viewer
 	s.mu.Unlock()
 	s.log.Info("session.opened", "dialMs", s.dialed.Milliseconds())
+	if s.controlRequested {
+		if err := viewer.Send(&view.Delivery{Kind: view.Record, Text: []byte(`{"type":"edge","control":true}`)}); err != nil {
+			s.end(1011, reasonUnavailable, causeWrite)
+		}
+	}
 	var flows sync.WaitGroup
-	flows.Add(3)
+	flows.Add(4)
 	go func() { defer flows.Done(); s.pump(viewer) }()
 	go func() { defer flows.Done(); s.forward() }()
 	go func() { defer flows.Done(); s.periodicReports() }()
+	go func() { defer flows.Done(); s.control.run() }()
 	s.read(viewer)
 	flows.Wait()
 	s.report("session.closed")
@@ -254,6 +265,10 @@ func (s *Session) read(viewer Carrier) {
 			s.renewal(message)
 			continue
 		}
+		if text && isControl(message) {
+			s.control.receive(message)
+			continue
+		}
 		forward, closing := s.channel.Viewer(text, message)
 		switch {
 		case closing != nil:
@@ -278,6 +293,10 @@ func isRenewal(message []byte) bool {
 // the session's authority; an expired or revoked one adds nothing; anything
 // else ends the session as an invalid message.
 func (s *Session) renewal(message []byte) {
+	if len(message) > view.MaxViewerMessageBytes {
+		s.end(1008, reasonInvalid, causeProtocol)
+		return
+	}
 	var value struct {
 		Type  string `json:"type"`
 		Token string `json:"token"`
