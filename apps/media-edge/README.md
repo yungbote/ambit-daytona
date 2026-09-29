@@ -20,12 +20,20 @@ build list. Build and test with `GOWORK=off go build ./... && GOWORK=off go test
 | `MEDIA_EDGE_ALLOWED_ORIGINS` | no | comma-separated page origins a browser may connect from (e.g. `https://ambit.sh`) |
 | `MEDIA_EDGE_LISTEN` | no | the WebSocket carrier, default `:8080` (behind the ingress, TLS terminated there) |
 | `MEDIA_EDGE_INTERNAL_LISTEN` | no | `POST /internal/revoke`, `GET /healthz`, `GET /readyz`, default `:8081`, cluster-only |
+| `MEDIA_EDGE_QUIC_LISTEN` | no | Enable WebTransport on this UDP address, e.g. `:8443`; absent keeps the WebSocket-only process |
+| `MEDIA_EDGE_TLS_CERT_FILE` and `MEDIA_EDGE_TLS_KEY_FILE` | with QUIC | Publicly trusted TLS certificate and key; changed files are reloaded within 10 s, and a rejected pair retains the last valid certificate |
 
 ## Interfaces
 
 - `GET /v1/channel?grant=<token>&<declarations>` (WebSocket): the page's view channel. The grant, the renewal
   message and revocation are specified in `artifacts/browser-frontier-20260927/transport/grant-contract.md`.
 - Upstream: the toolbox view route, dialed exactly as the backend's provider dials it.
+
+WebTransport uses extended CONNECT at `/v1/channel`, with the same grants, declarations, renewals, origin checks and revocation as WebSocket. Its server-created bidirectional control stream begins with `AMBWT001`; records in either direction have a four-byte big-endian length, unchanged JSON and the existing record/message bounds. Each picture has a separate unidirectional stream: kind byte `1`, the number of preceding control records (u64), picture ordinal (u64), then the unchanged binary unit through FIN. The viewer waits for earlier metadata and restores picture order without holding records or audio behind a picture.
+
+Audio datagrams contain the preceding-control count (u64) and unchanged binary packet. A packet exceeding the actual path datagram size uses its own unidirectional stream (kind `2`, control count, ordinal `0`), retaining the same loss-tolerant audio semantics. Independent picture writes retain at most eight units and 12 MiB before applying upstream backpressure. The session's `writeUs` on this carrier measures admission into that bounded writer, not delivery to the remote browser; transport delivery measurements belong to QUIC's tracer. Input remains on the existing control path until the control-scoped carrier is qualified.
+
+The module pins webtransport-go `v0.9.0` with quic-go `v0.54.0`: the draft02 contract measured by the transport proof. The optional built-worker browser gate runs the exact compiled frontend worker in a fresh Chrome against an in-memory ECDSA certificate. Its test origin pins that certificate via the browser API; production uses normal public TLS trust. Set `MEDIA_EDGE_BROWSER_INTEROP_SCRIPT` to the frontend's `scripts/browser-webtransport-interop.mjs` and `MEDIA_EDGE_BROWSER_INTEROP_WORKER` to its built worker asset, then run `GOWORK=off go test -race ./internal/webtransport -run TestBuiltWorkerAgainstRealChrome -count=1 -v`.
 
 ## Logs
 

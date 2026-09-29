@@ -139,4 +139,17 @@ func TestConfigurationNamesTheEdgeAndItsKeys(t *testing.T) {
 	if err != nil || c.listen != ":8080" || c.internalListen != ":8081" || len(c.origins) != 2 || c.credential != "secret-key" {
 		t.Fatalf("%+v %v", c, err)
 	}
+	t.Setenv("MEDIA_EDGE_QUIC_LISTEN", ":8443")
+	if _, err := loadConfig(); err == nil {
+		t.Fatal("QUIC started without certificate paths")
+	}
+	t.Setenv("MEDIA_EDGE_TLS_CERT_FILE", "/tls/tls.crt")
+	if _, err := loadConfig(); err == nil {
+		t.Fatal("QUIC started without a TLS key path")
+	}
+	t.Setenv("MEDIA_EDGE_TLS_KEY_FILE", "/tls/tls.key")
+	c, err = loadConfig()
+	if err != nil || c.quicListen != ":8443" || c.certFile != "/tls/tls.crt" || c.tlsKeyFile != "/tls/tls.key" {
+		t.Fatalf("QUIC config: %+v %v", c, err)
+	}
 }
