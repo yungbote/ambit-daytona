@@ -550,9 +550,9 @@ func TestBrowserViewerChannelForwardsTheDeclarationAsMade(t *testing.T) {
 	workspace.runDriver(t, "viewer-owner", "primary", "view-channel")
 	id, _ := workspace.only(t, "viewer-owner", "primary")
 	channel := openBrowserViewerWith(t, workspace.serve(t), "viewer-owner", id,
-		"?width=320&frames=binary&pacing=push&frameWindow=9&cursor=hidden&visible=scale&audio=flac&height=240&maxFps=120&video=av2%2Cav1-444&videoCapacity=coded&patches=0&maxWidth=4096&maxHeight=2048&frames=binary&flag")
+		"?width=320&frames=binary&pacing=push&frameWindow=9&cursor=hidden&visible=scale&audio=flac&height=240&maxFps=120&video=av2%2Cav1-444&videoCapacity=coded&videoFraming=chunks&patches=0&maxWidth=4096&maxHeight=2048&frames=binary&flag")
 	readViewerFrame(t, channel, false)
-	want := "/?pacing=ack&maxFps=60&patches=1&width=320&height=240&frames=binary&frameWindow=9&cursor=hidden&visible=scale&audio=flac&video=av2,av1-444&videoCapacity=coded&maxWidth=4096&maxHeight=2048&frames=binary&flag"
+	want := "/?pacing=ack&maxFps=60&patches=1&width=320&height=240&frames=binary&frameWindow=9&cursor=hidden&visible=scale&audio=flac&video=av2,av1-444&videoCapacity=coded&videoFraming=chunks&maxWidth=4096&maxHeight=2048&frames=binary&flag"
 	if upgrade := driverUpgrade(t, workspace, "primary"); upgrade != want {
 		t.Fatalf("the driver's upgrade is %s, want %s", upgrade, want)
 	}
@@ -722,6 +722,7 @@ func TestBrowserViewerChannelForwardsViewerMessagesAsSent(t *testing.T) {
 		`{"type":"video","keyframe":true,"generation":7}`,
 		`{"type":"audio","enabled":true,"generation":1,"extra":1}`,
 		`{"type":"rate","generation":1,"bitsPerSecond":4000000,"burstBytes":65536}`,
+		`{"type":"received","track":"video","streamId":"00000000-0000-4000-8000-000000000001","seq":1,"offset":1024}`,
 		`{"seq":3}`,
 		browserViewerMessageOf(browserViewerMessageLimit),
 	}
