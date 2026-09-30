@@ -150,6 +150,68 @@ class MaterializerSourceTests(unittest.TestCase):
                 installer.verify_materializer_install(self.binding, lineage)
 
 
+class DisplayHelperSourceTests(unittest.TestCase):
+    PATHS = ["LICENSE", "libs/computer-use/go.mod", "libs/computer-use/go.sum", "libs/computer-use/cmd/browser-display"]
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.binding = {"repository": "https://github.com/yungbote/ambit-daytona", "paths": list(self.PATHS),
+                        "archiveName": "browser-display-source.tar"}
+        self.files = {"LICENSE": b"license\n", "libs/computer-use/go.mod": b"module x\n", "libs/computer-use/go.sum": b"",
+                      "libs/computer-use/cmd/browser-display/main.go": b"package main\n"}
+
+    def archive(self, files=None, link=None):
+        """A git-archive-shaped tar: parent directories, then the files."""
+        archive = self.root / self.binding["archiveName"]
+        with tarfile.open(archive, "w") as package:
+            for directory in ("libs", "libs/computer-use", "libs/computer-use/cmd", "libs/computer-use/cmd/browser-display"):
+                entry = tarfile.TarInfo(directory)
+                entry.type = tarfile.DIRTYPE
+                package.addfile(entry)
+            for name, content in (files or self.files).items():
+                entry = tarfile.TarInfo(name)
+                entry.size = len(content)
+                package.addfile(entry, io.BytesIO(content))
+            if link:
+                entry = tarfile.TarInfo(link)
+                entry.type, entry.linkname = tarfile.SYMTYPE, "/etc/passwd"
+                package.addfile(entry)
+        self.binding["sha256"] = hashlib.sha256(archive.read_bytes()).hexdigest()
+
+    def prepared(self, destination):
+        return {str(path.relative_to(destination)): path.read_bytes() for path in destination.rglob("*") if path.is_file()}
+
+    def test_declared_paths_are_checked_then_copied(self):
+        self.archive()
+        destination = self.root / "prepared"
+        installer.prepare_display_helper_source(self.binding, destination, self.root)
+        self.assertEqual(self.prepared(destination), self.files)
+
+    def test_an_archive_other_than_the_pinned_one_is_refused_before_source_is_available(self):
+        self.archive()
+        self.binding["sha256"] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+            installer.prepare_display_helper_source(self.binding, self.root / "refused", self.root)
+        self.assertFalse((self.root / "refused").exists())
+
+    def test_a_path_the_binding_does_not_declare_is_refused(self):
+        self.archive({**self.files, "apps/runner/main.go": b"package main\n"})
+        with self.assertRaisesRegex(ValueError, "does not declare"):
+            installer.prepare_display_helper_source(self.binding, self.root / "refused", self.root)
+        self.assertFalse((self.root / "refused").exists())
+
+    def test_links_and_missing_declared_paths_are_refused(self):
+        for files, link, reason in ((self.files, "libs/computer-use/cmd/browser-display/link", "regular files"),
+                                    ({name: data for name, data in self.files.items() if name != "LICENSE"}, None, "lacks")):
+            with self.subTest(reason=reason):
+                self.archive(files, link)
+                with self.assertRaisesRegex(ValueError, reason):
+                    installer.prepare_display_helper_source(self.binding, self.root / "refused", self.root)
+                self.assertFalse((self.root / "refused").exists())
+
+
 class DebianInstallationTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()

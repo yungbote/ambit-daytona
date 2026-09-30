@@ -83,6 +83,31 @@ def prepare_materializer_source(binding, destination, inputs=Path("/inputs")):
         shutil.copytree(source, destination)
 
 
+def prepare_display_helper_source(binding, destination, inputs=Path("/inputs")):
+    """Validate the display helper's source input before the Go build consumes it: exactly its declared paths."""
+    declared = [PurePosixPath(path) for path in binding["paths"]]
+    if not declared or any(path.is_absolute() or ".." in path.parts or not path.parts for path in declared):
+        raise ValueError("Display helper paths must be relative paths inside its repository")
+    archive = verify_input(binding, inputs)
+
+    def declared_or_parent(name):
+        path = PurePosixPath(name)
+        return any(path == item or item in path.parents or path in item.parents for item in declared)
+
+    with tempfile.TemporaryDirectory(prefix="ambit-display-helper-source-") as temporary:
+        extracted = Path(temporary) / "source"
+        with tarfile.open(archive) as bundle:
+            members = bundle.getmembers()
+            if any(not (member.isfile() or member.isdir()) for member in members):
+                raise ValueError("Display helper source archive must contain regular files and directories")
+            if not all(declared_or_parent(member.name) for member in members):
+                raise ValueError("Display helper source archive holds paths its binding does not declare")
+            bundle.extractall(extracted, filter="data")
+        if not all((extracted / path).exists() for path in declared):
+            raise ValueError("Display helper source archive lacks a declared path")
+        shutil.copytree(extracted, destination)
+
+
 def verify_materializer_install(binding, lineage=MATERIALIZER_LINEAGE):
     lock = read_materializer_lock(lineage / "materializer.lock.json", binding)
     expected = lock["binary"]
@@ -419,6 +444,9 @@ def main():
         raise ValueError("Browser build must retain the exact locked workspace parent")
     if mode == "materializer-source":
         prepare_materializer_source(lock["materializer"], Path("/materializer-source"))
+        return
+    if mode == "display-helper-source":
+        prepare_display_helper_source(lock["displayHelper"], Path("/display-helper-source"))
         return
     if mode == "materializer":
         verify_materializer_install(lock["materializer"])

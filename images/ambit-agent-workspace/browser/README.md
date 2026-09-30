@@ -50,6 +50,28 @@ The image's build finishes by running that launcher's `--version` through the or
 
 Refreshing Debian inputs means selecting snapshots that contain the entire requested roster, updating their release hashes and any deliberately changed package versions together, then rebuilding and qualifying the resulting image. Updating a package version without its repository snapshot can make it unavailable; selecting current mirrors would make the next rebuild depend on repository rotation again. Snapshot availability remains an external build dependency. This follows [Debian's snapshot instructions](https://snapshot.debian.org/#usage) and the source-scoped `Signed-By` and `Check-Valid-Until` options in [APT's sources.list contract](https://manpages.debian.org/trixie/apt/sources.list.5.en.html).
 
+The layer compiles three sources. The lock binds each one to a single revision of its repository:
+- the driver (`agentBrowser`, agent-browser);
+- the display helper (`displayHelper`, this repository's `browser-display` and the paths it builds from);
+- the atomic materializer (`materializer`, the backend).
+
+A new image takes two inputs, the driver revision and the helper revision. The materializer belongs to the backend
+and moves only when its source does. One command derives everything the lock records from the repositories:
+
+```
+python3 build/source-inputs.py pin --driver <agent-browser revision> --driver-repo <agent-browser clone> \
+  --helper <daytona revision> --helper-repo <daytona clone>
+python3 build/source-inputs.py pin-materializer --backend <backend revision> --backend-repo <backend clone>
+```
+
+`pin` needs both revisions, so an image is never pinned from one of them alone. It writes each binding's revision
+and archive digest, plus the driver's source tree and version. Every command refuses a revision that the
+repository's `origin/main` does not contain. `source-inputs.py export` writes the three archives a build context
+carries into `browser_inputs`, and refuses unless each one has the digest the lock records. An archive is an
+uncompressed `git archive` tar, made with `tar.umask` fixed, so its digest depends only on the revision's tree. A
+gzip stream would also depend on the compressing machine's zlib: the same revision gave different digests on two
+build machines.
+
 Cargo consumes the fork's committed lock with `--locked`. The final image records the browser lock, Cargo dependency lock, license notices, and installed Debian roster under `/opt/ambit/browser`. Source changes require a new lock and image digest. No installation or browser download occurs during a Run.
 
 The atomic materializer is built from the backend source archive named by the
@@ -79,11 +101,10 @@ The image also records `/opt/ambit/runtime-base/workspace/lineage/executables.js
 
 `build/inspect-executables.py` also works on the original workspace image without a browser lock. Repeat `--component-lock /path/to/installed.lock.json` to include additional installed components. A component may declare `python` with `venv`, `requirements` and `requirementsSha256`; `node` with `root` and `packages`; a direct `debianPackages` name/version map; and `executables` with `name`, `version` and full `helpArgv`. Relative Python and Node paths resolve from that lock's directory. Python metadata comes from the specified venv, so a separate MarkItDown environment retains its own library versions and console-script symlinks. Explicit wrapper descriptors, such as Tika's, require the source-qualified wrapper to exist on PATH. The collector records metadata and does not route formats or run conversion sequences.
 
-Prepare the exact Git source archive with `git archive --format=tar --prefix=agent-browser/ REVISION`, compressed with Python's `gzip.compress(archive, mtime=0)` (zlib level 9; `gzip -n -9` writes different bytes than the pinned `agentBrowser.sha256`), and download the Chrome URL in the lock into a task-local directory. Also prepare the backend helper archive from its exact locked commit and source path: `git archive --format=tar REVISION runtime/agent-workspace-atomic-materializer`, compressed with `gzip -n -9`. Put all three archives in the existing `browser_inputs` directory. Their filenames and SHA-256 values must equal the lock; the build refuses different bytes. Release preparation must verify both source trees against their locked Git identities, rather than infer identity from archive filenames. Build from the Daytona repository root after the fork revision is published:
+Put the three archives from `source-inputs.py export` and the lock's other inputs (npm, Playwright, the Python wheels) in one `browser_inputs` directory. Add the archive from the lock's Chrome URL only when the lock's Chrome differs from the parent's; the installer reuses an identical parent Chrome. Their filenames and SHA-256 values must equal the lock; the build refuses different bytes. Build from the Daytona repository root after the fork revision is published:
 
 ```sh
 docker build --build-context browser_inputs=/path/to/exact-browser-inputs \
-  --build-context browser_display_source=. \
   --build-arg BUILD_SOURCE_REVISION="$(git rev-parse HEAD)" \
   --file images/ambit-agent-workspace/browser/Dockerfile \
   -t ambit-agent-workspace-browser:candidate images/ambit-agent-workspace/browser
@@ -91,8 +112,8 @@ docker build --build-context browser_inputs=/path/to/exact-browser-inputs \
 
 Measure `agent-browser mcp --describe-host-bound` from the actual installed driver and compare its canonical descriptor bytes with the selected backend consumer catalog. Descriptions contribute to the descriptor digest even when all tool names and input schemas remain unchanged. A locally built driver establishes preparation inputs; the published image must supply its own descriptor measurement before qualification.
 
-The same source archive supplies `libs/computer-use/cmd/browser-display` through
-the `browser_display_source` context. It shares the materializer's pinned Go
+The display helper's archive supplies `libs/computer-use/cmd/browser-display`,
+its module files and the repository license. The installer verifies it and admits only the declared paths. It shares the materializer's pinned Go
 1.25.13 builder and compiles only this CGO-free helper with unchanged dependency locks.
 The final image contains the helper beside the driver, with its Daytona, XGB, XGBUtil,
 golang.org/x/sys and Go license notices. Its exact binary is measured during image qualification.
