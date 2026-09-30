@@ -31,6 +31,10 @@ import (
 // pair exercises the actual HTTP/3 CONNECT and QUIC flow control. Its TLS key
 // is generated in memory for this test and never stored or printed.
 func pair(t *testing.T, action func(*carrier), registries ...*metricsRegistry) (*wt.Session, *wt.Stream, context.Context, string, string) {
+	return pairThrough(t, nil, 5*time.Second, action, registries...)
+}
+
+func pairThrough(t *testing.T, path func(net.Addr) net.Addr, timeout time.Duration, action func(*carrier), registries ...*metricsRegistry) (*wt.Session, *wt.Stream, context.Context, string, string) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -71,14 +75,18 @@ func pair(t *testing.T, action func(*carrier), registries ...*metricsRegistry) (
 	})
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() { _ = server.Close() })
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	t.Cleanup(cancel)
 	dialer := &wt.Dialer{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // task-scoped test certificate
 		QUICConfig:      &quic.Config{EnableDatagrams: true, InitialStreamReceiveWindow: 32 << 10, MaxStreamReceiveWindow: 32 << 10, InitialConnectionReceiveWindow: 4 << 20, MaxConnectionReceiveWindow: 4 << 20},
 	}
 	t.Cleanup(func() { _ = dialer.Close() })
-	_, s, err := dialer.Dial(ctx, "https://"+listener.LocalAddr().String()+"/v1/channel", nil)
+	address := listener.LocalAddr()
+	if path != nil {
+		address = path(address)
+	}
+	_, s, err := dialer.Dial(ctx, "https://"+address.String()+"/v1/channel", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,13 +94,13 @@ func pair(t *testing.T, action func(*carrier), registries ...*metricsRegistry) (
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = control.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = control.SetDeadline(time.Now().Add(timeout))
 	magic := make([]byte, len(Magic))
 	if _, err := io.ReadFull(control, magic); err != nil || string(magic) != Magic {
 		t.Fatalf("control magic %q: %v", magic, err)
 	}
 	hash := sha256.Sum256(der)
-	return s, control, ctx, "https://" + listener.LocalAddr().String() + "/v1/channel", base64.StdEncoding.EncodeToString(hash[:])
+	return s, control, ctx, "https://" + address.String() + "/v1/channel", base64.StdEncoding.EncodeToString(hash[:])
 }
 
 func record(t *testing.T, stream io.Reader) string {

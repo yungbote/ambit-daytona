@@ -47,6 +47,8 @@ Emission requires the actual upstream WebSocket handshake `X-Ambit-Browser-View-
 
 The module pins webtransport-go `v0.9.0` with quic-go `v0.54.0`: the draft02 contract measured by the transport proof. The optional built-worker browser gate runs the exact compiled frontend worker in a fresh Chrome against an in-memory ECDSA certificate. Its test origin pins that certificate via the browser API; production uses normal public TLS trust. Set `MEDIA_EDGE_BROWSER_INTEROP_SCRIPT` to the frontend's `scripts/browser-webtransport-interop.mjs` and `MEDIA_EDGE_BROWSER_INTEROP_WORKER` to its built worker asset, then run `GOWORK=off go test -race ./internal/webtransport -run TestBuiltWorkerAgainstRealChrome -count=1 -v`.
 
+The optional `TestRecordedNativeKeyOnConstrainedQUICLink` reads a raw native AV1 key from `MEDIA_EDGE_NATIVE_KEY_FILE` and exercises the actual carrier over a task-local UDP packet proxy at s3/s4 bandwidth, delay and loss. It records complete-key transport time, audio datagram age and control echo RTT with the payload SHA256. `TestPacketLinkSerializesAKnownDatagramTrain` checks the apparatus against a known20KB/1Mbit/s serialization floor. No host network configuration changes. These checks characterize transport completion and independent-lane progress; they do not establish decoded paint, native input, continuous producer rate feedback, or consumer-link acceptance. A valid key can exceed the encoder's bitrate interval: transport fragmentation cannot make a partial AV1 reference picture decodable before all its bytes arrive.
+
 ## Logs
 
 JSON on stdout: `session.opened`, `session.report` (every minute), `session.closed` (with the close code, reason and
