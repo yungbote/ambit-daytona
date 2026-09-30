@@ -282,6 +282,23 @@ func projectBrowserControlReply(line []byte, request browserControlRequest) (out
 }
 
 func projectBrowserControlSuccess(raw json.RawMessage, request browserControlRequest) browserControlOutcome {
+	if request.Op == "restart" {
+		var acknowledgment struct {
+			Status  string          `json:"status"`
+			Surface json.RawMessage `json:"surface"`
+		}
+		var surface *browserSurface
+		if json.Unmarshal(raw, &acknowledgment) != nil || acknowledgment.Status != "restarted" || len(acknowledgment.Surface) == 0 ||
+			json.Unmarshal(acknowledgment.Surface, &surface) != nil || (surface != nil && !surface.valid()) {
+			return browserControlFailure(http.StatusBadGateway, "browser_control_outcome_unknown")
+		}
+		// Restart is a lifecycle receipt, never a controller lease. Explicit
+		// null is meaningful for a producer without a physical window surface.
+		return browserControlOutcome{status: http.StatusOK, body: struct {
+			Status  string          `json:"status"`
+			Surface *browserSurface `json:"surface"`
+		}{Status: acknowledgment.Status, Surface: surface}}
+	}
 	if request.Op == "inspect" || request.Op == "downloads" {
 		var inspection struct {
 			Supported      bool            `json:"supported"`
@@ -403,7 +420,7 @@ func validBrowserControlRequest(request browserControlRequest) bool {
 	switch request.Op {
 	case "acquire", "renew":
 		return request.ExpiresAt > 0 && request.Sequence == 0 && len(request.Events) == 0
-	case "release", "copy":
+	case "release", "restart", "copy":
 		return request.ExpiresAt == 0 && request.Sequence == 0 && len(request.Events) == 0
 	case "input":
 		return request.ExpiresAt == 0 && request.Sequence > 0 && request.Sequence <= 9_007_199_254_740_991 && len(request.Events) > 0 && len(request.Events) <= 64

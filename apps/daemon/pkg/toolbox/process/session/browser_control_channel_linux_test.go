@@ -183,6 +183,7 @@ func TestBrowserControlChannelAnswersEachCommandAsThePostWould(t *testing.T) {
 	documents := []map[string]any{
 		{"op": "inspect"},
 		{"op": "acquire", "controllerId": browserFixtureController, "expiresAt": time.Now().Add(20 * time.Second).UnixMilli()},
+		{"op": "restart", "controllerId": browserFixtureController},
 		browserInput(1),
 		browserInput(browserFixtureUnknownSequence),                               // the driver reports an unknown outcome
 		{"op": "release", "controllerId": "aaaabbbb-cccc-4ddd-8eee-ffff00002222"}, // stale at the driver
