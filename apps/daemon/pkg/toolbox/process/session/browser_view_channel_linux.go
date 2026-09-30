@@ -78,7 +78,11 @@ func (s *SessionController) ViewBrowserChannel(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	channel := &browserViewChannel{controller: s, view: *selected, socket: socket, upstream: upstream}
+	limit := browserLegacyFrameLimit
+	if c.Request.URL.Query().Get("videoCapacity") == "coded" {
+		limit = browserBinaryFrameLimit
+	}
+	channel := &browserViewChannel{controller: s, view: *selected, socket: socket, upstream: upstream, messageLimit: limit}
 	channel.run(c.Request.Context())
 }
 
@@ -196,7 +200,8 @@ type browserViewChannel struct {
 	closeOnce  sync.Once
 	// Whether a picture has reached the viewer. Only the upstream reader,
 	// which is also the viewer's only writer, reads and sets it.
-	pictured bool
+	pictured     bool
+	messageLimit int
 }
 
 func (ch *browserViewChannel) run(parent context.Context) {
@@ -213,7 +218,11 @@ func (ch *browserViewChannel) run(parent context.Context) {
 		_ = ch.upstream.Close()
 	})
 	defer stop()
-	ch.upstream.SetReadLimit(browserBinaryFrameLimit)
+	limit := ch.messageLimit
+	if limit == 0 {
+		limit = browserLegacyFrameLimit
+	}
+	ch.upstream.SetReadLimit(int64(limit))
 	ch.socket.SetPongHandler(func(string) error { ch.unanswered.Store(0); return nil })
 	workers.Add(2)
 	go func() { defer workers.Done(); defer cancel(); ch.readViewer() }()
@@ -225,14 +234,14 @@ func (ch *browserViewChannel) run(parent context.Context) {
 		kind, reader, err := ch.upstream.NextReader()
 		var message []byte
 		if err == nil {
-			limit := browserBinaryFrameLimit
+			messageLimit := limit
 			if kind == websocket.TextMessage {
 				// A larger video envelope does not widen arbitrary records.
 				// Keep the old whole-image JSON compatibility envelope.
-				limit = 12 << 20
+				messageLimit = browserLegacyFrameLimit
 			}
-			message, err = io.ReadAll(io.LimitReader(reader, int64(limit)+1))
-			if err == nil && len(message) > limit {
+			message, err = io.ReadAll(io.LimitReader(reader, int64(messageLimit)+1))
+			if err == nil && len(message) > messageLimit {
 				err = io.ErrUnexpectedEOF
 			}
 		}

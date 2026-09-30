@@ -136,7 +136,7 @@ func serveBrowserViewChannelFixture(w http.ResponseWriter, r *http.Request, dir,
 		time.Sleep(30 * time.Second)
 		return
 	case "view-channel-oversize":
-		for _, size := range []int{browserBinaryFrameLimit, browserBinaryFrameLimit + 1} {
+		for _, size := range []int{browserLegacyFrameLimit, browserLegacyFrameLimit + 1} {
 			message := make([]byte, size)
 			message[0] = 0xff
 			if !driver.sendBinary(message) {
@@ -781,7 +781,7 @@ func TestBrowserViewerChannelBoundsTheDriversMessages(t *testing.T) {
 	connection.SetReadLimit(64 << 20)
 	_ = connection.SetReadDeadline(time.Now().Add(10 * time.Second))
 	kind, message, err := connection.ReadMessage()
-	if err != nil || kind != websocket.BinaryMessage || len(message) != browserBinaryFrameLimit {
+	if err != nil || kind != websocket.BinaryMessage || len(message) != browserLegacyFrameLimit {
 		t.Fatalf("a message at the bound: kind=%d %d bytes err=%v", kind, len(message), err)
 	}
 	expectClose(t, connection, websocket.CloseInternalServerErr, "screencast_failed", 10*time.Second)

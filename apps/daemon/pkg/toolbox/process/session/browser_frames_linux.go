@@ -21,6 +21,8 @@ const (
 	// rasters at supported4096², plus the4-byte prefix and4KiB header.
 	// The pipe allocates actual messages; edge validates each coded geometry.
 	browserBinaryFrameLimit = 8*4096*4096*3 + 4 + 4096
+	// An absent capacity declaration keeps the cached reader's envelope.
+	browserLegacyFrameLimit = 12 << 20
 	// The largest header of a binary message the legacy recognizer reads.
 	browserBinaryHeaderLimit = 64 << 10
 )
