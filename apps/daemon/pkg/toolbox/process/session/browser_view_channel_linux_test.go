@@ -550,9 +550,9 @@ func TestBrowserViewerChannelForwardsTheDeclarationAsMade(t *testing.T) {
 	workspace.runDriver(t, "viewer-owner", "primary", "view-channel")
 	id, _ := workspace.only(t, "viewer-owner", "primary")
 	channel := openBrowserViewerWith(t, workspace.serve(t), "viewer-owner", id,
-		"?width=320&frames=binary&pacing=push&frameWindow=9&cursor=hidden&visible=scale&audio=flac&height=240&maxFps=120&video=av2%2Cav1-444&patches=0&maxWidth=4096&maxHeight=2048&frames=binary&flag")
+		"?width=320&frames=binary&pacing=push&frameWindow=9&cursor=hidden&visible=scale&audio=flac&height=240&maxFps=120&video=av2%2Cav1-444&videoCapacity=coded&patches=0&maxWidth=4096&maxHeight=2048&frames=binary&flag")
 	readViewerFrame(t, channel, false)
-	want := "/?pacing=ack&maxFps=60&patches=1&width=320&height=240&frames=binary&frameWindow=9&cursor=hidden&visible=scale&audio=flac&video=av2,av1-444&maxWidth=4096&maxHeight=2048&frames=binary&flag"
+	want := "/?pacing=ack&maxFps=60&patches=1&width=320&height=240&frames=binary&frameWindow=9&cursor=hidden&visible=scale&audio=flac&video=av2,av1-444&videoCapacity=coded&maxWidth=4096&maxHeight=2048&frames=binary&flag"
 	if upgrade := driverUpgrade(t, workspace, "primary"); upgrade != want {
 		t.Fatalf("the driver's upgrade is %s, want %s", upgrade, want)
 	}

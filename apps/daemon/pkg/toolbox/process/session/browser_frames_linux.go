@@ -17,7 +17,10 @@ import (
 const (
 	// The largest message the driver may send a viewer: one picture, a unit
 	// of sound or video, or a record.
-	browserBinaryFrameLimit = 12 << 20
+	// Current native source capacity: eight32-aligned decoded8-bit4:4:4
+	// rasters at supported4096², plus the4-byte prefix and4KiB header.
+	// The pipe allocates actual messages; edge validates each coded geometry.
+	browserBinaryFrameLimit = 8*4096*4096*3 + 4 + 4096
 	// The largest header of a binary message the legacy recognizer reads.
 	browserBinaryHeaderLimit = 64 << 10
 )

@@ -222,7 +222,20 @@ func (ch *browserViewChannel) run(parent context.Context) {
 	// once the viewer took the last, so a slow viewer holds the driver back
 	// through the transport and nothing queues here.
 	for {
-		kind, message, err := ch.upstream.ReadMessage()
+		kind, reader, err := ch.upstream.NextReader()
+		var message []byte
+		if err == nil {
+			limit := browserBinaryFrameLimit
+			if kind == websocket.TextMessage {
+				// A larger video envelope does not widen arbitrary records.
+				// Keep the old whole-image JSON compatibility envelope.
+				limit = 12 << 20
+			}
+			message, err = io.ReadAll(io.LimitReader(reader, int64(limit)+1))
+			if err == nil && len(message) > limit {
+				err = io.ErrUnexpectedEOF
+			}
+		}
 		if err != nil {
 			if ctx.Err() == nil {
 				if ended, _ := ch.controller.browserViewCurrent(ch.view); ended {
