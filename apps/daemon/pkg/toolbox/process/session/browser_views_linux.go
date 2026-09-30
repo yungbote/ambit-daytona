@@ -501,6 +501,9 @@ func browserViewMessage(message []byte, patches bool) ([]byte, uint64, browserRe
 			Type           string  `json:"type"`
 			Connected      *bool   `json:"connected,omitempty"`
 			Screencasting  *bool   `json:"screencasting,omitempty"`
+			Browser        *string `json:"browser,omitempty"`
+			Reason         *string `json:"reason,omitempty"`
+			Restartable    *bool   `json:"restartable,omitempty"`
 			ViewportWidth  *uint32 `json:"viewportWidth,omitempty"`
 			ViewportHeight *uint32 `json:"viewportHeight,omitempty"`
 			Engine         *string `json:"engine,omitempty"`

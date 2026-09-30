@@ -678,6 +678,42 @@ func TestVisualStreamRejectsCommandsAndNonvisualData(t *testing.T) {
 	}
 }
 
+func TestBrowserViewPreservesOptionalLifecycleStatus(t *testing.T) {
+	for name, value := range map[string]string{
+		"legacy":          `{"type":"status","connected":false,"screencasting":false}`,
+		"running":         `{"type":"status","connected":true,"screencasting":true,"browser":"running"}`,
+		"restarting":      `{"type":"status","connected":true,"screencasting":true,"browser":"restarting"}`,
+		"closed":          `{"type":"status","connected":false,"screencasting":true,"browser":"closed","reason":"exited","restartable":true}`,
+		"not restartable": `{"type":"status","connected":false,"browser":"closed","reason":"closed","restartable":false}`,
+		"restart failed":  `{"type":"status","connected":false,"browser":"closed","reason":"restart_failed","restartable":true}`,
+		"new vocabulary":  `{"type":"status","connected":false,"browser":"future_state","reason":"future_reason","restartable":false}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			// Match the native public record, while proving unrelated driver data
+			// cannot reach a viewer through this projection.
+			withPrivate := strings.TrimSuffix(value, "}") + `,"private":"` + browserFixtureSecret + `"}`
+			body, sequence, kind := browserViewMessage([]byte(withPrivate), false)
+			if kind != browserRecordVisual || sequence != 0 || string(body) != value {
+				t.Fatalf("status projection = %s, sequence=%d, kind=%v; want %s", body, sequence, kind, value)
+			}
+		})
+	}
+	for _, malformed := range []string{
+		`{"type":"status","browser":false}`,
+		`{"type":"status","reason":{"private":"value"}}`,
+		`{"type":"status","restartable":"true"}`,
+	} {
+		if _, _, kind := browserViewMessage([]byte(malformed), false); kind != browserRecordDropped {
+			t.Fatalf("malformed lifecycle status was relayed: %s", malformed)
+		}
+	}
+	// Explicit null is optional absence, never a restart promise.
+	body, _, kind := browserViewMessage([]byte(`{"type":"status","connected":false,"browser":null,"reason":null,"restartable":null}`), false)
+	if kind != browserRecordVisual || string(body) != `{"type":"status","connected":false}` {
+		t.Fatalf("null optional lifecycle fields retained: %s", body)
+	}
+}
+
 func TestBrowserViewProjectsOnlyTheCurrentTabLocation(t *testing.T) {
 	value := []byte(`{"type":"tabs","tabs":[{"active":false,"url":"https://private.test/","title":"private"},{"active":true,"url":"https://example.test/","title":"Current","targetId":"private"}],"token":"private"}`)
 	body, sequence, kind := browserViewMessage(value, false)
