@@ -42,6 +42,8 @@ type Paint struct {
 	SentBytesPerSecond     float64
 	RTT, MinimumRTT        time.Duration
 	LastAck                time.Time
+	PictureBytes           uint64
+	MinimumPictureBytes    uint64
 }
 
 type Budget struct{ BitsPerSecond, BurstBytes uint64 }
@@ -93,21 +95,22 @@ func (e *Estimator) Update(now time.Time, generation uint64, network Network, pa
 	}
 	minimum := network.MinimumRTT
 	rtt := network.RTT
+	serialization := time.Duration(float64(paint.PictureBytes) * 8 / e.rate * float64(time.Second))
+	paintMinimum := max(time.Duration(0), paint.MinimumRTT-time.Duration(float64(paint.MinimumPictureBytes)*8/e.rate*float64(time.Second)))
 	if network.ProxyHop || !network.Known {
-		minimum, rtt = paint.MinimumRTT, paint.RTT
+		minimum, rtt = paintMinimum, paint.RTT-serialization
 	}
 	paintFresh := paint.Known && !paint.LastAck.IsZero() && !now.Before(paint.LastAck) && now.Sub(paint.LastAck) <= time.Second
 	newPaint := paintFresh && paint.LastAck.After(e.paintAck)
 	if newPaint {
 		e.paintAck = paint.LastAck
 	}
-	queued := minimum > 0 && rtt > minimum+30*time.Millisecond
-	if network.ProxyHop || !network.Known {
-		queued = queued && paintFresh
-	}
+	queued := network.Known && !network.ProxyHop && minimum > 0 && rtt > minimum+30*time.Millisecond
 	// A transport ACK does not mean the consumer painted the picture. A
 	// decoder/main-thread queue must cap a clean QUIC connection as well.
-	queued = queued || (paintFresh && paint.MinimumRTT > 0 && paint.RTT > paint.MinimumRTT+30*time.Millisecond)
+	// Paint includes the indivisible unit's serialization time. Charging a
+	// valid large key/refinement as queue growth would ratchet a stable link.
+	queued = queued || (paintFresh && paint.MinimumRTT > 0 && paint.RTT > paintMinimum+serialization+30*time.Millisecond)
 	if !queued {
 		e.queuedSince = time.Time{}
 	} else if e.queuedSince.IsZero() {

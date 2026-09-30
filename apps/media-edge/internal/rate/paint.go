@@ -12,6 +12,7 @@ const retainedPaintReceipts = 512
 
 type sentPicture struct {
 	sequence, prefix uint64
+	bytes            uint64
 	at               time.Time
 }
 
@@ -46,7 +47,7 @@ func (p *PaintTracker) Sent(stream string, sequence uint64, bytes int, now time.
 		copy(p.pictures, p.pictures[1:])
 		p.pictures = p.pictures[:len(p.pictures)-1]
 	}
-	p.pictures = append(p.pictures, sentPicture{sequence, p.bytes, now})
+	p.pictures = append(p.pictures, sentPicture{sequence, p.bytes, uint64(bytes), now})
 }
 
 // Acknowledge is called only after the channel admitted a valid sent-prefix
@@ -73,8 +74,10 @@ func (p *PaintTracker) Acknowledge(stream string, sequence uint64, now time.Time
 	}
 	rtt := now.Sub(picture.at)
 	p.sample.Known, p.sample.RTT, p.sample.LastAck = true, rtt, now
+	p.sample.PictureBytes = picture.bytes
 	if p.sample.MinimumRTT == 0 || rtt < p.sample.MinimumRTT {
 		p.sample.MinimumRTT = rtt
+		p.sample.MinimumPictureBytes = picture.bytes
 	}
 	start := p.lastAck
 	if start.IsZero() {

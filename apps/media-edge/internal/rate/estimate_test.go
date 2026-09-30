@@ -185,6 +185,40 @@ func TestConsumerPaintQueueCapsACleanQUICConnection(t *testing.T) {
 	}
 }
 
+func TestIndivisiblePictureSerializationCannotRatchetTheBudget(t *testing.T) {
+	now := time.Unix(100, 0)
+	e := New()
+	proxy := Network{ProxyHop: true}
+	_, _ = e.Update(now, 1, proxy, Paint{})
+	budget := Budget{BitsPerSecond: InitialBitsPerSecond}
+	for n := 1; n <= 80; n++ {
+		at := now.Add(time.Duration(n) * 1500 * time.Millisecond)
+		paint := Paint{Known: true, DeliveryBytesPerSecond: 500000, SentBytesPerSecond: 500000, RTT: 1276 * time.Millisecond, MinimumRTT: 26 * time.Millisecond, LastAck: at, PictureBytes: 625000}
+		// One indivisible625KB picture uses1.25s of a4Mbit/s link.
+		// The latency is serialization, not repeated backlog growth.
+		for step := 0; step < 5; step++ {
+			if next, emit := e.Update(at.Add(time.Duration(step)*100*time.Millisecond), 1, proxy, paint); emit {
+				budget = next
+			}
+		}
+	}
+	if budget.BitsPerSecond < 3_500_000 {
+		t.Fatalf("valid large pictures repeatedly reduced stable capacity: %+v", budget)
+	}
+}
+
+func TestFirstLargePictureCannotInflateTheFlightBudget(t *testing.T) {
+	now := time.Unix(100, 0)
+	e := New()
+	proxy := Network{ProxyHop: true}
+	_, _ = e.Update(now, 1, proxy, Paint{})
+	paint := Paint{Known: true, DeliveryBytesPerSecond: 500000, SentBytesPerSecond: 500000, RTT: 1276 * time.Millisecond, MinimumRTT: 1276 * time.Millisecond, LastAck: now.Add(1500 * time.Millisecond), PictureBytes: 625000, MinimumPictureBytes: 625000}
+	budget, _ := e.Update(paint.LastAck, 1, proxy, paint)
+	if budget.BurstBytes > 150000 {
+		t.Fatalf("key serialization was mistaken for path flight time: %+v", budget)
+	}
+}
+
 func TestClosedLoopConsumerQueueAdaptsAndRecovers(t *testing.T) {
 	now := time.Unix(100, 0)
 	e := New()

@@ -15,7 +15,7 @@ func TestPaintUsesEdgeSendAndPrefixBytesNotProducerClock(t *testing.T) {
 	p.Sent("video-a", 2, 1000, now.Add(10*time.Millisecond))
 	p.Acknowledge("video-a", 2, now.Add(50*time.Millisecond))
 	sample := p.Snapshot()
-	if sample.DeliveryBytesPerSecond != 40000 || sample.RTT != 40*time.Millisecond {
+	if sample.DeliveryBytesPerSecond != 40000 || sample.RTT != 40*time.Millisecond || sample.PictureBytes != 1000 || sample.MinimumPictureBytes != 1000 {
 		t.Fatalf("paint units: %+v", sample)
 	}
 	p.Acknowledge("video-a", 2, now.Add(100*time.Millisecond))
