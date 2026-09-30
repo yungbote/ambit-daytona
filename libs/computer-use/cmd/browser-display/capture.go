@@ -180,6 +180,41 @@ func rgbaToYCbCr(dst *image.YCbCr, src *image.RGBA) {
 	}
 }
 
+// rgbaToYCbCrRegion projects a requested screen rectangle from owned RGB
+// samples. Clamping at the public edge precedes chroma averaging; unchanged
+// full-aperture regions keep the existing conversion exactly.
+func rgbaToYCbCrRegion(dst *image.YCbCr, src *image.RGBA, requested image.Rectangle) {
+	if requested == src.Rect {
+		rgbaToYCbCr(dst, src)
+		return
+	}
+	rgb := func(x, y int) (int32, int32, int32) {
+		x = max(src.Rect.Min.X, min(x, src.Rect.Max.X-1))
+		y = max(src.Rect.Min.Y, min(y, src.Rect.Max.Y-1))
+		at := src.PixOffset(x, y)
+		return int32(src.Pix[at]), int32(src.Pix[at+1]), int32(src.Pix[at+2])
+	}
+	width, height := requested.Dx(), requested.Dy()
+	for y := 0; y < height; y += 2 {
+		y1 := min(y+1, height-1)
+		luma0 := dst.Y[y*dst.YStride : y*dst.YStride+width]
+		luma1 := dst.Y[y1*dst.YStride : y1*dst.YStride+width]
+		cb := dst.Cb[(y/2)*dst.CStride : (y/2)*dst.CStride+(width+1)/2]
+		cr := dst.Cr[(y/2)*dst.CStride : (y/2)*dst.CStride+(width+1)/2]
+		for x := 0; x < width; x += 2 {
+			x1 := min(x+1, width-1)
+			r00, g00, b00 := rgb(requested.Min.X+x, requested.Min.Y+y)
+			r01, g01, b01 := rgb(requested.Min.X+x1, requested.Min.Y+y)
+			r10, g10, b10 := rgb(requested.Min.X+x, requested.Min.Y+y1)
+			r11, g11, b11 := rgb(requested.Min.X+x1, requested.Min.Y+y1)
+			luma0[x], luma0[x1] = luma(r00, g00, b00), luma(r01, g01, b01)
+			luma1[x], luma1[x1] = luma(r10, g10, b10), luma(r11, g11, b11)
+			cb[x/2] = uint8((int32(chroma(blue(r00, g00, b00))) + int32(chroma(blue(r01, g01, b01))) + int32(chroma(blue(r10, g10, b10))) + int32(chroma(blue(r11, g11, b11))) + 2) >> 2)
+			cr[x/2] = uint8((int32(chroma(red(r00, g00, b00))) + int32(chroma(red(r01, g01, b01))) + int32(chroma(red(r10, g10, b10))) + int32(chroma(red(r11, g11, b11))) + 2) >> 2)
+		}
+	}
+}
+
 // compositeCursor blends the XFixes cursor onto img at its screen position;
 // img.Rect is in screen coordinates.
 func compositeCursor(img *image.RGBA, cursor *xfixes.GetCursorImageReply) {

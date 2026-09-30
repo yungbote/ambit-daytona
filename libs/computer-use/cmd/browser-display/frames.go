@@ -212,7 +212,8 @@ type framePipeline struct {
 	mosaic        bandMosaic
 	workers       []*frameWorker
 	quality       qualityController
-	fullNeeded    bool // no full frame exists at this size and quality yet
+	fullNeeded    bool            // no full frame exists at this size and quality yet
+	visible       image.Rectangle // owned pixels in the retained framebuffer
 }
 
 func (p *framePipeline) init(layout pixelLayout, workers int) {
@@ -235,6 +236,23 @@ func (p *framePipeline) resize(width, height int) {
 	p.fullNeeded = true
 }
 func (p *framePipeline) surface() image.Rectangle { return image.Rect(0, 0, p.width, p.height) }
+
+// setVisible retires cached JPEG bands when the owned aperture changes,
+// including a layout change with no pixel damage. Empty retains the existing
+// whole-frame meaning; pixels and all reported geometry keep screen coordinates.
+func (p *framePipeline) setVisible(visible image.Rectangle) bool {
+	visible = visible.Intersect(p.surface())
+	if visible.Empty() {
+		visible = p.surface()
+	}
+	if visible == p.visible {
+		return false
+	}
+	p.visible = visible
+	p.mosaic.invalidateAll()
+	p.fullNeeded = true
+	return true
+}
 
 // store keeps fetched rows for bands first through last.
 func (p *framePipeline) store(first, last int, data []byte) error {
@@ -312,6 +330,20 @@ func (p *framePipeline) convert(marked []bool) {
 // source is the region to encode: the retained conversion, or, where the
 // cursor overlaps, a scratch copy with the cursor composited before conversion.
 func (p *framePipeline) source(worker *frameWorker, rect image.Rectangle) *image.YCbCr {
+	if !p.visible.Empty() && p.visible != p.surface() {
+		// Decode/composite only pixels inside the aperture. Extend its public
+		// edge into the existing JPEG rectangle before420 sampling, so neither
+		// encoded padding nor an odd inside boundary can reveal a private gutter.
+		v := p.visible
+		sample := image.Rect(max(v.Min.X, min(rect.Min.X, v.Max.X-1)), max(v.Min.Y, min(rect.Min.Y, v.Max.Y-1)),
+			max(v.Min.X, min(rect.Max.X-1, v.Max.X-1))+1, max(v.Min.Y, min(rect.Max.Y-1, v.Max.Y-1))+1)
+		rgba := worker.rgbaFor(sample)
+		p.layout.decode(rgba, p.raw(sample), p.stride)
+		compositeCursor(rgba, p.cursorImage)
+		ycc := worker.yccFor(rect.Size())
+		rgbaToYCbCrRegion(ycc, rgba, rect)
+		return ycc
+	}
 	if p.cursorImage == nil || !rect.Overlaps(p.cursor.rect) {
 		return p.ycc.SubImage(rect).(*image.YCbCr)
 	}
@@ -1016,12 +1048,13 @@ func (e *frameEngine) captureOnce(options captureOptions) (any, bool, error) {
 		return nil, retry, err
 	}
 	rects := e.frames.rects
+	visibleChanged := p.setVisible(e.layout.visible)
 	copy(e.encode, e.frames.fetch)
 	cursorChanged, cursorRects := p.trackCursor(options.cursor, seen.cursor)
 	for _, rect := range cursorRects {
 		markRows(e.encode, rect.Min.Y, rect.Max.Y)
 	}
-	if !seen.damaged && !cursorChanged && !options.force {
+	if !seen.damaged && !cursorChanged && !visibleChanged && !options.force {
 		return unchangedFrame{Cursor: seen.identity}, false, nil
 	}
 	frame := capturedFrame{Changed: true, Width: seen.width, Height: seen.height, Encoding: "jpeg", CursorIncluded: options.cursor, Quality: p.quality.quality(), Cursor: seen.identity}
