@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // The audio and video tracks are the toolbox's (browser_audio_linux.go,
@@ -45,7 +46,7 @@ func videoPayloadBytes(codec string, coded videoSize) uint64 {
 // Audio and legacy/JPEG envelopes retain their own grammar/resource bounds.
 func BinaryPayloadLimit(header []byte) (int, bool) {
 	var kind struct{ Type, Track string }
-	if len(header) == 0 || len(header) > maxFrameHeaderBytes || json.Unmarshal(header, &kind) != nil {
+	if len(header) == 0 || len(header) > maxFrameHeaderBytes || !utf8.Valid(header) || json.Unmarshal(header, &kind) != nil {
 		return 0, false
 	}
 	if kind.Type == "media" && kind.Track == "video" {

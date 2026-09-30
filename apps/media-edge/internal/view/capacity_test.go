@@ -4,9 +4,18 @@
 package view
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 )
+
+func TestBinaryHeaderAdmissionRefusesInvalidUTF8BeforeGrowingBody(t *testing.T) {
+	header := jsonOf(videoHeaderFixture(1, true, 100))
+	header = bytes.Replace(header, []byte(fixtureSecret), []byte{0xff}, 1)
+	if _, valid := BinaryPayloadLimit(header); valid {
+		t.Fatal("invalid UTF8 source header admitted body buffering before canonical validation")
+	}
+}
 
 func TestWideVideoUnitIsAdmittedWithoutChangingItsGeometryOrBytes(t *testing.T) {
 	const size = 21734926 // recorded native4096² Q32 key, not a replacement ceiling
