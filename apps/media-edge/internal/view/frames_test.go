@@ -104,7 +104,7 @@ func TestBinaryFrameBudgetsAndPatchCount(t *testing.T) {
 	if _, err := parseBinaryFrame(packHeader(bounded, payload)); err != nil {
 		t.Fatal("exact header bound rejected", err)
 	}
-	for _, invalid := range [][]byte{nil, {0, 0, 0}, {0, 0, 0, 0}, {0xff, 0xff, 0xff, 0xff}, packHeader(append(bounded, ' '), payload), packHeader([]byte{0xff}, payload), packHeader([]byte(`{"type":`), payload), make([]byte, MaxMessageBytes+1)} {
+	for _, invalid := range [][]byte{nil, {0, 0, 0}, {0, 0, 0, 0}, {0xff, 0xff, 0xff, 0xff}, packHeader(append(bounded, ' '), payload), packHeader([]byte{0xff}, payload), packHeader([]byte(`{"type":`), payload), make([]byte, maxFrameMessageBytes+1)} {
 		if _, err := parseBinaryFrame(invalid); err == nil {
 			t.Fatal("invalid prefix or bound admitted")
 		}
@@ -147,7 +147,7 @@ func TestLegacyRecognitionRequiresAWholePageImage(t *testing.T) {
 	if legacyBinaryFrame(pack(header, payload)) {
 		t.Fatal("missing metadata admitted")
 	}
-	for _, input := range [][]byte{nil, {0xff, 0xff, 0xff, 0xff}, make([]byte, MaxMessageBytes+1)} {
+	for _, input := range [][]byte{nil, {0xff, 0xff, 0xff, 0xff}, make([]byte, maxFrameMessageBytes+1)} {
 		if legacyBinaryFrame(input) {
 			t.Fatal("unbounded or malformed framing admitted")
 		}
@@ -156,7 +156,7 @@ func TestLegacyRecognitionRequiresAWholePageImage(t *testing.T) {
 
 func TestFrameWindowCountsWireBytesAndExactCumulativeACKs(t *testing.T) {
 	w := frameWindow{limit: 8}
-	if !w.reserve(10, MaxMessageBytes/2) || !w.reserve(12, MaxMessageBytes/2) || w.reserve(14, 1) {
+	if !w.reserve(10, maxFrameMessageBytes/2) || !w.reserve(12, maxFrameMessageBytes/2) || w.reserve(14, 1) {
 		t.Fatal("aggregate wire budget was not enforced")
 	}
 	if forward, valid := w.acknowledge(11); forward || valid || len(w.frames) != 2 {

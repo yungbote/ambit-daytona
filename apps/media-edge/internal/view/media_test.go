@@ -68,11 +68,18 @@ func TestVideoUnitProjectionAndBounds(t *testing.T) {
 		t.Fatal("a header past the bound was accepted")
 	}
 	for _, input := range [][]byte{nil, {0xff, 0xff, 0xff, 0xff}, packHeader(bytes.Repeat([]byte(" "), videoHeaderLimit+1), payload),
-		pack(videoHeaderFixture(1, true, videoPayloadLimit+1), make([]byte, videoPayloadLimit+1)),
 		pack(videoHeaderFixture(1, true, 0), nil)} {
 		if _, _, _, valid := parseVideoUnit(input); valid {
 			t.Fatal("accepted invalid picture envelope")
 		}
+	}
+	bounded := videoHeaderFixture(1, true, 12289)
+	bounded["coded"] = map[string]any{"width": 16, "height": 16}
+	bounded["visible"] = map[string]any{"x": 0, "y": 0, "width": 16, "height": 16}
+	bounded["surface"].(map[string]any)["width"] = 16
+	bounded["surface"].(map[string]any)["height"] = 16
+	if _, _, _, valid := parseVideoUnit(pack(bounded, make([]byte, 12289))); valid {
+		t.Fatal("picture exceeded its coded format's source allowance")
 	}
 }
 

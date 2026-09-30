@@ -78,7 +78,7 @@ func (c *carrier) Receive() (bool, []byte, error) {
 }
 
 func (c *carrier) Send(d *view.Delivery) error {
-	if d.Size() > 12<<20 {
+	if d.Size() > view.MaxMessageBytes {
 		return errors.New("view delivery exceeds its bound")
 	}
 	if d.Kind == view.Record {
@@ -120,7 +120,10 @@ func (c *carrier) Send(d *view.Delivery) error {
 	}
 	for {
 		c.mu.Lock()
-		if c.bytes+d.Size() <= 12<<20 {
+		// A logical picture may exceed pending credit. Admit it alone and
+		// charge its full bytes; a larger source allowance never expands
+		// the retained pending budget or permits several large pictures.
+		if c.bytes == 0 || c.bytes+d.Size() <= 12<<20 {
 			c.bytes += d.Size()
 			c.mu.Unlock()
 			break

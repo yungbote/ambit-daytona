@@ -76,6 +76,7 @@ func TestDeclarationsAsTheBackendUpgradeReadsThem(t *testing.T) {
 	base := "frames=binary&patches=1"
 	for query, want := range map[string]Declaration{
 		base: {FrameWindow: 1},
+		base + "&video=av1-444&videoCapacity=coded": {FrameWindow: 1, Video: []string{"av1-444"}, VideoCapacity: true},
 		base + "&frameWindow=8&width=734&height=910&cursor=viewer&visible=crop&audio=opus&video=av1-444,av1,vp9": {
 			Width: 734, Height: 910, FrameWindow: 8, Cursor: true, Crop: true, Audio: "opus", Video: []string{"av1-444", "av1", "vp9"}},
 		base + "&width=2048&height=1":             {Width: 2048, Height: 1, FrameWindow: 1},
@@ -100,6 +101,7 @@ func TestDeclarationsAsTheBackendUpgradeReadsThem(t *testing.T) {
 		base + "&audio=", base + "&audio=OPUS", base + "&audio=pcm", base + "&audio=opus&audio=opus",
 		base + "&video=", base + "&video=h264", base + "&video=av1,av1", base + "&video=AV1", base + "&video=av1,",
 		base + "&video=av1%20,vp9", base + "&video=av1&video=vp9", base + "&video=" + strings.Repeat("av1,", 16) + "vp9",
+		base + "&videoCapacity=coded", base + "&video=av1&videoCapacity=", base + "&video=av1&videoCapacity=other", base + "&video=av1&videoCapacity=coded&videoCapacity=coded",
 	} {
 		if _, err := parse(query); err == nil {
 			t.Fatalf("accepted %q", query)
@@ -111,7 +113,8 @@ func TestDeclarationsAsTheBackendUpgradeReadsThem(t *testing.T) {
 // writes it (URLSearchParams.set in the provider's order).
 func TestDeclarationQueryIsTheBackendDial(t *testing.T) {
 	for want, d := range map[string]Declaration{
-		"frameWindow=1&frames=binary&patches=1": {FrameWindow: 1},
+		"frameWindow=1&frames=binary&patches=1":                                   {FrameWindow: 1},
+		"frameWindow=1&frames=binary&patches=1&video=av1-444&videoCapacity=coded": {FrameWindow: 1, Video: []string{"av1-444"}, VideoCapacity: true},
 		"frameWindow=8&frames=binary&patches=1&width=734&height=910&cursor=viewer&visible=crop&audio=pcm-s16le&video=av1-444%2Cav1": {
 			Width: 734, Height: 910, FrameWindow: 8, Cursor: true, Crop: true, Audio: "pcm-s16le", Video: []string{"av1-444", "av1"}},
 		"frameWindow=3&frames=binary&patches=1&cursor=viewer": {FrameWindow: 3, Cursor: true},

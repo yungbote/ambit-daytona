@@ -291,6 +291,13 @@ func (c *Channel) videoUnit(message []byte) (*Delivery, *Close) {
 	if value.Seq != e.sequence+1 || *value.Ts < e.timestamp || (!value.Key && (e.sequence == 0 || value.Coded != e.coded)) {
 		return nil, closeInvalidVideo
 	}
+	if !c.declaration.VideoCapacity && len(payload) > 4<<20 {
+		// Only an old peer's reader has this limit. Match the old producer's
+		// track refusal once, preserving JPEG fallback, audio and control;
+		// clearing the epoch drops any subsequent stale units until disable.
+		message, _ := json.Marshal(videoMetadata{Type: "video", State: "unavailable", Codec: value.Codec, Generation: &c.video.generation})
+		return c.videoRecord(message)
+	}
 	e.sequence, e.timestamp, e.coded = value.Seq, *value.Ts, value.Coded
 	return &Delivery{Kind: Video, Header: projected, Payload: payload, Paint: PictureIdentity{Sequence: value.Seq, StreamID: value.StreamID}}, nil
 }

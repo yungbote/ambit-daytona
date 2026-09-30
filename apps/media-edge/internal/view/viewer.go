@@ -167,6 +167,9 @@ type Declaration struct {
 	Audio string
 	// Video is the viewer's decodable codecs in its order of preference.
 	Video []string
+	// VideoCapacity names a viewer with geometry/chroma-derived readers.
+	// Absence preserves the cached legacy4MiB video reader's capability.
+	VideoCapacity bool
 }
 
 // ErrDeclaration is a malformed viewer upgrade.
@@ -246,6 +249,11 @@ func ParseDeclaration(query url.Values) (Declaration, error) {
 		}
 		d.Video = codecs
 	}
+	if values := query["videoCapacity"]; len(values) > 1 || (len(values) == 1 && (values[0] != "coded" || len(d.Video) == 0)) {
+		return Declaration{}, ErrDeclaration
+	} else if len(values) == 1 {
+		d.VideoCapacity = true
+	}
 	return d, nil
 }
 
@@ -271,6 +279,9 @@ func (d Declaration) Query() string {
 	}
 	if len(d.Video) != 0 {
 		query.WriteString("&video=" + url.QueryEscape(strings.Join(d.Video, ",")))
+	}
+	if d.VideoCapacity {
+		query.WriteString("&videoCapacity=coded")
 	}
 	return query.String()
 }
