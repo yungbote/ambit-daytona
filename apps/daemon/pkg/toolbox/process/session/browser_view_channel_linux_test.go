@@ -92,6 +92,10 @@ func (d *browserViewFixtureDriver) awaitAcknowledgement(seq int, onPresentation 
 // presenter's rate, size and identity, or an observer's absence of them. The
 // rest of the upgrade is recorded in <name>.upgrade exactly as it arrived.
 func serveBrowserViewChannelFixture(w http.ResponseWriter, r *http.Request, dir, name, mode string, closeListener func() error) {
+	if mode == "view-channel-source" {
+		serveBrowserExistingMediaSource(w, r, dir, name)
+		return
+	}
 	query := r.URL.Query()
 	presenter := query.Get("maxFps") == "60" && query.Get("width") == "320" && query.Get("height") == "240" && r.Header.Get("X-Ambit-Browser-Viewer") == browserFixtureViewer
 	switch mode {
