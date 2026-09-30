@@ -120,6 +120,9 @@ func browserControlFixtureReply(line []byte, stop, endView func() error) map[str
 	if command.ControllerID != browserFixtureController {
 		return map[string]any{"success": false, "code": "browser_control_stale", "error": browserFixtureSecret}
 	}
+	if command.Op == "restart" {
+		return map[string]any{"success": true, "data": map[string]any{"status": "restarted", "surface": nil, "secret": browserFixtureSecret}}
+	}
 	status := "controlled"
 	if command.Op == "release" {
 		status = "released"
@@ -175,6 +178,11 @@ func TestBrowserControlRelayUsesTheObservedSessionAndProjectsReplies(t *testing.
 	acquired := request(map[string]any{"op": "acquire", "controllerId": browserFixtureController, "expiresAt": time.Now().Add(20 * time.Second).UnixMilli()}, http.StatusOK)
 	if acquired["controllerId"] != browserFixtureController || acquired["status"] != "controlled" || len(acquired) != 4 {
 		t.Fatalf("control acknowledgement is invalid: %v", acquired)
+	}
+	if restarted := request(map[string]any{"op": "restart", "controllerId": browserFixtureController}, http.StatusOK); restarted["status"] != "restarted" || len(restarted) != 2 {
+		t.Fatalf("restart fabricated lease custody or lost its nullable surface: %v", restarted)
+	} else if surface, present := restarted["surface"]; !present || surface != nil {
+		t.Fatalf("restart lost explicit null surface: %v", restarted)
 	}
 	events := []map[string]any{{"type": "input_mouse", "eventType": "mouseMoved", "x": 12, "y": 34}}
 	if reply := request(map[string]any{"op": "input", "controllerId": browserFixtureController, "sequence": 1, "events": events}, http.StatusOK); reply["status"] != "applied" || reply["lastSequence"] != float64(1) {
