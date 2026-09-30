@@ -45,11 +45,18 @@ type Delivery struct {
 	Payload []byte
 	// Paint identifies a picture measured on the edge's own send/ACK clock.
 	Paint PictureIdentity
+	// Transfer names one issued part endpoint, reserved before carrier I/O.
+	Transfer TransferIdentity
 }
 
 type PictureIdentity struct {
 	Sequence uint64
 	StreamID string
+}
+
+type TransferIdentity struct {
+	PictureIdentity
+	Offset uint64
 }
 
 // Size is the delivery's size on the wire.
@@ -84,6 +91,8 @@ type Forward struct {
 	Message    []byte
 	Generation uint64
 	Paint      PictureIdentity
+	Transfer   TransferIdentity
+	Bytes      int
 }
 
 // track is one output track's negotiation state and current epoch.
@@ -115,6 +124,7 @@ type Channel struct {
 	video       track
 	// videoCodec is the codec the producer offered from the declaration.
 	videoCodec string
+	partial    *videoPartial
 }
 
 // NewChannel starts a channel for what the viewer declared.
@@ -274,10 +284,16 @@ func (c *Channel) videoRecord(message []byte) (*Delivery, *Close) {
 	} else {
 		c.video.epoch = epoch{}
 	}
+	c.partial = nil
 	return record(projected)
 }
 
 func (c *Channel) videoUnit(message []byte) (*Delivery, *Close) {
+	if header, _, valid := envelope(message); valid {
+		if _, part := videoPartOffset(header); part {
+			return c.videoPart(message)
+		}
+	}
 	value, projected, payload, valid := parseVideoUnit(message)
 	if !valid || !c.video.offered || value.Codec != c.videoCodec {
 		return nil, closeInvalidVideo
@@ -335,6 +351,7 @@ func (c *Channel) Viewer(text bool, message []byte) (*Forward, *Close) {
 			return nil, nil
 		}
 		c.video.generation, c.video.enabled = m.generation, m.enabled
+		c.partial = nil
 		return &Forward{Slot: SlotVideo, Message: m.encode(), Generation: m.generation}, nil
 	case viewerKeyframe:
 		if !c.video.offered {
@@ -356,7 +373,12 @@ func (c *Channel) Viewer(text bool, message []byte) (*Forward, *Close) {
 			return nil, closeInvalidViewer // a picture never sent
 		}
 		e.acknowledged = m.seq
+		if c.partial != nil && c.partial.header.Seq == m.seq {
+			c.partial = nil
+		}
 		return &Forward{Slot: SlotVideoAck, Message: m.encode(), Paint: PictureIdentity{Sequence: m.seq, StreamID: m.streamID}}, nil
+	case viewerVideoReceived:
+		return c.videoReceived(m)
 	default: // viewerFrameAck
 		forward, valid := c.frames.window.acknowledge(m.seq)
 		if !valid {
@@ -368,6 +390,8 @@ func (c *Channel) Viewer(text bool, message []byte) (*Forward, *Close) {
 		return &Forward{Slot: SlotFrameAck, Message: m.encode(), Paint: PictureIdentity{Sequence: m.seq}}, nil
 	}
 }
+
+func (c *Channel) VideoChunks() bool { return c.declaration.VideoChunks }
 
 // Rate is host-authored feedback for the current enabled video generation.
 // The viewer cannot create this message through Viewer; no second pacing

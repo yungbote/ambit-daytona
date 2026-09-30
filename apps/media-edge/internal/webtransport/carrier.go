@@ -7,6 +7,7 @@ package webtransport
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"io"
 	"sync"
@@ -42,6 +43,13 @@ type carrier struct {
 	changed        chan struct{}
 	metrics        *connectionMetrics
 	releaseMetrics func()
+	parts          map[*wt.SendStream]*pendingPart
+}
+
+type pendingPart struct {
+	stream   *wt.SendStream
+	streamID string
+	retired  bool
 }
 
 func newCarrier(session *wt.Session, registries ...*metricsRegistry) (*carrier, error) {
@@ -61,6 +69,8 @@ func newCarrier(session *wt.Session, registries ...*metricsRegistry) (*carrier, 
 }
 
 func (c *carrier) Network() rate.Network { return c.metrics.snapshot(time.Now()) }
+
+func (c *carrier) PartBytes(d *view.Delivery) int { return d.Size() + 17 }
 
 func (c *carrier) Receive() (bool, []byte, error) {
 	var prefix [4]byte
@@ -84,6 +94,10 @@ func (c *carrier) Send(d *view.Delivery) error {
 	if d.Kind == view.Record {
 		c.records.Lock()
 		defer c.records.Unlock()
+		var video struct{ Type, State, StreamID string }
+		if json.Unmarshal(d.Text, &video) == nil && video.Type == "video" && video.State != "available" {
+			c.retireParts(video.StreamID)
+		}
 		_ = c.control.SetWriteDeadline(time.Now().Add(writeTimeout))
 		var prefix [4]byte
 		binary.BigEndian.PutUint32(prefix[:], uint32(len(d.Text)))
@@ -142,6 +156,16 @@ func (c *carrier) Send(d *view.Delivery) error {
 		c.release(d.Size())
 		return err
 	}
+	var part *pendingPart
+	if d.Transfer.Offset > 0 {
+		part = &pendingPart{stream: stream, streamID: d.Transfer.StreamID}
+		c.mu.Lock()
+		if c.parts == nil {
+			c.parts = make(map[*wt.SendStream]*pendingPart)
+		}
+		c.parts[stream] = part
+		c.mu.Unlock()
+	}
 	var prefix [17]byte
 	prefix[0] = 1
 	if d.Kind == view.Audio {
@@ -156,7 +180,14 @@ func (c *carrier) Send(d *view.Delivery) error {
 	// Upstream.Read reuses its buffer; this write retains one bounded copy.
 	copy := &view.Delivery{Kind: d.Kind, Header: append([]byte(nil), d.Header...), Payload: append([]byte(nil), d.Payload...)}
 	go func() {
-		defer c.release(copy.Size())
+		defer func() {
+			if part != nil {
+				c.mu.Lock()
+				delete(c.parts, stream)
+				c.mu.Unlock()
+			}
+			c.release(copy.Size())
+		}()
 		var headerLength [4]byte
 		binary.BigEndian.PutUint32(headerLength[:], uint32(len(copy.Header)))
 		err = writeWithProgress(c.session.Context(), stream, writeTimeout, prefix[:], headerLength[:], copy.Header, copy.Payload)
@@ -165,10 +196,30 @@ func (c *carrier) Send(d *view.Delivery) error {
 		}
 		if err != nil {
 			stream.CancelWrite(1)
-			c.Close(1011, "browser_view_unavailable")
+			c.mu.Lock()
+			retired := part != nil && part.retired
+			c.mu.Unlock()
+			if !retired {
+				c.Close(1011, "browser_view_unavailable")
+			}
 		}
 	}()
 	return nil
+}
+
+func (c *carrier) retireParts(streamID string) {
+	c.mu.Lock()
+	var retiring []*wt.SendStream
+	for stream, part := range c.parts {
+		if part.streamID != streamID {
+			part.retired = true
+			retiring = append(retiring, stream)
+		}
+	}
+	c.mu.Unlock()
+	for _, stream := range retiring {
+		stream.CancelWrite(1)
+	}
 }
 
 func (c *carrier) release(size int) {

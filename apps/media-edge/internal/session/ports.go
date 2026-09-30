@@ -31,6 +31,10 @@ type Carrier interface {
 // at the session, so a proxied socket cannot masquerade as the consumer path.
 type MeasuredCarrier interface{ Network() rate.Network }
 
+// ChargedCarrier gives exact known application framing for a reserved part.
+// TCP/TLS/QUIC retransmission bytes remain carrier network measurements.
+type ChargedCarrier interface{ PartBytes(*view.Delivery) int }
+
 // RateUpstream declares the negotiated byte-pipe capability of this route.
 // Legacy toolbox validators must not receive a message they cannot admit.
 type RateUpstream interface{ RateInput() bool }

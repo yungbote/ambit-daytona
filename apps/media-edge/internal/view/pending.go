@@ -17,6 +17,7 @@ const (
 	SlotRate
 	SlotKeyframe
 	SlotPresentation
+	SlotVideoReceived
 	SlotVideoAck
 	SlotFrameAck
 	slotCount
@@ -49,6 +50,7 @@ func (p *Pending) Put(forward Forward) (superseded bool) {
 		p.videoGeneration = forward.Generation
 		p.slots[SlotRate] = nil
 		p.slots[SlotKeyframe], p.slots[SlotVideoAck] = nil, nil
+		p.slots[SlotVideoReceived] = nil
 	}
 	p.mu.Unlock()
 	select {

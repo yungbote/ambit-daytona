@@ -22,6 +22,8 @@ const (
 	// MaxVideoPayloadBytes is the current4096²8-bit4:4:4 source's capacity:
 	// eight aligned decoded rasters. Allocation uses actual unit bytes.
 	MaxVideoPayloadBytes = 8 * 4096 * 4096 * 3
+	// Parts bound transport retention; they never bound the logical picture.
+	MaxVideoPartBytes = 16 << 10
 )
 
 // videoPayloadBytes is the negotiated source allowance for coded geometry
@@ -50,6 +52,12 @@ func BinaryPayloadLimit(header []byte) (int, bool) {
 		return 0, false
 	}
 	if kind.Type == "media" && kind.Track == "video" {
+		if _, part := videoPartOffset(header); part {
+			if _, _, valid := parseVideoPartHeader(header); !valid {
+				return 0, false
+			}
+			return MaxVideoPartBytes - 4 - len(header), true
+		}
 		var value videoHeader
 		if len(header) > videoHeaderLimit || json.Unmarshal(header, &value) != nil || !value.valid(int(value.ByteLength)) {
 			return 0, false
@@ -205,6 +213,7 @@ type videoHeader struct {
 	InputSeq    uint64      `json:"inputSeq,omitempty"`
 	Quality     string      `json:"quality"`
 	ByteLength  uint32      `json:"byteLength"`
+	Offset      *uint64     `json:"offset,omitempty"`
 }
 
 func (h videoHeader) valid(payload int) bool {

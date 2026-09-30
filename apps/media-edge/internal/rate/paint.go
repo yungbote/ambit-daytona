@@ -93,3 +93,11 @@ func (p *PaintTracker) Acknowledge(stream string, sequence uint64, now time.Time
 }
 
 func (p *PaintTracker) Snapshot() Paint { p.mu.Lock(); defer p.mu.Unlock(); return p.sample }
+
+func (p *PaintTracker) Reset() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.stream, p.bytes, p.sequence, p.acknowledged = "", 0, 0, 0
+	p.pictures = p.pictures[:0]
+	p.lastAck, p.ackedBytes, p.sentAtAck, p.sample = time.Time{}, 0, 0, Paint{}
+}

@@ -71,6 +71,23 @@ func (e *Estimator) Published() (uint64, Budget) { return e.generation, e.budget
 // Update answers only for the currently enabled video generation. A generation
 // change emits immediately; otherwise >10% change or500ms emits latest state.
 func (e *Estimator) Update(now time.Time, generation uint64, network Network, paint Paint) (Budget, bool) {
+	return e.update(now, generation, network, paint, false)
+}
+
+// UpdateReceived uses validated part delivery before a complete picture can
+// be painted. No heuristic/bootstrap rate is emitted for a chunks peer.
+// The same estimator owns congestion and app-limited probing in both modes.
+func (e *Estimator) UpdateReceived(now time.Time, generation uint64, network Network, received Paint) (Budget, bool) {
+	if generation == 0 || !received.Known || !validDelivery(received.DeliveryBytesPerSecond) {
+		return Budget{}, false
+	}
+	if generation != e.generation {
+		e.rate = received.DeliveryBytesPerSecond * 8 * 0.85
+	}
+	return e.update(now, generation, network, received, true)
+}
+
+func (e *Estimator) update(now time.Time, generation uint64, network Network, paint Paint, received bool) (Budget, bool) {
 	if now.Before(e.observed) {
 		return Budget{}, false
 	}
@@ -129,7 +146,7 @@ func (e *Estimator) Update(now time.Time, generation uint64, network Network, pa
 	measured := newNetwork && network.Known && !network.ProxyHop && !network.ApplicationLimited && validDelivery(delivery)
 	if network.ProxyHop || !network.Known {
 		delivery = paint.DeliveryBytesPerSecond
-		measured = newPaint && congested && validDelivery(delivery)
+		measured = newPaint && (congested || received) && validDelivery(delivery)
 	} else if newPaint && validDelivery(paint.DeliveryBytesPerSecond) && congested {
 		delivery = math.Min(delivery, paint.DeliveryBytesPerSecond)
 		measured = validDelivery(delivery)

@@ -57,6 +57,15 @@ func (c *carrier) Receive() (bool, []byte, error) {
 	return kind == websocket.TextMessage, message, nil
 }
 
+// The production upgrader's64KiB write buffer fits every16KiB part in one
+// unmasked frame. Smaller envelopes use the two-byte WS frame header.
+func (c *carrier) PartBytes(d *view.Delivery) int {
+	if d.Size() <= 125 {
+		return d.Size() + 2
+	}
+	return d.Size() + 4
+}
+
 // Send writes a record as a text message and a binary kind as one binary
 // message: the length prefix, the header and the payload, without copying
 // the payload.

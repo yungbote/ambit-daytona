@@ -15,6 +15,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"io"
 	"math/big"
 	"net"
@@ -35,6 +36,10 @@ func pair(t *testing.T, action func(*carrier), registries ...*metricsRegistry) (
 }
 
 func pairThrough(t *testing.T, path func(net.Addr) net.Addr, timeout time.Duration, action func(*carrier), registries ...*metricsRegistry) (*wt.Session, *wt.Stream, context.Context, string, string) {
+	return pairThroughWindow(t, path, timeout, 32<<10, action, registries...)
+}
+
+func pairThroughWindow(t *testing.T, path func(net.Addr) net.Addr, timeout time.Duration, window uint64, action func(*carrier), registries ...*metricsRegistry) (*wt.Session, *wt.Stream, context.Context, string, string) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -79,7 +84,7 @@ func pairThrough(t *testing.T, path func(net.Addr) net.Addr, timeout time.Durati
 	t.Cleanup(cancel)
 	dialer := &wt.Dialer{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // task-scoped test certificate
-		QUICConfig:      &quic.Config{EnableDatagrams: true, InitialStreamReceiveWindow: 32 << 10, MaxStreamReceiveWindow: 32 << 10, InitialConnectionReceiveWindow: 4 << 20, MaxConnectionReceiveWindow: 4 << 20},
+		QUICConfig:      &quic.Config{EnableDatagrams: true, InitialStreamReceiveWindow: window, MaxStreamReceiveWindow: window, InitialConnectionReceiveWindow: 4 << 20, MaxConnectionReceiveWindow: 4 << 20},
 	}
 	t.Cleanup(func() { _ = dialer.Close() })
 	address := listener.LocalAddr()
@@ -215,5 +220,76 @@ func TestViewerMessagesAreFramedAndBoundedBeforeAllocation(t *testing.T) {
 	case <-s.Context().Done():
 	case <-ctx.Done():
 		t.Fatal("oversized input did not close the session")
+	}
+}
+
+func TestRetiringABlockedPartPreservesAudioControlAndSuccessor(t *testing.T) {
+	oldID, newID := "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"
+	started := func(id string) *view.Delivery {
+		return &view.Delivery{Kind: view.Record, Text: []byte(`{"type":"video","state":"started","streamId":"` + id + `"}`)}
+	}
+	part := func(id string, size int) *view.Delivery {
+		return &view.Delivery{Kind: view.Video, Header: []byte(`{"type":"media","track":"video","streamId":"` + id + `","seq":1,"offset":0}`), Payload: bytes.Repeat([]byte{43}, size), Transfer: view.TransferIdentity{PictureIdentity: view.PictureIdentity{StreamID: id, Sequence: 1}, Offset: uint64(size)}}
+	}
+	s, control, ctx, _, _ := pairThroughWindow(t, nil, 5*time.Second, 4096, func(c *carrier) {
+		if err := c.Send(started(oldID)); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := c.Send(part(oldID, 16000)); err != nil {
+			t.Error(err)
+			return
+		}
+		if _, _, err := c.Receive(); err != nil {
+			t.Error(err)
+			return
+		}
+		for _, d := range []*view.Delivery{started(newID), {Kind: view.Audio, Header: []byte(`{"track":"audio"}`), Payload: []byte{1, 2, 3}}, part(newID, 256), {Kind: view.Record, Text: []byte(`{"type":"cursor"}`)}} {
+			if err := c.Send(d); err != nil {
+				t.Error(err)
+				return
+			}
+		}
+	})
+	if record(t, control) != string(started(oldID).Text) {
+		t.Fatal("old start missing")
+	}
+	old, err := s.AcceptUniStream(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prefix [17]byte
+	if _, err := io.ReadFull(old, prefix[:]); err != nil {
+		t.Fatal(err)
+	}
+	if binary.BigEndian.Uint64(prefix[9:]) != 1 {
+		t.Fatal("old ordinal not issued")
+	}
+	message := []byte(`{"type":"next"}`)
+	var length [4]byte
+	binary.BigEndian.PutUint32(length[:], uint32(len(message)))
+	if _, err := control.Write(append(length[:], message...)); err != nil {
+		t.Fatal(err)
+	}
+	if record(t, control) != string(started(newID).Text) || record(t, control) != `{"type":"cursor"}` {
+		t.Fatal("retirement held state/control")
+	}
+	_ = old.SetReadDeadline(time.Now().Add(time.Second))
+	_, readErr := io.Copy(io.Discard, old)
+	var reset *wt.StreamError
+	if !errors.As(readErr, &reset) || reset.ErrorCode != 1 || !reset.Remote {
+		t.Fatalf("obsolete part was not retired by exact remote reset: %v", readErr)
+	}
+	packet, err := s.ReceiveDatagram(ctx)
+	if err != nil || !bytes.Equal(packet[len(packet)-3:], []byte{1, 2, 3}) {
+		t.Fatalf("audio after retirement: %v", err)
+	}
+	next, err := s.AcceptUniStream(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(next)
+	if err != nil || binary.BigEndian.Uint64(body[9:17]) != 2 || !bytes.Equal(body[len(body)-256:], bytes.Repeat([]byte{43}, 256)) {
+		t.Fatalf("successor after retirement: bytes%d err%v", len(body), err)
 	}
 }

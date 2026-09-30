@@ -25,6 +25,29 @@ func TestNoDemandDoesNotCollapseCapacityOrInventAProxyCapacity(t *testing.T) {
 	}
 }
 
+func TestReceivedPrefixSeedsOnlyMeasuredCurrentGenerationBeforePaint(t *testing.T) {
+	now := time.Unix(100, 0)
+	e := New()
+	proxy := Network{Known: true, ProxyHop: true, DeliveryBytesPerSecond: 1e12}
+	if _, emit := e.UpdateReceived(now, 1, proxy, Paint{}); emit {
+		t.Fatal("chunks emitted heuristic bootstrap rate")
+	}
+	feedback := Paint{Known: true, DeliveryBytesPerSecond: 62500, SentBytesPerSecond: 62500, RTT: 20 * time.Millisecond, MinimumRTT: 20 * time.Millisecond, LastAck: now, PictureBytes: 1024, MinimumPictureBytes: 1024}
+	budget, emit := e.UpdateReceived(now, 1, proxy, feedback)
+	if !emit || budget.BitsPerSecond != 425000 {
+		t.Fatalf("prefix rate ignored person and used proxy/initial guess: %+v", budget)
+	}
+	if _, emit := e.UpdateReceived(now.Add(time.Second), 2, proxy, Paint{}); emit {
+		t.Fatal("new generation inherited old delivered prefix")
+	}
+	feedback.DeliveryBytesPerSecond, feedback.SentBytesPerSecond = 12500, 12500
+	feedback.LastAck = now.Add(2 * time.Second)
+	budget, emit = e.UpdateReceived(feedback.LastAck, 2, proxy, feedback)
+	if !emit || budget.BitsPerSecond > 100000 {
+		t.Fatalf("new generation did not seed from own slow prefix: %+v", budget)
+	}
+}
+
 func TestSharedConsumerCapacityAndGenerationRetirement(t *testing.T) {
 	now := time.Unix(100, 0)
 	e := New()

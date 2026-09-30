@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log/slog"
 	"regexp"
+	"strconv"
 	"sync"
 	"time"
 
@@ -70,6 +71,7 @@ type Session struct {
 	rateMu           sync.Mutex
 	budget           *rate.Estimator
 	paint            rate.PaintTracker
+	progress         rate.PaintTracker
 }
 
 // add takes a verified renewal. A grant for another binding is a violation;
@@ -205,6 +207,13 @@ func (s *Session) pump(viewer Carrier) {
 		delivery, closing := s.channel.Upstream(text, message)
 		if delivery != nil {
 			start := time.Now()
+			if delivery.Transfer.Offset > 0 {
+				bytes := delivery.Size()
+				if carrier, ok := viewer.(ChargedCarrier); ok {
+					bytes = carrier.PartBytes(delivery)
+				}
+				s.progress.Sent(transferStream(delivery.Transfer), delivery.Transfer.Offset, bytes, start)
+			}
 			if delivery.Paint.Sequence > 0 {
 				s.paint.Sent(delivery.Paint.StreamID, delivery.Paint.Sequence, delivery.Size(), start)
 			}
@@ -295,6 +304,9 @@ func (s *Session) read(viewer Carrier) {
 		if forward != nil && forward.Paint.Sequence > 0 {
 			s.paint.Acknowledge(forward.Paint.StreamID, forward.Paint.Sequence, time.Now())
 		}
+		if forward != nil && forward.Transfer.Offset > 0 {
+			s.progress.Acknowledge(transferStream(forward.Transfer), forward.Transfer.Offset, time.Now())
+		}
 		switch {
 		case closing != nil:
 			s.end(closing.Code, closing.Reason, causeProtocol)
@@ -304,6 +316,7 @@ func (s *Session) read(viewer Carrier) {
 			s.counters.superseded.Add(1)
 		}
 		if forward != nil && forward.Slot == view.SlotVideo {
+			s.progress.Reset()
 			s.updateRate()
 		}
 	}
@@ -340,13 +353,23 @@ func (s *Session) updateRate() {
 	paint := s.paint.Snapshot()
 	// Evaluate after snapshots: their own monotonic observation/ACK instants
 	// must not appear to be future samples relative to an older ticker time.
-	budget, emit := s.budget.Update(time.Now(), generation, network, paint)
+	var budget rate.Budget
+	var emit bool
+	if s.channel.VideoChunks() {
+		budget, emit = s.budget.UpdateReceived(time.Now(), generation, network, s.progress.Snapshot())
+	} else {
+		budget, emit = s.budget.Update(time.Now(), generation, network, paint)
+	}
 	if !emit {
 		return
 	}
 	if message := s.channel.Rate(generation, budget.BitsPerSecond, budget.BurstBytes); message != nil {
 		s.pending.Put(*message)
 	}
+}
+
+func transferStream(identity view.TransferIdentity) string {
+	return identity.StreamID + "/" + strconv.FormatUint(identity.Sequence, 10)
 }
 
 // isRenewal recognizes the one message the session itself answers.

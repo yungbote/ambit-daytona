@@ -55,6 +55,10 @@ The optional `TestRecordedNativeKeyOnConstrainedQUICLink` reads a raw native AV1
 
 ## Logs
 
+Capable readers explicitly request `videoCapacity=coded&videoFraming=chunks`. A logical picture starts with its canonical full header and `offset:0`; continuations carry only media/video, stream/sequence and the exact next body offset. The edge retains metadata and outstanding part endpoints, forwards each bounded application envelope, and never assembles the logical body. A closed cumulative `received` receipt releases only issued endpoints; complete decode/paint ACK alone admits a successor picture. New demand or a started epoch retires the old partial state. WebTransport resets obsolete part writers without closing record/audio lanes; the reader's new first key retires old ordinal holes.
+
+The16KiB application-envelope bound and two-quanta outstanding boundary bound are transport resources, independent of codec/geometry-derived logical capacity. Consumer prefix samples pass through the existing E3 estimator before paint; negotiated chunks emit no initial4Mbit/s proxy guess. Measurement reserves before I/O and counts each part's envelope plus the known WS framing or17-byte WT application prefix. Carrier retransmission/TLS/QUIC overhead remains real transport measurement. Native/T1/Product and mixed-view memory qualification remain release gates.
+
 JSON on stdout: `session.opened`, `session.report` (every minute), `session.closed` (with the close code, reason and
 cause), `admission.refused`, `revocation.applied`, `grant_keys.rejected`. A session's report carries its messages and
 bytes per kind, the delivery rate, the time a unit waits in the edge (`holdUs`) and the time the carrier took it
