@@ -77,17 +77,6 @@ func (c *carrier) Receive() (bool, []byte, error) {
 	return true, message, err
 }
 
-func writeDelivery(writer io.Writer, d *view.Delivery) error {
-	var prefix [4]byte
-	binary.BigEndian.PutUint32(prefix[:], uint32(len(d.Header)))
-	for _, part := range [][]byte{prefix[:], d.Header, d.Payload} {
-		if _, err := writer.Write(part); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (c *carrier) Send(d *view.Delivery) error {
 	if d.Size() > 12<<20 {
 		return errors.New("view delivery exceeds its bound")
@@ -150,7 +139,6 @@ func (c *carrier) Send(d *view.Delivery) error {
 		c.release(d.Size())
 		return err
 	}
-	_ = stream.SetWriteDeadline(time.Now().Add(writeTimeout))
 	var prefix [17]byte
 	prefix[0] = 1
 	if d.Kind == view.Audio {
@@ -166,9 +154,9 @@ func (c *carrier) Send(d *view.Delivery) error {
 	copy := &view.Delivery{Kind: d.Kind, Header: append([]byte(nil), d.Header...), Payload: append([]byte(nil), d.Payload...)}
 	go func() {
 		defer c.release(copy.Size())
-		if _, err = stream.Write(prefix[:]); err == nil {
-			err = writeDelivery(stream, copy)
-		}
+		var headerLength [4]byte
+		binary.BigEndian.PutUint32(headerLength[:], uint32(len(copy.Header)))
+		err = writeWithProgress(c.session.Context(), stream, writeTimeout, prefix[:], headerLength[:], copy.Header, copy.Payload)
 		if err == nil {
 			err = stream.Close()
 		}

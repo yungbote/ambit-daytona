@@ -34,6 +34,10 @@ type packetLink struct {
 	loss             float64
 	random           *rand.Rand
 	packets, dropped [2]int
+	bytes            uint64
+	switchAfter      uint64
+	nextBits         uint64
+	switched         bool
 }
 
 func (l *packetLink) drop(direction quicproxy.Direction, _, _ net.Addr, packet []byte) bool {
@@ -51,6 +55,12 @@ func (l *packetLink) delayPacket(direction quicproxy.Direction, _, _ net.Addr, p
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := time.Now()
+	if direction == quicproxy.DirectionOutgoing {
+		l.bytes += uint64(len(packet))
+		if !l.switched && l.nextBits > 0 && l.bytes >= l.switchAfter {
+			l.bitrate, l.switched = l.nextBits, true
+		}
+	}
 	bitrate := l.bitrate
 	if direction == quicproxy.DirectionIncoming {
 		bitrate = 20_000_000
@@ -123,6 +133,30 @@ func TestPacketLinkSerializesAKnownDatagramTrain(t *testing.T) {
 }
 
 func TestRecordedNativeKeyOnConstrainedQUICLink(t *testing.T) {
+	recordedNativeKeyLinks(t, []keyLink{
+		{name: "s3", bits: 5_000_000, delay: 20 * time.Millisecond, loss: .01, queue: 60},
+		{name: "s4", bits: 3_000_000, delay: 30 * time.Millisecond, loss: .02, queue: 40},
+	})
+}
+
+func TestRecordedNativeKeyOnSlowAndChangingQUICLink(t *testing.T) {
+	recordedNativeKeyLinks(t, []keyLink{
+		{name: "slow500k", bits: 500_000, delay: 20 * time.Millisecond, queue: 60},
+		{name: "drop3MTo500k", bits: 3_000_000, delay: 20 * time.Millisecond, queue: 60, switchAfter: 128 << 10, nextBits: 500_000},
+	})
+}
+
+type keyLink struct {
+	name                  string
+	bits                  uint64
+	delay                 time.Duration
+	loss                  float64
+	queue                 int
+	switchAfter, nextBits uint64
+}
+
+func recordedNativeKeyLinks(t *testing.T, scenarios []keyLink) {
+	t.Helper()
 	path := os.Getenv("MEDIA_EDGE_NATIVE_KEY_FILE")
 	if path == "" {
 		t.Skip("MEDIA_EDGE_NATIVE_KEY_FILE raw native AV1 key required")
@@ -132,22 +166,13 @@ func TestRecordedNativeKeyOnConstrainedQUICLink(t *testing.T) {
 		t.Fatalf("native key unavailable/invalid size: %v %dB", err, len(payload))
 	}
 	hash := sha256.Sum256(payload)
-	for _, scenario := range []struct {
-		name  string
-		bits  uint64
-		delay time.Duration
-		loss  float64
-		queue int
-	}{
-		{"s3", 5_000_000, 20 * time.Millisecond, .01, 60},
-		{"s4", 3_000_000, 30 * time.Millisecond, .02, 40},
-	} {
+	for _, scenario := range scenarios {
 		t.Run(scenario.name, func(t *testing.T) {
-			link := &packetLink{bitrate: scenario.bits, delay: scenario.delay, loss: scenario.loss, queue: scenario.queue, random: rand.New(rand.NewSource(19))}
+			link := &packetLink{bitrate: scenario.bits, delay: scenario.delay, loss: scenario.loss, queue: scenario.queue, random: rand.New(rand.NewSource(19)), switchAfter: scenario.switchAfter, nextBits: scenario.nextBits}
 			clock := time.Now()
 			started := make(chan time.Time, 1)
 			var audio sync.WaitGroup
-			s, control, ctx, _, _ := pairThrough(t, func(address net.Addr) net.Addr { return link.path(t, address) }, 50*time.Second, func(c *carrier) {
+			s, control, ctx, _, _ := pairThrough(t, func(address net.Addr) net.Addr { return link.path(t, address) }, 90*time.Second, func(c *carrier) {
 				started <- time.Now()
 				if err := c.Send(&view.Delivery{Kind: view.Video, Header: []byte(`{"track":"video"}`), Payload: payload}); err != nil {
 					t.Error(err)
@@ -226,7 +251,7 @@ func TestRecordedNativeKeyOnConstrainedQUICLink(t *testing.T) {
 				}
 			}()
 			var finished completion
-			for n := 0; n < 100 && finished.at.IsZero(); n++ {
+			for n := 0; n < 4096 && finished.at.IsZero(); n++ {
 				message := []byte(fmt.Sprintf(`{"probe":%d}`, n))
 				var prefix [4]byte
 				binary.BigEndian.PutUint32(prefix[:], uint32(len(message)))
@@ -274,6 +299,10 @@ func TestRecordedNativeKeyOnConstrainedQUICLink(t *testing.T) {
 			}
 			link.mu.Lock()
 			defer link.mu.Unlock()
+			if scenario.nextBits > 0 && !link.switched {
+				t.Fatal("bandwidth change did not occur")
+			}
+			t.Logf("final bitrate=%dbit/s switched=%v forwarded path bytes=%d", link.bitrate, link.switched, link.bytes)
 			t.Logf("native key SHA256=%x bytes=%d link=%dbit/s RTT=%s loss=%.0f%% queue=%dpackets key=%s serializationfloor=%s audioN=%d audioP95=%s inputN=%d inputP95=%s downPackets=%d dropped=%d; transport completion/echo, not decoded paint or native input", hash, len(payload), scenario.bits, 2*scenario.delay, scenario.loss*100, scenario.queue, keyTime, time.Duration(float64(len(payload)*8)/float64(scenario.bits)*float64(time.Second)), len(audioAge), percentile(audioAge, .95), len(inputRTT), percentile(inputRTT, .95), link.packets[1], link.dropped[1])
 		})
 	}
