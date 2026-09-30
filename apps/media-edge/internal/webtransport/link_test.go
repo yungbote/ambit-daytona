@@ -146,6 +146,15 @@ func TestRecordedNativeKeyOnSlowAndChangingQUICLink(t *testing.T) {
 	})
 }
 
+func TestPacedPictureTrafficOnConstrainedQUICLink(t *testing.T) {
+	// This isolates a paced350kbit/s picture source plus the same audio/input
+	// traffic from the saturating first-key case. Opaque transport units are
+	// synthetic; neither native AV1 decoding nor producer Flow is asserted.
+	pictureLinks(t, bytes.Repeat([]byte{43}, 875), []keyLink{
+		{name: "paced350kOn500k", bits: 500_000, delay: 20 * time.Millisecond, queue: 60, units: 300, period: 20 * time.Millisecond},
+	})
+}
+
 type keyLink struct {
 	name                  string
 	bits                  uint64
@@ -153,6 +162,8 @@ type keyLink struct {
 	loss                  float64
 	queue                 int
 	switchAfter, nextBits uint64
+	units                 int
+	period                time.Duration
 }
 
 func recordedNativeKeyLinks(t *testing.T, scenarios []keyLink) {
@@ -165,9 +176,15 @@ func recordedNativeKeyLinks(t *testing.T, scenarios []keyLink) {
 	if err != nil || len(payload) == 0 || len(payload) > 12<<20 {
 		t.Fatalf("native key unavailable/invalid size: %v %dB", err, len(payload))
 	}
+	pictureLinks(t, payload, scenarios)
+}
+
+func pictureLinks(t *testing.T, payload []byte, scenarios []keyLink) {
+	t.Helper()
 	hash := sha256.Sum256(payload)
 	for _, scenario := range scenarios {
 		t.Run(scenario.name, func(t *testing.T) {
+			units := max(1, scenario.units)
 			link := &packetLink{bitrate: scenario.bits, delay: scenario.delay, loss: scenario.loss, queue: scenario.queue, random: rand.New(rand.NewSource(19)), switchAfter: scenario.switchAfter, nextBits: scenario.nextBits}
 			clock := time.Now()
 			started := make(chan time.Time, 1)
@@ -196,6 +213,24 @@ func recordedNativeKeyLinks(t *testing.T, scenarios []keyLink) {
 						}
 					}
 				}()
+				if units > 1 {
+					audio.Add(1)
+					go func() {
+						defer audio.Done()
+						ticker := time.NewTicker(scenario.period)
+						defer ticker.Stop()
+						for n := 1; n < units; n++ {
+							select {
+							case <-c.session.Context().Done():
+								return
+							case <-ticker.C:
+								if err := c.Send(&view.Delivery{Kind: view.Video, Header: []byte(`{"track":"video"}`), Payload: payload}); err != nil {
+									return
+								}
+							}
+						}
+					}()
+				}
 				for {
 					_, message, err := c.Receive()
 					if err != nil {
@@ -218,9 +253,18 @@ func recordedNativeKeyLinks(t *testing.T, scenarios []keyLink) {
 			}
 			keyDone := make(chan completion, 1)
 			go func() {
-				data, err := io.ReadAll(picture)
-				if err == nil && !bytes.HasSuffix(data, payload) {
-					err = fmt.Errorf("native key changed")
+				var err error
+				for n := 0; n < units && err == nil; n++ {
+					if n > 0 {
+						picture, err = s.AcceptUniStream(ctx)
+					}
+					if err == nil {
+						var data []byte
+						data, err = io.ReadAll(picture)
+						if err == nil && !bytes.HasSuffix(data, payload) {
+							err = fmt.Errorf("picture transport bytes changed")
+						}
+					}
 				}
 				keyDone <- completion{time.Now(), err}
 			}()
@@ -303,7 +347,11 @@ func recordedNativeKeyLinks(t *testing.T, scenarios []keyLink) {
 				t.Fatal("bandwidth change did not occur")
 			}
 			t.Logf("final bitrate=%dbit/s switched=%v forwarded path bytes=%d", link.bitrate, link.switched, link.bytes)
-			t.Logf("native key SHA256=%x bytes=%d link=%dbit/s RTT=%s loss=%.0f%% queue=%dpackets key=%s serializationfloor=%s audioN=%d audioP95=%s inputN=%d inputP95=%s downPackets=%d dropped=%d; transport completion/echo, not decoded paint or native input", hash, len(payload), scenario.bits, 2*scenario.delay, scenario.loss*100, scenario.queue, keyTime, time.Duration(float64(len(payload)*8)/float64(scenario.bits)*float64(time.Second)), len(audioAge), percentile(audioAge, .95), len(inputRTT), percentile(inputRTT, .95), link.packets[1], link.dropped[1])
+			label := "native key"
+			if units > 1 {
+				label = "synthetic paced transport units"
+			}
+			t.Logf("%s SHA256=%x bytesPerUnit=%d units=%d period=%s link=%dbit/s RTT=%s loss=%.0f%% queue=%dpackets completion=%s serializationfloor=%s audioN=%d audioP95=%s inputN=%d inputP95=%s downPackets=%d dropped=%d; transport completion/echo, not decoded paint or native input", label, hash, len(payload), units, scenario.period, scenario.bits, 2*scenario.delay, scenario.loss*100, scenario.queue, keyTime, time.Duration(float64(len(payload)*units*8)/float64(scenario.bits)*float64(time.Second)), len(audioAge), percentile(audioAge, .95), len(inputRTT), percentile(inputRTT, .95), link.packets[1], link.dropped[1])
 		})
 	}
 }
