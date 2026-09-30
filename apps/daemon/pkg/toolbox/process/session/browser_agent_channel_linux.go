@@ -311,7 +311,7 @@ func browserAgentFrameKind(frame []byte) browserAgentRequestKind {
 	switch value.Type {
 	case "site_sessions.offer", "site_session.attach", "site_session.refuse", "site_session.export", "site_session.detach":
 		return browserAgentCustody
-	case "program.status", "program.close":
+	case "program.status", "program.close", "program.files", "action.files", "action.files.release":
 		return browserAgentProgramStatus
 	default:
 		return browserAgentOrdinary

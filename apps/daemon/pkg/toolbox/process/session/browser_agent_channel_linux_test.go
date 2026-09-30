@@ -122,6 +122,12 @@ func TestBrowserAgentSiteNeedAndAttachDoNotWaitBehindPausedSequence(t *testing.T
 }
 
 func TestBrowserAgentProgramStatusOvertakesSequenceWithNormalBounds(t *testing.T) {
+	for _, kind := range []string{"program.status", "program.files", "action.files", "action.files.release"} {
+		t.Run(kind, func(t *testing.T) { testBrowserAgentMetadataOvertakesSequence(t, kind) })
+	}
+}
+
+func testBrowserAgentMetadataOvertakesSequence(t *testing.T, kind string) {
 	_, channel := openBrowserAgentChannelWithPing(t, "agent", browserAgentPingInterval)
 	if channel.WriteMessage(websocket.TextMessage, []byte(`{"type":"site_sessions.offer","id":1,"sites":[]}`)) != nil {
 		t.Fatal("offer write failed")
@@ -131,7 +137,14 @@ func TestBrowserAgentProgramStatusOvertakesSequenceWithNormalBounds(t *testing.T
 		t.Fatal("sequence write failed")
 	}
 	readBrowserAgentReply(t, channel)
-	if channel.WriteJSON(map[string]any{"type": "program.status", "id": 3, "programId": programFixtureID, "actionId": programFixtureAction, "ownerGeneration": "41"}) != nil {
+	frame := map[string]any{"type": kind, "id": 3, "actionId": programFixtureAction, "ownerGeneration": "41"}
+	if strings.HasPrefix(kind, "program.") {
+		frame["programId"] = programFixtureID
+	}
+	if kind == "program.files" || kind == "action.files" {
+		frame["files"] = []any{}
+	}
+	if channel.WriteJSON(frame) != nil {
 		t.Fatal("status write failed")
 	}
 	status, _ := readBrowserAgentReply(t, channel)
@@ -146,7 +159,7 @@ func TestBrowserAgentProgramStatusOvertakesSequenceWithNormalBounds(t *testing.T
 	if attached["id"] != float64(4) || sequence["id"] != float64(2) {
 		t.Fatal("programme metadata changed ordinary sequence ownership")
 	}
-	large := []byte(`{"type":"program.status","id":5,"extra":"` + strings.Repeat("x", browserAgentRequestLimit) + `"}`)
+	large := []byte(`{"type":"` + kind + `","id":5,"extra":"` + strings.Repeat("x", browserAgentRequestLimit) + `"}`)
 	if channel.WriteMessage(websocket.TextMessage, large) != nil {
 		t.Fatal("large status write failed")
 	}

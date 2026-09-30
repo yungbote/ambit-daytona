@@ -28,6 +28,9 @@ func TestMain(m *testing.M) {
 	if code, handled := session.RunSupervisor(os.Args[1:]); handled {
 		os.Exit(code)
 	}
+	if runBrowserProgramHostFixture(os.Args[1:]) {
+		os.Exit(0)
+	}
 	if runBrowserFixture(os.Args[1:]) {
 		os.Exit(0)
 	}
