@@ -6,6 +6,9 @@ package websocket
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -18,6 +21,7 @@ import (
 
 	"github.com/daytonaio/media-edge/internal/view"
 	ws "github.com/gorilla/websocket"
+	"golang.org/x/sys/unix"
 )
 
 // The task-only listener serializes actual TCP writes; no host qdisc or
@@ -29,6 +33,7 @@ type pacedListener struct {
 	bytes    atomic.Int64
 	progress chan struct{}
 	once     sync.Once
+	rate     atomic.Int64
 }
 
 type pacedConnection struct {
@@ -48,7 +53,11 @@ func (c *pacedConnection) Write(data []byte) (int, error) {
 	written := 0
 	for len(data) > 0 {
 		part := min(len(data), 4096)
-		timer := time.NewTimer(time.Duration(part*8) * time.Second / 500000)
+		rate := c.owner.rate.Load()
+		if rate == 0 {
+			rate = 500000
+		}
+		timer := time.NewTimer(time.Duration(part*8) * time.Second / time.Duration(rate))
 		select {
 		case <-timer.C:
 		case <-c.owner.ctx.Done():
@@ -176,4 +185,417 @@ func TestRecordedNativeKeyShowsWholeMessageWebSocketAudioHOL(t *testing.T) {
 		t.Fatal("queued audio writer did not cancel")
 	}
 	<-reading
+}
+
+// chunkFlight is the spike's byte-credit gate, independent of paint. A
+// boundary is reserved before socket I/O; receipts may arrive before the
+// writer returns. Only outstanding boundaries remain in memory.
+type chunkFlight struct {
+	mu                  sync.Mutex
+	window, bytes, peak int
+	acknowledged        int
+	boundaries          []chunkBoundary
+}
+
+type chunkBoundary struct{ offset, wire int }
+
+func (f *chunkFlight) reserve(offset, wire int) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if wire <= 0 || (f.bytes != 0 && wire > f.window-f.bytes) {
+		return false
+	}
+	f.boundaries = append(f.boundaries, chunkBoundary{offset, wire})
+	f.bytes += wire
+	f.peak = max(f.peak, f.bytes)
+	return true
+}
+
+func (f *chunkFlight) received(offset int) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if offset <= f.acknowledged {
+		return offset == f.acknowledged
+	}
+	for index, boundary := range f.boundaries {
+		if boundary.offset != offset {
+			continue
+		}
+		for _, part := range f.boundaries[:index+1] {
+			f.bytes -= part.wire
+		}
+		f.boundaries = f.boundaries[:copy(f.boundaries, f.boundaries[index+1:])]
+		f.acknowledged = offset
+		return true
+	}
+	return false
+}
+
+func TestChunkCreditReservationAcceptsEarlyReceiptAndPrunes(t *testing.T) {
+	f := &chunkFlight{window: 1024}
+	if f.received(1) || !f.reserve(16, 600) || f.reserve(32, 600) || f.received(17) || !f.received(16) {
+		t.Fatal("unissued receipt or credit boundary accepted")
+	}
+	// A tiny window cannot hold the minimum nonempty envelope. Its full
+	// debit is permitted only when empty, and then awaits received credit.
+	f.window = 3
+	if !f.reserve(17, 120) || f.reserve(18, 120) || !f.received(17) || len(f.boundaries) != 0 || f.bytes != 0 {
+		t.Fatal("minimum-envelope debt or cumulative pruning failed")
+	}
+}
+
+type chunkLinkResult struct {
+	wire, parts, peak, socketPeak, controls int
+	audioWire, controlWire                  int
+	elapsed                                 time.Duration
+	err                                     error
+}
+
+// The hard slice uses the actual carrier, TCP socket and immutable native
+// body. It intentionally precedes native/T1/Product qualification: the
+// sender is this bounded protocol spike, not the native publisher.
+func TestRecordedNativeKeyWithChunkCreditAt500k(t *testing.T) {
+	path := os.Getenv("MEDIA_EDGE_BROWSER_NATIVE_KEY_FILE")
+	if path == "" {
+		t.Skip("recorded native key required")
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := os.Open(path[:len(path)-len("native-q32-noise-4096x4096.av1")] + "native-q32-4096-wire-r1.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fixture.Close()
+	var prefix [4]byte
+	if _, err := io.ReadFull(fixture, prefix[:]); err != nil {
+		t.Fatal(err)
+	}
+	header := make([]byte, binary.BigEndian.Uint32(prefix[:]))
+	if _, err := io.ReadFull(fixture, header); err != nil {
+		t.Fatal(err)
+	}
+	var descriptor map[string]any
+	if err := json.Unmarshal(header, &descriptor); err != nil {
+		t.Fatal(err)
+	}
+	if int(descriptor["byteLength"].(float64)) != len(payload) {
+		t.Fatal("fixture/body mismatch")
+	}
+	// Compare window sizes on identical prefixes; spend one whole-key run
+	// on the smallest window that can cover two scheduling opportunities.
+	for _, quanta := range []int{1, 2, 4} {
+		t.Run(fmt.Sprintf("window-%d-prefix", quanta), func(t *testing.T) {
+			runChunkKeyLink(t, payload[:64<<10], descriptor, quanta*1024, false)
+		})
+	}
+	t.Run("complete-window-2", func(t *testing.T) {
+		runChunkKeyLink(t, payload, descriptor, 2*1024, true)
+	})
+}
+
+func runChunkKeyLink(t *testing.T, payload []byte, descriptor map[string]any, window int, adversarial bool) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
+	defer cancel()
+	result := make(chan chunkLinkResult, 1)
+	link := &pacedListener{ctx: ctx, progress: make(chan struct{})}
+	flight := &chunkFlight{window: window}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&ws.Upgrader{WriteBufferSize: 4096}).Upgrade(w, r, nil)
+		if err != nil {
+			result <- chunkLinkResult{err: err}
+			return
+		}
+		c := newCarrier(conn, time.Hour)
+		defer c.Close(0, "")
+		wake := make(chan struct{}, 1)
+		control := make(chan []byte, 1)
+		readerError := make(chan error, 1)
+		painted := make(chan struct{}, 1)
+		go func() {
+			for {
+				text, data, err := c.Receive()
+				if err != nil {
+					readerError <- err
+					return
+				}
+				var receipt struct {
+					Type   string
+					Offset int
+				}
+				if !text || json.Unmarshal(data, &receipt) != nil {
+					readerError <- fmt.Errorf("invalid receipt")
+					return
+				}
+				switch receipt.Type {
+				case "received":
+					if !flight.received(receipt.Offset) {
+						readerError <- fmt.Errorf("unissued prefix%d", receipt.Offset)
+						return
+					}
+					select {
+					case wake <- struct{}{}:
+					default:
+					}
+				case "input":
+					select {
+					case control <- data:
+					case <-ctx.Done():
+						return
+					}
+				case "ack":
+					flight.mu.Lock()
+					complete := flight.acknowledged == len(payload)
+					flight.mu.Unlock()
+					if !complete {
+						readerError <- fmt.Errorf("paint before complete received prefix")
+						return
+					}
+					painted <- struct{}{}
+				}
+			}
+		}()
+		started := time.Now()
+		stats := chunkLinkResult{}
+		finish := func(err error) {
+			stats.err, stats.elapsed = err, time.Since(started)
+			flight.mu.Lock()
+			stats.peak = flight.peak
+			flight.mu.Unlock()
+			result <- stats
+		}
+		audio := time.NewTicker(100 * time.Millisecond)
+		defer audio.Stop()
+		sendAudio := func() error {
+			body := make([]byte, 160)
+			binary.BigEndian.PutUint64(body, uint64(time.Now().UnixNano()))
+			delivery := &view.Delivery{Kind: view.Audio, Header: []byte(`{"type":"media","track":"audio"}`), Payload: body}
+			stats.audioWire = delivery.Size() + 4
+			return c.Send(delivery)
+		}
+		sendControl := func(data []byte) error {
+			stats.controls++
+			stats.controlWire = max(stats.controlWire, len(data)+2)
+			return c.Send(&view.Delivery{Kind: view.Record, Text: data})
+		}
+		for offset := 0; offset < len(payload); {
+			// Return to the existing priority order at every part boundary.
+			select {
+			case data := <-control:
+				if err := sendControl(data); err != nil {
+					finish(err)
+					return
+				}
+			default:
+			}
+			select {
+			case <-audio.C:
+				if err := sendAudio(); err != nil {
+					finish(err)
+					return
+				}
+			default:
+			}
+			var partHeader []byte
+			if offset == 0 {
+				first := make(map[string]any, len(descriptor)+1)
+				for key, value := range descriptor {
+					first[key] = value
+				}
+				first["byteLength"], first["offset"] = len(payload), 0
+				partHeader, _ = json.Marshal(first)
+			} else {
+				partHeader, _ = json.Marshal(struct {
+					Type     string `json:"type"`
+					Track    string `json:"track"`
+					StreamID any    `json:"streamId"`
+					Seq      any    `json:"seq"`
+					Offset   int    `json:"offset"`
+				}{"media", "video", descriptor["streamId"], descriptor["seq"], offset})
+			}
+			count := min(len(payload)-offset, max(1, 1024-8-len(partHeader)))
+			wire := 8 + len(partHeader) + count //4B envelope prefix + actual4B WS header
+			if !flight.reserve(offset+count, wire) {
+				select {
+				case <-wake:
+				case data := <-control:
+					if err := sendControl(data); err != nil {
+						finish(err)
+						return
+					}
+				case <-audio.C:
+					if err := sendAudio(); err != nil {
+						finish(err)
+						return
+					}
+				case err := <-readerError:
+					finish(err)
+					return
+				case <-ctx.Done():
+					finish(ctx.Err())
+					return
+				}
+				continue
+			}
+			if err := c.Send(&view.Delivery{Kind: view.Video, Header: partHeader, Payload: payload[offset : offset+count]}); err != nil {
+				finish(err)
+				return
+			}
+			offset += count
+			stats.wire += wire
+			stats.parts++
+			if tcp, ok := conn.UnderlyingConn().(*pacedConnection); ok {
+				if raw, err := tcp.Conn.(*net.TCPConn).SyscallConn(); err == nil {
+					_ = raw.Control(func(fd uintptr) {
+						queued, err := unix.IoctlGetInt(int(fd), unix.TIOCOUTQ)
+						if err == nil {
+							stats.socketPeak = max(stats.socketPeak, queued)
+						}
+					})
+				}
+			}
+		}
+		for {
+			select {
+			case <-painted:
+				finish(nil)
+				return
+			case data := <-control:
+				if err := sendControl(data); err != nil {
+					finish(err)
+					return
+				}
+			case <-audio.C:
+				if err := sendAudio(); err != nil {
+					finish(err)
+					return
+				}
+			case err := <-readerError:
+				finish(err)
+				return
+			case <-ctx.Done():
+				finish(ctx.Err())
+				return
+			}
+		}
+	}))
+	link.Listener = server.Listener
+	server.Listener = link
+	server.Start()
+	defer server.Close()
+	client, _, err := ws.DefaultDialer.Dial("ws"+server.URL[4:], nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	var writing sync.Mutex
+	write := func(value any) error { writing.Lock(); defer writing.Unlock(); return client.WriteJSON(value) }
+	inputDone := make(chan struct{})
+	defer func() { cancel(); <-inputDone }()
+	go func() {
+		defer close(inputDone)
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if write(map[string]any{"type": "input", "at": time.Now().UnixNano()}) != nil {
+					return
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	assembled := make([]byte, len(payload))
+	seen, audioCount, controls := 0, 0, 0
+	var maxAudio, maxInput time.Duration
+	var stallAt time.Time
+	stallOffset, latestHeld := 0, 0
+	receive := func(offset int) error {
+		return write(map[string]any{"type": "received", "track": "video", "streamId": descriptor["streamId"], "seq": descriptor["seq"], "offset": offset})
+	}
+	for seen < len(payload) {
+		_ = client.SetReadDeadline(time.Now().Add(5 * time.Second))
+		kind, data, err := client.ReadMessage()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if kind == ws.TextMessage {
+			var echo struct {
+				Type string
+				At   int64
+			}
+			if json.Unmarshal(data, &echo) != nil || echo.Type != "input" {
+				t.Fatalf("unexpected control%q", data)
+			}
+			controls++
+			maxInput = max(maxInput, time.Since(time.Unix(0, echo.At)))
+		} else {
+			if len(data) < 4 {
+				t.Fatal("short part")
+			}
+			headerBytes := int(binary.BigEndian.Uint32(data))
+			if headerBytes < 2 || headerBytes+4 > len(data) {
+				t.Fatal("bad part envelope")
+			}
+			var part struct {
+				Track      string
+				Offset     int
+				ByteLength int
+			}
+			if err := json.Unmarshal(data[4:4+headerBytes], &part); err != nil {
+				t.Fatal(err)
+			}
+			body := data[4+headerBytes:]
+			if part.Track == "audio" {
+				audioCount++
+				maxAudio = max(maxAudio, time.Since(time.Unix(0, int64(binary.BigEndian.Uint64(body)))))
+			} else {
+				if part.Offset != seen || len(body) == 0 || len(data)+4 > 1024 || seen+len(body) > len(assembled) {
+					t.Fatalf("invalid contiguous bounded part at%d: %+v body%d", seen, part, len(body))
+				}
+				copy(assembled[seen:], body)
+				seen += len(body)
+				if adversarial && stallAt.IsZero() && seen >= 32<<10 {
+					stallAt, stallOffset = time.Now(), seen
+					link.rate.Store(250000)
+				}
+				if !stallAt.IsZero() && time.Since(stallAt) < 200*time.Millisecond {
+					latestHeld = seen
+				} else if err := receive(seen); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if latestHeld > 0 && time.Since(stallAt) >= 200*time.Millisecond {
+			if latestHeld-stallOffset > window {
+				t.Fatalf("stalled receiver advanced%d payload bytes beyond%d-byte credit", latestHeld-stallOffset, window)
+			}
+			if err := receive(latestHeld); err != nil {
+				t.Fatal(err)
+			}
+			latestHeld = 0
+			link.rate.Store(500000)
+		}
+	}
+	if sha256.Sum256(assembled) != sha256.Sum256(payload) {
+		t.Fatal("reassembly changed the native key")
+	}
+	// No decode/paint credit is issued until the entire exact body exists.
+	if err := write(map[string]any{"type": "ack", "track": "video", "streamId": descriptor["streamId"], "seq": descriptor["seq"]}); err != nil {
+		t.Fatal(err)
+	}
+	stats := <-result
+	if stats.err != nil {
+		t.Fatal(stats.err)
+	}
+	// Video credit excludes the concurrent priority packet/echo. The kernel
+	// can retain that one bounded audio envelope as well as the video window.
+	if stats.peak > window || stats.socketPeak > window+stats.audioWire+stats.controlWire || audioCount == 0 || controls == 0 || maxAudio > 150*time.Millisecond || maxInput > 150*time.Millisecond {
+		t.Fatalf("unbounded/blocked chunk path: %+v audio%d/%s control%d/%s", stats, audioCount, maxAudio, controls, maxInput)
+	}
+	t.Logf("actual bounded WS at500k: keySHA%x body%dB exact videoWire%dB parts%d window%dB peakCredit%dB kernelQueuedPeak%dB duration%s audio%d maxAge%s control%d maxRTT%s; first-key zero paint ACK until full assembly. Native/T1/Product input remains unverified", sha256.Sum256(payload), len(payload), stats.wire, stats.parts, window, stats.peak, stats.socketPeak, stats.elapsed, audioCount, maxAudio, controls, maxInput)
 }
