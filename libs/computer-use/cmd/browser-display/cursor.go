@@ -238,9 +238,11 @@ func encodeCursorPNG(source cursorPixels) []byte {
 	return buf.Bytes()
 }
 
-// cursorTracker keeps the displayed cursor's identity current with no work
-// per capture: CursorNotify events, recorded by the frame observer, trigger
-// one GetCursorImageAndName round trip per new cursor object.
+// cursorTracker keeps the displayed cursor's identity current. A composited
+// picture feeds its existing image observation; a hidden cursor is fetched
+// only when its object changes, while its position is read independently of
+// the identity cache by the same capture owner. Stable serials and bitmap
+// hashes avoid reclassifying or encoding an unchanged cursor.
 type cursorTracker struct {
 	notified atomic.Uint64  // 1 + the newest notified serial; 0 before any
 	known    bool           // a fetch has answered
@@ -261,14 +263,19 @@ func (t *cursorTracker) notify(serial uint32) { t.notified.Store(uint64(serial) 
 // serial. With no announcement since the subscription, the cursor fetched is
 // still the one displayed.
 func (t *cursorTracker) begin(c *xgb.Conn) *xfixes.GetCursorImageAndNameCookie {
-	if t.known {
-		switch t.notified.Load() {
-		case 0, uint64(t.current.Serial) + 1:
-			return nil
-		}
+	if !t.imageNeeded() {
+		return nil
 	}
 	cookie := xfixes.GetCursorImageAndName(c)
 	return &cookie
+}
+
+func (t *cursorTracker) imageNeeded() bool {
+	if !t.known {
+		return true
+	}
+	notified := t.notified.Load()
+	return notified != 0 && notified != uint64(t.current.Serial)+1
 }
 
 // finish resolves a fetch. An X protocol error means no cursor is displayed;
@@ -284,12 +291,16 @@ func (t *cursorTracker) finish(cookie *xfixes.GetCursorImageAndNameCookie) error
 		}
 		return err
 	}
-	if t.known && reply.CursorSerial == t.current.Serial {
-		return nil
+	t.note(reply.CursorSerial, int(reply.Width), int(reply.Height), int(reply.Xhot), int(reply.Yhot), reply.CursorImage)
+	return nil
+}
+
+func (t *cursorTracker) note(serial uint32, width, height, hotX, hotY int, pixels []uint32) {
+	if t.known && serial == t.current.Serial {
+		return
 	}
 	t.known = true
-	t.current = t.describe(reply.CursorSerial, int(reply.Width), int(reply.Height), int(reply.Xhot), int(reply.Yhot), reply.CursorImage)
-	return nil
+	t.current = t.describe(serial, width, height, hotX, hotY, pixels)
 }
 
 // unreported returns the current identity when it differs from the last one
