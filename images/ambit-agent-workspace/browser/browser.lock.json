@@ -5,18 +5,18 @@
     "repository": "https://github.com/yungbote/ambit-agent-browser",
     "upstreamRepository": "https://github.com/vercel-labs/agent-browser",
     "upstreamRevision": "72007a6788d863611b23bed0b59d0d659c638d8e",
-    "revision": "3728dd9ad14352724f488a968f1fd3b8a568ffad",
-    "sourceTree": "371887aeb318aab01d3a04a9386c3791f699a2fd",
+    "revision": "4a77a0547ff4e9a71708f3a5343699e48730c768",
+    "sourceTree": "7e9aff9b4ccec1aea3eb8cb0799cf3a1adba5b65",
     "version": "0.37.1",
     "archiveName": "agent-browser-source.tar",
-    "sha256": "83f41fbc35d7a2c4604973839f35e11b7ec04c9e157c1ae3d8cec099989be3c3",
+    "sha256": "8201dd2059807d63696797898b425bf3b03f3bfc2819ca7454752a3724b0b1d6",
     "features": [
       "browser-audio"
     ]
   },
   "displayHelper": {
     "repository": "https://github.com/yungbote/ambit-daytona",
-    "revision": "03b6e585821805b64050552a8e6b018b844bfbd8",
+    "revision": "3dbf2cd0b11387f9b6ddc70a22eb655df0167368",
     "paths": [
       "LICENSE",
       "libs/computer-use/go.mod",
@@ -24,7 +24,7 @@
       "libs/computer-use/cmd/browser-display"
     ],
     "archiveName": "browser-display-source.tar",
-    "sha256": "32bc8f015b22abd8af0319d27dc2410d36ae4c7e283046c48d8ea304c257085f"
+    "sha256": "e8e65d925248d9f60f75a68c5f45993dfbebd8fdbbb040874d0c8d1a8607bb66"
   },
   "chrome": {
     "version": "152.0.7977.82",
