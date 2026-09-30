@@ -105,6 +105,9 @@ func (e *Estimator) Update(now time.Time, generation uint64, network Network, pa
 	if network.ProxyHop || !network.Known {
 		queued = queued && paintFresh
 	}
+	// A transport ACK does not mean the consumer painted the picture. A
+	// decoder/main-thread queue must cap a clean QUIC connection as well.
+	queued = queued || (paintFresh && paint.MinimumRTT > 0 && paint.RTT > paint.MinimumRTT+30*time.Millisecond)
 	if !queued {
 		e.queuedSince = time.Time{}
 	} else if e.queuedSince.IsZero() {

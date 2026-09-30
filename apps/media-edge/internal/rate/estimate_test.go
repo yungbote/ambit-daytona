@@ -166,6 +166,25 @@ func TestRepeatedPaintDoesNotInventProbeDemand(t *testing.T) {
 	}
 }
 
+func TestConsumerPaintQueueCapsACleanQUICConnection(t *testing.T) {
+	now := time.Unix(100, 0)
+	e := New()
+	network := Network{Known: true, DeliveryBytesPerSecond: 1000000, RTT: 20 * time.Millisecond, MinimumRTT: 20 * time.Millisecond, WindowBytes: 1 << 20, Shares: 1}
+	_, _ = e.Update(now, 1, network, Paint{})
+	var budget Budget
+	for n := 1; n <= 20; n++ {
+		at := now.Add(time.Duration(n) * 100 * time.Millisecond)
+		network.ObservedAt = at
+		paint := Paint{Known: true, DeliveryBytesPerSecond: 100000, SentBytesPerSecond: 500000, RTT: 200 * time.Millisecond, MinimumRTT: 26 * time.Millisecond, LastAck: at}
+		if next, emit := e.Update(at, 1, network, paint); emit {
+			budget = next
+		}
+	}
+	if budget.BitsPerSecond >= InitialBitsPerSecond || budget.BitsPerSecond > 1_500_000 {
+		t.Fatalf("transport ACK capacity overrode sustained consumer paint queue: %+v", budget)
+	}
+}
+
 func TestClosedLoopConsumerQueueAdaptsAndRecovers(t *testing.T) {
 	now := time.Unix(100, 0)
 	e := New()
