@@ -89,15 +89,16 @@ type capturedFrame struct {
 // the pixel slot, and the row ranges this picture wrote (ascending, disjoint).
 // Every other row of the slot is as the previous picture left it.
 type pictureFrame struct {
-	Changed        bool            `json:"changed"`
-	Width          int             `json:"width"`
-	Height         int             `json:"height"`
-	Stride         int             `json:"stride"`
-	Rows           [][2]int        `json:"rows"`
-	CursorIncluded bool            `json:"cursorIncluded"`
-	Visible        *visibleRect    `json:"visible,omitempty"`
-	Timings        pictureTimings  `json:"timings"`
-	Cursor         *cursorIdentity `json:"cursor,omitempty"`
+	Changed        bool             `json:"changed"`
+	Width          int              `json:"width"`
+	Height         int              `json:"height"`
+	Stride         int              `json:"stride"`
+	Rows           [][2]int         `json:"rows"`
+	CursorIncluded bool             `json:"cursorIncluded"`
+	Visible        *visibleRect     `json:"visible,omitempty"`
+	Timings        pictureTimings   `json:"timings"`
+	Cursor         *cursorIdentity  `json:"cursor,omitempty"`
+	Pointer        *pointerPosition `json:"pointer,omitempty"`
 	read           time.Time
 }
 type pictureTimings struct {
@@ -106,9 +107,26 @@ type pictureTimings struct {
 	CopyUs  int64 `json:"copyUs"`
 }
 type unchangedFrame struct {
-	Changed bool            `json:"changed"`
-	Cursor  *cursorIdentity `json:"cursor,omitempty"`
+	Changed bool             `json:"changed"`
+	Cursor  *cursorIdentity  `json:"cursor,omitempty"`
+	Pointer *pointerPosition `json:"pointer,omitempty"`
 }
+
+// Pointer position from this picture's existing XFixes observation, in
+// framebuffer device pixels. Cursor identity/hotspot size and page CSS scale
+// do not change these coordinates; an absent read never reuses an old point.
+type pointerPosition struct {
+	X int `json:"x"`
+	Y int `json:"y"`
+}
+
+func picturePointer(cursor *xfixes.GetCursorImageReply) *pointerPosition {
+	if cursor == nil {
+		return nil
+	}
+	return &pointerPosition{X: int(cursor.X), Y: int(cursor.Y)}
+}
+
 type visibleRect struct {
 	X      int `json:"x"`
 	Y      int `json:"y"`
@@ -894,6 +912,7 @@ type screen struct {
 	overflow      bool
 	damaged       bool
 	cursor        *xfixes.GetCursorImageReply
+	pointer       *pointerPosition
 	identity      *cursorIdentity
 }
 
@@ -907,12 +926,15 @@ func (e *frameEngine) observeScreen(consumer *damageConsumer, cursor, identity, 
 	geometry := xproto.GetGeometry(e.conn, xproto.Drawable(e.root))
 	serial := e.sendMarker()
 	var cursorCookie xfixes.GetCursorImageCookie
+	var identityCookie *xfixes.GetCursorImageAndNameCookie
+	var pointerCookie xproto.QueryPointerCookie
 	if cursor {
 		cursorCookie = xfixes.GetCursorImage(e.conn)
-	}
-	var identityCookie *xfixes.GetCursorImageAndNameCookie
-	if identity {
+	} else if identity {
 		identityCookie = e.cursor.begin(e.conn)
+		if identityCookie == nil {
+			pointerCookie = xproto.QueryPointer(e.conn, e.root)
+		}
 	}
 	reply, err := geometry.Reply()
 	if err != nil {
@@ -931,10 +953,32 @@ func (e *frameEngine) observeScreen(consumer *damageConsumer, cursor, identity, 
 		if seen.cursor, err = cursorCookie.Reply(); err != nil {
 			return screen{}, false, err
 		}
+		seen.pointer = picturePointer(seen.cursor)
+	} else if identity {
+		if identityCookie != nil {
+			image, fetchErr := identityCookie.Reply()
+			if fetchErr != nil {
+				if _, protocol := fetchErr.(xgb.Error); !protocol {
+					return screen{}, false, fetchErr
+				}
+			} else {
+				e.cursor.note(image.CursorSerial, int(image.Width), int(image.Height), int(image.Xhot), int(image.Yhot), image.CursorImage)
+				seen.pointer = &pointerPosition{X: int(image.X), Y: int(image.Y)}
+			}
+		} else {
+			pointer, fetchErr := pointerCookie.Reply()
+			if fetchErr != nil {
+				if _, protocol := fetchErr.(xgb.Error); !protocol {
+					return screen{}, false, fetchErr
+				}
+			} else if pointer.SameScreen {
+				seen.pointer = &pointerPosition{X: int(pointer.RootX), Y: int(pointer.RootY)}
+			}
+		}
 	}
 	if identity {
-		if err := e.cursor.finish(identityCookie); err != nil {
-			return screen{}, false, err
+		if seen.cursor != nil {
+			e.cursor.note(seen.cursor.CursorSerial, int(seen.cursor.Width), int(seen.cursor.Height), int(seen.cursor.Xhot), int(seen.cursor.Yhot), seen.cursor.CursorImage)
 		}
 		// A forced frame is whole, cursor included: the driver forces one
 		// when it holds nothing of the display, which includes having
@@ -1041,14 +1085,14 @@ func (e *frameEngine) pictureOnce(options pictureOptions) (any, bool, error) {
 		}
 	}
 	if !seen.damaged && !moved && !options.force {
-		return unchangedFrame{Cursor: seen.identity}, false, nil
+		return unchangedFrame{Cursor: seen.identity, Pointer: seen.pointer}, false, nil
 	}
 	if options.force {
 		for band := range rows {
 			rows[band] = true
 		}
 	}
-	frame := pictureFrame{Changed: true, Width: seen.width, Height: seen.height, Stride: seen.width * 4, CursorIncluded: options.cursor, Cursor: seen.identity}
+	frame := pictureFrame{Changed: true, Width: seen.width, Height: seen.height, Stride: seen.width * 4, CursorIncluded: options.cursor, Cursor: seen.identity, Pointer: seen.pointer}
 	if visible := e.layout.visible.Intersect(p.surface()); !visible.Empty() && visible != p.surface() {
 		frame.Visible = &visibleRect{X: visible.Min.X, Y: visible.Min.Y, Width: visible.Dx(), Height: visible.Dy()}
 	}
