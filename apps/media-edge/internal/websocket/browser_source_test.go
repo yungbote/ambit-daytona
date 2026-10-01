@@ -77,6 +77,9 @@ type receivedConnection struct {
 // This observer retains a hash state and scalar counts, never another body.
 func (c *receivedConnection) Read() (bool, []byte, error) {
 	text, message, err := c.Conn.Read()
+	if err != nil {
+		fmt.Printf("source/T1 Read ended: %T %v\n", err, err)
+	}
 	if err != nil || text || len(message) < 4 {
 		return text, message, err
 	}
@@ -97,6 +100,7 @@ func (c *receivedConnection) Read() (bool, []byte, error) {
 		c.declared, c.body = header.ByteLength, sha256.New()
 	}
 	if c.body == nil || c.picture.StreamID != header.StreamID || c.picture.Seq != header.Seq || c.picture.BodyBytes != *header.Offset {
+		fmt.Printf("SOURCE_OBSERVER_DISCONTIGUITY current=%s/%d/%d received=%s/%d/%d bodyPresent=%v\n", c.picture.StreamID, c.picture.Seq, c.picture.BodyBytes, header.StreamID, header.Seq, *header.Offset, c.body != nil)
 		return false, nil, fmt.Errorf("source byte observer found a noncontiguous picture")
 	}
 	payload := message[4+size:]
@@ -147,6 +151,7 @@ func TestExistingNativeSourceThroughT1EdgeAndBrowser(t *testing.T) {
 	if metadata == "" || script == "" || worker == "" {
 		t.Skip("existing T1 harness metadata, production browser script and built worker required")
 	}
+	observePartial := os.Getenv("MEDIA_EDGE_BROWSER_AUDIO_OBSERVE_PARTIAL") == "1"
 	data, err := os.ReadFile(metadata)
 	if err != nil {
 		t.Fatal(err)
@@ -192,19 +197,29 @@ func TestExistingNativeSourceThroughT1EdgeAndBrowser(t *testing.T) {
 	e.Upstream = receivedSource{Upstream: upstream, onPicture: onPicture}
 	wsServer := httptest.NewUnstartedServer(edgews.NewHandler(e))
 	fullSlow := os.Getenv("MEDIA_EDGE_BROWSER_NATIVE_FULL_SLOW") == "1"
+	fullSlowQUIC := os.Getenv("MEDIA_EDGE_BROWSER_NATIVE_FULL_SLOW_QUIC") == "1"
+	audioSteady := observePartial && os.Getenv("MEDIA_EDGE_BROWSER_AUDIO_STEADY") == "1"
 	ratePhase := os.Getenv("MEDIA_EDGE_BROWSER_NATIVE_RATE_PHASE") == "1" || fullSlow
-	quicRatePhase := os.Getenv("MEDIA_EDGE_BROWSER_NATIVE_QUIC_RATE_PHASE") == "1"
+	quicRatePhase := os.Getenv("MEDIA_EDGE_BROWSER_NATIVE_QUIC_RATE_PHASE") == "1" || fullSlowQUIC
 	if ratePhase {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		var changeRate func(int64)
 		var bytes func() int64
 		wsServer.Listener, changeRate, bytes = edgews.PaceBrowserTestListener(wsServer.Listener, ctx)
-		changeRate(500000)
+		if audioSteady {
+			changeRate(100000000)
+		} else {
+			changeRate(500000)
+		}
 		prefixes := 0
 		e.Upstream = receivedSource{Upstream: upstream, onPicture: onPicture, onReceived: func(offset uint64) {
 			prefixes++
 			if fullSlow {
+				if audioSteady && prefixes == 32 {
+					changeRate(500000)
+					t.Logf("steady audio: fast bootstrap ended at validated prefix32/offset%d; physical TCP now500k", offset)
+				}
 				if prefixes == 32 || prefixes == 64 || prefixes == 128 || prefixes%1024 == 0 {
 					t.Logf("full fixed500k consumer prefix%d/offset%d: serialized%dB", prefixes, offset, bytes())
 				}
@@ -247,13 +262,27 @@ func TestExistingNativeSourceThroughT1EdgeAndBrowser(t *testing.T) {
 	if quicRatePhase {
 		var changeRate func(uint64)
 		var bytes func() uint64
-		link := testlink.NewPacket(testlink.PacketConfig{Bits: 500000, Queue: 60, Seed: 19})
+		bits := uint64(500000)
+		if audioSteady {
+			bits = 100000000
+		}
+		link := testlink.NewPacket(testlink.PacketConfig{Bits: bits, Queue: 60, Seed: 19})
 		wtAddress = link.Path(t, wtAddress)
 		changeRate = link.SetBits
 		bytes = func() uint64 { return link.Stats().Bytes }
 		prefixes := 0
 		e.Upstream = receivedSource{Upstream: upstream, onPicture: onPicture, onReceived: func(offset uint64) {
 			prefixes++
+			if fullSlowQUIC {
+				if audioSteady && prefixes == 32 {
+					changeRate(500000)
+					t.Logf("steady audio: fast bootstrap ended at validated prefix32/offset%d; physical QUIC now500k", offset)
+				}
+				if prefixes == 32 || prefixes == 64 || prefixes == 128 || prefixes%1024 == 0 {
+					t.Logf("full fixed500k QUIC consumer prefix%d/offset%d: serialized%dB", prefixes, offset, bytes())
+				}
+				return
+			}
 			switch prefixes {
 			case 32:
 				t.Logf("actual QUIC consumer prefix%d/offset%d at500k: serialized%dB; physical drop250k", prefixes, offset, bytes())
@@ -315,6 +344,19 @@ func TestExistingNativeSourceThroughT1EdgeAndBrowser(t *testing.T) {
 				}
 				if os.Getenv("MEDIA_EDGE_BROWSER_NATIVE_STALL_PARTIAL") == "1" || mixed && index >= 6 {
 					options["stallPartial"] = true
+				}
+				if observePartial {
+					options["observePartial"] = true
+					options["rateProfile"] = "fast"
+					if fullSlow || fullSlowQUIC {
+						options["rateProfile"] = "fixed-500k-cold"
+					}
+					if audioSteady {
+						options["observeStartPrefix"] = 32
+						options["rateProfile"] = "fast-bootstrap-then-500k-at-prefix32"
+					}
+					options["timeoutMs"] = 180000
+					timeout = 190 * time.Second
 				}
 				if os.Getenv("MEDIA_EDGE_BROWSER_NATIVE_WIDE") == "1" {
 					options["size"] = map[string]int{"width": 2048, "height": 2048}
@@ -411,7 +453,7 @@ func TestExistingNativeSourceThroughT1EdgeAndBrowser(t *testing.T) {
 					output, err = cmd.CombinedOutput()
 					t.Log(string(output))
 				}
-				if err == nil {
+				if err == nil && !observePartial {
 					lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 					var result struct {
 						Hash        string
@@ -446,6 +488,10 @@ func TestExistingNativeSourceThroughT1EdgeAndBrowser(t *testing.T) {
 		run(t)
 	}
 	if !t.Failed() {
-		t.Logf("source composition passed with exact live T1 fixture %s/%s; bridge forwarding, not Product auth", source.SessionID, source.ViewID)
+		if observePartial {
+			t.Logf("observation complete with exact live T1 fixture %s/%s; interval and apparatus checks only, PCM continuity is not accepted by this gate", source.SessionID, source.ViewID)
+		} else {
+			t.Logf("source composition passed with exact live T1 fixture %s/%s; bridge forwarding, not Product auth", source.SessionID, source.ViewID)
+		}
 	}
 }
