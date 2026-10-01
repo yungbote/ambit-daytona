@@ -9,7 +9,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"math/rand"
 	"net"
 	"os"
 	"sort"
@@ -17,75 +16,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/daytonaio/media-edge/internal/testlink"
 	"github.com/daytonaio/media-edge/internal/view"
-	quicproxy "github.com/quic-go/quic-go/integrationtests/tools/proxy"
 )
-
-// The packet path is task-local UDP, not a host qdisc or a second product
-// pacer. QUIC packets, ACKs, retransmissions and congestion control are real;
-// only this bounded bottleneck's propagation, serialization and loss are
-// emulated. The native-key test below characterizes a one-time key, not glass.
-type packetLink struct {
-	mu               sync.Mutex
-	next             [2]time.Time
-	bitrate          uint64
-	delay            time.Duration
-	queue            int
-	loss             float64
-	random           *rand.Rand
-	packets, dropped [2]int
-	bytes            uint64
-	switchAfter      uint64
-	nextBits         uint64
-	switched         bool
-}
-
-func (l *packetLink) drop(direction quicproxy.Direction, _, _ net.Addr, packet []byte) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.packets[direction]++
-	if direction == quicproxy.DirectionOutgoing && (l.random.Float64() < l.loss || l.next[direction].Sub(time.Now()) > time.Duration(float64(l.queue*1200*8)/float64(l.bitrate)*float64(time.Second))) {
-		l.dropped[direction]++
-		return true
-	}
-	return false
-}
-
-func (l *packetLink) delayPacket(direction quicproxy.Direction, _, _ net.Addr, packet []byte) time.Duration {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	now := time.Now()
-	if direction == quicproxy.DirectionOutgoing {
-		l.bytes += uint64(len(packet))
-		if !l.switched && l.nextBits > 0 && l.bytes >= l.switchAfter {
-			l.bitrate, l.switched = l.nextBits, true
-		}
-	}
-	bitrate := l.bitrate
-	if direction == quicproxy.DirectionIncoming {
-		bitrate = 20_000_000
-	}
-	if now.After(l.next[direction]) {
-		l.next[direction] = now
-	}
-	l.next[direction] = l.next[direction].Add(time.Duration(float64(len(packet)*8) / float64(bitrate) * float64(time.Second)))
-	return l.next[direction].Sub(now) + l.delay
-}
-
-func (l *packetLink) path(t *testing.T, destination net.Addr) net.Addr {
-	t.Helper()
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	proxy := &quicproxy.Proxy{Conn: conn, ServerAddr: destination.(*net.UDPAddr), DropPacket: l.drop, DelayPacket: l.delayPacket}
-	if err := proxy.Start(); err != nil {
-		_ = conn.Close()
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = proxy.Close(); _ = conn.Close() })
-	return proxy.LocalAddr()
-}
 
 func TestPacketLinkSerializesAKnownDatagramTrain(t *testing.T) {
 	destination, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
@@ -93,8 +26,8 @@ func TestPacketLinkSerializesAKnownDatagramTrain(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer destination.Close()
-	link := &packetLink{bitrate: 1_000_000, delay: 10 * time.Millisecond, queue: 100, random: rand.New(rand.NewSource(7))}
-	address := link.path(t, destination.LocalAddr())
+	link := testlink.NewPacket(testlink.PacketConfig{Bits: 1_000_000, Delay: 10 * time.Millisecond, Queue: 100, Seed: 7})
+	address := link.Path(t, destination.LocalAddr())
 	client, err := net.DialUDP("udp", nil, address.(*net.UDPAddr))
 	if err != nil {
 		t.Fatal(err)
@@ -185,11 +118,11 @@ func pictureLinks(t *testing.T, payload []byte, scenarios []keyLink) {
 	for _, scenario := range scenarios {
 		t.Run(scenario.name, func(t *testing.T) {
 			units := max(1, scenario.units)
-			link := &packetLink{bitrate: scenario.bits, delay: scenario.delay, loss: scenario.loss, queue: scenario.queue, random: rand.New(rand.NewSource(19)), switchAfter: scenario.switchAfter, nextBits: scenario.nextBits}
+			link := testlink.NewPacket(testlink.PacketConfig{Bits: scenario.bits, Delay: scenario.delay, Loss: scenario.loss, Queue: scenario.queue, Seed: 19, SwitchAfter: scenario.switchAfter, NextBits: scenario.nextBits})
 			clock := time.Now()
 			started := make(chan time.Time, 1)
 			var audio sync.WaitGroup
-			s, control, ctx, _, _ := pairThrough(t, func(address net.Addr) net.Addr { return link.path(t, address) }, 90*time.Second, func(c *carrier) {
+			s, control, ctx, _, _ := pairThrough(t, func(address net.Addr) net.Addr { return link.Path(t, address) }, 90*time.Second, func(c *carrier) {
 				started <- time.Now()
 				if err := c.Send(&view.Delivery{Kind: view.Video, Header: []byte(`{"track":"video"}`), Payload: payload}); err != nil {
 					t.Error(err)
@@ -341,17 +274,16 @@ func pictureLinks(t *testing.T, payload []byte, scenarios []keyLink) {
 			if len(audioAge) == 0 {
 				t.Fatal("audio made no progress while key drained")
 			}
-			link.mu.Lock()
-			defer link.mu.Unlock()
-			if scenario.nextBits > 0 && !link.switched {
+			stats := link.Stats()
+			if scenario.nextBits > 0 && !stats.Switched {
 				t.Fatal("bandwidth change did not occur")
 			}
-			t.Logf("final bitrate=%dbit/s switched=%v forwarded path bytes=%d", link.bitrate, link.switched, link.bytes)
+			t.Logf("final bitrate=%dbit/s switched=%v forwarded path bytes=%d", stats.Bits, stats.Switched, stats.Bytes)
 			label := "native key"
 			if units > 1 {
 				label = "synthetic paced transport units"
 			}
-			t.Logf("%s SHA256=%x bytesPerUnit=%d units=%d period=%s link=%dbit/s RTT=%s loss=%.0f%% queue=%dpackets completion=%s serializationfloor=%s audioN=%d audioP95=%s inputN=%d inputP95=%s downPackets=%d dropped=%d; transport completion/echo, not decoded paint or native input", label, hash, len(payload), units, scenario.period, scenario.bits, 2*scenario.delay, scenario.loss*100, scenario.queue, keyTime, time.Duration(float64(len(payload)*units*8)/float64(scenario.bits)*float64(time.Second)), len(audioAge), percentile(audioAge, .95), len(inputRTT), percentile(inputRTT, .95), link.packets[1], link.dropped[1])
+			t.Logf("%s SHA256=%x bytesPerUnit=%d units=%d period=%s link=%dbit/s RTT=%s loss=%.0f%% queue=%dpackets completion=%s serializationfloor=%s audioN=%d audioP95=%s inputN=%d inputP95=%s downPackets=%d dropped=%d; transport completion/echo, not decoded paint or native input", label, hash, len(payload), units, scenario.period, scenario.bits, 2*scenario.delay, scenario.loss*100, scenario.queue, keyTime, time.Duration(float64(len(payload)*units*8)/float64(scenario.bits)*float64(time.Second)), len(audioAge), percentile(audioAge, .95), len(inputRTT), percentile(inputRTT, .95), stats.Packets[1], stats.Dropped[1])
 		})
 	}
 }
