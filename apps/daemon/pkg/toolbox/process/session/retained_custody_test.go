@@ -25,6 +25,12 @@ import (
 // TestMain also serves the session supervisor and the browser driver stand-in:
 // both re-execute /proc/self/exe, which is this test binary.
 func TestMain(m *testing.M) {
+	// Preserve the caller's race checks while removing only its artificial exit
+	// sleep from future self-reexecuted fixture children. The current process's
+	// race runtime has already read the original options during startup.
+	if err := os.Setenv("GORACE", os.Getenv("GORACE")+" atexit_sleep_ms=0"); err != nil {
+		panic(err)
+	}
 	if code, handled := session.RunSupervisor(os.Args[1:]); handled {
 		os.Exit(code)
 	}
