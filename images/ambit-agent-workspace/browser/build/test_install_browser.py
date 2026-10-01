@@ -15,6 +15,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+import zipfile
 
 
 SPEC = importlib.util.spec_from_file_location(
@@ -826,6 +827,132 @@ class BrowserComponentUpdateTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             installer.prepare_browser_component(self.root, "unknown", self.lock)
         self.assertEqual((self.root / "bin/old-file").read_text(), "bin")
+
+
+class ChromeVendorPackageTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.inputs = self.root / "inputs"
+        self.inputs.mkdir()
+        self.scratch = self.root / "scratch"
+        self.scratch.mkdir()
+        self.destination = self.root / "installed/chrome"
+        self.destination.parent.mkdir()
+        self.binding = {"distribution": "google-chrome-stable", "version": "154.0.8037.92",
+                        "packageVersion": "154.0.8037.92-1", "archiveName": "fixture.deb"}
+
+    def package(self, package="google-chrome-stable", version="154.0.8037.92-1", architecture="amd64"):
+        source = self.root / "package"
+        (source / "DEBIAN").mkdir(parents=True)
+        (source / "DEBIAN/control").write_text(
+            f"Package: {package}\nVersion: {version}\nArchitecture: {architecture}\n"
+            "Maintainer: nosecret fixture <fixture@example.invalid>\nDescription: vendor-layout fixture\n")
+        chrome = source / "opt/google/chrome"
+        chrome.mkdir(parents=True)
+        for name in ("chrome", "chrome_crashpad_handler", "chrome-sandbox", "icudtl.dat", "resources.pak", "CHROME_VERSION_EXTRA"):
+            (chrome / name).write_bytes(name.encode())
+        (chrome / "locales").mkdir()
+        (chrome / "locales/en-US.pak").write_bytes(b"fixture locale")
+        target = self.inputs / self.binding["archiveName"]
+        subprocess.run(["dpkg-deb", "--build", "--root-owner-group", str(source), str(target)],
+                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.binding["sha256"] = hashlib.sha256(target.read_bytes()).hexdigest()
+        return target
+
+    def image_root(self, owner=0, group=0):
+        original = Path.lstat
+        def installed_stat(path):
+            result = original(path)
+            if path == self.destination / "chrome-sandbox":
+                return SimpleNamespace(st_mode=result.st_mode, st_uid=owner, st_gid=group)
+            return result
+        return patch.object(Path, "lstat", installed_stat)
+
+    def test_signed_package_layout_keeps_vendor_resources_and_root_suid_helper(self):
+        self.package()
+        with patch.object(installer.os, "geteuid", return_value=0), patch.object(installer.os, "chown") as chown, self.image_root():
+            installer.install_chrome(self.binding, self.destination, self.scratch, self.inputs)
+        self.assertEqual((self.destination / "locales/en-US.pak").read_bytes(), b"fixture locale")
+        self.assertEqual((self.destination / "icudtl.dat").read_bytes(), b"icudtl.dat")
+        self.assertEqual(stat.S_IMODE((self.destination / "chrome-sandbox").stat().st_mode), 0o4755)
+        chown.assert_called_once_with(self.destination / "chrome-sandbox", 0, 0)
+        self.assertEqual(installer.chrome_version_output(self.binding), "Google Chrome 154.0.8037.92")
+
+    def test_changed_bytes_are_refused_before_vendor_package_execution(self):
+        target = self.package()
+        target.write_bytes(target.read_bytes() + b"changed")
+        with patch.object(installer.subprocess, "check_output") as execute:
+            with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+                installer.install_chrome(self.binding, self.destination, self.scratch, self.inputs)
+        execute.assert_not_called()
+        self.assertFalse(self.destination.exists())
+
+    def test_metadata_identity_must_match_before_extracting(self):
+        for change in ({"package": "chromium"}, {"version": "153.0.0.0-1"}, {"architecture": "arm64"}):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as temporary:
+                self.root = Path(temporary)
+                self.inputs = self.root / "inputs"
+                self.inputs.mkdir()
+                self.scratch = self.root / "scratch"
+                self.scratch.mkdir()
+                self.destination = self.root / "installed/chrome"
+                self.package(**change)
+                with patch.object(installer.subprocess, "run", wraps=installer.subprocess.run) as extract:
+                    with self.assertRaisesRegex(ValueError, "metadata differs"):
+                        installer.install_chrome(self.binding, self.destination, self.scratch, self.inputs)
+                self.assertFalse(any("--extract" in call.args[0] for call in extract.call_args_list))
+                self.assertFalse(self.destination.exists())
+
+    def test_user_owned_packaging_is_refused_without_weakening_sandbox(self):
+        self.package()
+        with patch.object(installer.os, "geteuid", return_value=1000), patch.object(installer.os, "chown") as chown:
+            with self.assertRaisesRegex(ValueError, "requires root ownership"):
+                installer.install_chrome(self.binding, self.destination, self.scratch, self.inputs)
+        chown.assert_not_called()
+        self.assertFalse(self.destination.exists())
+
+    def test_helper_owner_and_group_are_verified_after_packaging(self):
+        self.package()
+        for owner, group in ((1000, 0), (0, 1000)):
+            with self.subTest(owner=owner, group=group), patch.object(installer.os, "geteuid", return_value=0), patch.object(installer.os, "chown"), self.image_root(owner, group):
+                with self.assertRaisesRegex(ValueError, "not root-owned"):
+                    installer.install_chrome(self.binding, self.destination, self.scratch, self.inputs)
+                shutil.rmtree(self.destination)
+                shutil.rmtree(self.scratch / "google-chrome-stable")
+
+    def test_unknown_distribution_and_legacy_cft_version_have_truthful_contracts(self):
+        self.assertEqual(installer.chrome_version_output({"version": "152.0.7977.82"}),
+                         "Google Chrome for Testing 152.0.7977.82")
+        self.package()
+        with patch.object(installer.subprocess, "check_output") as execute:
+            with self.assertRaisesRegex(ValueError, "Unknown locked"):
+                installer.install_chrome({**self.binding, "distribution": "unqualified"}, self.destination, self.scratch, self.inputs)
+        execute.assert_not_called()
+
+    def test_legacy_cft_zip_keeps_its_resources_and_executable_modes(self):
+        binding = {"version": "152.0.7977.82", "archiveName": "cft.zip"}
+        archive = self.inputs / binding["archiveName"]
+        with zipfile.ZipFile(archive, "w") as package:
+            for name in ("chrome", "chrome_crashpad_handler", "chrome_sandbox", "icudtl.dat", "resources.pak", "locales/en-US.pak"):
+                package.writestr("chrome-linux64/" + name, name)
+        binding["sha256"] = hashlib.sha256(archive.read_bytes()).hexdigest()
+        installer.install_chrome(binding, self.destination, self.scratch, self.inputs)
+        self.assertEqual(stat.S_IMODE((self.destination / "chrome_sandbox").stat().st_mode), 0o755)
+        self.assertTrue((self.destination / "locales/en-US.pak").is_file())
+
+    def test_reused_stable_layout_cannot_keep_a_user_owned_helper_or_missing_resources(self):
+        self.package()
+        with patch.object(installer.os, "geteuid", return_value=0), patch.object(installer.os, "chown"), self.image_root():
+            installer.install_chrome(self.binding, self.destination, self.scratch, self.inputs)
+        with self.image_root(owner=1000):
+            with self.assertRaisesRegex(ValueError, "not root-owned"):
+                installer.verify_chrome_layout(self.binding, self.destination)
+        (self.destination / "resources.pak").unlink()
+        with self.image_root():
+            with self.assertRaisesRegex(ValueError, "resources are incomplete"):
+                installer.verify_chrome_layout(self.binding, self.destination)
 
 
 if __name__ == "__main__":

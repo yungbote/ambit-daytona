@@ -46,6 +46,23 @@ The image's build finishes by running that launcher's `--version` through the or
 
 ## Build and qualify
 
+The engine declaration also supports an official Google Chrome Stable Debian
+artifact: `chrome.distribution` is `google-chrome-stable`, `packageVersion` names
+the exact Debian release, and the existing `archiveName`/`sha256` bind its bytes.
+The installer checks package identity, version and amd64 architecture before
+extracting the complete vendor directory; it executes neither its wrapper nor
+maintainer scripts. Only the root image layer assigns the adjacent
+`chrome-sandbox` helper root:root ownership and mode4755. Ordinary execution
+remains the non-root workspace user. Reused Stable layers must retain that
+helper and all resources. An omitted distribution preserves the existing CfT
+ZIP/version contract for retained recipe inputs.
+
+A new Stable lock/image needs its own sandbox, launch, descriptor and profile
+qualification. Existing152 profiles are not opened by154 validation, and old
+image/state provenance is not relabelled. Account/Sync and Web Store extension
+acceptance requires the actual authorized human Chrome journey; package/version
+verification alone does not establish it. Native owns its launch/Sync changes.
+
 `browser.lock.json` names the exact workspace parent, fork revision and source archive checksum, Chrome archive version and checksum, npm and Playwright client archive checksums, the client patch checksum, and added Debian package versions. Debian inputs use timestamped snapshots with independently pinned `InRelease` SHA-256 values, following the signed snapshot approach used by the existing runtime packs. APT verifies signatures with the parent image's Debian archive keyring, then verifies index and package hashes. The installer rejects missing, partial or changed release metadata before installing anything. Historical release expiry is disabled only in these snapshot source entries; authentication remains required. Temporary source, index and cache paths exclude the parent's moving repositories during the build and leave its runtime APT configuration unchanged. Package removal is forbidden and all requested installed versions are checked.
 
 Refreshing Debian inputs means selecting snapshots that contain the entire requested roster, updating their release hashes and any deliberately changed package versions together, then rebuilding and qualifying the resulting image. Updating a package version without its repository snapshot can make it unavailable; selecting current mirrors would make the next rebuild depend on repository rotation again. Snapshot availability remains an external build dependency. This follows [Debian's snapshot instructions](https://snapshot.debian.org/#usage) and the source-scoped `Signed-By` and `Check-Valid-Until` options in [APT's sources.list contract](https://manpages.debian.org/trixie/apt/sources.list.5.en.html).

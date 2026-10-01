@@ -9,6 +9,7 @@ import copy
 import hashlib
 from importlib import metadata
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
@@ -36,6 +37,65 @@ def verify_input(artifact, inputs=Path("/inputs")):
     if actual != artifact["sha256"]:
         raise ValueError(f"Browser input checksum mismatch: {name}")
     return source
+
+
+def chrome_version_output(binding):
+    distribution = binding.get("distribution", "chrome-for-testing")
+    if distribution == "chrome-for-testing":
+        return f"Google Chrome for Testing {binding['version']}"
+    if distribution == "google-chrome-stable":
+        return f"Google Chrome {binding['version']}"
+    raise ValueError("Unknown locked Chrome distribution")
+
+
+def verify_chrome_layout(binding, destination):
+    distribution = binding.get("distribution", "chrome-for-testing")
+    chrome_version_output(binding)
+    for name in ("chrome", "chrome_crashpad_handler", "icudtl.dat", "resources.pak", "locales"):
+        if not (destination / name).exists():
+            raise ValueError("Chrome vendor resources are incomplete")
+    if distribution == "google-chrome-stable":
+        sandbox = (destination / "chrome-sandbox").lstat()
+        if (not stat.S_ISREG(sandbox.st_mode) or sandbox.st_uid != 0 or sandbox.st_gid != 0
+                or stat.S_IMODE(sandbox.st_mode) != 0o4755):
+            raise ValueError("Chrome sandbox helper is not root-owned with mode 4755")
+
+
+def install_chrome(binding, destination, scratch, inputs=Path("/inputs")):
+    """Install one verified vendor artifact with its complete resource layout."""
+    archive = verify_input(binding, inputs)
+    distribution = binding.get("distribution", "chrome-for-testing")
+    chrome_version_output(binding)
+    if distribution == "google-chrome-stable":
+        control = subprocess.check_output(["dpkg-deb", "--field", str(archive)], text=True)
+        fields = dict(line.split(": ", 1) for line in control.splitlines()
+                      if ": " in line and not line.startswith(" "))
+        if (fields.get("Package") != "google-chrome-stable"
+                or fields.get("Version") != binding["packageVersion"]
+                or fields.get("Architecture") != "amd64"):
+            raise ValueError("Chrome package metadata differs from its locked vendor artifact")
+        extracted = scratch / "google-chrome-stable"
+        subprocess.run(["dpkg-deb", "--extract", str(archive), str(extracted)], check=True)
+        source = extracted / "opt/google/chrome"
+        sandbox = source / "chrome-sandbox"
+        if not stat.S_ISREG(sandbox.lstat().st_mode):
+            raise ValueError("The Chrome sandbox helper must be an adjacent regular file")
+        if os.geteuid() != 0:
+            raise ValueError("Chrome image packaging requires root ownership of the sandbox helper")
+    else:
+        with zipfile.ZipFile(archive) as bundle:
+            bundle.extractall(scratch)
+        source = scratch / "chrome-linux64"
+    shutil.move(str(source), destination)
+    for name in ("chrome", "chrome_crashpad_handler"):
+        (destination / name).chmod(0o755)
+    sandbox = destination / ("chrome-sandbox" if distribution == "google-chrome-stable" else "chrome_sandbox")
+    if distribution == "google-chrome-stable":
+        os.chown(sandbox, 0, 0)
+        sandbox.chmod(0o4755)
+    else:
+        sandbox.chmod(0o755)
+    verify_chrome_layout(binding, destination)
 
 
 def read_materializer_lock(path, binding):
@@ -508,16 +568,11 @@ def main():
             requirements = install_python(lock, scratch, Path(lock_path).parent) if "python" in lock else None
             record_toolchain_update(source_toolchains, target_toolchains)
             if not reuse_chrome:
-                archive = verify_input(lock["chrome"])
-                with zipfile.ZipFile(archive) as bundle:
-                    bundle.extractall(scratch)
-                chrome_root = scratch / "chrome-linux64"
-                shutil.move(str(chrome_root), root / "chrome")
-            # ZIP entries do not retain Unix executable modes through zipfile.
-            for name in ("chrome", "chrome_crashpad_handler", "chrome_sandbox"):
-                (root / "chrome" / name).chmod(0o755)
+                install_chrome(lock["chrome"], root / "chrome", scratch)
+            else:
+                verify_chrome_layout(lock["chrome"], root / "chrome")
             observed = subprocess.check_output([str(root / "chrome/chrome"), "--version"], text=True).strip()
-            if observed != f"Google Chrome for Testing {lock['chrome']['version']}":
+            if observed != chrome_version_output(lock["chrome"]):
                 raise ValueError(f"Unexpected Chrome version: {observed}")
             installed = subprocess.check_output(["dpkg-query", "-W", "-f=${Package}\t${Version}\n"], text=True)
             (root / "installed-dpkg.lock").write_text("\n".join(sorted(installed.splitlines())) + "\n")
