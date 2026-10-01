@@ -21,12 +21,33 @@ import (
 )
 
 func (s *SessionService) Execute(sessionId, cmdId, cmd string, async, isCombinedOutput, skipServerDemux, suppressInputEcho bool, closeInputAfterCommand ...bool) (observation *SessionExecute, executionErr error) {
+	closeInput := len(closeInputAfterCommand) > 0 && closeInputAfterCommand[0]
+	return s.execute(sessionId, cmdId, cmd, async, isCombinedOutput, skipServerDemux, suppressInputEcho, closeInput, nil)
+}
+
+func (s *SessionService) ExecuteEnvironmentLease(sessionId, cmd string, async, isCombinedOutput, skipServerDemux, suppressInputEcho bool, lease *EnvironmentLease) (*SessionExecute, error) {
+	if lease == nil || strings.TrimSpace(cmd) == "" {
+		return nil, common_errors.NewBadRequestError(errors.New("environment lease command is invalid"))
+	}
+	return s.execute(sessionId, lease.ID, cmd, async, isCombinedOutput, skipServerDemux, suppressInputEcho, true, lease)
+}
+
+func (s *SessionService) execute(sessionId, cmdId, cmd string, async, isCombinedOutput, skipServerDemux, suppressInputEcho, closeInput bool, lease *EnvironmentLease) (observation *SessionExecute, executionErr error) {
 	session, ok := s.sessions.Get(sessionId)
 	if !ok {
 		return nil, common_errors.NewNotFoundError(errors.New("session not found"))
 	}
 
 	var scope *processScope
+	defer func() {
+		if executionErr != nil && lease != nil && scope != nil {
+			if accepted := session.environmentLease.Load(); accepted != nil && accepted.ID == lease.ID {
+				// Setup may fail after the recipient starts but before input closes.
+				// Retain its owner for Delete/retry, and end this finite scope now.
+				scope.cancel()
+			}
+		}
+	}()
 	defer func() {
 		if observation == nil {
 			return
@@ -36,6 +57,11 @@ func (s *SessionService) Execute(sessionId, cmdId, cmd string, async, isCombined
 			observation.ProcessScope = scope.state()
 		}
 		observation.InputClosed = session.ctx.Err() != nil || scope == nil || scope.inputClosed.Load()
+		observation.EnvironmentLeaseVersion = EnvironmentLeaseVersion()
+		if accepted := session.environmentLease.Load(); accepted != nil {
+			observation.EnvironmentLeaseID = accepted.ID
+			observation.EnvironmentLeaseExpiresAt = &accepted.ExpiresAt
+		}
 	}()
 
 	session.mu.Lock()
@@ -46,12 +72,19 @@ func (s *SessionService) Execute(sessionId, cmdId, cmd string, async, isCombined
 			session.mu.Unlock()
 		}
 	}()
-	if session.ctx.Err() != nil || scope == nil || scope.inputClosed.Load() || scope.state() != "running" {
+	if session.environmentLease.Load() != nil || session.ctx.Err() != nil || scope == nil || scope.inputClosed.Load() || scope.state() != "running" {
 		return nil, common_errors.NewGoneError(errors.New("session is no longer accepting commands"))
 	}
 
 	if cmdId == util.EmptyCommandID {
 		cmdId = uuid.NewString()
+	}
+	if lease != nil {
+		var err error
+		scope, err = s.admitEnvironmentLease(session, lease)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if _, ok := session.commands.Get(cmdId); ok {
@@ -105,7 +138,7 @@ func (s *SessionService) Execute(sessionId, cmdId, cmd string, async, isCombined
 		return nil, common_errors.NewBadRequestError(fmt.Errorf("failed to write command: %w", err))
 	}
 
-	if len(closeInputAfterCommand) > 0 && closeInputAfterCommand[0] {
+	if closeInput {
 		if err := scope.closeInput(); err != nil {
 			return nil, common_errors.NewBadRequestError(fmt.Errorf("command accepted but closing session input failed: %w", err))
 		}

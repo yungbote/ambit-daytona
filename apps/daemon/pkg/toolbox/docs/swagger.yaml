@@ -1170,18 +1170,24 @@ definitions:
     type: object
   Session:
     properties:
-      inputClosed:
-        type: boolean
-      processScope:
-        type: string
-        enum:
-          - running
-          - settled
-          - unavailable
       commands:
         items:
           $ref: '#/definitions/Command'
         type: array
+      environmentLeaseExpiresAt:
+        type: string
+      environmentLeaseId:
+        type: string
+      environmentLeaseVersion:
+        type: integer
+      inputClosed:
+        type: boolean
+      processScope:
+        enum:
+          - running
+          - settled
+          - unavailable
+        type: string
       sessionId:
         type: string
     required:
@@ -1203,12 +1209,14 @@ definitions:
     type: object
   SessionExecuteRequest:
     properties:
-      closeInputAfterCommand:
-        type: boolean
       async:
+        type: boolean
+      closeInputAfterCommand:
         type: boolean
       command:
         type: string
+      environmentLease:
+        $ref: '#/definitions/session.EnvironmentLease'
       runAsync:
         type: boolean
       suppressInputEcho:
@@ -1218,19 +1226,25 @@ definitions:
     type: object
   SessionExecuteResponse:
     properties:
+      cmdId:
+        type: string
+      environmentLeaseExpiresAt:
+        type: string
+      environmentLeaseId:
+        type: string
+      environmentLeaseVersion:
+        type: integer
+      exitCode:
+        type: integer
       inputClosed:
         type: boolean
-      processScope:
+      output:
         type: string
+      processScope:
         enum:
           - running
           - settled
           - unavailable
-      cmdId:
-        type: string
-      exitCode:
-        type: integer
-      output:
         type: string
       stderr:
         type: string
@@ -1395,6 +1409,19 @@ definitions:
     type: object
   gin.H:
     additionalProperties: {}
+    type: object
+  session.EnvironmentLease:
+    properties:
+      expiresAt:
+        type: string
+      id:
+        type: string
+      values:
+        additionalProperties:
+          type: string
+        type: object
+      version:
+        type: integer
     type: object
 info:
   contact: {}

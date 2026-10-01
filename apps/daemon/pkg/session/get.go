@@ -5,6 +5,7 @@ package session
 
 import (
 	"errors"
+	"time"
 
 	common_errors "github.com/daytonaio/common-go/pkg/errors"
 )
@@ -32,11 +33,19 @@ func (s *SessionService) Get(sessionId string) (*Session, error) {
 	if scope != nil {
 		scopeState = scope.state()
 	}
+	var leaseID string
+	var expiresAt *time.Time
+	if lease := owned.environmentLease.Load(); lease != nil {
+		leaseID, expiresAt = lease.ID, &lease.ExpiresAt
+	}
 	return &Session{
-		SessionId:    sessionId,
-		ProcessScope: scopeState,
-		InputClosed:  owned.ctx.Err() != nil || scope == nil || scope.inputClosed.Load(),
-		Commands:     commands,
+		EnvironmentLeaseVersion:   EnvironmentLeaseVersion(),
+		EnvironmentLeaseID:        leaseID,
+		EnvironmentLeaseExpiresAt: expiresAt,
+		SessionId:                 sessionId,
+		ProcessScope:              scopeState,
+		InputClosed:               owned.ctx.Err() != nil || scope == nil || scope.inputClosed.Load(),
+		Commands:                  commands,
 	}, nil
 }
 
