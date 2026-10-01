@@ -359,6 +359,12 @@ func TestExistingNativeSourceThroughT1EdgeAndBrowser(t *testing.T) {
 					if os.Getenv("MEDIA_EDGE_BROWSER_AUDIO_CONTROLS") == "1" {
 						options["audioControls"] = true
 					}
+					if os.Getenv("MEDIA_EDGE_BROWSER_AUDIO_DECODER_BATCH") == "1" {
+						if options["audioControls"] != true {
+							t.Fatal("decoder batch requires explicit native mute/resume qualification")
+						}
+						options["decoderBatch"] = true
+					}
 					options["rateProfile"] = "fast"
 					if fullSlow || fullSlowQUIC {
 						options["rateProfile"] = "fixed-500k-cold"
