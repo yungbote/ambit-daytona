@@ -5,11 +5,11 @@
     "repository": "https://github.com/yungbote/ambit-agent-browser",
     "upstreamRepository": "https://github.com/vercel-labs/agent-browser",
     "upstreamRevision": "72007a6788d863611b23bed0b59d0d659c638d8e",
-    "revision": "4a77a0547ff4e9a71708f3a5343699e48730c768",
-    "sourceTree": "7e9aff9b4ccec1aea3eb8cb0799cf3a1adba5b65",
+    "revision": "9de0ca06564b442b0ee23382e101aea5725f0599",
+    "sourceTree": "64f0fdb1f7f414adfc3bab0d4613028803d3221a",
     "version": "0.37.1",
     "archiveName": "agent-browser-source.tar",
-    "sha256": "8201dd2059807d63696797898b425bf3b03f3bfc2819ca7454752a3724b0b1d6",
+    "sha256": "fdd6412c1649fbc6be5009c15d41230b6e94e6541d0987f57b87fb88eac6c45b",
     "features": [
       "browser-audio"
     ]
@@ -27,10 +27,12 @@
     "sha256": "e8e65d925248d9f60f75a68c5f45993dfbebd8fdbbb040874d0c8d1a8607bb66"
   },
   "chrome": {
-    "version": "152.0.7977.82",
-    "url": "https://storage.googleapis.com/chrome-for-testing-public/152.0.7977.82/linux64/chrome-linux64.zip",
-    "archiveName": "chrome-linux64.zip",
-    "sha256": "0704631fb3e4f741092e08f55272f90abc3e307f991f05f332924364415b02e0"
+    "distribution": "google-chrome-stable",
+    "version": "154.0.8037.92",
+    "packageVersion": "154.0.8037.92-1",
+    "url": "https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_154.0.8037.92-1_amd64.deb",
+    "archiveName": "google-chrome-stable_154.0.8037.92-1_amd64.deb",
+    "sha256": "69e3f6ac0a4811f4689ca23f1fd5cc5b2c01550881928b3e196a97131165c4a2"
   },
   "debianSnapshots": [
     {

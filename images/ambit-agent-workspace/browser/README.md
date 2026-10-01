@@ -1,6 +1,6 @@
 # Browser in the agent workspace
 
-This image extends the exact ordinary Daytona workspace snapshot with Ambit's source-pinned fork of [agent-browser](https://github.com/vercel-labs/agent-browser) and Chrome for Testing. It preserves the existing polyglot and document toolchains, including the published file-tools parent with MarkItDown, Tika, libvips, and the explicit Tesseract wrapper. It does not replace or certify the C18 browser renderer, which remains a separate specialist executor.
+This image extends the exact ordinary Daytona workspace snapshot with Ambit's source-pinned fork of [agent-browser](https://github.com/vercel-labs/agent-browser) and official Google Chrome Stable. It preserves the existing polyglot and document toolchains, including the published file-tools parent with MarkItDown, Tika, libvips, and the explicit Tesseract wrapper. It does not replace or certify the C18 browser renderer, which remains a separate specialist executor.
 
 Orderly browser closure and stream disable emit an explicit `finished` record before closing responsive viewers. The native relay must recognize that record before this driver image is promoted; unexpected EOF remains a reconnectable interruption. Reopening a stream creates a new native view instance, including when the same driver process reuses its port.
 
@@ -62,6 +62,10 @@ qualification. Existing152 profiles are not opened by154 validation, and old
 image/state provenance is not relabelled. Account/Sync and Web Store extension
 acceptance requires the actual authorized human Chrome journey; package/version
 verification alone does not establish it. Native owns its launch/Sync changes.
+
+The selected native source writes custody4 state. Compose and deploy the
+compatible backend reader049 before activating this image; source qualification
+and a successful image build do not establish that rollout dependency.
 
 `browser.lock.json` names the exact workspace parent, fork revision and source archive checksum, Chrome archive version and checksum, npm and Playwright client archive checksums, the client patch checksum, and added Debian package versions. Debian inputs use timestamped snapshots with independently pinned `InRelease` SHA-256 values, following the signed snapshot approach used by the existing runtime packs. APT verifies signatures with the parent image's Debian archive keyring, then verifies index and package hashes. The installer rejects missing, partial or changed release metadata before installing anything. Historical release expiry is disabled only in these snapshot source entries; authentication remains required. Temporary source, index and cache paths exclude the parent's moving repositories during the build and leave its runtime APT configuration unchanged. Package removal is forbidden and all requested installed versions are checked.
 
