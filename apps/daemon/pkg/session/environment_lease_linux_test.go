@@ -52,7 +52,8 @@ func TestEnvironmentLeaseDispatchIsTransientAndFinite(t *testing.T) {
 		t.Fatal("native environment reader capability missing")
 	}
 	lease := syntheticEnvironmentLease()
-	result, err := svc.ExecuteEnvironmentLease("leased", `test -z "$empty_value" && printf '%s' "$api_key" | sha256sum`, false, true, true, true, lease)
+	lease.Values["HOME"] = filepath.Join(t.TempDir(), "recipient-home")
+	result, err := svc.ExecuteEnvironmentLease("leased", `test -z "$empty_value" && printf '%s' "$api_key" | sha256sum; printf '%s' "$HOME" | sha256sum`, false, true, true, true, lease)
 	if err != nil || result.ExitCode == nil || *result.ExitCode != 0 {
 		t.Fatal("native environment recipient failed", err)
 	}
@@ -60,12 +61,18 @@ func TestEnvironmentLeaseDispatchIsTransientAndFinite(t *testing.T) {
 	if result.Output == nil || !strings.Contains(*result.Output, expected) {
 		t.Fatal("actual process did not receive its exact synthetic environment")
 	}
+	if !strings.Contains(*result.Output, fmt.Sprintf("%x", sha256.Sum256([]byte(lease.Values["HOME"])))) {
+		t.Fatal("native recipient did not receive its leased home override")
+	}
 	if result.EnvironmentLeaseID != lease.ID || !result.InputClosed {
 		t.Fatal("environment dispatch lost its finite native identity")
 	}
 	observed, err := svc.Get("leased")
 	if err != nil || observed.EnvironmentLeaseID != lease.ID {
 		t.Fatal("accepted environment lease cannot be recovered from native custody")
+	}
+	if before.HomeDirectory == "" || observed.HomeDirectory != before.HomeDirectory || observed.HomeDirectory == lease.Values["HOME"] {
+		t.Fatal("ordinary native context was replaced by recipient environment")
 	}
 	encoded, err := svc.Execute("ordinary", "ordinary-check", `test -z "$api_key" && printf ordinary`, false, true, true, true)
 	if err != nil || encoded.Output == nil || !strings.Contains(*encoded.Output, "ordinary") {
@@ -78,6 +85,7 @@ func TestEnvironmentLeaseDispatchIsTransientAndFinite(t *testing.T) {
 		}
 	}
 	assertNoStoredEnvironment(t, owned.Dir(svc.configDir), lease.Values["api_key"])
+	assertNoStoredEnvironment(t, owned.Dir(svc.configDir), lease.Values["HOME"])
 	for _, command := range observed.Commands {
 		if strings.Contains(command.Command, lease.Values["api_key"]) {
 			t.Fatal("environment entered stored command text")

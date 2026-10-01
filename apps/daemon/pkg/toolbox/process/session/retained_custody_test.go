@@ -31,6 +31,9 @@ func TestMain(m *testing.M) {
 	if runBrowserFixture(os.Args[1:]) {
 		os.Exit(0)
 	}
+	if runCredentialProcessFixture(os.Args[1:]) {
+		os.Exit(0)
+	}
 	os.Exit(m.Run())
 }
 

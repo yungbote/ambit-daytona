@@ -5,6 +5,7 @@ package session
 
 import (
 	"errors"
+	"os"
 	"time"
 
 	common_errors "github.com/daytonaio/common-go/pkg/errors"
@@ -39,6 +40,7 @@ func (s *SessionService) Get(sessionId string) (*Session, error) {
 		leaseID, expiresAt = lease.ID, &lease.ExpiresAt
 	}
 	return &Session{
+		HomeDirectory:             nativeHomeDirectory(),
 		EnvironmentLeaseVersion:   EnvironmentLeaseVersion(),
 		EnvironmentLeaseID:        leaseID,
 		EnvironmentLeaseExpiresAt: expiresAt,
@@ -47,6 +49,16 @@ func (s *SessionService) Get(sessionId string) (*Session, error) {
 		InputClosed:               owned.ctx.Err() != nil || scope == nil || scope.inputClosed.Load(),
 		Commands:                  commands,
 	}, nil
+}
+
+// Ordinary context belongs to the clean daemon, before recipient overrides.
+// This exposes a directory only, never the recipient environment or a grant.
+func nativeHomeDirectory() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return home
 }
 
 // stillOwned reports why an observation cannot be attributed to this owner. A
