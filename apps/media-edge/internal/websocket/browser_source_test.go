@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash"
+	"io"
 	"log/slog"
 	"math/big"
 	"net"
@@ -29,6 +30,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -45,8 +47,10 @@ import (
 
 type receivedSource struct {
 	session.Upstream
-	onReceived func(uint64)
-	onPicture  func(string, sourcePicture)
+	onReceived   func(uint64)
+	onPicture    func(string, sourcePicture)
+	dropAudioSeq uint64
+	onAudioDrop  func(string, uint64)
 }
 
 type sourcePicture struct {
@@ -61,16 +65,79 @@ func (u receivedSource) DialView(ctx context.Context, target session.Target, vie
 	if err != nil {
 		return nil, err
 	}
-	return &receivedConnection{Conn: conn, onReceived: u.onReceived, onPicture: func(value sourcePicture) { u.onPicture(viewer, value) }}, nil
+	return &receivedConnection{Conn: conn, onReceived: u.onReceived, dropAudioSeq: u.dropAudioSeq, onAudioDrop: func(seq uint64) {
+		if u.onAudioDrop != nil {
+			u.onAudioDrop(viewer, seq)
+		}
+	}, onPicture: func(value sourcePicture) { u.onPicture(viewer, value) }}, nil
 }
 
 type receivedConnection struct {
 	session.Conn
-	onReceived func(uint64)
-	onPicture  func(sourcePicture)
-	picture    sourcePicture
-	declared   uint64
-	body       hash.Hash
+	onReceived   func(uint64)
+	onPicture    func(sourcePicture)
+	picture      sourcePicture
+	declared     uint64
+	body         hash.Hash
+	dropAudioSeq uint64
+	audioDropped bool
+	onAudioDrop  func(uint64)
+}
+
+type audioDropReadFixture struct {
+	session.Conn
+	messages [][]byte
+	next     int
+}
+
+func (c *audioDropReadFixture) Read() (bool, []byte, error) {
+	if c.next == len(c.messages) {
+		return false, nil, io.EOF
+	}
+	message := c.messages[c.next]
+	c.next++
+	return false, message, nil
+}
+
+func TestReceivedSourceDropsOnlyOneExactAudioPacket(t *testing.T) {
+	packet := func(seq uint64) []byte {
+		header, _ := json.Marshal(map[string]any{"type": "media", "track": "audio", "codec": "opus", "streamId": "11111111-1111-4111-8111-111111111111", "seq": seq, "ts": seq * 10000, "samples": 480, "byteLength": 3})
+		message := make([]byte, 4+len(header)+3)
+		binary.BigEndian.PutUint32(message, uint32(len(header)))
+		copy(message[4:], header)
+		copy(message[4+len(header):], []byte{0xf0, 0xff, 0xfe})
+		return message
+	}
+	first, lost, last := packet(1), packet(2), packet(3)
+	for _, enabled := range []bool{false, true} {
+		reader := &audioDropReadFixture{messages: [][]byte{first, lost, lost, last}}
+		drops := 0
+		conn := &receivedConnection{Conn: reader, onAudioDrop: func(seq uint64) {
+			if seq != 2 {
+				t.Fatalf("wrong source packet%d", seq)
+			}
+			drops++
+		}}
+		if enabled {
+			conn.dropAudioSeq = 2
+		}
+		expected := [][]byte{first, lost, lost, last}
+		if enabled {
+			expected = [][]byte{first, lost, last}
+		}
+		for _, want := range expected {
+			text, got, err := conn.Read()
+			if err != nil || text || !bytes.Equal(got, want) {
+				t.Fatalf("source bytes changed: text%v err%v", text, err)
+			}
+		}
+		if _, _, err := conn.Read(); err != io.EOF {
+			t.Fatalf("missing actual EOF: %v", err)
+		}
+		if drops != map[bool]int{false: 0, true: 1}[enabled] {
+			t.Fatalf("drop count%d enabled%v", drops, enabled)
+		}
+	}
 }
 
 // Hash the source's original envelopes immediately at the real T1 boundary.
@@ -91,8 +158,20 @@ func (c *receivedConnection) Read() (bool, []byte, error) {
 		Track, StreamID string
 		Seq, ByteLength uint64
 		Offset          *uint64
+		Ts, Samples     uint64
 	}
-	if json.Unmarshal(message[4:4+size], &header) != nil || header.Track != "video" || header.Offset == nil {
+	if json.Unmarshal(message[4:4+size], &header) != nil {
+		return text, message, err
+	}
+	if header.Track == "audio" && c.dropAudioSeq > 0 && !c.audioDropped && header.Seq == c.dropAudioSeq {
+		c.audioDropped = true
+		if c.onAudioDrop != nil {
+			c.onAudioDrop(header.Seq)
+		}
+		fmt.Printf("SOURCE_AUDIO_DROPPED stream=%s seq%d capture%d samples%d wire%d sha256%x\n", header.StreamID, header.Seq, header.Ts, header.Samples, len(message), sha256.Sum256(message))
+		return c.Read()
+	}
+	if header.Track != "video" || header.Offset == nil {
 		return text, message, err
 	}
 	if *header.Offset == 0 {
@@ -152,6 +231,14 @@ func TestExistingNativeSourceThroughT1EdgeAndBrowser(t *testing.T) {
 		t.Skip("existing T1 harness metadata, production browser script and built worker required")
 	}
 	observePartial := os.Getenv("MEDIA_EDGE_BROWSER_AUDIO_OBSERVE_PARTIAL") == "1"
+	var dropAudioSeq uint64
+	if value := os.Getenv("MEDIA_EDGE_BROWSER_TEST_DROP_AUDIO_SEQ"); value != "" {
+		var err error
+		dropAudioSeq, err = strconv.ParseUint(value, 10, 64)
+		if err != nil || dropAudioSeq == 0 {
+			t.Fatal("positive task audio drop sequence required")
+		}
+	}
 	data, err := os.ReadFile(metadata)
 	if err != nil {
 		t.Fatal(err)
@@ -188,13 +275,19 @@ func TestExistingNativeSourceThroughT1EdgeAndBrowser(t *testing.T) {
 		Hub: session.NewHub(nil), Upstream: upstream, Log: slog.New(slog.NewTextHandler(os.Stdout, nil))}
 	var receiptMu sync.Mutex
 	receipts := make(map[string][]sourcePicture)
+	droppedAudio := make(map[string][]uint64)
+	onAudioDrop := func(viewer string, seq uint64) {
+		receiptMu.Lock()
+		droppedAudio[viewer] = append(droppedAudio[viewer], seq)
+		receiptMu.Unlock()
+	}
 	onPicture := func(viewer string, picture sourcePicture) {
 		receiptMu.Lock()
 		receipts[viewer] = append(receipts[viewer], picture)
 		receiptMu.Unlock()
 		t.Logf("actual T1 source bytes viewer%s: %+v", viewer, picture)
 	}
-	e.Upstream = receivedSource{Upstream: upstream, onPicture: onPicture}
+	e.Upstream = receivedSource{Upstream: upstream, onPicture: onPicture, dropAudioSeq: dropAudioSeq, onAudioDrop: onAudioDrop}
 	wsServer := httptest.NewUnstartedServer(edgews.NewHandler(e))
 	fullSlow := os.Getenv("MEDIA_EDGE_BROWSER_NATIVE_FULL_SLOW") == "1"
 	fullSlowQUIC := os.Getenv("MEDIA_EDGE_BROWSER_NATIVE_FULL_SLOW_QUIC") == "1"
@@ -213,7 +306,7 @@ func TestExistingNativeSourceThroughT1EdgeAndBrowser(t *testing.T) {
 			changeRate(500000)
 		}
 		prefixes := 0
-		e.Upstream = receivedSource{Upstream: upstream, onPicture: onPicture, onReceived: func(offset uint64) {
+		e.Upstream = receivedSource{Upstream: upstream, onPicture: onPicture, dropAudioSeq: dropAudioSeq, onAudioDrop: onAudioDrop, onReceived: func(offset uint64) {
 			prefixes++
 			if fullSlow {
 				if audioSteady && prefixes == 32 {
@@ -271,7 +364,7 @@ func TestExistingNativeSourceThroughT1EdgeAndBrowser(t *testing.T) {
 		changeRate = link.SetBits
 		bytes = func() uint64 { return link.Stats().Bytes }
 		prefixes := 0
-		e.Upstream = receivedSource{Upstream: upstream, onPicture: onPicture, onReceived: func(offset uint64) {
+		e.Upstream = receivedSource{Upstream: upstream, onPicture: onPicture, dropAudioSeq: dropAudioSeq, onAudioDrop: onAudioDrop, onReceived: func(offset uint64) {
 			prefixes++
 			if fullSlowQUIC {
 				if audioSteady && prefixes == 32 {
@@ -478,6 +571,14 @@ func TestExistingNativeSourceThroughT1EdgeAndBrowser(t *testing.T) {
 				}
 				if err != nil {
 					t.Fatalf("actual T1/edge/%s native consumer: %v", carrier, err)
+				}
+				if dropAudioSeq > 0 {
+					receiptMu.Lock()
+					drops := append([]uint64(nil), droppedAudio[identity]...)
+					receiptMu.Unlock()
+					if len(drops) != 1 || drops[0] != dropAudioSeq {
+						t.Fatalf("expected one actual audio drop%d, got%v", dropAudioSeq, drops)
+					}
 				}
 			})
 		}
