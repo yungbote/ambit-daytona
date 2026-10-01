@@ -90,6 +90,13 @@ COPY --from=browser-display /out/licenses /opt/ambit/browser/licenses
 COPY --from=driver /opt/ambit/browser/Cargo.lock /opt/ambit/browser/Cargo.lock
 COPY --chmod=0755 runtime/agent-browser /usr/local/bin/agent-browser
 COPY README.md /opt/ambit/browser/README.md
+# fuse3 is a required upstream portal dependency. Its postinst sets this helper
+# setuid, although the private host-client chooser never needs a FUSE mount.
+# Keep the packaged bytes while preventing a new elevated helper in this image.
+RUN test -f /usr/bin/fusermount3 \
+ && test ! -L /usr/bin/fusermount3 \
+ && chmod 0755 /usr/bin/fusermount3 \
+ && test "$(stat -c %a /usr/bin/fusermount3)" = 755
 RUN --mount=type=bind,source=build/inspect-executables.py,target=/source/inspect-executables.py,ro \
     python3 /source/inspect-executables.py \
       --component-lock /opt/ambit/browser/browser.lock.json \
