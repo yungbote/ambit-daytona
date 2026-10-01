@@ -125,6 +125,12 @@ RUN --mount=type=bind,source=build/install-browser.py,target=/checks/install-bro
  && test -x /usr/bin/dump_xsettings \
  && test -r /usr/share/themes/Adwaita/gtk-3.0/gtk.css \
  && test -r /usr/share/themes/Adwaita-dark/gtk-3.0/gtk.css \
+ && test -x /usr/bin/dbus-daemon \
+ && test -x /usr/bin/dbus-send \
+ && test -x /usr/libexec/xdg-desktop-portal \
+ && test -x /usr/libexec/xdg-desktop-portal-gtk \
+ && test -r /usr/share/xdg-desktop-portal/portals/gtk.portal \
+ && test -r /usr/share/glib-2.0/schemas/gschemas.compiled \
  && xvfb-run --help >/dev/null \
  && AGENT_BROWSER_DOWNLOAD_PATH=/tmp/browser-version-check/downloads \
     AGENT_BROWSER_SCREENSHOT_DIR=/tmp/browser-version-check/screenshots \
