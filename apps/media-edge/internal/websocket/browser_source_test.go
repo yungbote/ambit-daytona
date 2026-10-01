@@ -347,6 +347,9 @@ func TestExistingNativeSourceThroughT1EdgeAndBrowser(t *testing.T) {
 				}
 				if observePartial {
 					options["observePartial"] = true
+					if os.Getenv("MEDIA_EDGE_BROWSER_AUDIO_CONTROLS") == "1" {
+						options["audioControls"] = true
+					}
 					options["rateProfile"] = "fast"
 					if fullSlow || fullSlowQUIC {
 						options["rateProfile"] = "fixed-500k-cold"
