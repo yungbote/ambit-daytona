@@ -134,6 +134,8 @@ RUN --mount=type=bind,source=build/install-browser.py,target=/checks/install-bro
  && test -r /usr/share/themes/Adwaita-dark/gtk-3.0/gtk.css \
  && test -x /usr/bin/dbus-daemon \
  && test -x /usr/bin/dbus-send \
+ && test -x /usr/bin/gsettings \
+ && test -x /usr/libexec/dconf-service \
  && test -x /usr/libexec/xdg-desktop-portal \
  && test -x /usr/libexec/xdg-desktop-portal-gtk \
  && test -r /usr/share/xdg-desktop-portal/portals/gtk.portal \
