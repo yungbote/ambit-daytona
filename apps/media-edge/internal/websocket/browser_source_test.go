@@ -206,7 +206,16 @@ func TestExistingNativeSourceThroughT1EdgeAndBrowser(t *testing.T) {
 		defer cancel()
 		var changeRate func(int64)
 		var bytes func() int64
-		wsServer.Listener, changeRate, bytes = edgews.PaceBrowserTestListener(wsServer.Listener, ctx)
+		var writeTrace func() edgews.PacedTrace
+		wsServer.Listener, changeRate, bytes, writeTrace = edgews.PaceBrowserTestListener(wsServer.Listener, ctx)
+		defer func() {
+			trace, err := json.Marshal(writeTrace())
+			if err != nil {
+				t.Error(err)
+			} else {
+				t.Logf("TASK_WIRE_WRITES:%s", trace)
+			}
+		}()
 		if audioSteady {
 			changeRate(100000000)
 		} else {

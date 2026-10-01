@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -34,6 +35,70 @@ type pacedListener struct {
 	progress chan struct{}
 	once     sync.Once
 	rate     atomic.Int64
+	writeMu  sync.Mutex
+	writes   []pacedWrite
+	history  []pacedWrite
+	dropped  uint64
+}
+
+type pacedWrite struct {
+	WireBytes            int
+	BitsPerSecondAtStart int64
+	StartedUnixMs        float64
+	DurationMs           float64
+	Track                string
+	StreamID             string
+	Sequence             uint64
+}
+
+type pacedTrace struct {
+	Largest []pacedWrite
+	History []pacedWrite
+	Dropped uint64
+}
+
+func (l *pacedListener) writeTrace() pacedTrace {
+	l.writeMu.Lock()
+	defer l.writeMu.Unlock()
+	return pacedTrace{append([]pacedWrite(nil), l.writes...), append([]pacedWrite(nil), l.history...), l.dropped}
+}
+
+// The task serializer records bounded original-wire writes, never payloads.
+func (l *pacedListener) recordWrite(data []byte, began time.Time, rate int64) {
+	row := pacedWrite{WireBytes: len(data), BitsPerSecondAtStart: rate, StartedUnixMs: float64(began.UnixNano()) / 1e6, DurationMs: float64(time.Since(began)) / float64(time.Millisecond)}
+	if len(data) >= 2 && data[0]&15 == 2 {
+		prefix := 2
+		if data[1]&127 == 126 {
+			prefix = 4
+		} else if data[1]&127 == 127 {
+			prefix = 10
+		}
+		if len(data) >= prefix+4 {
+			length := int(binary.BigEndian.Uint32(data[prefix:]))
+			if length > 0 && length <= 4096 && len(data) >= prefix+4+length {
+				var header struct {
+					Track    string `json:"track"`
+					StreamID string `json:"streamId"`
+					Sequence uint64 `json:"seq"`
+				}
+				if json.Unmarshal(data[prefix+4:prefix+4+length], &header) == nil {
+					row.Track, row.StreamID, row.Sequence = header.Track, header.StreamID, header.Sequence
+				}
+			}
+		}
+	}
+	l.writeMu.Lock()
+	defer l.writeMu.Unlock()
+	if len(l.history) < 16384 {
+		l.history = append(l.history, row)
+	} else {
+		l.dropped++
+	}
+	l.writes = append(l.writes, row)
+	sort.Slice(l.writes, func(i, j int) bool { return l.writes[i].DurationMs > l.writes[j].DurationMs })
+	if len(l.writes) > 10 {
+		l.writes = l.writes[:10]
+	}
 }
 
 type pacedConnection struct {
@@ -50,6 +115,11 @@ func (l *pacedListener) Accept() (net.Conn, error) {
 }
 
 func (c *pacedConnection) Write(data []byte) (int, error) {
+	started, original, rate := time.Now(), data, c.owner.rate.Load()
+	if rate == 0 {
+		rate = 500000
+	}
+	defer func() { c.owner.recordWrite(original, started, rate) }()
 	written := 0
 	for len(data) > 0 {
 		part := min(len(data), 4096)
@@ -104,6 +174,68 @@ func TestPacedTCPLinkSerializesAKnownByteTrain(t *testing.T) {
 		t.Fatalf("20KB at500kbit/s took%s, bytes%d; expected320ms floor", elapsed, link.bytes.Load())
 	}
 	t.Logf("actual known20x1000B TCP train: %s vs320ms serialization floor", elapsed)
+}
+
+func TestPacedTCPTraceBindsOriginalAudioEnvelopeAndRetainsBoundedWrites(t *testing.T) {
+	header := []byte(`{"type":"media","track":"audio","codec":"opus","streamId":"11111111-1111-4111-8111-111111111111","seq":378}`)
+	body := make([]byte, 4+len(header)+321)
+	binary.BigEndian.PutUint32(body, uint32(len(header)))
+	copy(body[4:], header)
+	wire := append([]byte{0x82, 126, byte(len(body) >> 8), byte(len(body))}, body...)
+	writer, reader := net.Pipe()
+	defer writer.Close()
+	defer reader.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	link := &pacedListener{ctx: ctx, progress: make(chan struct{})}
+	link.rate.Store(500000)
+	conn := &pacedConnection{Conn: writer, owner: link}
+	read := make(chan error, 1)
+	go func() { _, err := io.CopyN(io.Discard, reader, int64(12*len(wire))); read <- err }()
+	for n := 0; n < 12; n++ {
+		if _, err := conn.Write(wire); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := <-read; err != nil {
+		t.Fatal(err)
+	}
+	observed := link.writeTrace()
+	trace := observed.Largest
+	if len(trace) != 10 {
+		t.Fatalf("trace retained%d writes, expected10", len(trace))
+	}
+	for index, row := range trace {
+		if row.Track != "audio" || row.Sequence != 378 || row.StreamID != "11111111-1111-4111-8111-111111111111" || row.WireBytes != len(wire) || row.BitsPerSecondAtStart != 500000 || row.DurationMs < float64(len(wire)*8)/500 {
+			t.Fatalf("trace changed original audio/wire identity or serialization: %+v", row)
+		}
+		if index > 0 && trace[index-1].DurationMs < row.DurationMs {
+			t.Fatal("trace is not ordered by observed duration")
+		}
+	}
+	trace[0].Track = "altered"
+	if link.writeTrace().Largest[0].Track != "audio" {
+		t.Fatal("trace caller mutated retained measurement")
+	}
+	if len(observed.History) != 12 || observed.Dropped != 0 {
+		t.Fatalf("complete original-write chronology changed: %+v", observed)
+	}
+	for index, row := range observed.History {
+		if index > 0 && row.StartedUnixMs < observed.History[index-1].StartedUnixMs {
+			t.Fatal("original-write chronology is not ordered")
+		}
+	}
+}
+
+func TestPacedWriteHistoryReportsTruncationInsteadOfClaimingCompleteChronology(t *testing.T) {
+	link := &pacedListener{}
+	for count := 0; count < 16389; count++ {
+		link.recordWrite(nil, time.Now(), 500000)
+	}
+	trace := link.writeTrace()
+	if len(trace.History) != 16384 || len(trace.Largest) != 10 || trace.Dropped != 5 {
+		t.Fatalf("bounded trace failed to disclose omitted writes: %d/%d/%d", len(trace.History), len(trace.Largest), trace.Dropped)
+	}
 }
 
 func TestRecordedNativeKeyShowsWholeMessageWebSocketAudioHOL(t *testing.T) {
