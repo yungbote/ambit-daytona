@@ -8,17 +8,19 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	cmap "github.com/orcaman/concurrent-map/v2"
 )
 
 type session struct {
-	mu       sync.Mutex
-	scope    atomic.Pointer[processScope]
-	id       string
-	commands cmap.ConcurrentMap[string, *Command]
-	ctx      context.Context
-	cancel   context.CancelFunc
+	mu               sync.Mutex
+	scope            atomic.Pointer[processScope]
+	environmentLease atomic.Pointer[environmentLeaseCustody]
+	id               string
+	commands         cmap.ConcurrentMap[string, *Command]
+	ctx              context.Context
+	cancel           context.CancelFunc
 }
 
 func (s *session) Dir(configDir string) string {
@@ -41,18 +43,24 @@ func (c *Command) InputFilePath(sessionDir string) string {
 }
 
 type Session struct {
-	SessionId    string     `json:"sessionId" validate:"required"`
-	ProcessScope string     `json:"processScope" validate:"required"`
-	InputClosed  bool       `json:"inputClosed"`
-	Commands     []*Command `json:"commands" validate:"required"`
+	EnvironmentLeaseVersion   int        `json:"environmentLeaseVersion,omitempty"`
+	EnvironmentLeaseID        string     `json:"environmentLeaseId,omitempty"`
+	EnvironmentLeaseExpiresAt *time.Time `json:"environmentLeaseExpiresAt,omitempty"`
+	SessionId                 string     `json:"sessionId" validate:"required"`
+	ProcessScope              string     `json:"processScope" validate:"required"`
+	InputClosed               bool       `json:"inputClosed"`
+	Commands                  []*Command `json:"commands" validate:"required"`
 }
 
 type SessionExecute struct {
-	ProcessScope string  `json:"processScope,omitempty" validate:"optional"`
-	InputClosed  bool    `json:"inputClosed"`
-	CommandId    string  `json:"cmdId" validate:"optional"`
-	Output       *string `json:"output" validate:"optional"`
-	Stdout       *string `json:"stdout" validate:"optional"`
-	Stderr       *string `json:"stderr" validate:"optional"`
-	ExitCode     *int    `json:"exitCode" validate:"optional"`
+	EnvironmentLeaseVersion   int        `json:"environmentLeaseVersion,omitempty"`
+	EnvironmentLeaseID        string     `json:"environmentLeaseId,omitempty"`
+	EnvironmentLeaseExpiresAt *time.Time `json:"environmentLeaseExpiresAt,omitempty"`
+	ProcessScope              string     `json:"processScope,omitempty" validate:"optional"`
+	InputClosed               bool       `json:"inputClosed"`
+	CommandId                 string     `json:"cmdId" validate:"optional"`
+	Output                    *string    `json:"output" validate:"optional"`
+	Stdout                    *string    `json:"stdout" validate:"optional"`
+	Stderr                    *string    `json:"stderr" validate:"optional"`
+	ExitCode                  *int       `json:"exitCode" validate:"optional"`
 }

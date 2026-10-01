@@ -5,7 +5,6 @@ package session
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 
@@ -39,7 +38,9 @@ func (s *SessionController) SessionExecuteCommand(c *gin.Context) {
 
 	var request SessionExecuteRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.AbortWithError(http.StatusBadRequest, fmt.Errorf("invalid request body: %w", err))
+		// Typed JSON errors can contain the offending value. The request logger
+		// records c.Errors even when body logging is disabled.
+		c.Error(common_errors.NewBadRequestError(errors.New("invalid command execution request")))
 		return
 	}
 
@@ -64,7 +65,12 @@ func (s *SessionController) SessionExecuteCommand(c *gin.Context) {
 	isCombinedOutput := session.IsCombinedOutput(sdkVersion, versionComparison, c.Request.Header)
 	skipServerDemux := session.SkipServerDemux(sdkVersion)
 
-	executeResult, err := s.sessionService.Execute(sessionId, util.EmptyCommandID, request.Command, request.RunAsync, isCombinedOutput, skipServerDemux, request.SuppressInputEcho, request.CloseInputAfterCommand)
+	var executeResult *session.SessionExecute
+	if request.EnvironmentLease != nil {
+		executeResult, err = s.sessionService.ExecuteEnvironmentLease(sessionId, request.Command, request.RunAsync, isCombinedOutput, skipServerDemux, request.SuppressInputEcho, request.EnvironmentLease)
+	} else {
+		executeResult, err = s.sessionService.Execute(sessionId, util.EmptyCommandID, request.Command, request.RunAsync, isCombinedOutput, skipServerDemux, request.SuppressInputEcho, request.CloseInputAfterCommand)
+	}
 	if err != nil {
 		// The middleware classifies by concrete type, so a wrap here would erase
 		// the service's own not-found/gone/conflict status and reach the client
@@ -75,20 +81,26 @@ func (s *SessionController) SessionExecuteCommand(c *gin.Context) {
 
 	if request.RunAsync {
 		c.JSON(http.StatusAccepted, &SessionExecuteResponse{
-			CommandId:    executeResult.CommandId,
-			ProcessScope: executeResult.ProcessScope,
-			InputClosed:  executeResult.InputClosed,
+			EnvironmentLeaseVersion:   executeResult.EnvironmentLeaseVersion,
+			EnvironmentLeaseID:        executeResult.EnvironmentLeaseID,
+			EnvironmentLeaseExpiresAt: executeResult.EnvironmentLeaseExpiresAt,
+			CommandId:                 executeResult.CommandId,
+			ProcessScope:              executeResult.ProcessScope,
+			InputClosed:               executeResult.InputClosed,
 		})
 		return
 	}
 
 	c.JSON(http.StatusOK, &SessionExecuteResponse{
-		CommandId:    executeResult.CommandId,
-		ProcessScope: executeResult.ProcessScope,
-		InputClosed:  executeResult.InputClosed,
-		Output:       executeResult.Output,
-		Stdout:       executeResult.Stdout,
-		Stderr:       executeResult.Stderr,
-		ExitCode:     executeResult.ExitCode,
+		EnvironmentLeaseVersion:   executeResult.EnvironmentLeaseVersion,
+		EnvironmentLeaseID:        executeResult.EnvironmentLeaseID,
+		EnvironmentLeaseExpiresAt: executeResult.EnvironmentLeaseExpiresAt,
+		CommandId:                 executeResult.CommandId,
+		ProcessScope:              executeResult.ProcessScope,
+		InputClosed:               executeResult.InputClosed,
+		Output:                    executeResult.Output,
+		Stdout:                    executeResult.Stdout,
+		Stderr:                    executeResult.Stderr,
+		ExitCode:                  executeResult.ExitCode,
 	})
 }
