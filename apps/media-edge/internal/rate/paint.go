@@ -30,6 +30,16 @@ type PaintTracker struct {
 	sample                        Paint
 }
 
+// Charge adds serialized traffic covered by a later ordered prefix receipt.
+// Before the first retained transfer, no measurement interval exists yet.
+func (p *PaintTracker) Charge(bytes int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.stream != "" && bytes > 0 {
+		p.bytes += uint64(bytes)
+	}
+}
+
 func (p *PaintTracker) Sent(stream string, sequence uint64, bytes int, now time.Time) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

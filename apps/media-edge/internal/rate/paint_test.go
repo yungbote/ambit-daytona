@@ -51,3 +51,28 @@ func TestPaintHistoryIsBoundedAndRetiredStreamsDoNotMeasure(t *testing.T) {
 		t.Fatal("retired stream affected current measurement")
 	}
 }
+
+func TestOrderedPrefixCoversPriorityBytesOnlyBeforeItsIssuedBoundary(t *testing.T) {
+	now := time.Unix(100, 0)
+	p := &PaintTracker{}
+	p.Charge(9000) // Before the first measured transfer; no time interval yet.
+	p.Sent("part-a", 1000, 1000, now)
+	p.Charge(325)
+	p.Sent("part-a", 2000, 1000, now.Add(10*time.Millisecond))
+	p.Charge(900) // Written after prefix2000; that receipt cannot acknowledge it.
+	p.Acknowledge("part-a", 2000, now.Add(50*time.Millisecond))
+	sample := p.Snapshot()
+	if sample.DeliveryBytesPerSecond != 46500 || sample.SentBytesPerSecond != 64500 {
+		t.Fatalf("ordered wire prefix lost or overacknowledged priority bytes: %+v", sample)
+	}
+	p.Sent("part-a", 3000, 1000, now.Add(60*time.Millisecond))
+	p.Acknowledge("part-a", 3000, now.Add(100*time.Millisecond))
+	if p.Snapshot().DeliveryBytesPerSecond != 38000 {
+		t.Fatal("later receipt lost previously unacknowledged priority bytes")
+	}
+	p.Sent("part-b", 100, 100, now.Add(time.Second))
+	p.Acknowledge("part-a", 3000, now.Add(2*time.Second))
+	if p.Snapshot().Known {
+		t.Fatal("retired ordered prefix invented new-stream capacity")
+	}
+}

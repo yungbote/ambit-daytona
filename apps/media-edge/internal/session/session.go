@@ -213,6 +213,10 @@ func (s *Session) pump(viewer Carrier) {
 					bytes = carrier.PartBytes(delivery)
 				}
 				s.progress.Sent(transferStream(delivery.Transfer), delivery.Transfer.Offset, bytes, start)
+			} else if s.channel.VideoChunks() {
+				if carrier, ok := viewer.(OrderedCarrier); ok {
+					s.progress.Charge(carrier.OrderedPriorityBytes(delivery))
+				}
 			}
 			if delivery.Paint.Sequence > 0 {
 				s.paint.Sent(delivery.Paint.StreamID, delivery.Paint.Sequence, delivery.Size(), start)

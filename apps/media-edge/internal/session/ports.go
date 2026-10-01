@@ -35,6 +35,10 @@ type MeasuredCarrier interface{ Network() rate.Network }
 // TCP/TLS/QUIC retransmission bytes remain carrier network measurements.
 type ChargedCarrier interface{ PartBytes(*view.Delivery) int }
 
+// OrderedCarrier reports priority application bytes that a later video prefix
+// proves arrived first. A DAT carrier cannot make this delivery claim.
+type OrderedCarrier interface{ OrderedPriorityBytes(*view.Delivery) int }
+
 // RateUpstream declares the negotiated byte-pipe capability of this route.
 // Legacy toolbox validators must not receive a message they cannot admit.
 type RateUpstream interface{ RateInput() bool }
