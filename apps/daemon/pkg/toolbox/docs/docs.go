@@ -5405,6 +5405,9 @@ const docTemplate = `{
                 "environmentLeaseVersion": {
                     "type": "integer"
                 },
+                "homeDirectory": {
+                    "type": "string"
+                },
                 "inputClosed": {
                     "type": "boolean"
                 },

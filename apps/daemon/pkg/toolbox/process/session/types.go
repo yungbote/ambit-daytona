@@ -52,6 +52,7 @@ type CommandDTO struct {
 } //	@name	Command
 
 type SessionDTO struct {
+	HomeDirectory             string        `json:"homeDirectory,omitempty"`
 	EnvironmentLeaseVersion   int           `json:"environmentLeaseVersion,omitempty"`
 	EnvironmentLeaseID        string        `json:"environmentLeaseId,omitempty"`
 	EnvironmentLeaseExpiresAt *time.Time    `json:"environmentLeaseExpiresAt,omitempty"`
@@ -76,6 +77,7 @@ func SessionToDTO(s *session.Session) *SessionDTO {
 	}
 
 	return &SessionDTO{
+		HomeDirectory:             s.HomeDirectory,
 		EnvironmentLeaseVersion:   s.EnvironmentLeaseVersion,
 		EnvironmentLeaseID:        s.EnvironmentLeaseID,
 		EnvironmentLeaseExpiresAt: s.EnvironmentLeaseExpiresAt,

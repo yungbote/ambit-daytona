@@ -43,6 +43,7 @@ func (c *Command) InputFilePath(sessionDir string) string {
 }
 
 type Session struct {
+	HomeDirectory             string     `json:"homeDirectory,omitempty"`
 	EnvironmentLeaseVersion   int        `json:"environmentLeaseVersion,omitempty"`
 	EnvironmentLeaseID        string     `json:"environmentLeaseId,omitempty"`
 	EnvironmentLeaseExpiresAt *time.Time `json:"environmentLeaseExpiresAt,omitempty"`
