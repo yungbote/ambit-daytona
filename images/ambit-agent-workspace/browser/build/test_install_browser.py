@@ -843,7 +843,7 @@ class ChromeVendorPackageTests(unittest.TestCase):
         self.binding = {"distribution": "google-chrome-stable", "version": "154.0.8037.92",
                         "packageVersion": "154.0.8037.92-1", "archiveName": "fixture.deb"}
 
-    def package(self, package="google-chrome-stable", version="154.0.8037.92-1", architecture="amd64"):
+    def package(self, package="google-chrome-stable", version="154.0.8037.92-1", architecture="amd64", sandbox_symlink=False):
         source = self.root / "package"
         (source / "DEBIAN").mkdir(parents=True)
         (source / "DEBIAN/control").write_text(
@@ -853,6 +853,9 @@ class ChromeVendorPackageTests(unittest.TestCase):
         chrome.mkdir(parents=True)
         for name in ("chrome", "chrome_crashpad_handler", "chrome-sandbox", "icudtl.dat", "resources.pak", "CHROME_VERSION_EXTRA"):
             (chrome / name).write_bytes(name.encode())
+        if sandbox_symlink:
+            (chrome / "chrome-sandbox").unlink()
+            (chrome / "chrome-sandbox").symlink_to("chrome")
         (chrome / "locales").mkdir()
         (chrome / "locales/en-US.pak").write_bytes(b"fixture locale")
         target = self.inputs / self.binding["archiveName"]
@@ -913,6 +916,14 @@ class ChromeVendorPackageTests(unittest.TestCase):
         chown.assert_not_called()
         self.assertFalse(self.destination.exists())
 
+    def test_real_vendor_archive_symlink_helper_is_refused_before_move_or_chown(self):
+        self.package(sandbox_symlink=True)
+        with patch.object(installer.os, "geteuid", return_value=0), patch.object(installer.os, "chown") as chown:
+            with self.assertRaisesRegex(ValueError, "adjacent regular file"):
+                installer.install_chrome(self.binding, self.destination, self.scratch, self.inputs)
+        chown.assert_not_called()
+        self.assertFalse(self.destination.exists())
+
     def test_helper_owner_and_group_are_verified_after_packaging(self):
         self.package()
         for owner, group in ((1000, 0), (0, 1000)):
@@ -949,6 +960,11 @@ class ChromeVendorPackageTests(unittest.TestCase):
         with self.image_root(owner=1000):
             with self.assertRaisesRegex(ValueError, "not root-owned"):
                 installer.verify_chrome_layout(self.binding, self.destination)
+        (self.destination / "chrome-sandbox").chmod(0o755)
+        with self.image_root():
+            with self.assertRaisesRegex(ValueError, "not root-owned"):
+                installer.verify_chrome_layout(self.binding, self.destination)
+        (self.destination / "chrome-sandbox").chmod(0o4755)
         (self.destination / "resources.pak").unlink()
         with self.image_root():
             with self.assertRaisesRegex(ValueError, "resources are incomplete"):
