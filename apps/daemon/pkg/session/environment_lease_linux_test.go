@@ -21,7 +21,7 @@ import (
 
 func syntheticEnvironmentLease() *EnvironmentLease {
 	// nosecret: generated synthetic material, never a provider credential.
-	return &EnvironmentLease{Version: 1, ID: uuid.NewString(), ExpiresAt: time.Now().Add(5 * time.Second), Values: map[string]string{"api_key": "synthetic-" + uuid.NewString(), "empty_value": ""}}
+	return &EnvironmentLease{Version: 2, ID: uuid.NewString(), ExpiresAt: time.Now().Add(5 * time.Second), Values: map[string]string{"api_key": "synthetic-" + uuid.NewString(), "empty_value": ""}}
 }
 
 func assertNoStoredEnvironment(t *testing.T, directory, value string) {
@@ -48,7 +48,7 @@ func TestEnvironmentLeaseDispatchIsTransientAndFinite(t *testing.T) {
 	openSession(t, svc, "leased")
 	openSession(t, svc, "ordinary")
 	before, err := svc.Get("leased")
-	if err != nil || before.EnvironmentLeaseVersion != 1 {
+	if err != nil || before.EnvironmentLeaseVersion != 2 {
 		t.Fatal("native environment reader capability missing")
 	}
 	lease := syntheticEnvironmentLease()
@@ -135,7 +135,7 @@ func TestEnvironmentLeaseCancellationKillsTheOwnedTreeOnly(t *testing.T) {
 }
 
 func TestEnvironmentLeaseRejectsExpiredAndMalformedDispatchBeforeCommand(t *testing.T) {
-	for _, state := range []string{"expired", "protocol", "nul", "name", "identity"} {
+	for _, state := range []string{"expired", "protocol", "legacy_protocol", "nul", "name", "identity"} {
 		t.Run(state, func(t *testing.T) {
 			svc := newStdinTestService(t)
 			openSession(t, svc, "refused")
@@ -145,10 +145,12 @@ func TestEnvironmentLeaseRejectsExpiredAndMalformedDispatchBeforeCommand(t *test
 				lease.ExpiresAt = time.Now().Add(-time.Second)
 			case "protocol":
 				lease.Version = 0
+			case "legacy_protocol":
+				lease.Version = 1
 			case "nul":
 				lease.Values["api_key"] += "\x00"
 			case "name":
-				lease.Values["bad-name"] = "synthetic"
+				lease.Values["bad=name"] = "synthetic"
 			case "identity":
 				lease.ID = "../not-an-opaque-lease"
 			}

@@ -27,7 +27,7 @@ type environmentLeaseCustody struct {
 
 func EnvironmentLeaseVersion() int {
 	if runtime.GOOS == "linux" {
-		return 1
+		return 2
 	}
 	return 0
 }
@@ -38,13 +38,7 @@ func environmentValues(values map[string]string) (map[string]string, error) {
 	}
 	detached := make(map[string]string, len(values))
 	for name, value := range values {
-		for index, character := range name {
-			letter := character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character == '_'
-			if !letter && !(index > 0 && character >= '0' && character <= '9') {
-				return nil, errors.New("environment lease name is invalid")
-			}
-		}
-		if name == "" || strings.ContainsRune(value, '\x00') {
+		if name == "" || strings.ContainsAny(name, "=\x00") || strings.ContainsRune(value, '\x00') {
 			return nil, errors.New("environment lease value is not a native environment string")
 		}
 		detached[name] = value
@@ -69,7 +63,7 @@ func processEnvironment(base []string, values map[string]string) []string {
 // Called with the existing session lifecycle mutex held, before command
 // persistence. A lease can enter only the session's first finite invocation.
 func (s *SessionService) admitEnvironmentLease(owned *session, lease *EnvironmentLease) (*processScope, error) {
-	if lease.Version != EnvironmentLeaseVersion() || lease.Version != 1 {
+	if lease.Version != EnvironmentLeaseVersion() || lease.Version != 2 {
 		return nil, common_errors.NewBadRequestError(errors.New("environment lease protocol is unsupported"))
 	}
 	if _, err := uuid.Parse(lease.ID); err != nil {

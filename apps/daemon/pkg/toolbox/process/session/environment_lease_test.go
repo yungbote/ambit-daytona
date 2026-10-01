@@ -29,12 +29,12 @@ func TestEnvironmentLeaseHTTPAcceptanceIsRecoverableWithoutValues(t *testing.T) 
 	t.Cleanup(func() { call(t, engine, http.MethodDelete, "/process/session/"+sessionID, nil) })
 	status, body := call(t, engine, http.MethodGet, "/process/session/"+sessionID, nil)
 	var before SessionDTO
-	if status != http.StatusOK || json.Unmarshal(body, &before) != nil || before.EnvironmentLeaseVersion != 1 {
+	if status != http.StatusOK || json.Unmarshal(body, &before) != nil || before.EnvironmentLeaseVersion != 2 {
 		t.Fatal("native HTTP reader did not advertise the environment protocol")
 	}
 	// nosecret: generated synthetic material, never an external credential.
 	value := "synthetic-" + uuid.NewString()
-	lease := &native.EnvironmentLease{Version: 1, ID: uuid.NewString(), ExpiresAt: time.Now().Add(5 * time.Second), Values: map[string]string{"api_key": value, "empty_value": ""}}
+	lease := &native.EnvironmentLease{Version: 2, ID: uuid.NewString(), ExpiresAt: time.Now().Add(5 * time.Second), Values: map[string]string{"api_key": value, "empty_value": ""}}
 	status, body = call(t, engine, http.MethodPost, "/process/session/"+sessionID+"/exec", SessionExecuteRequest{
 		Command: `test -z "$empty_value" && printf '%s' "$api_key" | sha256sum`, EnvironmentLease: lease, SuppressInputEcho: true,
 	})

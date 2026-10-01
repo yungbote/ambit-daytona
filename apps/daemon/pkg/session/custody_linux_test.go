@@ -32,6 +32,8 @@ func runCustodyFixture(args []string) bool {
 	}
 	mode, path := args[1], args[2]
 	switch mode {
+	case "configuration-env":
+		runConfigurationEnvironmentFixture()
 	case "fork", "fork-again":
 		next := "fork-again"
 		if mode == "fork-again" {
