@@ -20,6 +20,12 @@ EXPECTED_TOOLCHAIN = (
 
 
 class RunnerImageInputsTest(unittest.TestCase):
+    def test_service_only_module_cannot_select_computer_use_dependencies(self) -> None:
+        builder = DOCKERFILE.read_text().split(" AS computer-use-builder\n", 1)[1].split("\nFROM ", 1)[0]
+        self.assertIn("./apps/daemon", builder)
+        self.assertIn("./libs/computer-use", builder)
+        self.assertNotIn("./libs/common-go", builder)
+
     def test_computer_use_is_built_twice_by_the_pinned_glibc_toolchain(self) -> None:
         dockerfile = DOCKERFILE.read_text()
         self.assertIn(
