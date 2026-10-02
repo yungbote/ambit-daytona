@@ -1,4 +1,4 @@
-FROM golang:1.25.11-alpine AS go-toolchain
+FROM golang:1.26.1-alpine AS go-toolchain
 
 # computer-use is a glibc/CGO binary copied into managed sandboxes by the
 # runner. Build it from repository source inside one digest-pinned toolchain;
