@@ -90,6 +90,13 @@ COPY --from=browser-display /out/licenses /opt/ambit/browser/licenses
 COPY --from=driver /opt/ambit/browser/Cargo.lock /opt/ambit/browser/Cargo.lock
 COPY --chmod=0755 runtime/agent-browser /usr/local/bin/agent-browser
 COPY README.md /opt/ambit/browser/README.md
+# fuse3 is a required upstream portal dependency. Its postinst sets this helper
+# setuid, although the private host-client chooser never needs a FUSE mount.
+# Keep the packaged bytes while preventing a new elevated helper in this image.
+RUN test -f /usr/bin/fusermount3 \
+ && test ! -L /usr/bin/fusermount3 \
+ && chmod 0755 /usr/bin/fusermount3 \
+ && test "$(stat -c %a /usr/bin/fusermount3)" = 755
 RUN --mount=type=bind,source=build/inspect-executables.py,target=/source/inspect-executables.py,ro \
     python3 /source/inspect-executables.py \
       --component-lock /opt/ambit/browser/browser.lock.json \
@@ -125,6 +132,14 @@ RUN --mount=type=bind,source=build/install-browser.py,target=/checks/install-bro
  && test -x /usr/bin/dump_xsettings \
  && test -r /usr/share/themes/Adwaita/gtk-3.0/gtk.css \
  && test -r /usr/share/themes/Adwaita-dark/gtk-3.0/gtk.css \
+ && test -x /usr/bin/dbus-daemon \
+ && test -x /usr/bin/dbus-send \
+ && test -x /usr/bin/gsettings \
+ && test -x /usr/libexec/dconf-service \
+ && test -x /usr/libexec/xdg-desktop-portal \
+ && test -x /usr/libexec/xdg-desktop-portal-gtk \
+ && test -r /usr/share/xdg-desktop-portal/portals/gtk.portal \
+ && test -r /usr/share/glib-2.0/schemas/gschemas.compiled \
  && xvfb-run --help >/dev/null \
  && AGENT_BROWSER_DOWNLOAD_PATH=/tmp/browser-version-check/downloads \
     AGENT_BROWSER_SCREENSHOT_DIR=/tmp/browser-version-check/screenshots \
