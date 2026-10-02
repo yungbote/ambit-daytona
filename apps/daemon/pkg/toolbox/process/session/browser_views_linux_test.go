@@ -98,11 +98,7 @@ func runBrowserFixture(args []string) bool {
 		panic(err)
 	}
 	// A failed test is bounded even if its cleanup path is broken.
-	lifetime := 30 * time.Second
-	if mode == "view-channel-source" {
-		lifetime = 20 * time.Minute
-	}
-	time.Sleep(lifetime)
+	time.Sleep(30 * time.Second)
 	return true
 }
 
