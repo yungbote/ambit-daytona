@@ -9,8 +9,10 @@ package daytona
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -18,6 +20,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/daytonaio/media-edge/internal/control"
 	"github.com/daytonaio/media-edge/internal/session"
 	"github.com/daytonaio/media-edge/internal/view"
 )
@@ -68,11 +71,33 @@ func New(proxy, credential, organization string) (*Upstream, error) {
 
 // Address is the view route for a target and a declaration.
 func (u *Upstream) Address(target session.Target, declaration view.Declaration) string {
-	segments := []string{target.SandboxID, "process", "session", target.SessionID, "browser-views", target.ViewID, "channel"}
+	return u.address(target, "channel") + "?" + declaration.Query()
+}
+
+func (u *Upstream) address(target session.Target, route string) string {
+	segments := []string{target.SandboxID, "process", "session", target.SessionID, "browser-views", target.ViewID}
 	for index, segment := range segments {
 		segments[index] = encodeURIComponent(segment)
 	}
-	return u.proxy.String() + strings.Join(segments, "/") + "?" + declaration.Query()
+	return u.proxy.String() + strings.Join(segments, "/") + "/" + route
+}
+
+// DialControl carries only input to the unchanged toolbox control route.
+// The backend remains the writer of acquire/renew/release commands.
+func (u *Upstream) DialControl(ctx context.Context, target session.Target) (session.Conn, error) {
+	headers := http.Header{"Accept": {"application/json"}, "Content-Type": {"application/json"}, "Authorization": {"Bearer " + u.credential}, "X-Daytona-Source": {"ambit-media-edge"}}
+	if u.organization != "" {
+		headers.Set("X-Daytona-Organization-ID", u.organization)
+	}
+	conn, response, err := u.dialer.DialContext(ctx, u.address(target, "control/channel"), headers)
+	if err != nil {
+		if response != nil {
+			return nil, fmt.Errorf("daytona: the control route answered %d", response.StatusCode)
+		}
+		return nil, fmt.Errorf("daytona: control dial: %w", err)
+	}
+	conn.SetReadLimit(control.MaxReplyBytes)
+	return &route{conn: conn}, nil
 }
 
 // DialView opens the view route with the backend's headers.
@@ -94,17 +119,25 @@ func (u *Upstream) DialView(ctx context.Context, target session.Target, viewerID
 		}
 		return nil, fmt.Errorf("daytona: dial: %w", err)
 	}
-	conn.SetReadLimit(view.MaxMessageBytes)
-	return &route{conn: conn}, nil
+	limit := view.MaxMessageBytes
+	if !declaration.VideoCapacity {
+		limit = view.MaxLegacyMessageBytes
+	}
+	conn.SetReadLimit(int64(limit))
+	return &route{conn: conn, viewMessages: true, rateInput: response != nil && response.Header.Get("X-Ambit-Browser-View-Pipe") == "1"}, nil
 }
 
 // route is one open view route. Its read buffer is reused up to
 // retainedReadBytes: a message is valid until the next Read, and a 200 KB
 // frame costs no allocation.
 type route struct {
-	conn   *websocket.Conn
-	buffer bytes.Buffer
+	conn         *websocket.Conn
+	buffer       bytes.Buffer
+	rateInput    bool
+	viewMessages bool
 }
+
+func (r *route) RateInput() bool { return r.rateInput }
 
 func (r *route) Read() (bool, []byte, error) {
 	if r.buffer.Cap() > retainedReadBytes {
@@ -113,7 +146,41 @@ func (r *route) Read() (bool, []byte, error) {
 	kind, reader, err := r.conn.NextReader()
 	if err == nil {
 		r.buffer.Reset()
-		_, err = r.buffer.ReadFrom(reader)
+		if r.viewMessages && kind == websocket.BinaryMessage {
+			var prefix [4]byte
+			_, err = io.ReadFull(reader, prefix[:])
+			length := binary.BigEndian.Uint32(prefix[:])
+			if err == nil && (length == 0 || length > 64<<10) {
+				err = errors.New("invalid view envelope header")
+			}
+			if err == nil {
+				header := make([]byte, int(length))
+				_, err = io.ReadFull(reader, header)
+				limit, valid := view.BinaryPayloadLimit(header)
+				if err == nil && !valid {
+					err = errors.New("invalid view envelope header")
+				}
+				if err == nil {
+					_, _ = r.buffer.Write(prefix[:])
+					_, _ = r.buffer.Write(header)
+					var count int64
+					count, err = r.buffer.ReadFrom(io.LimitReader(reader, int64(limit)+1))
+					if err == nil && count > int64(limit) {
+						err = errors.New("view body exceeds declared capacity")
+					}
+				}
+			}
+		} else if r.viewMessages {
+			// Preserve legacy whole-image JSON fallback, while a larger video
+			// envelope never expands arbitrary text/control admission.
+			var count int64
+			count, err = r.buffer.ReadFrom(io.LimitReader(reader, view.MaxLegacyMessageBytes+1))
+			if err == nil && count > view.MaxLegacyMessageBytes {
+				err = errors.New("view text exceeds legacy envelope")
+			}
+		} else {
+			_, err = r.buffer.ReadFrom(reader)
+		}
 	}
 	if err != nil {
 		var closed *websocket.CloseError

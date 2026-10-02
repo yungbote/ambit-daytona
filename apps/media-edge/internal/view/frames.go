@@ -20,8 +20,13 @@ import (
 // a driver's raw output comes out as the toolbox would have shaped it.
 
 const (
-	// MaxMessageBytes bounds one message from the view route.
-	MaxMessageBytes = 12 << 20
+	// MaxMessageBytes is the largest supported logical video envelope, not
+	// a retained buffer or a queue allowance. Per-unit geometry narrows it.
+	MaxMessageBytes = MaxVideoPayloadBytes + 4 + videoHeaderLimit
+	// MaxLegacyMessageBytes is the retained peer/JPEG reader's envelope.
+	MaxLegacyMessageBytes = 12 << 20
+	// Keep the existing JPEG frame/resource contract separate from video.
+	maxFrameMessageBytes = MaxLegacyMessageBytes
 	// maxFrameHeaderBytes bounds a binary message's header of any kind.
 	maxFrameHeaderBytes = 64 << 10
 )
@@ -162,6 +167,9 @@ func mediaTrack(message []byte) (track string, media bool) {
 
 func parseBinaryFrame(message []byte) (binaryFrame, error) {
 	var frame binaryFrame
+	if len(message) > maxFrameMessageBytes {
+		return frame, errBinaryFrame
+	}
 	header, payload, valid := envelope(message)
 	if !valid || json.Unmarshal(header, &frame.header) != nil {
 		return frame, errBinaryFrame
@@ -206,7 +214,7 @@ func parseBinaryFrame(message []byte) (binaryFrame, error) {
 func (f binaryFrame) project() (binaryFrame, error) {
 	var err error
 	f.projected, err = json.Marshal(f.header)
-	if err != nil || len(f.projected) > maxFrameHeaderBytes || f.wireSize() > MaxMessageBytes {
+	if err != nil || len(f.projected) > maxFrameHeaderBytes || f.wireSize() > maxFrameMessageBytes {
 		return f, errBinaryFrame
 	}
 	return f, nil

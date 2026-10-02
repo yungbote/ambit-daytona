@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +27,7 @@ import (
 	"github.com/daytonaio/media-edge/internal/grant"
 	"github.com/daytonaio/media-edge/internal/session"
 	"github.com/daytonaio/media-edge/internal/websocket"
+	edgewt "github.com/daytonaio/media-edge/internal/webtransport"
 )
 
 const (
@@ -43,6 +45,7 @@ func main() {
 
 type config struct {
 	edgeID, listen, internalListen, keysFile, proxy, credential, organization string
+	quicListen, certFile, tlsKeyFile                                          string
 	origins                                                                   []string
 }
 
@@ -54,6 +57,9 @@ func loadConfig() (config, error) {
 		keysFile:       os.Getenv("MEDIA_EDGE_GRANT_KEYS_FILE"),
 		proxy:          os.Getenv("DAYTONA_TOOLBOX_PROXY_URL"),
 		organization:   os.Getenv("DAYTONA_ORGANIZATION_ID"),
+		quicListen:     os.Getenv("MEDIA_EDGE_QUIC_LISTEN"),
+		certFile:       os.Getenv("MEDIA_EDGE_TLS_CERT_FILE"),
+		tlsKeyFile:     os.Getenv("MEDIA_EDGE_TLS_KEY_FILE"),
 	}
 	if origins := os.Getenv("MEDIA_EDGE_ALLOWED_ORIGINS"); origins != "" {
 		c.origins = strings.Split(origins, ",")
@@ -63,6 +69,9 @@ func loadConfig() (config, error) {
 	}
 	if c.keysFile == "" {
 		return c, errors.New("MEDIA_EDGE_GRANT_KEYS_FILE must name the grant public key file")
+	}
+	if c.quicListen != "" && (c.certFile == "" || c.tlsKeyFile == "") {
+		return c, errors.New("MEDIA_EDGE_QUIC_LISTEN requires MEDIA_EDGE_TLS_CERT_FILE and MEDIA_EDGE_TLS_KEY_FILE")
 	}
 	credential, err := fileBacked("DAYTONA_API_KEY")
 	if err != nil {
@@ -125,13 +134,47 @@ func run(log *slog.Logger) error {
 		Verifier: grant.Verifier{Keys: &keys, Audience: c.edgeID},
 		Hub:      hub,
 		Upstream: upstream,
+		Controls: upstream,
 		Origins:  c.origins,
 		Log:      log,
 	}
 	var ready atomic.Bool
 	public := &http.Server{Addr: c.listen, Handler: websocket.NewHandler(edge), ReadHeaderTimeout: 10 * time.Second}
 	internal := &http.Server{Addr: c.internalListen, Handler: internalRoutes(edge, &ready), ReadHeaderTimeout: 10 * time.Second}
-	failed := make(chan error, 2)
+	failed := make(chan error, 3)
+	var quicServer interface{ Close() error }
+	if c.quicListen != "" {
+		var certificate atomic.Pointer[tls.Certificate]
+		apply := func([]byte) error {
+			pair, err := tls.LoadX509KeyPair(c.certFile, c.tlsKeyFile)
+			if err == nil {
+				certificate.Store(&pair)
+			}
+			return err
+		}
+		for _, path := range []string{c.certFile, c.tlsKeyFile} {
+			if err := filewatch.Watch(ctx, path, keyFileCheck, apply, func(err error) {
+				log.Error("tls_certificate.rejected", "error", err.Error())
+			}); err != nil {
+				return fmt.Errorf("QUIC certificate: %w", err)
+			}
+		}
+		server := edgewt.NewServer(edge)
+		server.H3.Addr = c.quicListen
+		server.H3.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS13, GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return certificate.Load(), nil
+		}}
+		server.H3.QUICConfig.MaxIncomingStreams = 4
+		server.H3.QUICConfig.MaxIncomingUniStreams = 0
+		server.H3.QUICConfig.MaxIdleTimeout = 60 * time.Second
+		quicServer = server
+		defer server.Close()
+		go func() {
+			if err := server.ListenAndServe(); err != nil && ctx.Err() == nil {
+				failed <- err
+			}
+		}()
+	}
 	for _, server := range []*http.Server{public, internal} {
 		go func() {
 			if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
@@ -152,6 +195,9 @@ func run(log *slog.Logger) error {
 	defer cancel()
 	_ = public.Shutdown(deadline)
 	hub.Shutdown(1012, "browser_view_restarting")
+	if quicServer != nil {
+		_ = quicServer.Close()
+	}
 	for hub.Len() > 0 && deadline.Err() == nil {
 		time.Sleep(20 * time.Millisecond)
 	}

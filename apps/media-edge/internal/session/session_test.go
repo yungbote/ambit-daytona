@@ -88,16 +88,19 @@ func (c *fakeCarrier) delivered() []*view.Delivery {
 
 // fakeRoute is the view route: tests feed it and read what it was sent.
 type fakeRoute struct {
-	out     chan inbound
-	end     chan error
-	mu      sync.Mutex
-	written []string
-	gate    chan struct{} // when set, each Write waits for a token
-	entered chan struct{} // a Write began
-	wrote   chan struct{}
-	once    sync.Once
-	closed  chan struct{}
+	out       chan inbound
+	end       chan error
+	mu        sync.Mutex
+	written   []string
+	gate      chan struct{} // when set, each Write waits for a token
+	entered   chan struct{} // a Write began
+	wrote     chan struct{}
+	once      sync.Once
+	closed    chan struct{}
+	rateInput bool
 }
+
+func (r *fakeRoute) RateInput() bool { return r.rateInput }
 
 func newFakeRoute() *fakeRoute {
 	return &fakeRoute{out: make(chan inbound, 64), end: make(chan error, 1), entered: make(chan struct{}, 64), wrote: make(chan struct{}, 64), closed: make(chan struct{})}
@@ -311,13 +314,14 @@ func TestRelayCarriesTheRouteToTheViewerAndCoalescesTheViewer(t *testing.T) {
 	for size := 101; size <= 140; size++ {
 		viewer.send(`{"type":"presentation","width":` + strconv.Itoa(size) + `,"height":100}`)
 	}
-	await(t, "every presentation read", func() bool { return s.counters.received.Load() == 41 })
-	if superseded := s.counters.superseded.Load(); superseded != 39 {
-		t.Fatalf("%d superseded, want 39", superseded)
+	// Received advances before channel admission and Pending.Put. Wait for
+	// the effect being tested so the last mailbox update has completed.
+	await(t, "every presentation coalesced", func() bool { return s.counters.superseded.Load() == 39 })
+	if received := s.counters.received.Load(); received != 41 {
+		t.Fatalf("%d received, want41", received)
 	}
 	close(route.gate)
 	awaitWrites(t, route, 2)
-	time.Sleep(50 * time.Millisecond) // nothing else follows
 	if written := route.messages(); len(written) != 2 || written[0] != `{"type":"presentation","width":100,"height":100}` || written[1] != `{"type":"presentation","width":140,"height":100}` {
 		t.Fatalf("the route got %v", written)
 	}

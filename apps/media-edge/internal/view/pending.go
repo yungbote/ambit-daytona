@@ -14,8 +14,10 @@ type Slot uint8
 const (
 	SlotAudio Slot = iota
 	SlotVideo
+	SlotRate
 	SlotKeyframe
 	SlotPresentation
+	SlotVideoReceived
 	SlotVideoAck
 	SlotFrameAck
 	slotCount
@@ -25,9 +27,10 @@ const (
 // takes it (the backend relay's BrowserViewRelay.flush). Ready is signalled
 // whenever a message is put; the writer drains with Next until it is empty.
 type Pending struct {
-	mu    sync.Mutex
-	slots [slotCount][]byte
-	ready chan struct{}
+	mu              sync.Mutex
+	slots           [slotCount][]byte
+	ready           chan struct{}
+	videoGeneration uint64
 }
 
 // NewPending returns an empty mailbox.
@@ -37,10 +40,17 @@ func NewPending() *Pending { return &Pending{ready: make(chan struct{}, 1)} }
 // pending keyframe request and video acknowledgement: they name the old one.
 func (p *Pending) Put(forward Forward) (superseded bool) {
 	p.mu.Lock()
+	if forward.Slot == SlotRate && forward.Generation != p.videoGeneration {
+		p.mu.Unlock()
+		return false
+	}
 	superseded = p.slots[forward.Slot] != nil
 	p.slots[forward.Slot] = forward.Message
 	if forward.Slot == SlotVideo {
+		p.videoGeneration = forward.Generation
+		p.slots[SlotRate] = nil
 		p.slots[SlotKeyframe], p.slots[SlotVideoAck] = nil, nil
+		p.slots[SlotVideoReceived] = nil
 	}
 	p.mu.Unlock()
 	select {

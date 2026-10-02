@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/daytonaio/media-edge/internal/rate"
 	"github.com/daytonaio/media-edge/internal/view"
 )
 
@@ -26,6 +27,22 @@ type Carrier interface {
 	Close(code int, reason string)
 }
 
+// MeasuredCarrier reports its own network boundary. Paint ACKs supplement it
+// at the session, so a proxied socket cannot masquerade as the consumer path.
+type MeasuredCarrier interface{ Network() rate.Network }
+
+// ChargedCarrier gives exact known application framing for a reserved part.
+// TCP/TLS/QUIC retransmission bytes remain carrier network measurements.
+type ChargedCarrier interface{ PartBytes(*view.Delivery) int }
+
+// OrderedCarrier reports priority application bytes that a later video prefix
+// proves arrived first. A DAT carrier cannot make this delivery claim.
+type OrderedCarrier interface{ OrderedPriorityBytes(*view.Delivery) int }
+
+// RateUpstream declares the negotiated byte-pipe capability of this route.
+// Legacy toolbox validators must not receive a message they cannot admit.
+type RateUpstream interface{ RateInput() bool }
+
 // Target is the view a grant names, in terms any sandbox provider has.
 type Target struct {
 	SandboxID string
@@ -36,6 +53,12 @@ type Target struct {
 // Upstream reaches a sandbox's browser view.
 type Upstream interface {
 	DialView(ctx context.Context, target Target, viewerID string, declaration view.Declaration) (Conn, error)
+}
+
+// ControlUpstream reaches the existing toolbox control route. The backend
+// still acquires, renews and releases the driver's lease.
+type ControlUpstream interface {
+	DialControl(ctx context.Context, target Target) (Conn, error)
 }
 
 // Conn is one open view route.

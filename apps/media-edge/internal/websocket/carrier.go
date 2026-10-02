@@ -35,6 +35,7 @@ type carrier struct {
 	closing    atomic.Bool
 	once       sync.Once
 	stop       chan struct{}
+	writing    sync.Mutex
 }
 
 func newCarrier(conn *websocket.Conn, keepalive time.Duration) *carrier {
@@ -56,10 +57,37 @@ func (c *carrier) Receive() (bool, []byte, error) {
 	return kind == websocket.TextMessage, message, nil
 }
 
+// The production upgrader's64KiB write buffer fits every16KiB part in one
+// unmasked frame. Smaller envelopes use the two-byte WS frame header.
+func (c *carrier) PartBytes(d *view.Delivery) int {
+	if d.Size() <= 125 {
+		return d.Size() + 2
+	}
+	return d.Size() + 4
+}
+
+func (c *carrier) OrderedPriorityBytes(d *view.Delivery) int {
+	if d.Kind != view.Audio && d.Kind != view.Record {
+		return 0
+	}
+	bytes := d.Size()
+	if bytes <= 125 {
+		return bytes + 2
+	}
+	if bytes <= 65535 {
+		return bytes + 4
+	}
+	// WriteMessage sends a server text record as one frame; bounded audio
+	// envelopes fit the carrier's64KiB buffer. No TLS/retransmission claim.
+	return bytes + 10
+}
+
 // Send writes a record as a text message and a binary kind as one binary
 // message: the length prefix, the header and the payload, without copying
 // the payload.
 func (c *carrier) Send(d *view.Delivery) error {
+	c.writing.Lock()
+	defer c.writing.Unlock()
 	if d.Kind == view.Record {
 		return c.conn.WriteMessage(websocket.TextMessage, d.Text)
 	}

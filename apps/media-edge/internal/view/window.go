@@ -23,7 +23,7 @@ type sentFrame struct {
 }
 
 func (w *frameWindow) reserve(sequence uint64, bytes int) bool {
-	if len(w.frames) >= w.limit || bytes <= 0 || bytes > MaxMessageBytes-w.bytes {
+	if len(w.frames) >= w.limit || bytes <= 0 || bytes > maxFrameMessageBytes-w.bytes {
 		return false
 	}
 	w.frames = append(w.frames, sentFrame{sequence, bytes})

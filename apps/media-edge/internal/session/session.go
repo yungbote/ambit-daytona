@@ -9,10 +9,12 @@ import (
 	"errors"
 	"log/slog"
 	"regexp"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/daytonaio/media-edge/internal/grant"
+	"github.com/daytonaio/media-edge/internal/rate"
 	"github.com/daytonaio/media-edge/internal/view"
 )
 
@@ -63,7 +65,13 @@ type Session struct {
 		code          int
 		reason, cause string
 	}
-	done chan struct{}
+	done             chan struct{}
+	control          *controlLine
+	controlRequested bool
+	rateMu           sync.Mutex
+	budget           *rate.Estimator
+	paint            rate.PaintTracker
+	progress         rate.PaintTracker
 }
 
 // add takes a verified renewal. A grant for another binding is a violation;
@@ -130,6 +138,9 @@ func (s *Session) end(code int, reason, cause string) bool {
 	viewer, upstream := s.viewer, s.upstream
 	s.mu.Unlock()
 	close(s.done)
+	if s.control != nil {
+		s.control.close()
+	}
 	if viewer != nil {
 		viewer.Close(code, reason)
 	}
@@ -154,11 +165,28 @@ func (s *Session) Run(viewer Carrier) {
 	s.viewer = viewer
 	s.mu.Unlock()
 	s.log.Info("session.opened", "dialMs", s.dialed.Milliseconds())
+	if s.controlRequested {
+		capability := []byte(`{"type":"edge","control":false}`)
+		if s.control != nil && s.edge.Controls != nil {
+			capability = []byte(`{"type":"edge","control":true}`)
+		}
+		if err := viewer.Send(&view.Delivery{Kind: view.Record, Text: capability}); err != nil {
+			s.end(1011, reasonUnavailable, causeWrite)
+		}
+	}
 	var flows sync.WaitGroup
 	flows.Add(3)
 	go func() { defer flows.Done(); s.pump(viewer) }()
 	go func() { defer flows.Done(); s.forward() }()
 	go func() { defer flows.Done(); s.periodicReports() }()
+	if upstream, ok := s.upstream.(RateUpstream); ok && upstream.RateInput() {
+		flows.Add(1)
+		go func() { defer flows.Done(); s.rates() }()
+	}
+	if s.control != nil {
+		flows.Add(1)
+		go func() { defer flows.Done(); s.control.run() }()
+	}
 	s.read(viewer)
 	flows.Wait()
 	s.report("session.closed")
@@ -179,6 +207,20 @@ func (s *Session) pump(viewer Carrier) {
 		delivery, closing := s.channel.Upstream(text, message)
 		if delivery != nil {
 			start := time.Now()
+			if delivery.Transfer.Offset > 0 {
+				bytes := delivery.Size()
+				if carrier, ok := viewer.(ChargedCarrier); ok {
+					bytes = carrier.PartBytes(delivery)
+				}
+				s.progress.Sent(transferStream(delivery.Transfer), delivery.Transfer.Offset, bytes, start)
+			} else if s.channel.VideoChunks() {
+				if carrier, ok := viewer.(OrderedCarrier); ok {
+					s.progress.Charge(carrier.OrderedPriorityBytes(delivery))
+				}
+			}
+			if delivery.Paint.Sequence > 0 {
+				s.paint.Sent(delivery.Paint.StreamID, delivery.Paint.Sequence, delivery.Size(), start)
+			}
 			s.counters.hold.observe(start.Sub(read))
 			if err := viewer.Send(delivery); err != nil {
 				s.end(1011, reasonUnavailable, causeWrite)
@@ -254,7 +296,21 @@ func (s *Session) read(viewer Carrier) {
 			s.renewal(message)
 			continue
 		}
+		if text && isControl(message) {
+			if s.control == nil {
+				s.end(1008, reasonInvalid, causeProtocol)
+				continue
+			}
+			s.control.receive(message)
+			continue
+		}
 		forward, closing := s.channel.Viewer(text, message)
+		if forward != nil && forward.Paint.Sequence > 0 {
+			s.paint.Acknowledge(forward.Paint.StreamID, forward.Paint.Sequence, time.Now())
+		}
+		if forward != nil && forward.Transfer.Offset > 0 {
+			s.progress.Acknowledge(transferStream(forward.Transfer), forward.Transfer.Offset, time.Now())
+		}
 		switch {
 		case closing != nil:
 			s.end(closing.Code, closing.Reason, causeProtocol)
@@ -263,7 +319,61 @@ func (s *Session) read(viewer Carrier) {
 		case s.pending.Put(*forward):
 			s.counters.superseded.Add(1)
 		}
+		if forward != nil && forward.Slot == view.SlotVideo {
+			s.progress.Reset()
+			s.updateRate()
+		}
 	}
+}
+
+func (s *Session) rates() {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-ticker.C:
+			s.updateRate()
+		}
+	}
+}
+
+func (s *Session) updateRate() {
+	upstream, ok := s.upstream.(RateUpstream)
+	if !ok || !upstream.RateInput() {
+		return
+	}
+	s.rateMu.Lock()
+	defer s.rateMu.Unlock()
+	if s.budget == nil {
+		s.budget = rate.New()
+	}
+	network := rate.Network{}
+	if carrier, ok := s.viewer.(MeasuredCarrier); ok {
+		network = carrier.Network()
+	}
+	generation := s.channel.VideoGeneration()
+	paint := s.paint.Snapshot()
+	// Evaluate after snapshots: their own monotonic observation/ACK instants
+	// must not appear to be future samples relative to an older ticker time.
+	var budget rate.Budget
+	var emit bool
+	if s.channel.VideoChunks() {
+		budget, emit = s.budget.UpdateReceived(time.Now(), generation, network, s.progress.Snapshot())
+	} else {
+		budget, emit = s.budget.Update(time.Now(), generation, network, paint)
+	}
+	if !emit {
+		return
+	}
+	if message := s.channel.Rate(generation, budget.BitsPerSecond, budget.BurstBytes); message != nil {
+		s.pending.Put(*message)
+	}
+}
+
+func transferStream(identity view.TransferIdentity) string {
+	return identity.StreamID + "/" + strconv.FormatUint(identity.Sequence, 10)
 }
 
 // isRenewal recognizes the one message the session itself answers.
@@ -278,6 +388,10 @@ func isRenewal(message []byte) bool {
 // the session's authority; an expired or revoked one adds nothing; anything
 // else ends the session as an invalid message.
 func (s *Session) renewal(message []byte) {
+	if len(message) > view.MaxViewerMessageBytes {
+		s.end(1008, reasonInvalid, causeProtocol)
+		return
+	}
 	var value struct {
 		Type  string `json:"type"`
 		Token string `json:"token"`
@@ -329,6 +443,14 @@ func (s *Session) report(event string) {
 	s.mu.Unlock()
 	now := time.Now()
 	attrs := append([]any{"ageMs", now.Sub(s.opened).Milliseconds()}, s.counters.attrs(now)...)
+	s.rateMu.Lock()
+	if s.budget != nil {
+		generation, budget := s.budget.Published()
+		if generation > 0 {
+			attrs = append(attrs, slog.Group("rate", "generation", generation, "bitsPerSecond", budget.BitsPerSecond, "burstBytes", budget.BurstBytes))
+		}
+	}
+	s.rateMu.Unlock()
 	if event == "session.closed" {
 		attrs = append(attrs, slog.Group("close", "code", closing.code, "reason", closing.reason, "cause", closing.cause))
 	}

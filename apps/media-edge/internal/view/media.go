@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // The audio and video tracks are the toolbox's (browser_audio_linux.go,
@@ -18,8 +19,60 @@ const (
 	audioHeaderLimit  = 1024
 	audioPayloadLimit = 4096
 	videoHeaderLimit  = 4096
-	videoPayloadLimit = 4 << 20
+	// MaxVideoPayloadBytes is the current4096²8-bit4:4:4 source's capacity:
+	// eight aligned decoded rasters. Allocation uses actual unit bytes.
+	MaxVideoPayloadBytes = 8 * 4096 * 4096 * 3
+	// Parts bound transport retention; they never bound the logical picture.
+	MaxVideoPartBytes = 16 << 10
 )
+
+// videoPayloadBytes is the negotiated source allowance for coded geometry
+// and chroma. The current native libaom encoder uses this allocation bound;
+// the VP9 vocabulary retains the same format allowance, not a claim about a
+// different encoder's private allocation. Metadata/control have other bounds.
+func videoPayloadBytes(codec string, coded videoSize) uint64 {
+	if !validVideoCodec(codec) || coded.Width == 0 || coded.Width > 4096 || coded.Height == 0 || coded.Height > 4096 {
+		return 0
+	}
+	width := (uint64(coded.Width) + 31) &^ 31
+	height := (uint64(coded.Height) + 31) &^ 31
+	bits := uint64(12)
+	if strings.HasSuffix(codec, "-444") {
+		bits = 24
+	}
+	return max(uint64(8192), 8*width*height*bits/8)
+}
+
+// BinaryPayloadLimit admits the small header before a route grows a body
+// buffer. A large allowance belongs only to validated producer video.
+// Audio and legacy/JPEG envelopes retain their own grammar/resource bounds.
+func BinaryPayloadLimit(header []byte) (int, bool) {
+	var kind struct{ Type, Track string }
+	if len(header) == 0 || len(header) > maxFrameHeaderBytes || !utf8.Valid(header) || json.Unmarshal(header, &kind) != nil {
+		return 0, false
+	}
+	if kind.Type == "media" && kind.Track == "video" {
+		if _, part := videoPartOffset(header); part {
+			if _, _, valid := parseVideoPartHeader(header); !valid {
+				return 0, false
+			}
+			return MaxVideoPartBytes - 4 - len(header), true
+		}
+		var value videoHeader
+		if len(header) > videoHeaderLimit || json.Unmarshal(header, &value) != nil || !value.valid(int(value.ByteLength)) {
+			return 0, false
+		}
+		return int(value.ByteLength), true
+	}
+	if kind.Type == "media" && kind.Track == "audio" {
+		var value audioHeader
+		if len(header) > audioHeaderLimit || json.Unmarshal(header, &value) != nil || value.ByteLength == 0 || value.ByteLength > audioPayloadLimit {
+			return 0, false
+		}
+		return int(value.ByteLength), true
+	}
+	return maxFrameMessageBytes - 4 - len(header), true
+}
 
 func validAudioCodec(codec string) bool { return codec == "opus" || codec == "pcm-s16le" }
 
@@ -160,6 +213,7 @@ type videoHeader struct {
 	InputSeq    uint64      `json:"inputSeq,omitempty"`
 	Quality     string      `json:"quality"`
 	ByteLength  uint32      `json:"byteLength"`
+	Offset      *uint64     `json:"offset,omitempty"`
 }
 
 func (h videoHeader) valid(payload int) bool {
@@ -170,7 +224,7 @@ func (h videoHeader) valid(payload int) bool {
 		v.Width == 0 || v.Height == 0 || v.X >= h.Coded.Width || v.Y >= h.Coded.Height ||
 		v.Width > h.Coded.Width-v.X || v.Height > h.Coded.Height-v.Y || !h.Surface.valid() ||
 		(h.Quality != "motion" && h.Quality != "refine" && h.Quality != "final") ||
-		payload == 0 || payload > videoPayloadLimit || uint64(h.ByteLength) != uint64(payload) {
+		payload <= 0 || uint64(payload) > videoPayloadBytes(h.Codec, h.Coded) || uint64(h.ByteLength) != uint64(payload) {
 		return false
 	}
 	if !h.Key {

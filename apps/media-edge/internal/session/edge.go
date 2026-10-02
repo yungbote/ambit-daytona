@@ -25,6 +25,7 @@ type Edge struct {
 	Verifier grant.Verifier
 	Hub      *Hub
 	Upstream Upstream
+	Controls ControlUpstream
 	// Origins, when set, are the page origins a browser may connect from.
 	Origins []string
 	Log     *slog.Logger
@@ -46,6 +47,8 @@ type Admission struct {
 	Declaration view.Declaration
 	// Fallback says why the page is on this carrier (telemetry only).
 	Fallback string
+	// The page asks for the edge's control capability before using input.
+	Control bool
 }
 
 // Refusal is an upgrade the edge refuses before any connection exists. A
@@ -89,7 +92,7 @@ func (e *Edge) Admit(query url.Values, origin string) (Admission, *Refusal) {
 	if e.Hub.Revoked(g) {
 		return Admission{}, &Refusal{http.StatusForbidden, "revoked"}
 	}
-	return Admission{Grant: g, Declaration: declaration, Fallback: fallback}, nil
+	return Admission{Grant: g, Declaration: declaration, Fallback: fallback, Control: query.Get("control") == "1"}, nil
 }
 
 func refusalReason(err error) string {
@@ -118,16 +121,20 @@ func (e *Edge) Open(ctx context.Context, admission Admission, carrier string) (*
 	id := make([]byte, 8)
 	_, _ = rand.Read(id)
 	s := &Session{
-		id:        hex.EncodeToString(id),
-		edge:      e,
-		carrier:   carrier,
-		fallback:  admission.Fallback,
-		binding:   g.Binding,
-		channel:   view.NewChannel(admission.Declaration),
-		pending:   view.NewPending(),
-		opened:    time.Now(),
-		authority: grant.NewAuthority(g),
-		done:      make(chan struct{}),
+		id:               hex.EncodeToString(id),
+		edge:             e,
+		carrier:          carrier,
+		fallback:         admission.Fallback,
+		binding:          g.Binding,
+		channel:          view.NewChannel(admission.Declaration),
+		pending:          view.NewPending(),
+		opened:           time.Now(),
+		authority:        grant.NewAuthority(g),
+		done:             make(chan struct{}),
+		controlRequested: admission.Control,
+	}
+	if carrier != "websocket" {
+		s.control = newControlLine(s, Target{SandboxID: g.SandboxID, SessionID: g.SessionID, ViewID: g.NativeViewID})
 	}
 	s.counters.lastAt = s.opened
 	s.log = e.Log.With(slog.Group("session", "id", s.id, "carrier", carrier, "fallback", admission.Fallback,

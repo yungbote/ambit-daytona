@@ -5,6 +5,7 @@ package daytona
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -48,6 +49,39 @@ func TestTheProxyURLIsAnHTTPURLWithAPathAndNothingElse(t *testing.T) {
 	}
 	if _, err := New("http://proxy/toolbox", "", ""); err == nil {
 		t.Error("an empty credential was taken")
+	}
+}
+
+func TestOnlyTheActualPipeHandshakeEnablesRateInput(t *testing.T) {
+	declaration, _ := view.ParseDeclaration(url.Values{"frames": {"binary"}, "patches": {"1"}})
+	for _, capability := range []string{"", "0", "1", "2"} {
+		t.Run("capability="+capability, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				headers := http.Header{}
+				if capability != "" {
+					headers.Set("X-Ambit-Browser-View-Pipe", capability)
+				}
+				conn, err := (&websocket.Upgrader{}).Upgrade(w, r, headers)
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+				_, _, _ = conn.ReadMessage()
+			}))
+			defer server.Close()
+			upstream, err := New(server.URL, "fixture-nosecret", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			conn, err := upstream.DialView(context.Background(), session.Target{SandboxID: "sandbox", SessionID: "session", ViewID: "view"}, "11111111-2222-4333-8444-555555555555", declaration)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			if conn.(session.RateUpstream).RateInput() != (capability == "1") {
+				t.Fatal("legacy/unknown route admitted rate")
+			}
+		})
 	}
 }
 

@@ -29,6 +29,7 @@ type viewerKind int
 const (
 	viewerFrameAck viewerKind = iota + 1
 	viewerVideoAck
+	viewerVideoReceived
 	viewerAudio
 	viewerVideo
 	viewerKeyframe
@@ -45,6 +46,7 @@ type viewerMessage struct {
 	generation uint64
 	width      uint64
 	height     uint64
+	offset     uint64
 }
 
 var byteOrderMark = []byte("\xef\xbb\xbf")
@@ -95,6 +97,12 @@ func parseViewerMessage(message []byte) (viewerMessage, bool) {
 		if streamID := text("streamId"); positive && text("type") == "ack" && text("track") == "video" && validUUID(streamID) {
 			return viewerMessage{kind: viewerVideoAck, seq: seq, streamID: streamID}, true
 		}
+	case "offset,seq,streamId,track,type":
+		seq, positive := safePositive(record["seq"])
+		offset, prefix := safePositive(record["offset"])
+		if streamID := text("streamId"); positive && prefix && text("type") == "received" && text("track") == "video" && validUUID(streamID) {
+			return viewerMessage{kind: viewerVideoReceived, seq: seq, streamID: streamID, offset: offset}, true
+		}
 	case "seq,type":
 		if seq, positive := safePositive(record["seq"]); positive && text("type") == "ack" {
 			return viewerMessage{kind: viewerFrameAck, seq: seq}, true
@@ -141,6 +149,8 @@ func (m viewerMessage) encode() []byte {
 		return []byte(`{"type":"ack","seq":` + strconv.FormatUint(m.seq, 10) + `}`)
 	case viewerVideoAck:
 		return []byte(`{"type":"ack","track":"video","streamId":"` + m.streamID + `","seq":` + strconv.FormatUint(m.seq, 10) + `}`)
+	case viewerVideoReceived:
+		return []byte(`{"type":"received","track":"video","streamId":"` + m.streamID + `","seq":` + strconv.FormatUint(m.seq, 10) + `,"offset":` + strconv.FormatUint(m.offset, 10) + `}`)
 	case viewerAudio:
 		return []byte(`{"type":"audio","enabled":` + strconv.FormatBool(m.enabled) + `,"generation":` + generation + `}`)
 	case viewerVideo:
@@ -167,6 +177,11 @@ type Declaration struct {
 	Audio string
 	// Video is the viewer's decodable codecs in its order of preference.
 	Video []string
+	// VideoCapacity names a viewer with geometry/chroma-derived readers.
+	// Absence preserves the cached legacy4MiB video reader's capability.
+	VideoCapacity bool
+	// VideoChunks explicitly opts into bounded parts and received-prefix credit.
+	VideoChunks bool
 }
 
 // ErrDeclaration is a malformed viewer upgrade.
@@ -246,6 +261,16 @@ func ParseDeclaration(query url.Values) (Declaration, error) {
 		}
 		d.Video = codecs
 	}
+	if values := query["videoCapacity"]; len(values) > 1 || (len(values) == 1 && (values[0] != "coded" || len(d.Video) == 0)) {
+		return Declaration{}, ErrDeclaration
+	} else if len(values) == 1 {
+		d.VideoCapacity = true
+	}
+	if values := query["videoFraming"]; len(values) > 1 || (len(values) == 1 && (values[0] != "chunks" || !d.VideoCapacity)) {
+		return Declaration{}, ErrDeclaration
+	} else if len(values) == 1 {
+		d.VideoChunks = true
+	}
 	return d, nil
 }
 
@@ -271,6 +296,12 @@ func (d Declaration) Query() string {
 	}
 	if len(d.Video) != 0 {
 		query.WriteString("&video=" + url.QueryEscape(strings.Join(d.Video, ",")))
+	}
+	if d.VideoCapacity {
+		query.WriteString("&videoCapacity=coded")
+	}
+	if d.VideoChunks {
+		query.WriteString("&videoFraming=chunks")
 	}
 	return query.String()
 }
