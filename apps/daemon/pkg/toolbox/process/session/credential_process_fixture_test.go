@@ -14,6 +14,7 @@ import (
 
 	common_errors "github.com/daytonaio/common-go/pkg/errors"
 	native "github.com/daytonaio/daemon/pkg/session"
+	"github.com/daytonaio/daemon/pkg/toolbox/process/pty"
 	"github.com/gin-gonic/gin"
 	sloggin "github.com/samber/slog-gin"
 )
@@ -31,18 +32,7 @@ func runCredentialProcessFixture(args []string) bool {
 		panic(err)
 	}
 	gin.SetMode(gin.ReleaseMode)
-	engine := gin.New()
-	engine.Use(sloggin.New(logger), common_errors.NewErrorMiddleware(func(ctx *gin.Context, err error) common_errors.ErrorResponse {
-		return common_errors.ErrorResponse{StatusCode: http.StatusInternalServerError, Message: err.Error()}
-	}, false))
-	controller := NewSessionController(logger, args[1], service)
-	routes := engine.Group("/process/session")
-	routes.POST("", controller.CreateSession)
-	routes.GET("", controller.ListSessions)
-	routes.GET("/:sessionId", controller.GetSession)
-	routes.DELETE("/:sessionId", controller.DeleteSession)
-	routes.POST("/:sessionId/exec", controller.SessionExecuteCommand)
-	routes.GET("/:sessionId/command/:commandId/logs", controller.GetSessionCommandLogs)
+	engine := credentialProcessFixtureEngine(logger, args[1], service)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		panic(err)
@@ -66,4 +56,32 @@ func runCredentialProcessFixture(args []string) bool {
 	}
 	<-done
 	return true
+}
+
+// The fixture uses the production controllers on the same native owner. It
+// exposes no host namespace, alternate PTY implementation or credential path.
+func credentialProcessFixtureEngine(logger *slog.Logger, workDir string, service *native.SessionService) *gin.Engine {
+	engine := gin.New()
+	engine.Use(sloggin.New(logger), common_errors.NewErrorMiddleware(func(ctx *gin.Context, err error) common_errors.ErrorResponse {
+		return common_errors.ErrorResponse{StatusCode: http.StatusInternalServerError, Message: err.Error()}
+	}, false))
+	controller := NewSessionController(logger, workDir, service)
+	routes := engine.Group("/process/session")
+	routes.POST("", controller.CreateSession)
+	routes.GET("", controller.ListSessions)
+	routes.GET("/:sessionId", controller.GetSession)
+	routes.DELETE("/:sessionId", controller.DeleteSession)
+	routes.POST("/:sessionId/exec", controller.SessionExecuteCommand)
+	routes.GET("/:sessionId/command/:commandId/logs", controller.GetSessionCommandLogs)
+
+	ptyController := pty.NewPTYController(logger, "/workspace")
+	ptyRoutes := engine.Group("/process/pty")
+	ptyRoutes.GET("/create-connect", ptyController.CreateAndConnectPTYSession)
+	ptyRoutes.GET("", ptyController.ListPTYSessions)
+	ptyRoutes.POST("", ptyController.CreatePTYSession)
+	ptyRoutes.GET("/:sessionId", ptyController.GetPTYSession)
+	ptyRoutes.DELETE("/:sessionId", ptyController.DeletePTYSession)
+	ptyRoutes.GET("/:sessionId/connect", ptyController.ConnectPTYSession)
+	ptyRoutes.POST("/:sessionId/resize", ptyController.ResizePTYSession)
+	return engine
 }
