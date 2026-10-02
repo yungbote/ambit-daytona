@@ -5390,6 +5390,24 @@ const docTemplate = `{
                 "sessionId"
             ],
             "properties": {
+                "commands": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/Command"
+                    }
+                },
+                "environmentLeaseExpiresAt": {
+                    "type": "string"
+                },
+                "environmentLeaseId": {
+                    "type": "string"
+                },
+                "environmentLeaseVersion": {
+                    "type": "integer"
+                },
+                "homeDirectory": {
+                    "type": "string"
+                },
                 "inputClosed": {
                     "type": "boolean"
                 },
@@ -5400,12 +5418,6 @@ const docTemplate = `{
                         "settled",
                         "unavailable"
                     ]
-                },
-                "commands": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/Command"
-                    }
                 },
                 "sessionId": {
                     "type": "string"
@@ -5437,14 +5449,17 @@ const docTemplate = `{
                 "command"
             ],
             "properties": {
-                "closeInputAfterCommand": {
+                "async": {
                     "type": "boolean"
                 },
-                "async": {
+                "closeInputAfterCommand": {
                     "type": "boolean"
                 },
                 "command": {
                     "type": "string"
+                },
+                "environmentLease": {
+                    "$ref": "#/definitions/session.EnvironmentLease"
                 },
                 "runAsync": {
                     "type": "boolean"
@@ -5460,8 +5475,26 @@ const docTemplate = `{
                 "cmdId"
             ],
             "properties": {
+                "cmdId": {
+                    "type": "string"
+                },
+                "environmentLeaseExpiresAt": {
+                    "type": "string"
+                },
+                "environmentLeaseId": {
+                    "type": "string"
+                },
+                "environmentLeaseVersion": {
+                    "type": "integer"
+                },
+                "exitCode": {
+                    "type": "integer"
+                },
                 "inputClosed": {
                     "type": "boolean"
+                },
+                "output": {
+                    "type": "string"
                 },
                 "processScope": {
                     "type": "string",
@@ -5470,15 +5503,6 @@ const docTemplate = `{
                         "settled",
                         "unavailable"
                     ]
-                },
-                "cmdId": {
-                    "type": "string"
-                },
-                "exitCode": {
-                    "type": "integer"
-                },
-                "output": {
-                    "type": "string"
                 },
                 "stderr": {
                     "type": "string"
@@ -5707,6 +5731,26 @@ const docTemplate = `{
         "gin.H": {
             "type": "object",
             "additionalProperties": {}
+        },
+        "session.EnvironmentLease": {
+            "type": "object",
+            "properties": {
+                "expiresAt": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "values": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
         }
     },
     "securityDefinitions": {

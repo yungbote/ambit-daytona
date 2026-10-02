@@ -1482,17 +1482,23 @@ func (s *Service) validateBinding(sandboxID string, binding CaptureBinding) (str
 	if err := s.validateCaptureSource(sandboxID, binding); err != nil {
 		return "", err
 	}
+	if binding.Selector.SemanticZoneRef == codeProgramFileZone && binding.SandboxFile.SourceNamespace != "code_program" {
+		return "", invalidf("programme files require explicit native CODE source custody")
+	}
 	root, ok := semanticZoneRoot(binding.Selector.SemanticZoneRef)
 	if !ok {
 		return "", invalidf("semantic zone is not admitted for capture")
 	}
 	relative := binding.Selector.ZoneRelativePath
-	if !canonicalRelativePath(relative) {
+	if binding.Selector.SemanticZoneRef != codeProgramFileZone && !canonicalRelativePath(relative) {
 		return "", invalidf("zoneRelativePath is not a bounded canonical relative path")
 	}
 	if binding.Selector.SemanticZoneRef == userFilesSemanticZoneRef &&
 		(!canonicalWorkingTreePath(relative) || reservedWorkingTreePath(relative)) {
 		return "", invalidf("private working-tree selector names an invalid or managed runtime path")
+	}
+	if binding.Selector.SemanticZoneRef == codeProgramFileZone {
+		return sandboxFilePath(binding.Selector), nil
 	}
 	return root + "/" + relative, nil
 }
@@ -1525,6 +1531,7 @@ func semanticZoneRoot(semanticZoneRef string) (string, bool) {
 		"ambit.workspace-zone/work@1":    "/workspace/work",
 		"ambit.workspace-zone/outputs@1": "/workspace/outputs",
 		userFilesSemanticZoneRef:         "/workspace",
+		codeProgramFileZone:              "/",
 	}[semanticZoneRef]
 	return root, ok
 }

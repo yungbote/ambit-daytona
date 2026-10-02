@@ -3,18 +3,23 @@
 
 package session
 
-import "github.com/daytonaio/daemon/pkg/session"
+import (
+	"time"
+
+	"github.com/daytonaio/daemon/pkg/session"
+)
 
 type CreateSessionRequest struct {
 	SessionId string `json:"sessionId" validate:"required"`
 } //	@name	CreateSessionRequest
 
 type SessionExecuteRequest struct {
-	CloseInputAfterCommand bool   `json:"closeInputAfterCommand" validate:"optional"`
-	Command                string `json:"command" validate:"required"`
-	RunAsync               bool   `json:"runAsync" validate:"optional"`
-	Async                  bool   `json:"async" validate:"optional"`
-	SuppressInputEcho      bool   `json:"suppressInputEcho" validate:"optional"`
+	EnvironmentLease       *session.EnvironmentLease `json:"environmentLease,omitempty" validate:"optional"`
+	CloseInputAfterCommand bool                      `json:"closeInputAfterCommand" validate:"optional"`
+	Command                string                    `json:"command" validate:"required"`
+	RunAsync               bool                      `json:"runAsync" validate:"optional"`
+	Async                  bool                      `json:"async" validate:"optional"`
+	SuppressInputEcho      bool                      `json:"suppressInputEcho" validate:"optional"`
 } //	@name	SessionExecuteRequest
 
 type SessionSendInputRequest struct {
@@ -22,13 +27,16 @@ type SessionSendInputRequest struct {
 } //	@name	SessionSendInputRequest
 
 type SessionExecuteResponse struct {
-	ProcessScope string  `json:"processScope,omitempty" validate:"optional" enums:"running,settled,unavailable"`
-	InputClosed  bool    `json:"inputClosed"`
-	CommandId    string  `json:"cmdId" validate:"required"`
-	Output       *string `json:"output" validate:"optional"`
-	Stdout       *string `json:"stdout" validate:"optional"`
-	Stderr       *string `json:"stderr" validate:"optional"`
-	ExitCode     *int    `json:"exitCode" validate:"optional"`
+	EnvironmentLeaseVersion   int        `json:"environmentLeaseVersion,omitempty"`
+	EnvironmentLeaseID        string     `json:"environmentLeaseId,omitempty"`
+	EnvironmentLeaseExpiresAt *time.Time `json:"environmentLeaseExpiresAt,omitempty"`
+	ProcessScope              string     `json:"processScope,omitempty" validate:"optional" enums:"running,settled,unavailable"`
+	InputClosed               bool       `json:"inputClosed"`
+	CommandId                 string     `json:"cmdId" validate:"required"`
+	Output                    *string    `json:"output" validate:"optional"`
+	Stdout                    *string    `json:"stdout" validate:"optional"`
+	Stderr                    *string    `json:"stderr" validate:"optional"`
+	ExitCode                  *int       `json:"exitCode" validate:"optional"`
 } //	@name	SessionExecuteResponse
 
 type SessionCommandLogsResponse struct {
@@ -44,10 +52,14 @@ type CommandDTO struct {
 } //	@name	Command
 
 type SessionDTO struct {
-	ProcessScope string        `json:"processScope,omitempty" validate:"optional" enums:"running,settled,unavailable"`
-	InputClosed  bool          `json:"inputClosed"`
-	SessionId    string        `json:"sessionId" validate:"required"`
-	Commands     []*CommandDTO `json:"commands" validate:"required"`
+	HomeDirectory             string        `json:"homeDirectory,omitempty"`
+	EnvironmentLeaseVersion   int           `json:"environmentLeaseVersion,omitempty"`
+	EnvironmentLeaseID        string        `json:"environmentLeaseId,omitempty"`
+	EnvironmentLeaseExpiresAt *time.Time    `json:"environmentLeaseExpiresAt,omitempty"`
+	ProcessScope              string        `json:"processScope,omitempty" validate:"optional" enums:"running,settled,unavailable"`
+	InputClosed               bool          `json:"inputClosed"`
+	SessionId                 string        `json:"sessionId" validate:"required"`
+	Commands                  []*CommandDTO `json:"commands" validate:"required"`
 } //	@name	Session
 
 func CommandToDTO(c *session.Command) *CommandDTO {
@@ -65,9 +77,13 @@ func SessionToDTO(s *session.Session) *SessionDTO {
 	}
 
 	return &SessionDTO{
-		SessionId:    s.SessionId,
-		ProcessScope: s.ProcessScope,
-		InputClosed:  s.InputClosed,
-		Commands:     commands,
+		HomeDirectory:             s.HomeDirectory,
+		EnvironmentLeaseVersion:   s.EnvironmentLeaseVersion,
+		EnvironmentLeaseID:        s.EnvironmentLeaseID,
+		EnvironmentLeaseExpiresAt: s.EnvironmentLeaseExpiresAt,
+		SessionId:                 s.SessionId,
+		ProcessScope:              s.ProcessScope,
+		InputClosed:               s.InputClosed,
+		Commands:                  commands,
 	}
 }
