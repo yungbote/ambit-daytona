@@ -66,7 +66,7 @@ func (d *display) events() {
 		d.eventMu.Lock()
 		if d.closing {
 			d.eventMu.Unlock()
-			return
+			continue
 		}
 		switch value := event.(type) {
 		case xproto.FocusInEvent:
