@@ -25,10 +25,19 @@ import (
 // TestMain also serves the session supervisor and the browser driver stand-in:
 // both re-execute /proc/self/exe, which is this test binary.
 func TestMain(m *testing.M) {
+	// Preserve the caller's race checks while removing only its artificial exit
+	// sleep from future self-reexecuted fixture children. The current process's
+	// race runtime has already read the original options during startup.
+	if err := os.Setenv("GORACE", os.Getenv("GORACE")+" atexit_sleep_ms=0"); err != nil {
+		panic(err)
+	}
 	if code, handled := session.RunSupervisor(os.Args[1:]); handled {
 		os.Exit(code)
 	}
 	if runBrowserFixture(os.Args[1:]) {
+		os.Exit(0)
+	}
+	if runCredentialProcessFixture(os.Args[1:]) {
 		os.Exit(0)
 	}
 	os.Exit(m.Run())
@@ -36,7 +45,7 @@ func TestMain(m *testing.M) {
 
 // newSessionEngine builds the real session routes behind the real error
 // middleware, so a status code here is the status code a client receives.
-func newSessionEngine(t *testing.T, configDir string, configure func(*SessionController)) (*gin.Engine, *session.SessionService) {
+func newSessionEngine(t *testing.T, configDir string, configure func(*SessionController), middleware ...gin.HandlerFunc) (*gin.Engine, *session.SessionService) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -45,6 +54,7 @@ func newSessionEngine(t *testing.T, configDir string, configure func(*SessionCon
 		t.Fatalf("new session service: %v", err)
 	}
 	engine := gin.New()
+	engine.Use(middleware...)
 	engine.Use(common_errors.NewErrorMiddleware(func(ctx *gin.Context, err error) common_errors.ErrorResponse {
 		return common_errors.ErrorResponse{StatusCode: http.StatusInternalServerError, Message: err.Error()}
 	}, false))

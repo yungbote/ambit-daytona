@@ -63,7 +63,22 @@ func (d *display) events() {
 		if err != nil || event == nil {
 			return
 		}
+		d.eventMu.Lock()
+		if d.closing {
+			d.eventMu.Unlock()
+			continue
+		}
 		switch value := event.(type) {
+		case xproto.FocusInEvent:
+			d.desktopFocused()
+		case xproto.FocusOutEvent:
+			d.desktopFocused()
+		case xproto.MapNotifyEvent:
+			d.desktopMapped(value.Window)
+		case xproto.UnmapNotifyEvent:
+			d.desktopRetired(value.Window)
+		case xproto.DestroyNotifyEvent:
+			d.desktopRetired(value.Window)
 		case paintAlarm:
 			select {
 			case d.paintEvents <- value:
@@ -84,6 +99,9 @@ func (d *display) events() {
 		case xproto.SelectionRequestEvent:
 			c.serve(value)
 		case xproto.PropertyNotifyEvent:
+			if value.Atom == d.atoms["_NET_WM_PID"] || value.Atom == d.atoms["WM_TRANSIENT_FOR"] {
+				d.desktopMapped(value.Window)
+			}
 			c.advance(value)
 			if value.Window == c.window && value.Atom == c.display.atoms["AMB_BROWSER_SELECTION"] {
 				select {
@@ -99,6 +117,7 @@ func (d *display) events() {
 				}
 			}
 		}
+		d.eventMu.Unlock()
 	}
 }
 func (c *clipboard) own(value []byte) (<-chan struct{}, error) {

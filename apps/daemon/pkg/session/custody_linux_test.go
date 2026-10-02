@@ -32,6 +32,8 @@ func runCustodyFixture(args []string) bool {
 	}
 	mode, path := args[1], args[2]
 	switch mode {
+	case "configuration-env":
+		runConfigurationEnvironmentFixture()
 	case "fork", "fork-again":
 		next := "fork-again"
 		if mode == "fork-again" {
@@ -45,7 +47,10 @@ func runCustodyFixture(args []string) bool {
 		_ = cmd.Process.Release()
 	case "actor":
 		signal.Ignore(syscall.SIGTERM, syscall.SIGHUP)
-		if err := os.WriteFile(path, []byte(strconv.Itoa(os.Getpid())), 0600); err != nil {
+		if err := os.WriteFile(path+".tmp", []byte(strconv.Itoa(os.Getpid())), 0600); err != nil {
+			panic(err)
+		}
+		if err := os.Rename(path+".tmp", path); err != nil {
 			panic(err)
 		}
 		// A failed test is bounded even if its cleanup path is broken.
@@ -130,7 +135,7 @@ func runCustodyFixture(args []string) bool {
 		if none, shellExited, err := reapScopeChildren(shellPID); err != nil || !none || shellExited {
 			panic(fmt.Sprintf("an already-reaped shell was re-reported: none=%v shellExited=%v error=%v", none, shellExited, err))
 		}
-	case "owner":
+	case "owner", "environment-owner":
 		svc, err := NewSessionService(slog.New(slog.NewTextHandler(io.Discard, nil)), filepath.Join(filepath.Dir(path), "owner-state"), 100*time.Millisecond, 10*time.Millisecond)
 		if err != nil {
 			panic(err)
@@ -139,8 +144,14 @@ func runCustodyFixture(args []string) bool {
 			panic(err)
 		}
 		command := fixtureCommand("fork", path)
-		if _, err := svc.Execute("owner-dies", "start", command, false, true, true, false, true); err != nil {
-			panic(err)
+		var dispatchErr error
+		if mode == "environment-owner" {
+			_, dispatchErr = svc.ExecuteEnvironmentLease("owner-dies", command, false, true, true, true, syntheticEnvironmentLease())
+		} else {
+			_, dispatchErr = svc.Execute("owner-dies", "start", command, false, true, true, false, true)
+		}
+		if dispatchErr != nil {
+			panic(dispatchErr)
 		}
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
