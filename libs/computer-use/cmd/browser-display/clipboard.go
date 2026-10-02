@@ -79,6 +79,8 @@ func (d *display) events() {
 			d.desktopRetired(value.Window)
 		case xproto.DestroyNotifyEvent:
 			d.desktopRetired(value.Window)
+		case xproto.ConfigureNotifyEvent:
+			d.desktopConfigured(value.Window)
 		case paintAlarm:
 			select {
 			case d.paintEvents <- value:

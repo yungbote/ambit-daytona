@@ -164,6 +164,7 @@ func (d *display) desktopMapped(window xproto.Window) {
 	if chrome == d.desktopChrome && d.normalChrome(chrome) {
 		link := desktopParent{parent: parent, chrome: chrome}
 		d.desktopParents[window] = link
+		d.desktopPlace(window, link)
 		d.desktopAcquire(window, link)
 	}
 }
