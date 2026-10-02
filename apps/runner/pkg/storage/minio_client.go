@@ -14,8 +14,10 @@ import (
 	"io"
 	"maps"
 	"math"
+	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/daytonaio/runner/cmd/runner/config"
 	"github.com/minio/minio-go/v7"
@@ -155,12 +157,94 @@ func (m *minioClient) CreatePrivateObjectStream(
 		return fmt.Errorf("private stream object reader or size is invalid")
 	}
 	opts := privateObjectPutOptions(size, contentType, metadata)
+	if size > 5*1024*1024*1024 {
+		return m.createPrivateMultipart(ctx, key, reader, size, contentType, metadata)
+	}
 	_, err := m.client.PutObject(ctx, m.bucketName, key, reader, size, opts)
 	if err != nil {
 		if isPreconditionFailure(err) {
 			return ErrPrivateObjectAlreadyExists
 		}
 		return fmt.Errorf("create private stream object: %w", err)
+	}
+	return nil
+}
+
+// Own the multipart upload identity here. The pinned SDK streaming wrapper
+// discards conditional completion headers and aborts with a canceled context.
+func (m *minioClient) createPrivateMultipart(ctx context.Context, key string, reader io.Reader, size int64, contentType string, metadata map[string]string) (result error) {
+	count, partSize, lastSize, err := minio.OptimalPartInfo(size, 0)
+	if err != nil || size <= 0 || reader == nil {
+		return fmt.Errorf("private multipart length is invalid")
+	}
+	core := minio.Core{Client: m.client}
+	opts := privateObjectPutOptions(size, contentType, metadata)
+	if opts.UserMetadata == nil {
+		opts.UserMetadata = make(map[string]string)
+	}
+	opts.UserMetadata["X-Amz-Checksum-Algorithm"] = "SHA256"
+	uploadID, err := core.NewMultipartUpload(ctx, m.bucketName, key, opts)
+	if err != nil {
+		if isPreconditionFailure(err) {
+			return ErrPrivateObjectAlreadyExists
+		}
+		return fmt.Errorf("initiate private multipart: %w", err)
+	}
+	completed := false
+	defer func() {
+		if completed {
+			return
+		}
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		if err := core.AbortMultipartUpload(cleanup, m.bucketName, key, uploadID); err != nil && minio.ToErrorResponse(err).Code != "NoSuchUpload" {
+			result = errors.Join(result, fmt.Errorf("retire private multipart: %w", err))
+		}
+	}()
+	buffer := make([]byte, partSize)
+	parts := make([]minio.CompletePart, 0, count)
+	composite := sha256.New()
+	for number := 1; number <= count; number++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		length := partSize
+		if number == count {
+			length = lastSize
+		}
+		part := buffer[:length]
+		if _, err := io.ReadFull(reader, part); err != nil {
+			return fmt.Errorf("read private multipart part: %w", err)
+		}
+		digest := sha256.Sum256(part)
+		checksum := base64.StdEncoding.EncodeToString(digest[:])
+		_, _ = composite.Write(digest[:])
+		observed, err := core.PutObjectPart(ctx, m.bucketName, key, uploadID, number, bytes.NewReader(part), length, minio.PutObjectPartOptions{
+			Sha256Hex:    hex.EncodeToString(digest[:]),
+			CustomHeader: http.Header{"X-Amz-Checksum-Sha256": []string{checksum}},
+		})
+		if err != nil {
+			return fmt.Errorf("write private multipart part: %w", err)
+		}
+		if observed.ChecksumSHA256 != checksum {
+			return fmt.Errorf("private multipart part checksum differs")
+		}
+		parts = append(parts, minio.CompletePart{PartNumber: number, ETag: observed.ETag, ChecksumSHA256: checksum})
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	observed, err := core.CompleteMultipartUpload(ctx, m.bucketName, key, uploadID, parts, opts)
+	if err != nil {
+		if isPreconditionFailure(err) {
+			return ErrPrivateObjectAlreadyExists
+		}
+		return fmt.Errorf("commit private multipart: %w", err)
+	}
+	completed = true
+	checksum := base64.StdEncoding.EncodeToString(composite.Sum(nil)) + fmt.Sprintf("-%d", count)
+	if observed.ChecksumSHA256 != checksum {
+		return fmt.Errorf("private multipart completion checksum differs")
 	}
 	return nil
 }
