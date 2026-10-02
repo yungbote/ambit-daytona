@@ -136,6 +136,9 @@ func (d *display) desktopMapped(window xproto.Window) {
 	if process == nil {
 		return
 	}
+	// Re-evaluated metadata replaces the old proof, including descendants
+	// that depended on it; an inadmissible rewrite must not retain authority.
+	d.desktopForget(window)
 	pid := d.windowPID(window)
 	if pid == d.chromePID {
 		if d.desktopWatch(window) {
@@ -161,6 +164,15 @@ func (d *display) desktopMapped(window xproto.Window) {
 	}
 	if chrome == d.desktopChrome && d.normalChrome(chrome) {
 		d.desktopParents[window] = desktopParent{parent: parent, chrome: chrome}
+	}
+}
+
+func (d *display) desktopForget(window xproto.Window) {
+	delete(d.desktopParents, window)
+	for child, link := range d.desktopParents {
+		if link.parent == window {
+			d.desktopForget(child)
+		}
 	}
 }
 
