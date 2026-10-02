@@ -5,9 +5,9 @@ go 1.25.0
 require (
 	github.com/distribution/distribution/v3 v3.1.1
 	github.com/kelseyhightower/envconfig v1.4.0
-	github.com/lmittmann/tint v1.1.2
-	github.com/mattn/go-isatty v0.0.20
-	github.com/sirupsen/logrus v1.9.4
+	github.com/lmittmann/tint v1.2.0
+	github.com/mattn/go-isatty v0.0.24
+	github.com/sirupsen/logrus v1.10.2
 	golang.org/x/crypto v0.50.0
 )
 
