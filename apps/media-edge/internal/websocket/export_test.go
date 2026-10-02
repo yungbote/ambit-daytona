@@ -16,3 +16,9 @@ func PaceBrowserTestListener(listener net.Listener, ctx context.Context) (net.Li
 	link := &pacedListener{Listener: listener, ctx: ctx, progress: make(chan struct{})}
 	return link, link.rate.Store, link.bytes.Load, link.writeTrace
 }
+
+// Observe actual writes unchanged: one delegate call, no slicing, timer or rate.
+func ObserveBrowserTestListener(listener net.Listener) (net.Listener, func() pacedTrace) {
+	link := &pacedListener{Listener: listener, unpaced: true}
+	return link, link.writeTrace
+}

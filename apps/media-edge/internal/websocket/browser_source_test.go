@@ -77,6 +77,7 @@ type receivedConnection struct {
 // This observer retains a hash state and scalar counts, never another body.
 func (c *receivedConnection) Read() (bool, []byte, error) {
 	text, message, err := c.Conn.Read()
+	readAt := time.Now()
 	if err != nil {
 		fmt.Printf("source/T1 Read ended: %T %v\n", err, err)
 	}
@@ -92,7 +93,14 @@ func (c *receivedConnection) Read() (bool, []byte, error) {
 		Seq, ByteLength uint64
 		Offset          *uint64
 	}
-	if json.Unmarshal(message[4:4+size], &header) != nil || header.Track != "video" || header.Offset == nil {
+	if json.Unmarshal(message[4:4+size], &header) != nil {
+		return text, message, err
+	}
+	if os.Getenv("MEDIA_EDGE_BROWSER_NATIVE_OBSERVE_WIRE") == "1" && header.Track == "audio" && header.Seq <= 16 {
+		row, _ := json.Marshal(map[string]any{"streamId": header.StreamID, "seq": header.Seq, "readUnixMs": float64(readAt.UnixNano()) / 1e6})
+		fmt.Printf("TASK_T1_AUDIO_READ:%s\n", row)
+	}
+	if header.Track != "video" || header.Offset == nil {
 		return text, message, err
 	}
 	if *header.Offset == 0 {
@@ -130,14 +138,24 @@ func (c *receivedConnection) RateInput() bool {
 }
 
 func (c *receivedConnection) Write(message []byte) error {
-	if err := c.Conn.Write(message); err != nil {
+	began := time.Now()
+	err := c.Conn.Write(message)
+	completed := time.Now()
+	var value struct {
+		Type       string
+		Offset     uint64
+		Enabled    *bool
+		Generation uint64
+	}
+	parsed := json.Unmarshal(message, &value) == nil
+	if os.Getenv("MEDIA_EDGE_BROWSER_NATIVE_OBSERVE_WIRE") == "1" && parsed && value.Type == "audio" {
+		row, _ := json.Marshal(map[string]any{"enabled": value.Enabled, "generation": value.Generation, "startedUnixMs": float64(began.UnixNano()) / 1e6, "completedUnixMs": float64(completed.UnixNano()) / 1e6, "failed": err != nil})
+		fmt.Printf("TASK_T1_AUDIO_INTENT:%s\n", row)
+	}
+	if err != nil {
 		return err
 	}
-	var value struct {
-		Type   string
-		Offset uint64
-	}
-	if c.onReceived != nil && json.Unmarshal(message, &value) == nil && value.Type == "received" {
+	if c.onReceived != nil && parsed && value.Type == "received" {
 		c.onReceived(value.Offset)
 	}
 	return nil
@@ -152,6 +170,10 @@ func TestExistingNativeSourceThroughT1EdgeAndBrowser(t *testing.T) {
 		t.Skip("existing T1 harness metadata, production browser script and built worker required")
 	}
 	observePartial := os.Getenv("MEDIA_EDGE_BROWSER_AUDIO_OBSERVE_PARTIAL") == "1"
+	observeWire := os.Getenv("MEDIA_EDGE_BROWSER_NATIVE_OBSERVE_WIRE") == "1"
+	if observeWire && (os.Getenv("MEDIA_EDGE_BROWSER_NATIVE_RATE_PHASE") == "1" || os.Getenv("MEDIA_EDGE_BROWSER_NATIVE_FULL_SLOW") == "1" || os.Getenv("MEDIA_EDGE_BROWSER_NATIVE_QUIC_RATE_PHASE") == "1" || os.Getenv("MEDIA_EDGE_BROWSER_NATIVE_FULL_SLOW_QUIC") == "1") {
+		t.Fatal("passive wire observation requires unchanged transport pacing")
+	}
 	data, err := os.ReadFile(metadata)
 	if err != nil {
 		t.Fatal(err)
@@ -196,6 +218,18 @@ func TestExistingNativeSourceThroughT1EdgeAndBrowser(t *testing.T) {
 	}
 	e.Upstream = receivedSource{Upstream: upstream, onPicture: onPicture}
 	wsServer := httptest.NewUnstartedServer(edgews.NewHandler(e))
+	if observeWire {
+		var writeTrace func() edgews.PacedTrace
+		wsServer.Listener, writeTrace = edgews.ObserveBrowserTestListener(wsServer.Listener)
+		defer func() {
+			trace, err := json.Marshal(writeTrace())
+			if err != nil {
+				t.Error(err)
+			} else {
+				t.Logf("TASK_WIRE_WRITES:%s", trace)
+			}
+		}()
+	}
 	fullSlow := os.Getenv("MEDIA_EDGE_BROWSER_NATIVE_FULL_SLOW") == "1"
 	fullSlowQUIC := os.Getenv("MEDIA_EDGE_BROWSER_NATIVE_FULL_SLOW_QUIC") == "1"
 	audioSteady := observePartial && os.Getenv("MEDIA_EDGE_BROWSER_AUDIO_STEADY") == "1"

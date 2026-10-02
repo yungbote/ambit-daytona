@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -39,6 +40,7 @@ type pacedListener struct {
 	writes   []pacedWrite
 	history  []pacedWrite
 	dropped  uint64
+	unpaced  bool
 }
 
 type pacedWrite struct {
@@ -49,6 +51,8 @@ type pacedWrite struct {
 	Track                string
 	StreamID             string
 	Sequence             uint64
+	WrittenBytes         int
+	WriteError           string
 }
 
 type pacedTrace struct {
@@ -64,8 +68,11 @@ func (l *pacedListener) writeTrace() pacedTrace {
 }
 
 // The task serializer records bounded original-wire writes, never payloads.
-func (l *pacedListener) recordWrite(data []byte, began time.Time, rate int64) {
-	row := pacedWrite{WireBytes: len(data), BitsPerSecondAtStart: rate, StartedUnixMs: float64(began.UnixNano()) / 1e6, DurationMs: float64(time.Since(began)) / float64(time.Millisecond)}
+func (l *pacedListener) recordWrite(data []byte, began time.Time, rate int64, written int, writeErr error) {
+	row := pacedWrite{WireBytes: len(data), WrittenBytes: written, BitsPerSecondAtStart: rate, StartedUnixMs: float64(began.UnixNano()) / 1e6, DurationMs: float64(time.Since(began)) / float64(time.Millisecond)}
+	if writeErr != nil {
+		row.WriteError = writeErr.Error()
+	}
 	if len(data) >= 2 && data[0]&15 == 2 {
 		prefix := 2
 		if data[1]&127 == 126 {
@@ -114,13 +121,18 @@ func (l *pacedListener) Accept() (net.Conn, error) {
 	return &pacedConnection{Conn: c, owner: l}, nil
 }
 
-func (c *pacedConnection) Write(data []byte) (int, error) {
+func (c *pacedConnection) Write(data []byte) (written int, writeErr error) {
 	started, original, rate := time.Now(), data, c.owner.rate.Load()
+	if c.owner.unpaced {
+		written, writeErr = c.Conn.Write(data)
+		c.owner.bytes.Add(int64(written))
+		c.owner.recordWrite(original, started, 0, written, writeErr)
+		return written, writeErr
+	}
 	if rate == 0 {
 		rate = 500000
 	}
-	defer func() { c.owner.recordWrite(original, started, rate) }()
-	written := 0
+	defer func() { c.owner.recordWrite(original, started, rate, written, writeErr) }()
 	for len(data) > 0 {
 		part := min(len(data), 4096)
 		rate := c.owner.rate.Load()
@@ -206,7 +218,7 @@ func TestPacedTCPTraceBindsOriginalAudioEnvelopeAndRetainsBoundedWrites(t *testi
 		t.Fatalf("trace retained%d writes, expected10", len(trace))
 	}
 	for index, row := range trace {
-		if row.Track != "audio" || row.Sequence != 378 || row.StreamID != "11111111-1111-4111-8111-111111111111" || row.WireBytes != len(wire) || row.BitsPerSecondAtStart != 500000 || row.DurationMs < float64(len(wire)*8)/500 {
+		if row.Track != "audio" || row.Sequence != 378 || row.StreamID != "11111111-1111-4111-8111-111111111111" || row.WireBytes != len(wire) || row.WrittenBytes != len(wire) || row.WriteError != "" || row.BitsPerSecondAtStart != 500000 || row.DurationMs < float64(len(wire)*8)/500 {
 			t.Fatalf("trace changed original audio/wire identity or serialization: %+v", row)
 		}
 		if index > 0 && trace[index-1].DurationMs < row.DurationMs {
@@ -230,11 +242,64 @@ func TestPacedTCPTraceBindsOriginalAudioEnvelopeAndRetainsBoundedWrites(t *testi
 func TestPacedWriteHistoryReportsTruncationInsteadOfClaimingCompleteChronology(t *testing.T) {
 	link := &pacedListener{}
 	for count := 0; count < 16389; count++ {
-		link.recordWrite(nil, time.Now(), 500000)
+		link.recordWrite(nil, time.Now(), 500000, 0, nil)
 	}
 	trace := link.writeTrace()
 	if len(trace.History) != 16384 || len(trace.Largest) != 10 || trace.Dropped != 5 {
 		t.Fatalf("bounded trace failed to disclose omitted writes: %d/%d/%d", len(trace.History), len(trace.Largest), trace.Dropped)
+	}
+}
+
+type observedWriteConnection struct {
+	net.Conn
+	write func([]byte) (int, error)
+}
+
+func (c observedWriteConnection) Write(data []byte) (int, error) { return c.write(data) }
+
+func TestUnpacedObserverDelegatesOneUnchangedWriteAndRecordsActualResult(t *testing.T) {
+	failure := errors.New("known write failure")
+	for _, outcome := range []struct {
+		name string
+		n    int
+		err  error
+	}{
+		{"complete", 8197, nil},
+		{"short", 317, nil},
+		{"partial-error", 317, failure},
+		{"zero-error", 0, failure},
+		{"zero", 0, nil},
+	} {
+		t.Run(outcome.name, func(t *testing.T) {
+			data := make([]byte, 8197)
+			calls := 0
+			link := &pacedListener{unpaced: true}
+			// A nonzero rate must not turn passive observation into serialization.
+			link.rate.Store(1)
+			conn := &pacedConnection{owner: link, Conn: observedWriteConnection{write: func(actual []byte) (int, error) {
+				calls++
+				if len(actual) != len(data) || &actual[0] != &data[0] {
+					t.Fatal("observer split or copied the original write")
+				}
+				return outcome.n, outcome.err
+			}}}
+			n, err := conn.Write(data)
+			if calls != 1 || n != outcome.n || err != outcome.err {
+				t.Fatalf("observer changed delegate result: calls%d n%d err%v", calls, n, err)
+			}
+			trace := link.writeTrace()
+			if len(trace.History) != 1 || len(trace.Largest) != 1 || trace.Dropped != 0 || link.bytes.Load() != int64(n) {
+				t.Fatalf("observer lost actual write result: %+v bytes%d", trace, link.bytes.Load())
+			}
+			row := trace.History[0]
+			expectedError := ""
+			if outcome.err != nil {
+				expectedError = outcome.err.Error()
+			}
+			if row.WireBytes != len(data) || row.WrittenBytes != n || row.WriteError != expectedError || row.BitsPerSecondAtStart != 0 || row.StartedUnixMs <= 0 || row.DurationMs < 0 {
+				t.Fatalf("observer claimed a different completion: %+v", row)
+			}
+		})
 	}
 }
 
