@@ -149,11 +149,10 @@ func (d *display) desktopMapped(window xproto.Window) {
 	if pid != process.PID || !d.desktopLive() || !d.mappedOwner(window, process.PID) || !d.desktopWatch(window) {
 		return
 	}
-	property, err := xproto.GetProperty(d.conn, false, window, d.atoms["WM_TRANSIENT_FOR"], xproto.AtomWindow, 0, 1).Reply()
-	if err != nil || property.Format != 32 || len(property.Value) != 4 {
+	parent, valid := d.desktopTransient(window)
+	if !valid {
 		return
 	}
-	parent := xproto.Window(xgb.Get32(property.Value))
 	chrome := parent
 	if d.windowPID(parent) != d.chromePID {
 		link, owned := d.desktopParents[parent]
@@ -163,8 +162,73 @@ func (d *display) desktopMapped(window xproto.Window) {
 		chrome = link.chrome
 	}
 	if chrome == d.desktopChrome && d.normalChrome(chrome) {
-		d.desktopParents[window] = desktopParent{parent: parent, chrome: chrome}
+		link := desktopParent{parent: parent, chrome: chrome}
+		d.desktopParents[window] = link
+		d.desktopAcquire(window, link)
 	}
+}
+
+func (d *display) desktopTransient(window xproto.Window) (xproto.Window, bool) {
+	property, err := xproto.GetProperty(d.conn, false, window, d.atoms["WM_TRANSIENT_FOR"], xproto.AtomWindow, 0, 1).Reply()
+	if err != nil || property.Format != 32 || len(property.Value) != 4 {
+		return 0, false
+	}
+	return xproto.Window(xgb.Get32(property.Value)), true
+}
+
+// A mapped owned modal takes only its parent's current focus. This is the
+// acquisition half of that transient's lifecycle, never a retirement fallback.
+func (d *display) desktopAcquire(window xproto.Window, link desktopParent) {
+	if !d.desktopLive() || xproto.GrabServerChecked(d.conn).Check() != nil {
+		return
+	}
+	defer xproto.UngrabServerChecked(d.conn).Check()
+	parent, valid := d.desktopTransient(window)
+	if !valid || parent != link.parent || !d.desktopChain(window, link.chrome) {
+		return
+	}
+	focus, err := xproto.GetInputFocus(d.conn).Reply()
+	if err != nil {
+		return
+	}
+	if focus.Focus != xproto.WindowNone && focus.Focus != xproto.InputFocusPointerRoot && focus.Focus != d.screen.Root && !d.focusWithin(focus.Focus, link.parent) {
+		return
+	}
+	_ = xproto.SetInputFocusChecked(d.conn, xproto.InputFocusParent, window, xproto.TimeCurrentTime).Check()
+}
+
+// Called under the final server grab: every still-live edge must match its
+// retained proof, including an ancestor whose property event is still queued.
+func (d *display) desktopChain(window, chrome xproto.Window) bool {
+	if chrome != d.desktopChrome {
+		return false
+	}
+	for count := 0; count < 64; count++ {
+		if window == chrome {
+			return d.normalChrome(chrome)
+		}
+		link, owned := d.desktopParents[window]
+		parent, valid := d.desktopTransient(window)
+		if !owned || !valid || link.parent != parent || link.chrome != chrome || !d.mappedOwner(window, d.desktopProcess.PID) {
+			return false
+		}
+		window = parent
+	}
+	return false
+}
+
+func (d *display) focusWithin(focus, parent xproto.Window) bool {
+	for count := 0; count < 64 && focus != xproto.WindowNone && focus != xproto.InputFocusPointerRoot && focus != d.screen.Root; count++ {
+		if focus == parent {
+			return true
+		}
+		tree, err := xproto.QueryTree(d.conn, focus).Reply()
+		if err != nil {
+			return false
+		}
+		focus = tree.Parent
+	}
+	return false
 }
 
 func (d *display) desktopForget(window xproto.Window) {
@@ -181,7 +245,7 @@ func (d *display) mappedOwner(window xproto.Window, pid uint32) bool {
 		return false
 	}
 	attributes, err := xproto.GetWindowAttributes(d.conn, window).Reply()
-	return err == nil && attributes.MapState == xproto.MapStateViewable
+	return err == nil && attributes.MapState == xproto.MapStateViewable && !attributes.OverrideRedirect
 }
 
 func (d *display) desktopRetired(window xproto.Window) {
@@ -208,9 +272,10 @@ func (d *display) desktopRetired(window xproto.Window) {
 	}
 	parent := link.chrome
 	if d.desktopProcess != nil && d.mappedOwner(link.parent, d.desktopProcess.PID) {
-		if retained, found := d.desktopParents[link.parent]; found && retained.chrome == link.chrome {
-			parent = link.parent
+		if !d.desktopChain(link.parent, link.chrome) {
+			return
 		}
+		parent = link.parent
 	}
 	if link.chrome != d.desktopChrome || !d.normalChrome(link.chrome) {
 		return

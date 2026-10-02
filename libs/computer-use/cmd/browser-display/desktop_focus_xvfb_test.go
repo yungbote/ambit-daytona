@@ -456,3 +456,113 @@ func TestXvfbNestedOuterFirstRetirementRevalidatesTheRetainedChromeAncestor(t *t
 	}
 	waitTestFocus(t, peer, parent)
 }
+
+func TestXvfbOwnedDesktopMapTransfersOnlyItsProvenParentFocus(t *testing.T) {
+	for _, focusOwner := range []string{"parent", "foreign"} {
+		t.Run(focusOwner, func(t *testing.T) {
+			startXvfb(t, 800, 600)
+			const chromePID = 4242
+			peer := newPainter(t).conn
+			pid := uint32(os.Getpid())
+			started, _ := processStarted(pid)
+			d, err := openDisplay(chromePID, &desktopProcess{PID: pid, Started: started})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer d.close()
+			parent := focusTestChrome(t, peer, d)
+			expected := xproto.Window(0)
+			if focusOwner == "foreign" {
+				expected = closeTestWindow(t, peer, chromePID+1, "_NET_WM_WINDOW_TYPE_NORMAL", false, true, false)
+				if err := xproto.SetInputFocusChecked(peer, xproto.InputFocusParent, expected, xproto.TimeCurrentTime).Check(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			modal := closeTestWindow(t, peer, pid, "_NET_WM_WINDOW_TYPE_DIALOG", false, false, false)
+			focusTestTransient(t, peer, modal, parent)
+			if err := xproto.MapWindowChecked(peer, modal).Check(); err != nil {
+				t.Fatal(err)
+			}
+			waitTestDesktopOwner(t, d, modal, true)
+			if focusOwner == "parent" {
+				expected = modal
+			}
+			waitTestFocus(t, peer, expected)
+		})
+	}
+}
+
+func TestXvfbDesktopAcquisitionRechecksCurrentMetadataBeforeQueuedEvents(t *testing.T) {
+	for _, mutation := range []string{"foreign-pid", "deleted-transient", "stale-birth", "nested-parent-rebind"} {
+		t.Run(mutation, func(t *testing.T) {
+			startXvfb(t, 800, 600)
+			const chromePID = 4242
+			peer := newPainter(t).conn
+			pid := uint32(os.Getpid())
+			started, _ := processStarted(pid)
+			d, err := openDisplay(chromePID, &desktopProcess{PID: pid, Started: started})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer d.close()
+			chrome := focusTestChrome(t, peer, d)
+			parent := chrome
+			if mutation == "nested-parent-rebind" {
+				parent = focusTestModal(t, peer, d, chrome)
+			}
+			modal := focusTestModal(t, peer, d, parent)
+			d.eventMu.Lock()
+			defer d.eventMu.Unlock()
+			link := d.desktopParents[modal]
+			if err := xproto.SetInputFocusChecked(peer, xproto.InputFocusParent, parent, xproto.TimeCurrentTime).Check(); err != nil {
+				t.Fatal(err)
+			}
+			switch mutation {
+			case "foreign-pid":
+				data := make([]byte, 4)
+				xgb.Put32(data, pid+1)
+				if err := xproto.ChangePropertyChecked(peer, xproto.PropModeReplace, modal, closeTestAtom(t, peer, "_NET_WM_PID"), xproto.AtomCardinal, 32, 1, data).Check(); err != nil {
+					t.Fatal(err)
+				}
+			case "deleted-transient":
+				if err := xproto.DeletePropertyChecked(peer, modal, closeTestAtom(t, peer, "WM_TRANSIENT_FOR")).Check(); err != nil {
+					t.Fatal(err)
+				}
+			case "stale-birth":
+				d.desktopProcess.Started++
+			default:
+				foreign := closeTestWindow(t, peer, chromePID+1, "_NET_WM_WINDOW_TYPE_NORMAL", false, true, false)
+				focusTestTransient(t, peer, parent, foreign)
+			}
+			d.desktopAcquire(modal, link)
+			if got := testCurrentFocus(t, peer); got != parent {
+				t.Fatalf("%s acquired focus using stale binding: got=%d expected=%d", mutation, got, parent)
+			}
+		})
+	}
+}
+
+func TestXvfbOwnedOverrideRedirectPopupDoesNotTakeParentFocus(t *testing.T) {
+	startXvfb(t, 800, 600)
+	const chromePID = 4242
+	peer := newPainter(t).conn
+	pid := uint32(os.Getpid())
+	started, _ := processStarted(pid)
+	d, err := openDisplay(chromePID, &desktopProcess{PID: pid, Started: started})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.close()
+	parent := focusTestChrome(t, peer, d)
+	popup := closeTestWindow(t, peer, pid, "_NET_WM_WINDOW_TYPE_DIALOG", true, false, false)
+	focusTestTransient(t, peer, popup, parent)
+	d.eventMu.Lock()
+	defer d.eventMu.Unlock()
+	if err := xproto.MapWindowChecked(peer, popup).Check(); err != nil {
+		t.Fatal(err)
+	}
+	d.desktopMapped(popup)
+	if got := testCurrentFocus(t, peer); got != parent {
+		t.Fatal("override-redirect popup took managed parent focus")
+	}
+}
