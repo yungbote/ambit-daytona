@@ -1,0 +1,34 @@
+{
+ "seedHex": "4ccfbe18204cadf961d8c82e8ba1252e314398844fe34c475a365a509d12b01f",
+ "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAofq5G2GO0RZ4/grQ/McSFBHGa2uXMNaVyxY5VDN4ImI=\n-----END PUBLIC KEY-----\n",
+ "grant": {
+  "v": 1,
+  "typ": "grant",
+  "aud": "mwcc-node-01",
+  "issuedAt": 1790000000000,
+  "expiresAt": 1790000060000,
+  "scope": "view",
+  "tenantId": "85086ad0-dab6-4cab-a0dc-6d029be8be75",
+  "userId": "11111111-2222-4333-8444-555555555555",
+  "threadId": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+  "viewId": "bv1_eyJydW5JZCI6InJ1biJ9",
+  "viewerId": "baaaaabb-cccc-4ddd-8eee-ffff00000301",
+  "sandboxId": "c0ffee00-1111-4222-8333-444455556666",
+  "sessionId": "browser-session",
+  "nativeViewId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+ },
+ "grantToken": "eyJ2IjoxLCJ0eXAiOiJncmFudCIsImF1ZCI6Im13Y2Mtbm9kZS0wMSIsImlzc3VlZEF0IjoxNzkwMDAwMDAwMDAwLCJleHBpcmVzQXQiOjE3OTAwMDAwNjAwMDAsInNjb3BlIjoidmlldyIsInRlbmFudElkIjoiODUwODZhZDAtZGFiNi00Y2FiLWEwZGMtNmQwMjliZThiZTc1IiwidXNlcklkIjoiMTExMTExMTEtMjIyMi00MzMzLTg0NDQtNTU1NTU1NTU1NTU1IiwidGhyZWFkSWQiOiI2NjY2NjY2Ni03Nzc3LTQ4ODgtODk5OS1hYWFhYWFhYWFhYWEiLCJ2aWV3SWQiOiJidjFfZXlKeWRXNUpaQ0k2SW5KMWJpSjkiLCJ2aWV3ZXJJZCI6ImJhYWFhYWJiLWNjY2MtNGRkZC04ZWVlLWZmZmYwMDAwMDMwMSIsInNhbmRib3hJZCI6ImMwZmZlZTAwLTExMTEtNDIyMi04MzMzLTQ0NDQ1NTU1NjY2NiIsInNlc3Npb25JZCI6ImJyb3dzZXItc2Vzc2lvbiIsIm5hdGl2ZVZpZXdJZCI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWEifQ.ArJpLNHm3oRDpC6cY5LTCwpNW0rUVxSB-zcXU1M2oO1NpkAw7w1qSvbYddWSVAbHm7Gfdw-OMAeGjYyRDKpbCw",
+ "revoke": {
+  "v": 1,
+  "typ": "revoke",
+  "issuedAt": 1790000030000,
+  "code": 4403,
+  "tenantId": "85086ad0-dab6-4cab-a0dc-6d029be8be75",
+  "userId": "11111111-2222-4333-8444-555555555555",
+  "threadId": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+  "viewId": "bv1_eyJydW5JZCI6InJ1biJ9"
+ },
+ "revokeToken": "eyJ2IjoxLCJ0eXAiOiJyZXZva2UiLCJpc3N1ZWRBdCI6MTc5MDAwMDAzMDAwMCwiY29kZSI6NDQwMywidGVuYW50SWQiOiI4NTA4NmFkMC1kYWI2LTRjYWItYTBkYy02ZDAyOWJlOGJlNzUiLCJ1c2VySWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJ0aHJlYWRJZCI6IjY2NjY2NjY2LTc3NzctNDg4OC04OTk5LWFhYWFhYWFhYWFhYSIsInZpZXdJZCI6ImJ2MV9leUp5ZFc1SlpDSTZJbkoxYmlKOSJ9.pqiRmEj5PgKt7CE_b-yPbexX5KVH9S3pt-1zWdNTJntIGWjCTqoecPj5782e8b_PbuzNSSfQhxfNrKT1_S9UCA",
+ "verifies": true,
+ "grantTokenBytes": 761
+}
