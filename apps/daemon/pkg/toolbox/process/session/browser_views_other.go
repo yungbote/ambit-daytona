@@ -16,3 +16,4 @@ func (s *SessionController) ViewBrowserChannel(c *gin.Context)        { c.Status
 func (s *SessionController) ControlBrowserView(c *gin.Context)        { c.Status(http.StatusNotFound) }
 func (s *SessionController) ControlBrowserViewChannel(c *gin.Context) { c.Status(http.StatusNotFound) }
 func (s *SessionController) AgentBrowserViewChannel(c *gin.Context)   { c.Status(http.StatusNotFound) }
+func (s *SessionController) ProgramBrowserViewChannel(c *gin.Context) { c.Status(http.StatusNotFound) }
