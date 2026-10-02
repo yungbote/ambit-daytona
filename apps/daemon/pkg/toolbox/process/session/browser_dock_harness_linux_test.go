@@ -53,7 +53,15 @@ func TestBrowserDockHarness(t *testing.T) {
 		controller.browserExecutable = driver
 	})
 	workspace := &browserWorkspace{engine: engine, socketDir: scratch}
-	const session = "browser-dock"
+	session := os.Getenv("AMBIT_TEST_BROWSER_HARNESS_SESSION_ID")
+	if session == "" {
+		session = "browser-dock"
+	}
+	namespace := os.Getenv("AMBIT_TEST_BROWSER_HARNESS_NAMESPACE")
+	nativeSession := os.Getenv("AMBIT_TEST_BROWSER_HARNESS_NATIVE_SESSION")
+	if nativeSession == "" {
+		nativeSession = "primary"
+	}
 	workspace.open(t, session)
 	quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'" }
 	var environment []string
@@ -70,13 +78,30 @@ func TestBrowserDockHarness(t *testing.T) {
 		environment = append(environment, "DISPLAY=", "AGENT_BROWSER_WINDOW_STREAM=1", "AGENT_BROWSER_DISPLAY_HELPER="+helper)
 		command = append(command, "DISPLAY=", "AGENT_BROWSER_WINDOW_STREAM=1", "AGENT_BROWSER_DISPLAY_HELPER="+quote(helper))
 	}
-	command = append(command, quote(driver), "--config", quote(config), "--session", "primary", "daemon")
+	args := []string{"--config", config}
+	if namespace != "" {
+		args = append(args, "--namespace", namespace)
+	}
+	args = append(args, "--session", nativeSession)
+	command = append(command, quote(driver))
+	for _, argument := range args {
+		command = append(command, quote(argument))
+	}
+	command = append(command, "daemon")
 	if status, body := call(t, engine, http.MethodPost, "/process/session/"+session+"/exec", SessionExecuteRequest{Command: strings.Join(command, " "), RunAsync: true}); status != http.StatusAccepted {
 		t.Fatalf("driver start: %d %s", status, body)
 	}
-	awaitPath(t, filepath.Join(scratch, "primary.sock"))
-	args := []string{"--config", config, "--session", "primary", "--json"}
-	actions := [][]string{{"open", "data:text/html,<title>Native browser dock</title><h1>Browser ready</h1><input aria-label=Message>"}}
+	socketPath := filepath.Join(scratch, nativeSession+".sock")
+	if namespace != "" {
+		socketPath = filepath.Join(scratch, "namespaces", namespace, "run", nativeSession+".sock")
+	}
+	awaitPath(t, socketPath)
+	args = append(args, "--json")
+	pageURL := os.Getenv("AMBIT_TEST_BROWSER_HARNESS_URL")
+	if pageURL == "" {
+		pageURL = "data:text/html,<title>Native browser dock</title><h1>Browser ready</h1><input aria-label=Message>"
+	}
+	actions := [][]string{{"open", pageURL}}
 	width, height := 1280, 720
 	if !windowMode {
 		actions = append(actions, []string{"set", "viewport", "960", "720"})
@@ -92,10 +117,10 @@ func TestBrowserDockHarness(t *testing.T) {
 			t.Fatalf("initial browser command: %v %s", err, body)
 		}
 	}
-	id, _ := workspace.only(t, session, "primary")
+	id, _ := workspace.only(t, session, nativeSession)
 	server := httptest.NewServer(engine)
 	defer server.Close()
-	metadata := map[string]any{"baseUrl": server.URL, "sessionId": session, "viewId": id, "pid": os.Getpid(),
+	metadata := map[string]any{"baseUrl": server.URL, "sessionId": session, "viewId": id, "pid": os.Getpid(), "namespace": namespace, "nativeSession": nativeSession,
 		"streamPath":              "/process/session/" + session + "/browser-views/" + id + "/stream",
 		"controlPath":             "/process/session/" + session + "/browser-views/" + id + "/control",
 		"viewChannelPath":         "/process/session/" + session + "/browser-views/" + id + "/channel",
