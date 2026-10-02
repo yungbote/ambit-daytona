@@ -257,6 +257,23 @@ def interrupt_once_on_line(
 
 
 @contextlib.contextmanager
+def trace_opcodes(trace: Callable[..., object]):
+    """Enable opcode delivery before installing the trace on Python 3.12."""
+
+    previous = sys.gettrace()
+    frame = sys._getframe()
+    previous_opcodes = frame.f_trace_opcodes
+    frame.f_trace_opcodes = True
+    sys.settrace(trace)
+    try:
+        yield
+    finally:
+        frame.f_trace_opcodes = previous_opcodes
+        sys.settrace(previous)
+        del frame
+
+
+@contextlib.contextmanager
 def interrupt_once_on_opcode(
     code: object,
     offset: int,
@@ -264,7 +281,6 @@ def interrupt_once_on_opcode(
 ):  # type: ignore[no-untyped-def]
     """Inject once after a selected instruction has made its state durable."""
 
-    previous = sys.gettrace()
     fired = [False]
 
     def trace(frame: object, event: str, _argument: object):  # type: ignore[no-untyped-def]
@@ -279,11 +295,8 @@ def interrupt_once_on_opcode(
                 raise KeyboardInterrupt(message)
         return trace
 
-    sys.settrace(trace)
-    try:
+    with trace_opcodes(trace):
         yield fired
-    finally:
-        sys.settrace(previous)
 
 
 def class_method_ast(
@@ -2904,12 +2917,8 @@ class ProcessUniverseTest(unittest.TestCase):
                 calls.append(value)
                 real_close(value)
 
-            previous = sys.gettrace()
-            try:
-                sys.settrace(trace)
+            with trace_opcodes(trace):
                 descriptor = custody.open("/dev/null", os.O_RDONLY)
-            finally:
-                sys.settrace(previous)
             try:
                 self.assertTrue(fired[0])
                 self.assertEqual(len(observed), 1)
@@ -3185,13 +3194,8 @@ class ProcessUniverseTest(unittest.TestCase):
                     custody.close()
             return trace
 
-        previous = sys.gettrace()
-        try:
-            with mock.patch.object(MODULE.os, "close") as close:
-                sys.settrace(trace)
-                custody.close()
-        finally:
-            sys.settrace(previous)
+        with mock.patch.object(MODULE.os, "close") as close, trace_opcodes(trace):
+            custody.close()
         self.assertTrue(fired[0])
         close.assert_called_once_with(40)
         self.assertEqual(custody._resources, [])
@@ -7405,12 +7409,8 @@ class WrapperBoundaryTest(unittest.TestCase):
                 calls.append(value)
                 real_close(value)
 
-            previous = sys.gettrace()
-            try:
-                sys.settrace(trace)
+            with trace_opcodes(trace):
                 descriptor = custody.open("/dev/null", os.O_RDONLY)
-            finally:
-                sys.settrace(previous)
             try:
                 self.assertTrue(fired[0])
                 self.assertEqual(len(observed), 1)
@@ -7711,13 +7711,8 @@ class WrapperBoundaryTest(unittest.TestCase):
                     custody.close()
             return trace
 
-        previous = sys.gettrace()
-        try:
-            with mock.patch.object(os, "close") as close:
-                sys.settrace(trace)
-                custody.close()
-        finally:
-            sys.settrace(previous)
+        with mock.patch.object(os, "close") as close, trace_opcodes(trace):
+            custody.close()
         self.assertTrue(fired[0])
         close.assert_called_once_with(40)
         self.assertEqual(custody.descriptors, [])
