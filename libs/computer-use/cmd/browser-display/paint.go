@@ -163,6 +163,8 @@ func (d *display) waitForPaint(request paintRequest, configure bool) error {
 		if err := xproto.ConfigureWindowChecked(d.conn, request.window, xproto.ConfigWindowX|xproto.ConfigWindowY|xproto.ConfigWindowWidth|xproto.ConfigWindowHeight, []uint32{0, 0, uint32(request.width), uint32(request.height)}).Check(); err != nil {
 			return unknown()
 		}
+		d.clock.ConfigureUs = d.clock.lap()
+		defer func() { d.clock.PaintUs = d.clock.lap() }()
 	}
 	timer := time.NewTimer(3 * time.Second)
 	defer timer.Stop()

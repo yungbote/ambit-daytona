@@ -50,6 +50,8 @@ type display struct {
 	// shrink times how long size-class layouts have found the framebuffer
 	// larger than the window needs.
 	shrink shrinkClock
+	// clock times the stages of the latest resize.
+	clock layoutTimings
 }
 type windowInfo struct {
 	ID               uint32 `json:"id"`
@@ -71,6 +73,30 @@ type displayInfo struct {
 	// Features lists the protocol extensions this helper serves; only info
 	// answers it.
 	Features []string `json:"features,omitempty"`
+	// Timings are a resize's stages; only resize answers them.
+	Timings *layoutTimings `json:"timings,omitempty"`
+}
+
+// layoutTimings are one layout's stages in microseconds, in the order they
+// run: the request's checks, waiting captures' look at the previous paint,
+// the output mode and framebuffer, the window configure, the browser's paint
+// acknowledgment, and the read back that answers.
+type layoutTimings struct {
+	CheckUs     int64 `json:"checkUs"`
+	GateUs      int64 `json:"gateUs"`
+	ModeUs      int64 `json:"modeUs"`
+	ConfigureUs int64 `json:"configureUs"`
+	PaintUs     int64 `json:"paintUs"`
+	ReadUs      int64 `json:"readUs"`
+	last        time.Time
+}
+
+// lap answers the microseconds since the previous lap and starts the next.
+func (t *layoutTimings) lap() int64 {
+	now := time.Now()
+	elapsed := now.Sub(t.last).Microseconds()
+	t.last = now
+	return elapsed
 }
 
 // A size-class framebuffer is the window rounded up to whole steps, so a dock
@@ -297,6 +323,7 @@ func (d *display) resize(width, height int, windowID uint32, sizeClass bool) (di
 	if !validSize(width, height) {
 		return displayInfo{}, invalid()
 	}
+	d.clock = layoutTimings{last: time.Now()}
 	if windowID != 0 {
 		before, err := d.info()
 		if err != nil {
@@ -331,11 +358,16 @@ func (d *display) resize(width, height int, windowID uint32, sizeClass bool) (di
 		shrink := d.shrink.allows(needsSmaller, time.Now()) || d.framebufferChanged.IsZero()
 		framebufferW, framebufferH = framebufferFor(width, height, oldW, oldH, limitW, limitH, shrink)
 	}
+	d.clock.CheckUs = d.clock.lap()
 	d.frames.beginLayout()
+	d.clock.GateUs = d.clock.lap()
 	result, err := d.layout(width, height, framebufferW, framebufferH, oldW, oldH, windowID)
 	// Read back, not assumed: a layout of unknown outcome may have changed the
 	// framebuffer, the mode and the window before it failed.
 	d.frames.endLayout(d.visibleArea(windowID))
+	d.clock.ReadUs = d.clock.lap()
+	timings := d.clock
+	result.Timings = &timings
 	return result, err
 }
 
@@ -479,6 +511,7 @@ func (d *display) layout(width, height, framebufferW, framebufferH, oldW, oldH i
 	return d.resizeWindow(width, height, framebufferW, framebufferH, windowID)
 }
 func (d *display) resizeWindow(width, height, framebufferW, framebufferH int, windowID uint32) (displayInfo, error) {
+	d.clock.ModeUs = d.clock.lap()
 	if windowID != 0 {
 		if err := d.paintAfterResize(xproto.Window(windowID), width, height); err != nil {
 			return displayInfo{}, unknown()

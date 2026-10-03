@@ -490,6 +490,37 @@ func TestXvfbLayoutGateHoldsFramesUntilTheBrowserPaints(t *testing.T) {
 	}
 }
 
+// A resize answers how long each of its stages took: the browser's paint is
+// the paint stage, the stages add up to no more than the resize took, and
+// only a resize answers them.
+func TestXvfbAResizeAnswersItsStages(t *testing.T) {
+	startXvfb(t, 1200, 900)
+	d, err := openDisplay(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.close()
+	browser := newSyncBrowser(t, 600, 400, 80*time.Millisecond, 0x2060c0)
+	started := time.Now()
+	reply := mustCall(t, d, `{"id":1,"op":"resize","windowId":`+itoa(int(browser.window))+`,"width":900,"height":700}`)
+	took := float64(time.Since(started).Microseconds())
+	timings, _ := reply["timings"].(map[string]any)
+	sum := 0.0
+	for _, stage := range []string{"checkUs", "gateUs", "modeUs", "configureUs", "paintUs", "readUs"} {
+		value, ok := timings[stage].(float64)
+		if !ok || value < 0 {
+			t.Fatalf("stage %s: %v", stage, timings)
+		}
+		sum += value
+	}
+	if timings["paintUs"].(float64) < 75000 || sum > took {
+		t.Fatalf("stages %v add up to %.0f us of a %.0f us resize", timings, sum, took)
+	}
+	if info := mustCall(t, d, `{"id":2,"op":"info"}`); info["timings"] != nil {
+		t.Fatalf("info answered timings: %v", info["timings"])
+	}
+}
+
 // With a size class, a resize inside the class changes only the output mode
 // and the window; frames keep the framebuffer's size and name the window.
 func TestXvfbSizeClassLaysOutOnlyTheModeAndWindow(t *testing.T) {
