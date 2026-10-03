@@ -4,6 +4,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -54,6 +55,23 @@ func waitTestDesktopOwner(t *testing.T, d *display, window xproto.Window, modal 
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("helper never proved window %d (modal=%v)", window, modal)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func waitTestDesktopUnlinked(t *testing.T, d *display, window xproto.Window) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		d.eventMu.Lock()
+		_, linked := d.desktopParents[window]
+		d.eventMu.Unlock()
+		if !linked {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("helper retained obsolete ownership for window %d", window)
 		}
 		time.Sleep(time.Millisecond)
 	}
@@ -320,6 +338,120 @@ func TestXvfbDesktopOwnerSeedsOnlyActuallyFocusedChromeAtStartup(t *testing.T) {
 	waitTestDesktopOwner(t, d, parent, false)
 	modal := focusTestModal(t, peer, d, parent)
 	if err := xproto.DestroyWindowChecked(peer, modal).Check(); err != nil {
+		t.Fatal(err)
+	}
+	waitTestFocus(t, peer, parent)
+}
+
+func TestXvfbDesktopMetadataChangesInvalidatePriorOwnershipAndDescendants(t *testing.T) {
+	for _, mutation := range []string{"foreign-pid", "deleted-transient", "foreign-parent", "nested-parent-rebind"} {
+		t.Run(mutation, func(t *testing.T) {
+			startXvfb(t, 800, 600)
+			const chromePID = 4242
+			peer := newPainter(t).conn
+			pid := uint32(os.Getpid())
+			started, _ := processStarted(pid)
+			d, err := openDisplay(chromePID, &desktopProcess{PID: pid, Started: started})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer d.close()
+			parent := focusTestChrome(t, peer, d)
+			modal := focusTestModal(t, peer, d, parent)
+			retiring := modal
+			if mutation == "nested-parent-rebind" {
+				retiring = focusTestModal(t, peer, d, modal)
+			}
+			switch mutation {
+			case "foreign-pid":
+				data := make([]byte, 4)
+				xgb.Put32(data, pid+1)
+				if err := xproto.ChangePropertyChecked(peer, xproto.PropModeReplace, modal, closeTestAtom(t, peer, "_NET_WM_PID"), xproto.AtomCardinal, 32, 1, data).Check(); err != nil {
+					t.Fatal(err)
+				}
+			case "deleted-transient":
+				if err := xproto.DeletePropertyChecked(peer, modal, closeTestAtom(t, peer, "WM_TRANSIENT_FOR")).Check(); err != nil {
+					t.Fatal(err)
+				}
+			default:
+				foreign := closeTestWindow(t, peer, chromePID+1, "_NET_WM_WINDOW_TYPE_NORMAL", false, true, false)
+				focusTestTransient(t, peer, modal, foreign)
+			}
+			waitTestDesktopUnlinked(t, d, modal)
+			waitTestDesktopUnlinked(t, d, retiring)
+			d.eventMu.Lock()
+			defer d.eventMu.Unlock()
+			if err := xproto.DestroyWindowChecked(peer, retiring).Check(); err != nil {
+				t.Fatal(err)
+			}
+			d.desktopRetired(retiring)
+			if got := testCurrentFocus(t, peer); got == parent {
+				t.Fatal("changed metadata retained prior restoration authority")
+			}
+		})
+	}
+}
+
+func TestXvfbDesktopOwnerDeathCannotRestoreFromAnAdmittedTransient(t *testing.T) {
+	startXvfb(t, 800, 600)
+	const chromePID = 4242
+	peer := newPainter(t).conn
+	owner := exec.Command("/bin/sleep", "60")
+	if err := owner.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if owner.ProcessState == nil {
+			_ = owner.Process.Kill()
+			_ = owner.Wait()
+		}
+	}()
+	pid := uint32(owner.Process.Pid)
+	started, _ := processStarted(pid)
+	d, err := openDisplay(chromePID, &desktopProcess{PID: pid, Started: started})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.close()
+	parent := focusTestChrome(t, peer, d)
+	modal := focusTestModal(t, peer, d, parent)
+	if err := owner.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = owner.Wait()
+	d.eventMu.Lock()
+	defer d.eventMu.Unlock()
+	if err := xproto.DestroyWindowChecked(peer, modal).Check(); err != nil {
+		t.Fatal(err)
+	}
+	d.desktopRetired(modal)
+	if got := testCurrentFocus(t, peer); got == parent {
+		t.Fatal("retired desktop process restored its old Chrome parent")
+	}
+}
+
+func TestXvfbNestedOuterFirstRetirementRevalidatesTheRetainedChromeAncestor(t *testing.T) {
+	startXvfb(t, 800, 600)
+	const chromePID = 4242
+	peer := newPainter(t).conn
+	pid := uint32(os.Getpid())
+	started, _ := processStarted(pid)
+	d, err := openDisplay(chromePID, &desktopProcess{PID: pid, Started: started})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.close()
+	parent := focusTestChrome(t, peer, d)
+	outer := focusTestModal(t, peer, d, parent)
+	inner := focusTestModal(t, peer, d, outer)
+	if err := xproto.DestroyWindowChecked(peer, outer).Check(); err != nil {
+		t.Fatal(err)
+	}
+	waitTestDesktopUnlinked(t, d, outer)
+	if got := testCurrentFocus(t, peer); got != inner {
+		t.Fatal("outer retirement displaced the live inner dialog")
+	}
+	if err := xproto.DestroyWindowChecked(peer, inner).Check(); err != nil {
 		t.Fatal(err)
 	}
 	waitTestFocus(t, peer, parent)
