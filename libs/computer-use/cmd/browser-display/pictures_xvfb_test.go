@@ -224,6 +224,43 @@ func TestXvfbAWaitingCaptureSeesEveryLayoutsPaint(t *testing.T) {
 	}
 }
 
+// A capture that follows a drag sees each layout's paint even when it comes
+// back to the screen just after the paint, as a producer does from encoding
+// the previous picture: the next layout waits for its look.
+func TestXvfbACaptureFollowingADragSeesEachPaintWhenItComesBackAfterIt(t *testing.T) {
+	startXvfb(t, 640, 480)
+	d, err := openDisplay(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.close()
+	page := newPainter(t)
+	expectFrame(t, d, captureOptions{}, "first frame")
+	d.frames.beginLayout()
+	for step := 0; step < 5; step++ {
+		page.fill(t, image.Rect(0, step*16, 640, step*16+16), uint32(0x101010*(step+1)))
+		d.frames.endLayout(image.Rectangle{})
+		began := make(chan struct{})
+		go func() {
+			d.frames.beginLayout()
+			close(began)
+		}()
+		time.Sleep(10 * time.Millisecond)
+		result, err := d.frames.capture(captureOptions{})
+		if frame, ok := result.(capturedFrame); err != nil || !ok || !frame.Changed {
+			<-began
+			d.frames.endLayout(image.Rectangle{})
+			t.Fatalf("step %d: the capture following the drag missed the paint: %T %v", step, result, err)
+		}
+		select {
+		case <-began:
+		case <-time.After(time.Second):
+			t.Fatalf("step %d: the next layout never began after the look", step)
+		}
+	}
+	d.frames.endLayout(image.Rectangle{})
+}
+
 // A layout waits for a read of the screen in progress, never for what a
 // capture does with the pixels it read: while a capture holds the capture
 // lock, as its conversion, encoding or slot copy does, a layout begins and

@@ -581,20 +581,26 @@ type layoutGate struct {
 	pending bool
 	settled chan struct{}
 	visible image.Rectangle // the window inside a larger framebuffer; empty is the whole frame
-	// owed is open while a capture that was waiting when the last layout
-	// settled has not looked at the screen yet; it closes when one does.
+	// seen records that a capture looked at the screen since the last layout
+	// settled: it follows the layouts.
+	seen bool
+	// owed is open while the last layout's paint is owed to a capture that
+	// follows the layouts and has not looked at it yet; it closes when one does.
 	owed chan struct{}
 }
 
-// layoutLook bounds how long a layout waits for a waiting capture to look at
-// the previous layout's paint: two display frames. A drag of many layouts
-// thus shows the browser at each size instead of starving every capture.
+// layoutLook bounds how long a layout waits for a capture that follows the
+// layouts to look at the previous layout's paint: two display frames. A drag
+// of many layouts thus shows the browser at each size, even to a producer
+// that comes back from encoding the previous one just after the paint,
+// instead of holding it behind the next layout.
 const layoutLook = 34 * time.Millisecond
 
 // beginLayout waits for any read of the screen in progress, so no capture
 // reads pixels after a geometry change it did not see begin; what a capture
 // does with pixels it has read never holds a layout. It first lets a capture
-// that was waiting look at the previous layout's paint, within layoutLook.
+// that follows the layouts look at the previous layout's paint, within
+// layoutLook.
 func (e *frameEngine) beginLayout() {
 	e.gate.Lock()
 	defer e.gate.Unlock()
@@ -608,7 +614,7 @@ func (e *frameEngine) beginLayout() {
 		}
 		timer.Stop()
 		e.gate.Lock()
-		e.looked()
+		e.layout.owed = nil
 	}
 	if !e.layout.pending {
 		e.layout.pending, e.layout.settled = true, make(chan struct{})
@@ -616,7 +622,8 @@ func (e *frameEngine) beginLayout() {
 }
 
 // endLayout reopens capture with the window where the layout left it. A
-// capture waiting now is owed a look before the next layout begins.
+// capture that follows the layouts, waiting now or one that looked at the
+// previous paint, is owed a look before the next layout begins.
 func (e *frameEngine) endLayout(visible image.Rectangle) {
 	e.gate.Lock()
 	defer e.gate.Unlock()
@@ -624,9 +631,10 @@ func (e *frameEngine) endLayout(visible image.Rectangle) {
 	if e.layout.pending {
 		e.layout.pending = false
 		close(e.layout.settled)
-		if e.waiting > 0 && e.layout.owed == nil {
+		if (e.waiting > 0 || e.layout.seen) && e.layout.owed == nil {
 			e.layout.owed = make(chan struct{})
 		}
+		e.layout.seen = false
 	}
 	e.poke()
 }
@@ -634,6 +642,7 @@ func (e *frameEngine) endLayout(visible image.Rectangle) {
 // looked records that a capture observed the screen: the look a layout owed.
 // The caller holds gate.
 func (e *frameEngine) looked() {
+	e.layout.seen = true
 	if e.layout.owed != nil {
 		close(e.layout.owed)
 		e.layout.owed = nil
