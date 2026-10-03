@@ -1180,11 +1180,21 @@ func (e *frameEngine) pictureOnce(options pictureOptions) (any, bool, error) {
 	}
 	frame.Timings.FetchUs = seen.fetched.Sub(seen.read).Microseconds()
 	started := time.Now()
+	written := make([]int, 0, len(rows))
 	for _, run := range bandRuns(rows, 0) {
 		top, bottom := bandRect(run[0], seen.width, seen.height).Min.Y, bandRect(run[1], seen.width, seen.height).Max.Y
-		e.slot.copyRows(p.retained, p.stride, seen.width, top, bottom)
 		frame.Rows = append(frame.Rows, [2]int{top, bottom})
+		for band := run[0]; band <= run[1]; band++ {
+			written = append(written, band)
+		}
 	}
+	// Band by band on the pipeline's workers: a whole window is some 20 MB,
+	// which one thread copies at a fraction of the memory's bandwidth.
+	_ = p.parallel(len(written), func(_ *frameWorker, item int) error {
+		rect := bandRect(written[item], seen.width, seen.height)
+		e.slot.copyRows(p.retained, p.stride, seen.width, rect.Min.Y, rect.Max.Y)
+		return nil
+	})
 	e.pictured = image.Rectangle{}
 	if !drawn.Empty() {
 		e.pictured = e.slot.composite(seen.cursor, seen.width, seen.height)
