@@ -12,7 +12,9 @@ type Authority struct {
 	binding Binding
 	grants  []Grant
 	// Expiry or pruning cannot restore a grant for an older controller.
-	controlIssued int64
+	controlIssued     int64
+	controlController string
+	controlAmbiguous  bool
 }
 
 // NewAuthority starts a session's authority from the grant that admitted it.
@@ -20,6 +22,7 @@ func NewAuthority(first Grant) *Authority {
 	a := &Authority{binding: first.Binding, grants: []Grant{first}}
 	if first.Scope == ScopeControl {
 		a.controlIssued = first.IssuedAt
+		a.controlController = first.ControllerID
 	}
 	return a
 }
@@ -35,8 +38,14 @@ func (a *Authority) Add(g Grant, now int64) error {
 	}
 	a.Prune(now)
 	if now < g.ExpiresAt {
-		if g.Scope == ScopeControl && g.IssuedAt > a.controlIssued {
-			a.controlIssued = g.IssuedAt
+		if g.Scope == ScopeControl {
+			if g.IssuedAt > a.controlIssued {
+				a.controlIssued, a.controlController, a.controlAmbiguous = g.IssuedAt, g.ControllerID, false
+			} else if g.IssuedAt == a.controlIssued && g.ControllerID != a.controlController {
+				// Integer-millisecond proof starts are not unique. Neither
+				// arrival order nor expiry may choose between tied controllers.
+				a.controlAmbiguous = true
+			}
 		}
 		for _, held := range a.grants {
 			if held == g {
@@ -86,6 +95,9 @@ func (a *Authority) ViewUntil(now int64) (until int64, ok bool) {
 // Control is the newest control grant while it is unexpired. Older grants
 // may still permit viewing, but never become control authority again.
 func (a *Authority) Control(now int64) (Grant, bool) {
+	if a.controlAmbiguous {
+		return Grant{}, false
+	}
 	var newest Grant
 	found := false
 	for _, g := range a.grants {
