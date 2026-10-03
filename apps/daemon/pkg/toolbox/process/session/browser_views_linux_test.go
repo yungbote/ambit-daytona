@@ -90,16 +90,43 @@ func runBrowserFixture(args []string) bool {
 		serveBrowserFixture(connection, mode)
 	})}
 	go func() { _ = server.Serve(screencast) }()
-	if err := os.WriteFile(filepath.Join(dir, name+".pid"), []byte(strconv.Itoa(os.Getpid())), 0600); err != nil {
+	if err := publishBrowserFixtureFile(filepath.Join(dir, name+".pid"), []byte(strconv.Itoa(os.Getpid()))); err != nil {
 		panic(err)
 	}
 	port := screencast.Addr().(*net.TCPAddr).Port
-	if err := os.WriteFile(filepath.Join(dir, name+".stream"), []byte(strconv.Itoa(port)+"\n"), 0600); err != nil {
+	if err := publishBrowserFixtureFile(filepath.Join(dir, name+".stream"), []byte(strconv.Itoa(port)+"\n")); err != nil {
 		panic(err)
 	}
 	// A failed test is bounded even if its cleanup path is broken.
-	time.Sleep(30 * time.Second)
+	lifetime := 30 * time.Second
+	if mode == "view-channel-source" {
+		lifetime = 20 * time.Minute
+	}
+	time.Sleep(lifetime)
 	return true
+}
+
+// publishBrowserFixtureFile makes a file the stand-in announces appear whole:
+// it is written beside its final name and renamed over it. The test polls these
+// names (pid, stream port, counters) and reads them the moment they exist, so a
+// plain write would let a reader see the file between its creation and its
+// bytes.
+func publishBrowserFixtureFile(path string, content []byte) error {
+	file, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
+	if err != nil {
+		return err
+	}
+	_, err = file.Write(content)
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(file.Name(), path)
+	}
+	if err != nil {
+		_ = os.Remove(file.Name())
+	}
+	return err
 }
 
 func serveBrowserFixture(connection *websocket.Conn, mode string) {

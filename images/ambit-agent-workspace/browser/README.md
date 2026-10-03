@@ -10,7 +10,7 @@ The browser is an ordinary workspace process. Use `agent-browser open`, `snapsho
 
 The ordinary launcher selects a headed Chrome window on its own private authenticated Xvfb display. The same process supplies Chrome's actual tabs, address bar, menus, dialogs and page; the user-facing view does not recreate those controls. The window stream reports display-pixel geometry and its current generation, while page screenshots retain page coordinates. The driver owns and reaps the display helper with Chrome. No display package is installed during a Run.
 
-This image also pins GTK3, `gnome-themes-extra-data` and `xsettingsd`. The launcher opts its private display into standard system-theme updates; the driver starts one scoped settings child before Chrome and acknowledges `Net/ThemeName` through the distribution's `dump_xsettings` reader. Light/dark changes retain the Chrome process, profile, tabs and page contents. The child and private config follow the retained Xvfb lifetime, including sign-in relaunches. There is no global desktop settings service, settings tab or Chrome profile edit. Explicit custom theme flags/environment report `ui: pinned`; older images and an unavailable settings service report `ui: next_launch`. `conformance/theme.py --output /workspace/outputs/theme` proves actual toolbar pixels, retained page state, isolated displays, sign-in/control continuity and cleanup in a dedicated candidate container.
+This source composition pins GTK3, `gnome-themes-extra-data`, `xsettingsd`, `xdg-desktop-portal` and its maintained GTK backend. The native SystemTheme owner projects the existing session theme through XSettings and maintained gsettings; its private dconf service serializes the theme key with GTK chooser preferences. Its EXTERNAL-authenticated Unix bus, dconf writer, portal frontend and GTK backend follow the retained authenticated Xvfb lifetime, including sign-in relaunches. Only the paired Chrome child receives this bus address. Portal configuration selects maintained Settings and FileChooser implementations; no custom dialog, host/system bus, FUSE mount or new privilege is introduced. Explicit custom theme flags/environment still report `ui: pinned`; an unavailable settings service reports `ui: next_launch`. `conformance/theme.py --output /workspace/outputs/theme` must prove actual toolbar pixels, retained page state, isolated displays, sign-in/control continuity and cleanup in the exact built candidate. The preparation and remaining source/approval boundary are recorded in [PORTAL_PREPARATION.md](PORTAL_PREPARATION.md); these source changes are not runtime qualification.
 
 Both default launch and explicit `--headed` qualification now require one headed Chrome process, one private display, and an actual `browser-window` frame whose decoded JPEG dimensions match its declared surface. Browser sandbox, local/public navigation, screenshot, download, proxy trust, cancellation and whole-process cleanup checks remain required. A build that passes these checks still needs its current runtime qualification and integrated Product/browser acceptance.
 
@@ -256,9 +256,11 @@ run time), `libopus0` and `libpulse0`. The parent carried them only as
 dependencies of other packages. GTK3's settings backend needs a D-Bus session
 bus provider; `dbus-x11` is pinned so that apt does not choose
 `dbus-user-session`, which would bring systemd, `systemd-sysv` and
-`libpam-systemd`. Nothing in the image starts a system bus, and no session bus
-runs either: the launcher sets `DBUS_SESSION_BUS_ADDRESS` to a unix path that
-cannot exist, so libdbus and GLib never start one through `dbus-launch`. Whenever the
+`libpam-systemd`. Nothing in the image starts a system bus. The launcher sets
+`DBUS_SESSION_BUS_ADDRESS` to a unix path that cannot exist, preventing libdbus
+and GLib from starting an unowned bus through `dbus-launch`. The qualified native
+successor supplies a private session bus only to its owned desktop services and
+paired Chrome child. Whenever the
 composition changes the installed packages, `locks/installed-dpkg.lock` is
 regenerated from the locked snapshots and committed with the lock; the build
 records the same roster in the image's lineage.

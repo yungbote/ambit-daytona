@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/robotn/xgb"
@@ -17,17 +18,22 @@ import (
 )
 
 type display struct {
-	conn      *xgb.Conn
-	screen    *xproto.ScreenInfo
-	chromePID uint32
-	atoms     map[string]xproto.Atom
-	clipboard *clipboard
-	keys      map[byte]bool
-	buttons   map[byte]bool
-	keysyms   map[string]byte
-	textKeys  map[rune][]textKey
-	heldCodes map[string]byte
-	keyboard  *xgbutil.XUtil
+	conn           *xgb.Conn
+	screen         *xproto.ScreenInfo
+	chromePID      uint32
+	desktopProcess *desktopProcess
+	desktopParents map[xproto.Window]desktopParent
+	desktopChrome  xproto.Window
+	eventMu        sync.Mutex
+	closing        bool
+	atoms          map[string]xproto.Atom
+	clipboard      *clipboard
+	keys           map[byte]bool
+	buttons        map[byte]bool
+	keysyms        map[string]byte
+	textKeys       map[rune][]textKey
+	heldCodes      map[string]byte
+	keyboard       *xgbutil.XUtil
 	// modes are the output modes generated on this display, by name: the
 	// ones this helper created and the ones earlier helpers left on it.
 	modes       map[string]randr.Mode
@@ -133,7 +139,7 @@ func (c *shrinkClock) allows(needsSmaller bool, now time.Time) bool {
 
 func (c *shrinkClock) reset() { c.since = time.Time{} }
 
-func openDisplay(pid int) (*display, error) {
+func openDisplay(pid int, desktop ...*desktopProcess) (*display, error) {
 	c, err := xgb.NewConn()
 	if err != nil {
 		return nil, err
@@ -162,7 +168,7 @@ func openDisplay(pid int) (*display, error) {
 		return nil, err
 	}
 	d := &display{conn: c, screen: screen, chromePID: uint32(pid), atoms: map[string]xproto.Atom{}, keys: map[byte]bool{}, buttons: map[byte]bool{}, modes: modes}
-	for _, name := range []string{"_NET_WM_PID", "WM_PROTOCOLS", "WM_DELETE_WINDOW", "_NET_WM_SYNC_REQUEST", "_NET_WM_SYNC_REQUEST_COUNTER", "_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_NORMAL", "_NET_WM_WINDOW_TYPE_DIALOG", "CLIPBOARD", "UTF8_STRING", "TARGETS", "TEXT", "INCR", "AMB_BROWSER_SELECTION"} {
+	for _, name := range []string{"_NET_WM_PID", "WM_TRANSIENT_FOR", "WM_PROTOCOLS", "WM_DELETE_WINDOW", "_NET_WM_SYNC_REQUEST", "_NET_WM_SYNC_REQUEST_COUNTER", "_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_NORMAL", "_NET_WM_WINDOW_TYPE_DIALOG", "CLIPBOARD", "UTF8_STRING", "TARGETS", "TEXT", "INCR", "AMB_BROWSER_SELECTION"} {
 		a, err := xproto.InternAtom(c, false, uint16(len(name)), name).Reply()
 		if err != nil {
 			return nil, err
@@ -180,6 +186,11 @@ func openDisplay(pid int) (*display, error) {
 		return nil, err
 	}
 	d.frames = frames
+	if len(desktop) > 0 {
+		if err := d.startDesktopFocus(desktop[0]); err != nil {
+			return nil, err
+		}
+	}
 	if err := d.startClipboard(); err != nil {
 		return nil, err
 	}
@@ -187,6 +198,9 @@ func openDisplay(pid int) (*display, error) {
 	return d, nil
 }
 func (d *display) close() {
+	d.eventMu.Lock()
+	d.closing = true
+	d.eventMu.Unlock()
 	_ = d.reset()
 	if d.clipboard != nil {
 		d.clipboard.close()
