@@ -6,6 +6,7 @@ package session
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -26,6 +27,7 @@ type scopeResult struct {
 
 type processScope struct {
 	cmd         *exec.Cmd
+	shell       string
 	input       io.WriteCloser
 	control     *os.File
 	stop        sync.Once
@@ -35,7 +37,7 @@ type processScope struct {
 	result      scopeResult // Published by closing done, then immutable.
 }
 
-func startProcessScope(ctx context.Context, shell, dir string, grace, interval time.Duration) (*processScope, error) {
+func startProcessScope(ctx context.Context, shell, dir string, grace, interval time.Duration, environment ...*EnvironmentLease) (*processScope, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -63,18 +65,39 @@ func startProcessScope(ctx context.Context, shell, dir string, grace, interval t
 		return nil, err
 	}
 	cmd.ExtraFiles = []*os.File{controlRead, statusWrite}
+	var environmentRead, environmentWrite *os.File
+	if len(environment) > 0 {
+		environmentRead, environmentWrite, err = os.Pipe()
+		if err != nil {
+			input.Close()
+			controlRead.Close()
+			controlWrite.Close()
+			statusRead.Close()
+			statusWrite.Close()
+			return nil, err
+		}
+		cmd.ExtraFiles = append(cmd.ExtraFiles, environmentRead)
+		cmd.Args = append(cmd.Args, "--environment-fd=5")
+	}
 	if err := cmd.Start(); err != nil {
 		input.Close()
 		controlRead.Close()
 		controlWrite.Close()
 		statusRead.Close()
 		statusWrite.Close()
+		if environmentRead != nil {
+			environmentRead.Close()
+			environmentWrite.Close()
+		}
 		return nil, err
 	}
 	inputRead.Close()
 	controlRead.Close()
 	statusWrite.Close()
-	scope := &processScope{cmd: cmd, input: input, control: controlWrite, done: make(chan struct{})}
+	if environmentRead != nil {
+		environmentRead.Close()
+	}
+	scope := &processScope{cmd: cmd, shell: shell, input: input, control: controlWrite, done: make(chan struct{})}
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -82,6 +105,16 @@ func startProcessScope(ctx context.Context, shell, dir string, grace, interval t
 		case <-scope.done:
 		}
 	}()
+	var environmentSent <-chan error
+	if environmentWrite != nil {
+		sent := make(chan error, 1)
+		environmentSent = sent
+		go func() {
+			err := json.NewEncoder(environmentWrite).Encode(environment[0])
+			err = errors.Join(err, environmentWrite.Close())
+			sent <- err
+		}()
+	}
 	ready := make(chan error, 1)
 	observed := make(chan scopeResult, 1)
 	go func() {
@@ -125,11 +158,22 @@ func startProcessScope(ctx context.Context, shell, dir string, grace, interval t
 		scope.cancel()
 		close(scope.done)
 	}()
-	select {
-	case err := <-ready:
-		return scope, err
-	case <-time.After(10 * time.Second):
-		return scope, errors.New("session supervisor startup timed out")
+	startup := time.NewTimer(10 * time.Second)
+	defer startup.Stop()
+	for {
+		select {
+		case err := <-environmentSent:
+			environmentSent = nil
+			if err != nil {
+				scope.cancel()
+				return scope, errors.New("session environment dispatch failed")
+			}
+		case err := <-ready:
+			return scope, err
+		case <-startup.C:
+			scope.cancel()
+			return scope, errors.New("session supervisor startup timed out")
+		}
 	}
 }
 
