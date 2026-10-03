@@ -4,6 +4,8 @@
 // browser-display is a private child of one browser process. It has no listener,
 // control lease or replay loop: the driver owns those concerns and serializes
 // requests over stdio. DISPLAY and XAUTHORITY are inherited only by this child.
+// Its owner can also bind the maintained desktop child so retiring that
+// child's proven transient returns focus without a separate window manager.
 package main
 
 import (
@@ -138,7 +140,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, "The private display authority is unavailable.")
 		os.Exit(2)
 	}
-	display, err := openDisplay(*pid)
+	desktop, err := desktopBinding(os.Getenv("BROWSER_DISPLAY_DESKTOP_PROCESS"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "The owned private desktop process is unavailable.")
+		os.Exit(2)
+	}
+	display, err := openDisplay(*pid, desktop)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "The private browser display could not be opened.")
 		os.Exit(2)

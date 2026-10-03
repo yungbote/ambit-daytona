@@ -299,6 +299,8 @@ CGROUP_NAME_RE = re.compile(r"^ambit-c16b-docker-[0-9a-f]{12}$")
 LIBC = ctypes.CDLL(None, use_errno=True)
 RENAME_NOREPLACE = 1
 AT_EMPTY_PATH = 0x1000
+AT_FDCWD = -100
+AT_SYMLINK_FOLLOW = 0x400
 PIDFD_THREAD = os.O_EXCL
 TASK_NAMESPACE_ENTRIES = (
     ("cgroup", "cgroup"),
@@ -7388,6 +7390,22 @@ def link_tmpfile_noreplace_at(
         ctypes.c_int(destination_directory_fd),
         ctypes.c_char_p(os.fsencode(destination_name)),
         ctypes.c_int(AT_EMPTY_PATH),
+    )
+    if result == 0:
+        return
+    observed_errno = ctypes.get_errno()
+    if observed_errno not in (errno.ENOENT, errno.EPERM):
+        raise OSError(observed_errno, os.strerror(observed_errno))
+    # AT_EMPTY_PATH requires CAP_DAC_READ_SEARCH on kernels that do not grant
+    # the O_TMPFILE exception. The proc descriptor link still names this exact
+    # open file description and linkat retains its no-replace destination
+    # semantics, so an unprivileged verifier can exercise the real boundary.
+    result = function(
+        ctypes.c_int(AT_FDCWD),
+        ctypes.c_char_p(os.fsencode(f"/proc/self/fd/{descriptor}")),
+        ctypes.c_int(destination_directory_fd),
+        ctypes.c_char_p(os.fsencode(destination_name)),
+        ctypes.c_int(AT_SYMLINK_FOLLOW),
     )
     if result != 0:
         observed_errno = ctypes.get_errno()

@@ -93,25 +93,27 @@ func (s *SessionService) admitEnvironmentLease(owned *session, lease *Environmen
 	finite, expire := context.WithDeadline(owned.ctx, lease.ExpiresAt)
 	dispatch := &EnvironmentLease{Version: lease.Version, ID: lease.ID, ExpiresAt: lease.ExpiresAt, Values: values}
 	scope, err := startProcessScope(finite, previous.shell, previous.cmd.Dir, s.terminationGracePeriod, s.terminationCheckInterval, dispatch)
-	if scope != nil {
+	if scope == nil {
 		// A canceled startup may return no recipient at all. Keep the prior
 		// settled scope as deletion's proof instead of erasing that custody.
-		owned.scope.Store(scope)
-		go func() {
-			<-scope.done
-			expire()
-		}()
-	}
-	if err != nil {
 		expire()
-		if scope != nil {
-			scope.cancel()
-			cleanup, stop := context.WithTimeout(context.Background(), s.terminationGracePeriod+2*time.Second)
-			cleanupErr := scope.awaitSettlement(cleanup)
-			stop()
-			err = errors.Join(err, cleanupErr)
+		if err == nil {
+			err = errors.New("environment lease started no recipient")
 		}
 		return nil, err
+	}
+	owned.scope.Store(scope)
+	go func() {
+		<-scope.done
+		expire()
+	}()
+	if err != nil {
+		expire()
+		scope.cancel()
+		cleanup, stop := context.WithTimeout(context.Background(), s.terminationGracePeriod+2*time.Second)
+		cleanupErr := scope.awaitSettlement(cleanup)
+		stop()
+		return nil, errors.Join(err, cleanupErr)
 	}
 	if owned.ctx.Err() != nil || !lease.ExpiresAt.After(time.Now()) {
 		expire()

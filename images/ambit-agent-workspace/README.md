@@ -182,17 +182,29 @@ All selected source files must be present and match the image's lineage.
 
 ## Publish and admit
 
-1. Push to Harbor with the Daytona internal registry admin credential
+1. Push to the platform's internal registry with its admin credential
    (`daytona-system/daytona-api-secrets` keys `INTERNAL_REGISTRY_ADMIN` /
-   `INTERNAL_REGISTRY_PASSWORD` on the `ambit-daytona-prod` cluster):
-   `docker push registry.daytona.ambit.sh/daytona/ambit-agent-workspace:<tag>`.
+   `INTERNAL_REGISTRY_PASSWORD`). Read the registry itself from the live
+   config rather than hardcoding it: it has moved twice, from Harbor at
+   `registry.daytona.ambit.sh` to Google Artifact Registry (2026-09-03) and
+   back to Harbor at `registry.daytona.ambit.sh` on the bare-metal deployment
+   (infra `delivery/daytona/overlays/bare-metal-mwcc-node-01`), and the runner
+   pulls from whatever these two keys name:
+
+   ```sh
+   kubectl -n daytona-system get cm daytona-api-config \
+     -o jsonpath='{.data.INTERNAL_REGISTRY_URL}{"/"}{.data.INTERNAL_REGISTRY_PROJECT_ID}{"\n"}'
+   # bare metal → https://registry.daytona.ambit.sh/daytona
+   docker push <that host>/<that project>/ambit-agent-workspace:<tag>
+   ```
+
    Record the pushed manifest digest
    (`docker inspect --format '{{index .RepoDigests 0}}' <tag>`); the digest,
    not the tag, is the admitted reference.
 2. Register the snapshot with the Daytona API at
    `https://api.daytona.ambit.sh` using the platform `ADMIN_API_KEY`:
    `POST /api/snapshots` with `name` and `imageName` both set to
-   `registry.daytona.ambit.sh/daytona/ambit-agent-workspace@sha256:<digest>`,
+   `<registry>/<project>/ambit-agent-workspace@sha256:<digest>`,
    `entrypoint: ["sleep","infinity"]`, and the same `cpu`/`memory`/`disk`
    defaults as the current admitted snapshot. The runner pulls the image and
    republishes it under `daytona/daytona-<digest>`; poll `GET /api/snapshots`

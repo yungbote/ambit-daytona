@@ -1,5 +1,19 @@
 # Ambit self-hosted local Daytona
 
+Native capture qualification uses `qualify_native_capture.py`, under private
+mount and network namespaces, with its own containerd socket, root, state,
+configuration and namespace. Separate Docker data/exec roots and disabled
+bridge/firewall flags do not isolate a daemon: on 2026-09-29 a second daemon
+auto-connected the host containerd in `moby`; the host `docker0` bridge was then
+absent and the existing Redis host port stopped working. The pre-start network
+snapshot was missing, so bridge deletion causality was inferred from timing,
+while shared containerd adoption and the missing bridge were directly observed.
+The corrected harness refuses shared namespaces before any effect and records
+both child namespace identities before loading an image. Unit guards do not
+establish live isolation or native clone correctness; qualify startup against a
+recorded host baseline with `--startup-only` before running the browser capture
+gate. The startup receipt is distinct from native capture acceptance.
+
 This directory defines the task-scoped Daytona provider used by Ambit when the
 selected deployment is `self_hosted_local`. It does not target Daytona Cloud,
 does not publish public ingress, and does not make a runtime pack current merely

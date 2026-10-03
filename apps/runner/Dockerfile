@@ -1,4 +1,4 @@
-FROM golang:1.25.11-alpine AS go-toolchain
+FROM golang:1.26.1-alpine AS go-toolchain
 
 # computer-use is a glibc/CGO binary copied into managed sandboxes by the
 # runner. Build it from repository source inside one digest-pinned toolchain;
@@ -19,7 +19,10 @@ COPY libs/computer-use/ libs/computer-use/
 COPY docker/ambit-local/computer-use-build.lock.json /tmp/computer-use-build.lock.json
 COPY docker/ambit-local/computer-use-binary.sha256 /tmp/computer-use-binary.sha256
 
-RUN printf 'go 1.25.5\n\nuse (\n  ./apps/daemon\n  ./libs/common-go\n  ./libs/computer-use\n)\n' > go.work \
+# Only the modules imported by computer-use own this independent graph. The
+# service telemetry module is not a plugin dependency and must not change its
+# locked bytes through workspace minimum-version selection.
+RUN printf 'go 1.25.5\n\nuse (\n  ./apps/daemon\n  ./libs/computer-use\n)\n' > go.work \
   && test "$(go version)" = 'go version go1.25.11 linux/amd64' \
   && mkdir -p /out /tmp/computer-use-cache-a /tmp/computer-use-cache-b \
   && cd libs/computer-use \

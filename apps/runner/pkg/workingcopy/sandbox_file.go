@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/daytonaio/runner/pkg/generationstop"
 	"github.com/google/uuid"
@@ -65,6 +67,7 @@ func (s *Service) CaptureSandboxFile(ctx context.Context, sandboxID string, requ
 		binding = CaptureBinding{Selector: selector, SandboxFile: SandboxFileSource{
 			Contract: SandboxFileCaptureContract, OrganizationID: request.OrganizationID, SandboxID: sandboxID,
 			OperationID: request.OperationID, Generation: observed.Generation.ExpectedGeneration, Component: component,
+			SourceNamespace: request.SourceNamespace,
 		}}
 	}
 	zonePath, err := s.validateBinding(sandboxID, binding)
@@ -79,13 +82,8 @@ func (s *Service) CaptureSandboxFile(ctx context.Context, sandboxID string, requ
 }
 
 func (s *Service) ObserveSandboxFile(ctx context.Context, sandboxID string, request SandboxFileObserveRequest) (SandboxFileObservation, error) {
-	if err := validateSandboxFileOperation(sandboxID, request.OrganizationID, request.OperationID); err != nil {
+	if err := validateSandboxFileLookupRequest(sandboxID, request); err != nil {
 		return SandboxFileObservation{}, err
-	}
-	if request.Path != nil {
-		if _, err := sandboxFileSelector(*request.Path); err != nil {
-			return SandboxFileObservation{}, err
-		}
 	}
 	root := sandboxFileObjectRoot(request.OrganizationID, sandboxID, request.OperationID)
 	release := s.locks.acquire(root)
@@ -93,11 +91,8 @@ func (s *Service) ObserveSandboxFile(ctx context.Context, sandboxID string, requ
 	if deletion, retired, err := s.readDeletion(ctx, root); err != nil {
 		return SandboxFileObservation{}, err
 	} else if retired {
-		if request.Path != nil {
-			expected := request
-			if err := requireSandboxFileRetirement(deletion, sandboxID, expected); err != nil {
-				return SandboxFileObservation{}, err
-			}
+		if err := requireSandboxFileRetirement(deletion, sandboxID, request); err != nil {
+			return SandboxFileObservation{}, err
 		}
 		return SandboxFileObservation{Status: "retired"}, nil
 	}
@@ -140,7 +135,7 @@ func (s *Service) ReadSandboxFile(ctx context.Context, sandboxID string, request
 }
 
 func (s *Service) DeleteSandboxFile(ctx context.Context, sandboxID string, request SandboxFileDeleteRequest) (SandboxFileDeleteReceipt, error) {
-	native := SandboxFileObserveRequest{OrganizationID: request.OrganizationID, OperationID: request.OperationID, Path: request.Path}
+	native := SandboxFileObserveRequest{OrganizationID: request.OrganizationID, OperationID: request.OperationID, Path: request.Path, SourceNamespace: request.SourceNamespace}
 	var expected *CaptureReceipt
 	if request.Receipt != nil {
 		if native != (SandboxFileObserveRequest{}) {
@@ -152,15 +147,10 @@ func (s *Service) DeleteSandboxFile(ctx context.Context, sandboxID string, reque
 		}
 		expected = &receipt
 		path := request.Receipt.Path
-		native = SandboxFileObserveRequest{OrganizationID: request.Receipt.OrganizationID, OperationID: request.Receipt.OperationID, Path: &path}
+		native = SandboxFileObserveRequest{OrganizationID: request.Receipt.OrganizationID, OperationID: request.Receipt.OperationID, Path: &path, SourceNamespace: request.Receipt.SourceNamespace}
 	}
-	if err := validateSandboxFileOperation(sandboxID, native.OrganizationID, native.OperationID); err != nil {
+	if err := validateSandboxFileLookupRequest(sandboxID, native); err != nil {
 		return SandboxFileDeleteReceipt{}, err
-	}
-	if native.Path != nil {
-		if _, err := sandboxFileSelector(*native.Path); err != nil {
-			return SandboxFileDeleteReceipt{}, err
-		}
 	}
 	root := sandboxFileObjectRoot(native.OrganizationID, sandboxID, native.OperationID)
 	release := s.locks.acquire(root)
@@ -189,8 +179,7 @@ func (s *Service) DeleteSandboxFile(ctx context.Context, sandboxID string, reque
 		}
 		if !retired {
 			deletion.Identity = identityFromIntent(intent)
-			zone, _ := semanticZoneRoot(intent.Binding.Selector.SemanticZoneRef)
-			admittedPath := zone + "/" + intent.Binding.Selector.ZoneRelativePath
+			admittedPath := sandboxFilePath(intent.Binding.Selector)
 			deletion.SandboxFile.Request.Path = &admittedPath
 		}
 	}
@@ -248,13 +237,8 @@ func (s *Service) DeleteSandboxFile(ctx context.Context, sandboxID string, reque
 
 func validateSandboxFileRetirement(deletion captureDeletion, root string) error {
 	native := deletion.SandboxFile
-	if err := validateSandboxFileOperation(native.SandboxID, native.Request.OrganizationID, native.Request.OperationID); err != nil {
+	if err := validateSandboxFileLookupRequest(native.SandboxID, native.Request); err != nil {
 		return fmt.Errorf("%w: native retirement request is invalid", ErrConflict)
-	}
-	if native.Request.Path != nil {
-		if _, err := sandboxFileSelector(*native.Request.Path); err != nil {
-			return fmt.Errorf("%w: native retirement path is invalid", ErrConflict)
-		}
 	}
 	if root != sandboxFileObjectRoot(native.Request.OrganizationID, native.SandboxID, native.Request.OperationID) {
 		return fmt.Errorf("%w: native retirement scope differs", ErrConflict)
@@ -272,7 +256,7 @@ func validateSandboxFileRetirement(deletion captureDeletion, root string) error 
 func requireSandboxFileRetirement(deletion captureDeletion, sandboxID string, request SandboxFileObserveRequest) error {
 	if deletion.Version == 2 {
 		actual := deletion.SandboxFile
-		if actual.SandboxID != sandboxID || actual.Request.OrganizationID != request.OrganizationID || actual.Request.OperationID != request.OperationID ||
+		if actual.SandboxID != sandboxID || actual.Request.OrganizationID != request.OrganizationID || actual.Request.OperationID != request.OperationID || actual.Request.SourceNamespace != request.SourceNamespace ||
 			(actual.Request.Path != nil && request.Path != nil && *actual.Request.Path != *request.Path) {
 			return fmt.Errorf("%w: native operation retirement differs", ErrConflict)
 		}
@@ -308,12 +292,26 @@ func validateSandboxFileRequest(sandboxID string, request SandboxFileRequest) (C
 	if err := validateSandboxFileOperation(sandboxID, request.OrganizationID, request.OperationID); err != nil {
 		return CaptureSelector{}, err
 	}
-	return sandboxFileSelector(request.Path)
+	return sandboxFileSelectorIn(request.Path, request.SourceNamespace)
 }
 
 func validateSandboxFileOperation(sandboxID, organizationID, operationID string) error {
 	if !canonicalNativeID(organizationID) || !canonicalNativeID(sandboxID) || !canonicalOperationID(operationID) {
 		return invalidf("native sandbox capture owner or operation is invalid")
+	}
+	return nil
+}
+
+func validateSandboxFileLookupRequest(sandboxID string, request SandboxFileObserveRequest) error {
+	if err := validateSandboxFileOperation(sandboxID, request.OrganizationID, request.OperationID); err != nil {
+		return err
+	}
+	if request.SourceNamespace != "" && request.SourceNamespace != "code_program" {
+		return invalidf("native capture source namespace is invalid")
+	}
+	if request.Path != nil {
+		_, err := sandboxFileSelectorIn(*request.Path, request.SourceNamespace)
+		return err
 	}
 	return nil
 }
@@ -354,10 +352,31 @@ func sandboxFileSelector(value string) (CaptureSelector, error) {
 	return CaptureSelector{}, invalidf("native file capture requires a canonical file within /workspace/work or /workspace/outputs")
 }
 
+const codeProgramFileZone = "ambit.code-program-files@1"
+
+func sandboxFileSelectorIn(value, namespace string) (CaptureSelector, error) {
+	if namespace == "" {
+		return sandboxFileSelector(value)
+	}
+	if namespace != "code_program" || value == "/" || !strings.HasPrefix(value, "/") || path.Clean(value) != value || strings.HasSuffix(value, "/") || len(value) > 4096 || !utf8.ValidString(value) || strings.ContainsRune(value, 0) {
+		return CaptureSelector{}, invalidf("programme capture requires one canonical CODE file path")
+	}
+	for _, part := range strings.Split(value, "/") {
+		if len(part) > 255 {
+			return CaptureSelector{}, invalidf("programme file path component exceeds its bound")
+		}
+	}
+	return CaptureSelector{SemanticZoneRef: codeProgramFileZone, ZoneRelativePath: strings.TrimPrefix(value, "/")}, nil
+}
+
+func sandboxFilePath(selector CaptureSelector) string {
+	root, _ := semanticZoneRoot(selector.SemanticZoneRef)
+	return path.Join(root, selector.ZoneRelativePath)
+}
+
 func validateSandboxFileBinding(sandboxID string, binding CaptureBinding) error {
 	source := binding.SandboxFile
-	root, _ := semanticZoneRoot(binding.Selector.SemanticZoneRef)
-	request := SandboxFileRequest{OrganizationID: source.OrganizationID, OperationID: source.OperationID, Path: root + "/" + binding.Selector.ZoneRelativePath}
+	request := SandboxFileRequest{OrganizationID: source.OrganizationID, OperationID: source.OperationID, Path: sandboxFilePath(binding.Selector), SourceNamespace: source.SourceNamespace}
 	selector, err := validateSandboxFileRequest(sandboxID, request)
 	if err != nil {
 		return err
@@ -373,15 +392,15 @@ func validateSandboxFileBinding(sandboxID string, binding CaptureBinding) error 
 }
 
 func requireSandboxFileRequest(binding CaptureBinding, sandboxID string, request SandboxFileRequest) error {
-	return requireSandboxFileLookup(binding, sandboxID, SandboxFileObserveRequest{OrganizationID: request.OrganizationID, OperationID: request.OperationID, Path: &request.Path})
+	return requireSandboxFileLookup(binding, sandboxID, SandboxFileObserveRequest{OrganizationID: request.OrganizationID, OperationID: request.OperationID, Path: &request.Path, SourceNamespace: request.SourceNamespace})
 }
 
 func requireSandboxFileLookup(binding CaptureBinding, sandboxID string, request SandboxFileObserveRequest) error {
-	if err := validateSandboxFileOperation(sandboxID, request.OrganizationID, request.OperationID); err != nil {
+	if err := validateSandboxFileLookupRequest(sandboxID, request); err != nil {
 		return err
 	}
 	if request.Path != nil {
-		selector, err := sandboxFileSelector(*request.Path)
+		selector, err := sandboxFileSelectorIn(*request.Path, request.SourceNamespace)
 		if err != nil {
 			return err
 		}
@@ -390,7 +409,7 @@ func requireSandboxFileLookup(binding CaptureBinding, sandboxID string, request 
 		}
 	}
 	source := binding.SandboxFile
-	if source.Contract != SandboxFileCaptureContract || source.OrganizationID != request.OrganizationID || source.SandboxID != sandboxID || source.OperationID != request.OperationID {
+	if source.Contract != SandboxFileCaptureContract || source.OrganizationID != request.OrganizationID || source.SandboxID != sandboxID || source.OperationID != request.OperationID || source.SourceNamespace != request.SourceNamespace {
 		return fmt.Errorf("%w: native operation is already bound to a different source", ErrConflict)
 	}
 	return nil
@@ -401,7 +420,7 @@ func (s *Service) sandboxFileRetired(ctx context.Context, root, sandboxID string
 	if err != nil || !retired {
 		return false, err
 	}
-	if err := requireSandboxFileRetirement(deletion, sandboxID, SandboxFileObserveRequest{OrganizationID: request.OrganizationID, OperationID: request.OperationID, Path: &request.Path}); err != nil {
+	if err := requireSandboxFileRetirement(deletion, sandboxID, SandboxFileObserveRequest{OrganizationID: request.OrganizationID, OperationID: request.OperationID, Path: &request.Path, SourceNamespace: request.SourceNamespace}); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -413,21 +432,21 @@ func sandboxFileObjectRoot(organizationID, sandboxID, operationID string) string
 
 func sandboxFileReceipt(receipt CaptureReceipt) SandboxFileReceipt {
 	source := receipt.SandboxFile
-	root, _ := semanticZoneRoot(receipt.Selector.SemanticZoneRef)
 	return SandboxFileReceipt{Contract: SandboxFileCaptureContract, CaptureID: receipt.ProviderResourceID,
 		OperationID: source.OperationID, OrganizationID: source.OrganizationID, SandboxID: source.SandboxID,
-		Path: root + "/" + receipt.Selector.ZoneRelativePath, Generation: source.Generation, Component: source.Component,
+		Path: sandboxFilePath(receipt.Selector), Generation: source.Generation, Component: source.Component, SourceNamespace: source.SourceNamespace,
 		TotalByteLength: receipt.TotalByteLength, SHA256: receipt.ProviderSHA256Digest, CapturedAt: receipt.CapturedAt}
 }
 
 func validateSandboxFileReceipt(sandboxID string, receipt SandboxFileReceipt) (CaptureReceipt, error) {
-	selector, err := validateSandboxFileRequest(sandboxID, SandboxFileRequest{OrganizationID: receipt.OrganizationID, OperationID: receipt.OperationID, Path: receipt.Path})
+	selector, err := validateSandboxFileRequest(sandboxID, SandboxFileRequest{OrganizationID: receipt.OrganizationID, OperationID: receipt.OperationID, Path: receipt.Path, SourceNamespace: receipt.SourceNamespace})
 	if err != nil {
 		return CaptureReceipt{}, err
 	}
 	binding := CaptureBinding{Selector: selector, SandboxFile: SandboxFileSource{
 		Contract: receipt.Contract, OrganizationID: receipt.OrganizationID, SandboxID: receipt.SandboxID,
 		OperationID: receipt.OperationID, Generation: receipt.Generation, Component: receipt.Component,
+		SourceNamespace: receipt.SourceNamespace,
 	}}
 	if err := validateSandboxFileBinding(sandboxID, binding); err != nil {
 		return CaptureReceipt{}, err
@@ -447,5 +466,5 @@ func validateSandboxFileReceipt(sandboxID string, receipt SandboxFileReceipt) (C
 func sameSandboxFileRequest(left, right CaptureBinding) bool {
 	return left.SandboxFile != (SandboxFileSource{}) && right.SandboxFile != (SandboxFileSource{}) &&
 		left.SandboxFile.OrganizationID == right.SandboxFile.OrganizationID && left.SandboxFile.SandboxID == right.SandboxFile.SandboxID &&
-		left.SandboxFile.OperationID == right.SandboxFile.OperationID && left.Selector == right.Selector
+		left.SandboxFile.OperationID == right.SandboxFile.OperationID && left.SandboxFile.SourceNamespace == right.SandboxFile.SourceNamespace && left.Selector == right.Selector
 }

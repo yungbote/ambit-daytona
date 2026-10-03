@@ -149,25 +149,25 @@ func TestSharedSecretInjection_EndToEnd(t *testing.T) {
 	defer m.Close()
 
 	dir := t.TempDir()
-	handle, err := m.EnableSecretInjection(SecretInjectionConfig{
+	handle, err := m.EnableEgressProxy(EgressProxyConfig{
 		ListenAddr: "127.0.0.1:0",
 		CACertPath: filepath.Join(dir, "ca.crt"),
 		CAKeyPath:  filepath.Join(dir, "ca.key"),
 	})
 	if err != nil {
-		t.Fatalf("EnableSecretInjection failed: %v", err)
+		t.Fatalf("EnableEgressProxy failed: %v", err)
 	}
 	// Idempotent: a second call returns the same running proxy.
-	again, err := m.EnableSecretInjection(SecretInjectionConfig{
+	again, err := m.EnableEgressProxy(EgressProxyConfig{
 		ListenAddr: "127.0.0.1:0",
 		CACertPath: filepath.Join(dir, "ca.crt"),
 		CAKeyPath:  filepath.Join(dir, "ca.key"),
 	})
 	if err != nil || again.Addr != handle.Addr {
-		t.Fatalf("EnableSecretInjection not idempotent: addr1=%s addr2=%s err=%v", handle.Addr, again.Addr, err)
+		t.Fatalf("EnableEgressProxy not idempotent: addr1=%s addr2=%s err=%v", handle.Addr, again.Addr, err)
 	}
 
-	if err := m.RegisterSandboxSecrets("sb-1", SandboxSecretConfig{
+	if err := m.RegisterSandboxPolicy("sb-1", SandboxPolicyConfig{
 		ClientIP:       "127.0.0.1",
 		AllowedDomains: []string{"localhost"},
 		Resolver: proxy.ResolverFunc(func(ctx context.Context) ([]proxy.SecretConfig, error) {
@@ -175,7 +175,7 @@ func TestSharedSecretInjection_EndToEnd(t *testing.T) {
 		}),
 		PlaceholderMarker: "dtn_secret_",
 	}); err != nil {
-		t.Fatalf("RegisterSandboxSecrets failed: %v", err)
+		t.Fatalf("RegisterSandboxPolicy failed: %v", err)
 	}
 
 	caPEM, err := os.ReadFile(handle.CACertFile)
@@ -214,15 +214,15 @@ func TestSharedSecretInjection_EndToEnd(t *testing.T) {
 	}
 }
 
-func TestRegisterSandboxSecrets_RequiresEnable(t *testing.T) {
+func TestRegisterSandboxPolicy_RequiresEgressProxy(t *testing.T) {
 	m := quietManager()
 	defer m.Close()
-	err := m.RegisterSandboxSecrets("sb", SandboxSecretConfig{
+	err := m.RegisterSandboxPolicy("sb", SandboxPolicyConfig{
 		ClientIP: "127.0.0.1",
 		Resolver: proxy.ResolverFunc(func(ctx context.Context) ([]proxy.SecretConfig, error) { return nil, nil }),
 	})
 	if err == nil {
-		t.Fatal("expected error when secret injection is not enabled")
+		t.Fatal("expected error when the egress proxy is not enabled")
 	}
 }
 

@@ -49,7 +49,7 @@ func (c *browserFixtureConnections) finished() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.done++
-	_ = os.WriteFile(c.path, []byte(strconv.Itoa(c.done)), 0600)
+	_ = publishBrowserFixtureFile(c.path, []byte(strconv.Itoa(c.done)))
 }
 
 // Transport stand-in only. The real Rust driver tests own input semantics;
@@ -93,7 +93,7 @@ func (f browserControlFixture) serve(connection net.Conn) {
 			time.Sleep(f.replyDelay)
 			if reader.Buffered() > 0 {
 				overlapped++
-				_ = os.WriteFile(f.overlaps, []byte(strconv.Itoa(overlapped)), 0600)
+				_ = publishBrowserFixtureFile(f.overlaps, []byte(strconv.Itoa(overlapped)))
 			}
 		}
 		if reply == nil || json.NewEncoder(connection).Encode(reply) != nil || !f.persistent {

@@ -13,7 +13,7 @@ import (
 // It selects a subprotocol from those the client offered (gorilla picks the first offered), so strict
 // clients that offer any subprotocol receive a server selection and pass the handshake.
 // It uses a permissive CORS (CheckOrigin always returns true) to allow connections from any origin.
-func UpgradeToWebSocket(w http.ResponseWriter, r *http.Request) (*websocket.Conn, error) {
+func UpgradeToWebSocket(w http.ResponseWriter, r *http.Request, headers ...http.Header) (*websocket.Conn, error) {
 	// Echo back the client's offered subprotocols. gorilla selects the first
 	// client-offered entry, so this preserves the previous behavior of echoing
 	// the SDK-version token when the client lists it, while also selecting a
@@ -26,7 +26,11 @@ func UpgradeToWebSocket(w http.ResponseWriter, r *http.Request) (*websocket.Conn
 	}
 
 	// Upgrade the connection to a WebSocket protocol
-	ws, err := upgrader.Upgrade(w, r, nil)
+	var responseHeaders http.Header
+	if len(headers) > 0 {
+		responseHeaders = headers[0]
+	}
+	ws, err := upgrader.Upgrade(w, r, responseHeaders)
 	if err != nil {
 		return nil, err
 	}

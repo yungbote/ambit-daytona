@@ -13,23 +13,28 @@ type SandboxFileRequest struct {
 	OrganizationID string `json:"organizationId" validate:"required"`
 	OperationID    string `json:"operationId" validate:"required"`
 	Path           string `json:"path" validate:"required"`
+	// Absent preserves ordinary work/outputs capture. Programme admission is
+	// proved by the host runtime; this names only the physical source namespace.
+	SourceNamespace string `json:"sourceNamespace,omitempty"`
 }
 
 type SandboxFileObserveRequest struct {
-	OrganizationID string  `json:"organizationId" validate:"required"`
-	OperationID    string  `json:"operationId" validate:"required"`
-	Path           *string `json:"path,omitempty"`
+	OrganizationID  string  `json:"organizationId" validate:"required"`
+	OperationID     string  `json:"operationId" validate:"required"`
+	Path            *string `json:"path,omitempty"`
+	SourceNamespace string  `json:"sourceNamespace,omitempty"`
 }
 
 // SandboxFileSource freezes native authority and implementation once, in the
 // same private intent that owns capture publication and recovery.
 type SandboxFileSource struct {
-	Contract       string                            `json:"contract"`
-	OrganizationID string                            `json:"organizationId"`
-	SandboxID      string                            `json:"sandboxId"`
-	OperationID    string                            `json:"operationId"`
-	Generation     generationstop.ExpectedGeneration `json:"generation"`
-	Component      CaptureComponent                  `json:"component"`
+	Contract        string                            `json:"contract"`
+	OrganizationID  string                            `json:"organizationId"`
+	SandboxID       string                            `json:"sandboxId"`
+	OperationID     string                            `json:"operationId"`
+	Generation      generationstop.ExpectedGeneration `json:"generation"`
+	Component       CaptureComponent                  `json:"component"`
+	SourceNamespace string                            `json:"sourceNamespace,omitempty"`
 }
 
 type SandboxFileReceipt struct {
@@ -44,6 +49,7 @@ type SandboxFileReceipt struct {
 	TotalByteLength int64                             `json:"totalByteLength" validate:"required"`
 	SHA256          string                            `json:"sha256" validate:"required"`
 	CapturedAt      string                            `json:"capturedAt" validate:"required"`
+	SourceNamespace string                            `json:"sourceNamespace,omitempty"`
 }
 
 type SandboxFileObservation struct {
@@ -68,10 +74,11 @@ type SandboxFileReadResponse struct {
 }
 
 type SandboxFileDeleteRequest struct {
-	Receipt        *SandboxFileReceipt `json:"receipt,omitempty"`
-	OrganizationID string              `json:"organizationId,omitempty"`
-	OperationID    string              `json:"operationId,omitempty"`
-	Path           *string             `json:"path,omitempty"`
+	Receipt         *SandboxFileReceipt `json:"receipt,omitempty"`
+	OrganizationID  string              `json:"organizationId,omitempty"`
+	OperationID     string              `json:"operationId,omitempty"`
+	Path            *string             `json:"path,omitempty"`
+	SourceNamespace string              `json:"sourceNamespace,omitempty"`
 }
 
 type SandboxFileDeleteReceipt struct {
