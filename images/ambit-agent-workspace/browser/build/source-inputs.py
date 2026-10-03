@@ -15,10 +15,12 @@ that revision.
 
 pin needs both revisions, so an image is never pinned from one of them alone. It writes each binding's revision
 and archive digest, plus the driver's source tree and version. pin-materializer writes the materializer's
-revision, source tree, archive digest and build-lock digest. export writes the three archives a build context
-carries into browser_inputs, and refuses unless each has the digest the lock records. Every command refuses a
-revision that the repository's origin/main does not contain, and a clone whose origin is not the repository the
-binding names.
+revision, source tree, archive digest and build-lock digest. Pinning accepts any revision of the binding's
+repository, so a release is prepared from reviewed heads before they merge: what it derives depends only on the
+revision, and a merge does not change it. export writes the three archives a build context carries into
+browser_inputs, and refuses unless each has the digest the lock records and the repository's origin/main contains
+its revision: an image is built only from merged sources. Every command refuses a clone whose origin is not the
+repository the binding names.
 
 An archive is an uncompressed `git archive` tar, laid out as install-browser.py reads it. Its digest depends only
 on the revision's tree. A gzip stream would also depend on the compressing machine's zlib.
@@ -65,11 +67,16 @@ def location(url):
 
 
 def revision(repo, rev, binding):
-    """The full commit of `rev`, from the repository the binding names, contained in its origin/main."""
+    """The full commit of `rev`, from the repository the binding names."""
     origin = git(repo, "remote", "get-url", "origin").decode()
     require(location(origin) == location(binding["repository"]), f"{repo} is {origin.strip()}, not {binding['repository']}")
-    commit = git(repo, "rev-parse", "--verify", rev + "^{commit}").decode().strip()
-    require(contains(repo, commit, MAIN), f"{commit} is not on {binding['repository']} main (fetch origin, or pin a merged revision)")
+    return git(repo, "rev-parse", "--verify", rev + "^{commit}").decode().strip()
+
+
+def merged(repo, rev, binding):
+    """`revision`, contained in the repository's origin/main."""
+    commit = revision(repo, rev, binding)
+    require(contains(repo, commit, MAIN), f"{commit} is not on {binding['repository']} main (merge it, then fetch origin)")
     return commit
 
 
@@ -123,7 +130,7 @@ def export(arguments):
     archives = {}
     for key, repo in repos.items():
         binding = lock[key]
-        data = archive(key, repo, revision(repo, binding["revision"], binding), binding)
+        data = archive(key, repo, merged(repo, binding["revision"], binding), binding)
         require(binding["archiveName"] == ARCHIVES[key] and sha256(data) == binding["sha256"],
                 f"{ARCHIVES[key]} at {binding['revision']} is not the archive the lock records; pin again")
         archives[binding["archiveName"]] = data

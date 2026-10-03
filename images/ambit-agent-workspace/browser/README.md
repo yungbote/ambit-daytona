@@ -86,9 +86,11 @@ python3 build/source-inputs.py pin-materializer --backend <backend revision> --b
 ```
 
 `pin` needs both revisions, so an image is never pinned from one of them alone. It writes each binding's revision
-and archive digest, plus the driver's source tree and version. Every command refuses a revision that the
-repository's `origin/main` does not contain. `source-inputs.py export` writes the three archives a build context
-carries into `browser_inputs`, and refuses unless each one has the digest the lock records. An archive is an
+and archive digest, plus the driver's source tree and version. It accepts reviewed heads that have not merged yet:
+what it derives depends only on the revision, so moving a pin is one command and merging changes none of it.
+`source-inputs.py export` writes the three archives a build context carries into `browser_inputs`, and refuses
+unless each one has the digest the lock records and the repository's `origin/main` contains its revision, so an
+image is built only from merged sources. An archive is an
 uncompressed `git archive` tar, made with `tar.umask` fixed, so its digest depends only on the revision's tree. A
 gzip stream would also depend on the compressing machine's zlib: the same revision gave different digests on two
 build machines.

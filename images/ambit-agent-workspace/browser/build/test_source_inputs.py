@@ -153,10 +153,20 @@ class SourceInputs(unittest.TestCase):
             self.export(self.root / "inputs")
         self.assertFalse((self.root / "inputs").exists())
 
-    def test_pin_refuses_a_revision_main_does_not_contain(self):
+    def test_a_reviewed_head_is_pinned_before_it_merges_and_exported_only_after(self):
+        self.pin_materializer()
         branch = commit(self.helper, {"libs/computer-use/cmd/browser-display/wake.go": "package main\n"}, "unmerged")
+        self.pin(helper=branch)
+        pinned = json.loads(self.lock.read_text())["displayHelper"]
+        self.assertEqual(pinned["revision"], branch)
         with self.assertRaisesRegex(SystemExit, f"{branch} is not on https://github.com/example/daytona main"):
-            self.pin(helper=branch)
+            self.export(self.root / "inputs")
+        self.assertFalse((self.root / "inputs").exists())
+        run(self.helper, "checkout", "-q", "-b", "main-next", self.helper_rev)
+        run(self.helper, "-c", "user.name=t", "-c", "user.email=t@example.com", "merge", "-q", "--no-ff", "-m", "merge", branch)
+        run(self.helper, "update-ref", source_inputs.MAIN, run(self.helper, "rev-parse", "HEAD"))
+        self.export(self.root / "inputs")
+        self.assertEqual(digest((self.root / "inputs" / pinned["archiveName"]).read_bytes()), pinned["sha256"])
 
     def test_pin_refuses_a_clone_of_another_repository(self):
         run(self.helper, "remote", "set-url", "origin", "git@github.com:someone/else.git")
