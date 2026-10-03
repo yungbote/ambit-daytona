@@ -224,6 +224,100 @@ func TestXvfbAWaitingCaptureSeesEveryLayoutsPaint(t *testing.T) {
 	}
 }
 
+// A layout waits for a read of the screen in progress, never for what a
+// capture does with the pixels it read: while a capture holds the capture
+// lock, as its conversion, encoding or slot copy does, a layout begins and
+// ends at once.
+func TestXvfbALayoutNeverWaitsForACapturesWorkAfterItsRead(t *testing.T) {
+	startXvfb(t, 640, 480)
+	d, err := openDisplay(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.close()
+	d.frames.mu.Lock()
+	laid := make(chan struct{})
+	go func() {
+		defer close(laid)
+		d.frames.beginLayout()
+		d.frames.endLayout(image.Rectangle{})
+	}()
+	select {
+	case <-laid:
+		d.frames.mu.Unlock()
+	case <-time.After(time.Second):
+		d.frames.mu.Unlock()
+		<-laid
+		t.Fatal("a layout waited for a capture's work after its read")
+	}
+}
+
+// A layout that begins while a capture reads the screen waits for the read:
+// the server is grabbed so the read stalls, and the layout begins only once
+// the read has the pixels, which therefore show nothing of its geometry.
+func TestXvfbALayoutWaitsForAReadInProgress(t *testing.T) {
+	startXvfb(t, 640, 480)
+	d, err := openDisplay(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.close()
+	page, grabber := newPainter(t), newPainter(t)
+	expectFrame(t, d, captureOptions{}, "first frame")
+	page.fill(t, image.Rect(0, 0, 640, 480), 0x204080)
+	if err := xproto.GrabServerChecked(grabber.conn).Check(); err != nil {
+		t.Fatal(err)
+	}
+	ungrabbed := false
+	ungrab := func() {
+		if !ungrabbed {
+			ungrabbed = true
+			if err := xproto.UngrabServerChecked(grabber.conn).Check(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	defer ungrab()
+	captured := make(chan any, 1)
+	go func() {
+		result, _ := d.frames.capture(captureOptions{})
+		captured <- result
+	}()
+	// The capture is inside its read once it holds the gate.
+	for deadline := time.Now().Add(2 * time.Second); d.frames.gate.TryLock(); {
+		d.frames.gate.Unlock()
+		if time.Now().After(deadline) {
+			t.Fatal("the capture never began its read")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	began := make(chan struct{})
+	go func() {
+		d.frames.beginLayout()
+		close(began)
+	}()
+	select {
+	case <-began:
+		t.Fatal("a layout began during a read in progress")
+	case <-time.After(100 * time.Millisecond):
+	}
+	ungrab()
+	select {
+	case result := <-captured:
+		if frame, ok := result.(capturedFrame); !ok || !frame.Changed {
+			t.Fatalf("the read in progress was not answered with its pixels: %T", result)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the stalled read never finished")
+	}
+	select {
+	case <-began:
+	case <-time.After(time.Second):
+		t.Fatal("the layout never began after the read")
+	}
+	d.frames.endLayout(image.Rectangle{})
+}
+
 // The picture channel is found in the environment, answers only pictures, and
 // its slot holds the screen; the other channels refuse pictures.
 func TestXvfbProtocolServesPicturesOnTheirOwnChannel(t *testing.T) {
