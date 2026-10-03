@@ -252,19 +252,33 @@ func (d *display) describe() (displayInfo, error) {
 	result.Features = append(d.frames.features(), "closeWindows")
 	return result, err
 }
+// info describes the display: its size, focus and the owned browser's
+// top-level windows. Requests whose replies do not decide the next are sent
+// together, so a description costs a few round trips however many windows
+// the root holds.
 func (d *display) info() (displayInfo, error) {
-	w, h, err := d.size()
+	rootCookie := xproto.GetGeometry(d.conn, xproto.Drawable(d.screen.Root))
+	treeCookie := xproto.QueryTree(d.conn, d.screen.Root)
+	focusCookie := xproto.GetInputFocus(d.conn)
+	root, err := rootCookie.Reply()
 	if err != nil {
 		return displayInfo{}, err
 	}
-	result := displayInfo{Width: w, Height: h, Windows: []windowInfo{}}
-	tree, err := xproto.QueryTree(d.conn, d.screen.Root).Reply()
+	if !validSize(int(root.Width), int(root.Height)) {
+		return displayInfo{}, unavailable()
+	}
+	result := displayInfo{Width: int(root.Width), Height: int(root.Height), Windows: []windowInfo{}}
+	tree, err := treeCookie.Reply()
 	if err != nil {
 		return result, err
 	}
-	focus, err := xproto.GetInputFocus(d.conn).Reply()
+	focus, err := focusCookie.Reply()
 	if err != nil {
 		return result, err
+	}
+	pids := make([]xproto.GetPropertyCookie, len(tree.Children))
+	for index, id := range tree.Children {
+		pids[index] = xproto.GetProperty(d.conn, false, id, d.atoms["_NET_WM_PID"], xproto.AtomCardinal, 0, 1)
 	}
 	focused := focus.Focus
 	// A toolkit child may own focus. Follow exact ancestry to the root window;
@@ -279,23 +293,35 @@ func (d *display) info() (displayInfo, error) {
 		}
 		focused = t.Parent
 	}
-	for _, id := range tree.Children {
-		p, e := xproto.GetProperty(d.conn, false, id, d.atoms["_NET_WM_PID"], xproto.AtomCardinal, 0, 1).Reply()
+	type owned struct {
+		id         xproto.Window
+		geometry   xproto.GetGeometryCookie
+		attributes xproto.GetWindowAttributesCookie
+		types      xproto.GetPropertyCookie
+	}
+	windows := []owned{}
+	for index, id := range tree.Children {
+		p, e := pids[index].Reply()
 		if e != nil || p.Format != 32 || len(p.Value) != 4 || xgb.Get32(p.Value) != d.chromePID {
 			continue
 		}
-		g, e := xproto.GetGeometry(d.conn, xproto.Drawable(id)).Reply()
+		windows = append(windows, owned{id, xproto.GetGeometry(d.conn, xproto.Drawable(id)), xproto.GetWindowAttributes(d.conn, id),
+			xproto.GetProperty(d.conn, false, id, d.atoms["_NET_WM_WINDOW_TYPE"], xproto.AtomAtom, 0, 16)})
+	}
+	for _, window := range windows {
+		id := window.id
+		g, e := window.geometry.Reply()
 		if e != nil {
 			continue
 		}
-		a, e := xproto.GetWindowAttributes(d.conn, id).Reply()
+		a, e := window.attributes.Reply()
 		if e != nil {
 			continue
 		}
 		item := windowInfo{ID: uint32(id), PID: d.chromePID, X: int(g.X), Y: int(g.Y), Width: int(g.Width), Height: int(g.Height), Mapped: a.MapState == xproto.MapStateViewable, Focused: focused == id}
 		item.OverrideRedirect = a.OverrideRedirect
 		item.WindowType = "unknown"
-		types, e := xproto.GetProperty(d.conn, false, id, d.atoms["_NET_WM_WINDOW_TYPE"], xproto.AtomAtom, 0, 16).Reply()
+		types, e := window.types.Reply()
 		if e == nil && types.Format == 32 {
 			for offset := 0; offset+4 <= len(types.Value); offset += 4 {
 				switch xproto.Atom(xgb.Get32(types.Value[offset:])) {
