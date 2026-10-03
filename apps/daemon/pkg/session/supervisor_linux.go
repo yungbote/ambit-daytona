@@ -6,6 +6,7 @@
 package session
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -31,7 +32,7 @@ func RunSupervisor(args []string) (int, bool) {
 	if len(args) == 0 || args[0] != supervisorArgument {
 		return 0, false
 	}
-	if len(args) != 4 {
+	if len(args) != 4 && (len(args) != 5 || args[4] != "--environment-fd=5") {
 		return 2, true
 	}
 	control := os.NewFile(3, "session-control")
@@ -88,8 +89,42 @@ func RunSupervisor(args []string) (int, bool) {
 		close(parentGone)
 	}()
 	shell := exec.Command(args[3])
+	var lease *EnvironmentLease
+	if len(args) == 5 {
+		environment := os.NewFile(5, "session-environment")
+		if environment == nil {
+			return fail(errors.New("session environment descriptor is unavailable"))
+		}
+		unix.CloseOnExec(5)
+		decoder := json.NewDecoder(environment)
+		if err := decoder.Decode(&lease); err != nil || lease == nil {
+			environment.Close()
+			return fail(errors.New("session environment dispatch is invalid"))
+		}
+		var trailing any
+		err := decoder.Decode(&trailing)
+		environment.Close()
+		if !errors.Is(err, io.EOF) {
+			return fail(errors.New("session environment dispatch has trailing data"))
+		}
+		shell.Env = processEnvironment(os.Environ(), lease.Values)
+	}
 	shell.Stdin, shell.Stdout, shell.Stderr = os.Stdin, os.Stdout, os.Stderr
 	shell.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if lease != nil {
+		if !lease.ExpiresAt.After(time.Now()) {
+			return fail(errors.New("session environment expired before recipient startup"))
+		}
+		// Check the kernel lifetime pipe itself: its reader goroutine may not
+		// yet have published EOF when decoding the environment finishes.
+		lifetime := []unix.PollFd{{Fd: 3, Events: unix.POLLIN | unix.POLLHUP}}
+		if _, err := unix.Poll(lifetime, 0); err != nil {
+			return fail(errors.New("session environment lifetime is unavailable"))
+		}
+		if lifetime[0].Revents&(unix.POLLHUP|unix.POLLERR|unix.POLLNVAL) != 0 {
+			return fail(errors.New("session environment lifetime ended before recipient startup"))
+		}
+	}
 	if err := shell.Start(); err != nil {
 		return fail(fmt.Errorf("session shell did not start: %w", err))
 	}
