@@ -1540,6 +1540,12 @@ const docTemplate = `{
                             "$ref": "#/definitions/ErrorResponse"
                         }
                     },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
@@ -1551,7 +1557,7 @@ const docTemplate = `{
         },
         "/sandboxes/{sandboxId}/working-copy-captures/capabilities": {
             "post": {
-                "description": "Read-only discovery checked against the Runner's measured capture component and physical source generation. Measurement does not replace image publication or conformance qualification.",
+                "description": "Read-only discovery checked against the physical source generation. The answer states the Runner's measured capture component and echoes a requested authority only when it names exactly that component. A build outside its deployment's pin refuses with 500.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1572,7 +1578,7 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "description": "Current capture authority",
+                        "description": "Discovery request; authority optionally names the expected component",
                         "name": "request",
                         "in": "body",
                         "required": true,
@@ -1596,6 +1602,12 @@ const docTemplate = `{
                     },
                     "409": {
                         "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1913,6 +1925,12 @@ const docTemplate = `{
                             "$ref": "#/definitions/ErrorResponse"
                         }
                     },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
@@ -2176,6 +2194,12 @@ const docTemplate = `{
                             "$ref": "#/definitions/ErrorResponse"
                         }
                     },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
@@ -2231,6 +2255,12 @@ const docTemplate = `{
                     },
                     "409": {
                         "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -4515,12 +4545,15 @@ const docTemplate = `{
         "workingcopy.CaptureCapabilities": {
             "type": "object",
             "required": [
-                "authority",
+                "component",
                 "stoppedWorkingTreeInventory"
             ],
             "properties": {
                 "authority": {
                     "$ref": "#/definitions/workingcopy.CaptureAuthority"
+                },
+                "component": {
+                    "$ref": "#/definitions/workingcopy.CaptureComponent"
                 },
                 "fileSnapshot": {
                     "$ref": "#/definitions/workingcopy.FileSnapshotCapability"
@@ -4533,7 +4566,6 @@ const docTemplate = `{
         "workingcopy.CaptureCapabilitiesRequest": {
             "type": "object",
             "required": [
-                "authority",
                 "fence",
                 "owner",
                 "source"

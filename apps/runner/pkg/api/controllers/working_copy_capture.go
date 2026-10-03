@@ -21,14 +21,15 @@ const maximumWorkingCopyCaptureRequestBytes = 128 * 1024
 //
 //	@Tags sandbox
 //	@Summary Discover the assigned Runner capture surface before stopping a generation
-//	@Description Read-only discovery checked against the Runner's measured capture component and physical source generation. Measurement does not replace image publication or conformance qualification.
+//	@Description Read-only discovery checked against the physical source generation. The answer states the Runner's measured capture component and echoes a requested authority only when it names exactly that component. A build outside its deployment's pin refuses with 500.
 //	@Accept json
 //	@Produce json
 //	@Param sandboxId path string true "Sandbox ID"
-//	@Param request body workingcopy.CaptureCapabilitiesRequest true "Current capture authority"
+//	@Param request body workingcopy.CaptureCapabilitiesRequest true "Discovery request; authority optionally names the expected component"
 //	@Success 200 {object} workingcopy.CaptureCapabilities
 //	@Failure 400 {object} common_errors.ErrorResponse
 //	@Failure 409 {object} common_errors.ErrorResponse
+//	@Failure 500 {object} common_errors.ErrorResponse
 //	@Failure 503 {object} common_errors.ErrorResponse
 //	@Security Bearer
 //	@Router /sandboxes/{sandboxId}/working-copy-captures/capabilities [post]
@@ -64,6 +65,7 @@ func WorkingCopyCaptureCapabilities(ctx *gin.Context) {
 //	@Failure		400	{object}	common_errors.ErrorResponse
 //	@Failure		401	{object}	common_errors.ErrorResponse
 //	@Failure		409	{object}	common_errors.ErrorResponse
+//	@Failure		500	{object}	common_errors.ErrorResponse
 //	@Failure		503	{object}	common_errors.ErrorResponse
 //	@Router			/sandboxes/{sandboxId}/working-copy-captures [post]
 //
@@ -167,6 +169,7 @@ func ReadWorkingCopyCapture(ctx *gin.Context) {
 //	@Failure		400	{object}	common_errors.ErrorResponse
 //	@Failure		401	{object}	common_errors.ErrorResponse
 //	@Failure		409	{object}	common_errors.ErrorResponse
+//	@Failure		500	{object}	common_errors.ErrorResponse
 //	@Failure		503	{object}	common_errors.ErrorResponse
 //	@Router			/sandboxes/{sandboxId}/working-copy-captures/stopped-directory-roster [post]
 //
@@ -287,6 +290,13 @@ func writeWorkingCopyCaptureError(ctx *gin.Context, err error) {
 		))
 	case errors.Is(err, workingcopy.ErrConflict):
 		ctx.Error(common_errors.NewConflictError(err))
+	case errors.Is(err, workingcopy.ErrPinMismatch):
+		// A deployment fault that lasts until it is corrected: never retryable.
+		ctx.Error(common_errors.NewCustomError(
+			http.StatusInternalServerError,
+			err.Error(),
+			"WORKING_COPY_CAPTURE_PIN_MISMATCH",
+		))
 	default:
 		ctx.Error(err)
 	}
@@ -314,6 +324,7 @@ func decodeExactCaptureBody(ctx *gin.Context, target any) error {
 //	@Success 200 {object} workingcopy.WorkingTreeInventoryReceipt
 //	@Failure 400 {object} common_errors.ErrorResponse
 //	@Failure 409 {object} common_errors.ErrorResponse
+//	@Failure 500 {object} common_errors.ErrorResponse
 //	@Failure 503 {object} common_errors.ErrorResponse
 //	@Security Bearer
 //	@Router /sandboxes/{sandboxId}/working-copy-captures/stopped-working-tree-inventories [post]

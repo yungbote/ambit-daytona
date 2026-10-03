@@ -22,6 +22,7 @@ import (
 // @Success 200 {object} workingcopy.SandboxFileReceipt
 // @Failure 400 {object} common_errors.ErrorResponse
 // @Failure 409 {object} common_errors.ErrorResponse
+// @Failure 500 {object} common_errors.ErrorResponse
 // @Failure 503 {object} common_errors.ErrorResponse
 // @Security Bearer
 // @Router /sandboxes/{sandboxId}/working-copy-captures/sandbox-files [post]

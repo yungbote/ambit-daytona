@@ -333,17 +333,26 @@ func run() int {
 			if generationObserver != nil {
 				captureObserver = generationObserver
 			}
+			capturePin := workingcopy.Pin{Build: internal.Version, Revision: cfg.SourceRevision}
 			workingCopyCaptures, captureErr = workingcopy.NewService(
 				cli,
 				privateObjects,
 				captureStops,
 				captureComponent,
+				capturePin,
 				captureObserver,
 				fileSnapshots...,
 			)
 			if captureErr != nil {
 				logger.Warn("Working-copy capture is unavailable", "error", captureErr)
 				workingCopyCaptures = nil
+			} else {
+				level := slog.LevelInfo
+				if capturePin.State() == workingcopy.PinMismatch {
+					level = slog.LevelError
+				}
+				logger.Log(context.Background(), level, "Working-copy capture pin",
+					"state", capturePin.State(), "build", capturePin.Build, "revision", capturePin.Revision)
 			}
 		}
 	}

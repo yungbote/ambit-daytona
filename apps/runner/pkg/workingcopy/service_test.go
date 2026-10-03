@@ -1469,7 +1469,7 @@ func TestCaptureRequiresExistingStreamingStorageCapability(t *testing.T) {
 	baseOnly := struct {
 		storage.PrivateObjectStorageClient
 	}{newFakeObjectStore()}
-	_, err := NewService(containers, baseOnly, &fakeStoppedGenerationAuthority{container: containers}, testCaptureComponent(binding.Authority), nil)
+	_, err := NewService(containers, baseOnly, &fakeStoppedGenerationAuthority{container: containers}, binding.Authority.component(), Pin{}, nil)
 	if !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("buffer-only storage was admitted: %v", err)
 	}
@@ -2364,7 +2364,8 @@ func mustService(
 		containers,
 		objects,
 		&fakeStoppedGenerationAuthority{container: containers},
-		testCaptureComponent(authority),
+		authority.component(),
+		Pin{},
 		nil,
 	)
 	if err != nil {
